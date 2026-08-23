@@ -1,0 +1,1174 @@
+{
+  "common": {
+    "cancel": "Cancel",
+    "close": "Close",
+    "copy": "Copy",
+    "description": "Description",
+    "loadMore": "Load more",
+    "loadingMore": "Loading more...",
+    "name": "Name",
+    "newFeature": "New Feature",
+    "open": "Open",
+    "retry": "Retry",
+    "save": "Save",
+    "saveChanges": "Save changes",
+    "saved": "Saved",
+    "saving": "Saving...",
+    "youAreCaughtUp": "You are caught up",
+    "loading": "Loading...",
+    "railViewer": {
+      "itemCountOne": "{count} item",
+      "itemCountOther": "{count} items",
+      "latestDate": "Latest {date}",
+      "noRecentActivity": "No recent activity"
+    }
+  },
+  "app": {
+    "authLoading": {
+      "eyebrow": "Access Protection",
+      "title": "Checking access",
+      "description": "Loading the current password protection status."
+    }
+  },
+  "auth": {
+    "gate": {
+      "eyebrow": "Shared Password",
+      "title": "Unlock Foldergram",
+      "passwordLabel": "Password",
+      "descriptionPassword": "This library accepts either the admin password or the viewer password for local access.",
+      "descriptionAdmin": "This library is protected with the admin password for local and homelab access.",
+      "placeholderPassword": "Enter the admin or viewer password",
+      "placeholderAdmin": "Enter the admin password",
+      "unlocking": "Unlocking...",
+      "unlock": "Unlock Library",
+      "unableToSignIn": "Unable to sign in."
+    },
+    "adminUnlock": {
+      "eyebrow": "Admin Unlock",
+      "title": "Unlock admin access",
+      "closeAria": "Close admin unlock dialog",
+      "description": "Enter the admin password to open Settings, Trash, scans, rebuild tools, and other admin-only actions.",
+      "passwordLabel": "Admin password",
+      "placeholder": "Enter the admin password",
+      "unlocking": "Unlocking...",
+      "unlock": "Unlock Admin",
+      "unableToUnlock": "Unable to unlock admin access."
+    }
+  },
+  "nav": {
+    "primary": "Primary navigation",
+    "foldergramHome": "Foldergram home",
+    "home": "Home",
+    "reels": "Reels",
+    "search": "Search",
+    "library": "Library",
+    "places": "Places",
+    "collections": "Collections",
+    "more": "More",
+    "trash": "Trash",
+    "settings": "Settings",
+    "unlockAdmin": "Unlock admin",
+    "switchAppearance": "Switch appearance",
+    "switchToDarkMode": "Switch to dark mode",
+    "switchToLightMode": "Switch to light mode",
+    "signOut": "Sign out",
+    "returnToPublicView": "Return to public view",
+    "foldersSpotlight": "Folders Spotlight",
+    "likesAriaLabel": "{label} ({count})",
+    "folderPosts": "{count} posts"
+  },
+  "settings": {
+    "eyebrow": "Settings",
+    "title": "Library Controls",
+    "description": "Manage scans, app defaults, access, and the library index.",
+    "sections": {
+      "navigation": "Settings sections",
+      "library": {
+        "label": "Scan & Library",
+        "shortLabel": "Scan and Library",
+        "description": "Index media, rebuild thumbnails, and maintain the library index"
+      },
+      "general": {
+        "label": "General Settings",
+        "description": "Stories mode, excluded folders, and feed defaults"
+      },
+      "places": {
+        "label": "Places",
+        "description": "Offline city lookup and place assignment"
+      },
+      "access": {
+        "label": "Security & Access",
+        "shortLabel": "Security and Access",
+        "description": "Password locks & viewer roles"
+      },
+      "status": {
+        "label": "System Status",
+        "description": "Storage overview & scan history"
+      }
+    },
+    "places": {
+      "banner": {
+        "title": "Places from photo GPS data",
+        "description": "Group GPS-tagged photos by offline city and location labels.",
+        "helper": "Prepare the local GeoNames dataset, then rebuild place assignments for the photos already in your library.",
+        "setup": "Set up Places",
+        "dismissAria": "Dismiss places announcement",
+        "availableLater": "The download is opt-in, and the Places tab stays available in Settings later."
+      },
+      "section": {
+        "title": "Offline places",
+        "description": "Prepare GeoNames city data, then rebuild place links from existing photo coordinates.",
+        "prepared": "Prepared",
+        "notPrepared": "Not Prepared",
+        "datasetLabel": "Dataset",
+        "rowsLabel": "Rows",
+        "notImported": "Not imported",
+        "importedAt": "Imported {value}.",
+        "fallbackDataset": "GeoNames cities500",
+        "prepareButton": "Prepare Geodata",
+        "preparingButton": "Preparing...",
+        "rebuildButton": "Rebuild Place Assignments",
+        "rebuildingButton": "Rebuilding...",
+        "loadStatusError": "Unable to load places status",
+        "actions": {
+          "ready": "Offline place data is ready.",
+          "prepareError": "Unable to prepare offline place data.",
+          "rebuilt": "Rebuilt places for {assigned} of {processed} posts.",
+          "rebuildError": "Unable to rebuild place assignments."
+        }
+      }
+    },
+    "general": {
+      "migration": {
+        "eyebrow": "Stories Migration",
+        "title": "This library may already use folders named stories",
+        "description": "Foldergram can now treat stories/ as profile stories and highlights by default. Choose whether to keep legacy folder behavior or switch to the new reserved stories mode, then rescan the library.",
+        "dismissAria": "Dismiss stories migration notice",
+        "useFeature": "Use Stories Feature",
+        "keepLegacy": "Keep Legacy Behavior",
+        "helper": "Choose a mode here, then save it below. Run a library scan afterward so the indexed folder structure matches.",
+        "helperSaving": "Wait for the current settings update to finish first."
+      },
+      "carouselsMigration": {
+        "eyebrow": "Carousel Migration",
+        "title": "This library may already use folders named carousels",
+        "description": "Choose whether AppFolder/carousels should create multi-item posts or remain ordinary folders.",
+        "useFeature": "Use Carousel Posts",
+        "keepFolders": "Keep Normal Folders",
+        "helper": "Choose a mode here, then save it below. Run a library scan afterward so indexed folders and carousel posts match."
+      },
+      "carouselsAnnouncement": {
+        "title": "Carousel Posts",
+        "headline": "Reserved carousels/ folders can combine media into one post",
+        "description": "Create one direct child folder inside AppFolder/carousels for each carousel, then place 2–20 images, animated images, or videos directly inside it. Natural filename order controls the slides, and the first item becomes the cover. Numeric filename prefixes are optional.",
+        "dismissAria": "Dismiss carousel posts announcement",
+        "showStructure": "See carousel directory structure",
+        "hideStructure": "Hide carousel directory structure"
+      },
+      "announcement": {
+        "title": "Stories",
+        "headline": "Reserved stories/ folders can power App Folder stories",
+        "description": "Drop direct media into AppFolder/stories for the avatar story set, and use direct child folders for highlight circles. Nested folders stay inside the same highlight capsule.",
+        "dismissAria": "Dismiss stories announcement",
+        "showStructure": "See directory structure",
+        "hideStructure": "Hide directory structure"
+      },
+      "card": {
+        "title": "General Settings",
+        "description": "App-wide defaults for language, nested folder titles, stories folders, excluded folders, Home, Reels, and app folders."
+      },
+      "language": {
+        "label": "App language",
+        "description": "Choose the language used for navigation, dialogs, and other translated app UI on this device.",
+        "helper": "Applies immediately in this browser. Save changes below to make the selected language the app-wide default. Missing translations fall back to English.",
+        "overrideNotice": "App default is {savedLabel}. This browser is temporarily using {currentLabel} from a browser-only setting. Save changes to make {currentLabel} the default.",
+        "selectLabel": "App language",
+        "options": {
+          "en": "English",
+          "es": "Spanish",
+          "zh": "Chinese"
+        }
+      },
+      "homeFeed": {
+        "label": "Home feed sort order",
+        "description": "Choose the first feed mode shown on Home.",
+        "closeMenuAria": "Close home feed sort menu",
+        "options": {
+          "random": {
+            "label": "Random",
+            "description": "Steady shuffle."
+          },
+          "recent": {
+            "label": "Recent",
+            "description": "Newest first."
+          },
+          "rediscover": {
+            "label": "Rediscover",
+            "description": "Bring older picks back."
+          }
+        }
+      },
+      "reelsFeed": {
+        "label": "Reels feed sort order",
+        "description": "Choose the default queue style when Reels opens.",
+        "closeMenuAria": "Close reels feed sort menu",
+        "options": {
+          "random": {
+            "label": "Random",
+            "description": "Stable session shuffle."
+          },
+          "recent": {
+            "label": "Recent",
+            "description": "Newest videos first."
+          },
+          "recommended": {
+            "label": "Recommended",
+            "description": "Affinity-ranked mix."
+          }
+        }
+      },
+      "folderOrder": {
+        "label": "App folder photo order",
+        "description": "Choose the default order for photos inside app folders.",
+        "closeMenuAria": "Close app folder photo order menu",
+        "options": {
+          "newest": {
+            "label": "Newest First",
+            "description": "Recent photos appear first."
+          },
+          "oldest": {
+            "label": "Oldest First",
+            "description": "Earlier photos appear first."
+          }
+        }
+      },
+      "nestedFolderTitle": {
+        "label": "Nested folder title format",
+        "description": "Choose how nested app folders are labeled throughout the app. This changes presentation only.",
+        "closeMenuAria": "Close nested folder title format menu",
+        "options": {
+          "folder": {
+            "label": "Folder name only",
+            "description": "Show only the current folder name."
+          },
+          "parentPlusFolder": {
+            "label": "Parent + folder name",
+            "description": "Prefix nested folders with their immediate parent."
+          }
+        }
+      },
+      "storiesMode": {
+        "label": "Treat stories folders as normal app folders",
+        "scanRequired": "Scan required",
+        "explainAria": "Explain stories folders setting",
+        "explainDescription": "When this stays off, AppFolder/stories becomes the source for avatar stories and highlight circles. Turn it on only if folders literally named stories should continue behaving like normal folders everywhere in the app.",
+        "toggleLabel": "Toggle stories folders behavior",
+        "enabledDescription": "Legacy mode is enabled. stories folders remain ordinary app folders everywhere.",
+        "disabledDescription": "Reserved stories mode is enabled. AppFolder/stories powers avatar stories and highlight circles."
+      },
+      "carouselsMode": {
+        "label": "Treat carousels folders as normal app folders",
+        "toggleLabel": "Toggle carousel folders behavior",
+        "enabledDescription": "Legacy mode is enabled. carousels folders remain ordinary app folders.",
+        "disabledDescription": "Reserved carousel mode is enabled. Each direct child of AppFolder/carousels becomes one post."
+      },
+      "excludedFolders": {
+        "label": "Excluded source folders",
+        "description": "Skip matching folders anywhere by name or by exact relative path under the gallery root. Hidden paths and app-managed storage stay excluded automatically.",
+        "customRules": "Custom rules",
+        "envRulesLabel": "Read-only env rules",
+        "envRulesDescription": "Change GALLERY_EXCLUDED_FOLDERS in .env or Docker and restart the app to update these.",
+        "envRulesEmpty": "No env-backed folder exclusions are configured.",
+        "activeRulesLabel": "Currently active saved rules",
+        "activeRulesDescription": "This combines the saved textarea rules with any env-backed entries. New textarea edits appear here after you save them.",
+        "activeRulesEmpty": "No saved custom or env-backed folder exclusions are active."
+      },
+      "actionNote": {
+        "loading": "Loading the current app preferences...",
+        "excludedAndOther": "Save the folder exclusion rules with the other app-wide changes. Run a library scan afterward so reserved folder modes and excluded folders reindex correctly.",
+        "excludedOnly": "This saves the custom excluded folders only. Run a library scan afterward so those folders disappear from the index.",
+        "storiesAndDefaults": "Save the folder behavior and updated app defaults together. Run a library scan afterward to reindex the affected folders.",
+        "storiesOnly": "This saves the reserved folder behavior. Run a library scan afterward to reindex with the selected mode.",
+        "multipleDefaults": "Save these app defaults together. Language applies immediately in this browser; Home visitors can still switch modes on the homepage; Reels, app folders, and nested folder titles use app defaults.",
+        "languageOnly": "This changes the language immediately in this browser. Save it too if you want the selected language to become the app-wide default.",
+        "homeOnly": "This updates the first feed mode shown on Home for this app. Visitors can still switch modes from the homepage.",
+        "reelsOnly": "This updates the queue style used when Reels opens for this app. Visitors cannot switch modes from the reels page.",
+        "folderOnly": "This updates the default photo order used by app folder grids.",
+        "nestedFolderTitleOnly": "This updates how nested app folders are labeled throughout the app.",
+        "carouselReconciliation": "The Carousel folder mode is saved. Complete the library action above to apply it to the index.",
+        "idle": "These are the current app-wide defaults for language, Home, Reels, app folders, nested folder titles, stories folders, carousel folders, and excluded folders."
+      },
+      "rescanNotice": {
+        "rebuildRequired": "Save these changes, then rebuild the library index so the selected folder behavior is applied to the current gallery location.",
+        "pendingRebuild": "Rebuild the library index to apply the saved Carousel folder mode to the current gallery location.",
+        "pendingCarousels": "Run a library scan to apply the saved Carousel folder mode to indexed folders and posts.",
+        "excludedAndStories": "Save these changes, then run a library scan to update reserved folder behavior and excluded folders.",
+        "excludedOnly": "Save this change, then run a library scan before excluded folders disappear from the index.",
+        "storiesOnly": "Save this change, then run a library scan before expecting stories folders, avatar stories, or highlights to update.",
+        "carouselsOnly": "Save this change, then run a library scan before expecting carousel posts or carousels folders to update.",
+        "storiesAndCarousels": "Save these changes, then run a library scan before expecting stories and carousel folder behavior to update."
+      },
+      "feedback": {
+        "folderRulesSavedRebuild": "Folder behavior was saved. Rebuild the library index to apply it to the current gallery location.",
+        "settingsAndFolderRulesSaved": "Settings were saved. Run a library scan to apply the folder rule changes.",
+        "folderRulesSaved": "Folder behavior was saved. Run a library scan to apply the changes.",
+        "excludedFoldersSaved": "Excluded folders were saved. Run a library scan to apply them.",
+        "settingsAndStoriesSaved": "Settings were saved. Run a library scan to apply the stories folder change.",
+        "storiesSaved": "Stories folder behavior was saved. Run a library scan to apply it.",
+        "carouselsSaved": "Carousel folder behavior was saved. Run a library scan to apply it.",
+        "defaultsSaved": "App-wide defaults were updated.",
+        "languageSaved": "App language default saved as {label}.",
+        "homeSaved": "The homepage now opens with {label}.",
+        "reelsSaved": "Reels now opens with {label}.",
+        "folderOrderSaved": "App folders now open with {label}.",
+        "nestedFolderTitleSaved": "Nested app folders now use {label}.",
+        "parts": {
+          "appLanguage": "app language",
+          "excludedFolders": "excluded folders",
+          "storiesFolderHandling": "stories folder handling",
+          "carouselsFolderHandling": "carousel folder handling",
+          "homeFeedDefault": "Home feed default",
+          "reelsFeedDefault": "Reels feed default",
+          "appFolderOrder": "app folder order",
+          "nestedFolderTitles": "nested folder titles"
+        }
+      },
+      "errors": {
+        "validateExcludedFolders": "Unable to validate the excluded folder rules.",
+        "update": "Unable to update the general settings.",
+        "partialUpdate": "Some settings were saved ({parts}), but the update did not finish: {message}"
+      }
+    },
+    "library": {
+      "legacyMigration": {
+        "title": "Legacy derivative migration pending",
+        "messageOne": "{count} indexed media record still uses the old mirrored thumbnail and preview paths. Run Scan Library to move it into asset-key storage.",
+        "messageOther": "{count} indexed media records still use the old mirrored thumbnail and preview paths. Run Scan Library to move them into asset-key storage."
+      },
+      "carouselReconciliation": {
+        "title": "Carousel folder update pending",
+        "scanDescription": "The saved Carousel folder mode has not been applied to the index. Run Scan Library to update folders and posts.",
+        "rebuildDescription": "The saved Carousel folder mode has not been applied to the index. Rebuild Library Index below to apply it to the current gallery location."
+      },
+      "scanCard": {
+        "title": "Scan Library",
+        "description": "Run a scan after adding folders or when you want to refresh indexed media."
+      },
+      "statusLabel": {
+        "storageUnavailable": "Storage unavailable",
+        "scanInProgress": "Scan in progress",
+        "rebuildActive": "Rebuild active",
+        "ready": "Ready"
+      },
+      "scanButton": {
+        "active": "Scanning library...",
+        "idle": "Run Scan Library"
+      },
+      "scanActionNote": {
+        "loading": "Loading current library status...",
+        "rebuildRequired": "Rebuild the library index first because the gallery location changed.",
+        "otherTaskActive": "Another library task is running. Live progress appears in the sticky status bar.",
+        "progress": "Live progress appears in the sticky status bar.",
+        "legacyMigration": "Run Scan Library to move legacy mirrored thumbnails and previews into the asset-key storage layout.",
+        "carouselReconciliation": "Run Scan Library to apply the saved Carousel folder mode to indexed folders and posts.",
+        "idle": "Scans check for added, updated, or missing media."
+      },
+      "thumbnailCard": {
+        "title": "Regenerate Thumbnails",
+        "description": "Rebuild feed and profile thumbnails plus video posters from indexed media only. Original files are not affected."
+      },
+      "thumbnailButton": {
+        "active": "Regenerating now...",
+        "idle": "Regenerate Thumbnails"
+      },
+      "thumbnailActionNote": {
+        "loading": "Loading current library status...",
+        "rebuildRequired": "Unavailable until the library index is rebuilt for the new gallery location.",
+        "progress": "Live progress appears in the sticky status bar.",
+        "rebuildActive": "Wait for the full rebuild to finish first.",
+        "scanActive": "Wait for the current scan to finish first.",
+        "legacyMigration": "This keeps the current thumbnail paths and does not migrate legacy mirrored derivatives. Run Scan Library instead to move them into asset-key storage.",
+        "idle": "Use this for a faster thumbnail-only refresh."
+      },
+      "dangerZone": {
+        "title": "Danger Zone",
+        "recommended": "Recommended",
+        "rebuildTitle": "Rebuild Library Index",
+        "rebuildDescription": "Reset the library index, reuse matching cached media, and generate only missing derivatives from the current gallery root.",
+        "currentGalleryRoot": "Current gallery root",
+        "previousGalleryRoot": "Previous gallery root"
+      },
+      "rebuildButton": {
+        "active": "Rebuilding now...",
+        "idle": "Rebuild Library Index"
+      },
+      "rebuildActionNote": {
+        "loading": "Loading current library status...",
+        "progress": "Live progress appears in the sticky status bar.",
+        "thumbnailActive": "Wait for thumbnail regeneration to finish first.",
+        "scanActive": "Wait for the current scan to finish first.",
+        "rebuildRequired": "Recommended because the gallery location changed.",
+        "idle": "Use this to reset the index and reuse matching derivatives from the previous library index."
+      },
+      "dialogs": {
+        "rebuildTitle": "Rebuild the current library index?",
+        "rebuildMessage": "This will clear the indexed database tables for folders, posts, likes, and scan history, then rescan the active gallery root. Existing thumbnails and previews from the previous index will be reused when they still match the current files, and only missing or changed derivatives will be generated. Original files in the gallery will not be deleted.",
+        "rebuildConfirm": "Rebuild Library Index",
+        "rebuildLoading": "Rebuilding...",
+        "thumbnailsTitle": "Regenerate thumbnails only?",
+        "thumbnailsMessage": "This will remove generated feed and profile thumbnails plus video poster images, then rebuild them from the current indexed library using each item's current thumbnail path. Previews, likes, scan history, and indexed library records will not be changed. Original files in the gallery will not be deleted.",
+        "thumbnailsConfirm": "Regenerate Thumbnails",
+        "thumbnailsLoading": "Regenerating..."
+      },
+      "errors": {
+        "startScan": "Unable to start a library scan.",
+        "rebuild": "Unable to rebuild the current library index.",
+        "regenerate": "Unable to regenerate thumbnails."
+      }
+    },
+    "notices": {
+      "scanWarning": {
+        "eyebrow": "Scan Warning",
+        "title": "Scan completed with {count} structural warning",
+        "title_plural": "Scan completed with {count} structural warnings"
+      },
+      "scanError": {
+        "eyebrow": "Scan Needs Attention",
+        "title": "The last scan completed with errors",
+        "fullReportPrefix": "Full report:",
+        "dismissAria": "Dismiss scan warning",
+        "actionNote": "Run a new library scan to retry failed media and fill in any missing thumbnails or previews.",
+        "messages": {
+          "genericNoDetails": "Some media failed during the last run. Scan the library again to retry any missed files and derivative generation.",
+          "ffmpegMissing": "Video processing tools are missing from the server environment. Install FFmpeg so scans can read video metadata and generate video derivatives.",
+          "withReport": "Some media failed during the last run. Review the sample error and full report path below, then scan the library again to retry failed media and derivative generation.",
+          "withSample": "Some media failed during the last run. Review the sample error below, then scan the library again to retry any missed files and derivative generation."
+        },
+        "detailMore": "{line} (+{count} more)"
+      },
+      "ignoredRootMedia": {
+        "dismissAria": "Dismiss gallery root warning",
+        "messageOne": "{count} supported file is being ignored in the gallery root. Move it into a folder inside your gallery root to create App Folders. Files placed directly in the gallery root are ignored.",
+        "messageOther": "{count} supported files are being ignored in the gallery root. Move them into a folder inside your gallery root to create App Folders. Files placed directly in the gallery root are ignored."
+      }
+    },
+    "access": {
+      "section": {
+        "title": "Admin and viewer access",
+        "description": "Protect admin actions with an admin password, then optionally issue a separate viewer password for browsing-only sessions.",
+        "locked": "Admin Locked",
+        "open": "Open Access"
+      },
+      "fields": {
+        "adminPassword": "Admin password",
+        "confirmPassword": "Confirm password",
+        "currentPassword": "Current password",
+        "newPassword": "New password",
+        "confirmNewPassword": "Confirm new password",
+        "viewerPassword": "Viewer password",
+        "confirmViewerPassword": "Confirm viewer password"
+      },
+      "placeholders": {
+        "minimumLength": "Minimum {count} characters",
+        "repeatPassword": "Repeat the password",
+        "enterNewViewerPassword": "Enter a new viewer password",
+        "repeatNewViewerPassword": "Repeat the new viewer password",
+        "repeatViewerPassword": "Repeat the viewer password"
+      },
+      "enable": {
+        "description": "The admin password is stored as a one-way hash and unlocks this browser with a signed session cookie.",
+        "buttonLoading": "Enabling...",
+        "buttonIdle": "Enable Admin Password",
+        "success": "The admin password is now enabled for this Foldergram instance.",
+        "error": "Unable to enable the admin password."
+      },
+      "change": {
+        "title": "Change admin password",
+        "description": "Update the admin password and invalidate older sessions.",
+        "showForm": "Change Password",
+        "hideForm": "Hide Form",
+        "helper": "Use at least 8 characters. Changing the password signs out any older sessions.",
+        "buttonLoading": "Updating...",
+        "buttonIdle": "Change Admin Password",
+        "missingCurrent": "Enter the current password to change it.",
+        "success": "The admin password was updated and existing sessions were invalidated.",
+        "error": "Unable to change the admin password."
+      },
+      "viewer": {
+        "title": "Viewer access",
+        "description": "Issue a browsing-only password for viewer sessions or open the library for anonymous public viewing.",
+        "modes": {
+          "adminOnlyTitle": "Admin only",
+          "adminOnlyDescription": "Only the admin password can unlock the app.",
+          "viewerPasswordTitle": "Viewer password",
+          "viewerPasswordDescription": "Allow a separate viewer login that can browse and use shared likes without seeing admin controls.",
+          "publicTitle": "Public",
+          "publicDescription": "Allow anonymous browsing with browser-local favorites while keeping admin unlock available from More."
+        },
+        "status": {
+          "adminPasswordOff": "Admin Password Off",
+          "viewerPasswordOn": "Viewer Password On",
+          "publicViewerOn": "Public Viewer On",
+          "adminOnly": "Admin Only"
+        },
+        "summary": {
+          "enableAdminFirst": "Enable the admin password first",
+          "viewerPasswordEnabled": "Viewer password access is enabled",
+          "publicEnabled": "Public viewer access is enabled",
+          "off": "Viewer access is currently off"
+        },
+        "summaryCopy": {
+          "enableAdminFirst": "Viewer access settings become available after the admin password is enabled.",
+          "viewerPasswordEnabled": "Viewers can sign in with the separate viewer password, use shared likes, and browse without admin controls. To replace that password, enter a new one below. The current viewer password is not required.",
+          "publicEnabled": "Anyone who can reach this Foldergram can browse without logging in. Favorites stay in the current browser only, and admins can elevate from More with the admin password.",
+          "off": "Only the admin password can unlock the app right now. Turn on viewer password mode below if you want a browsing-only login."
+        },
+        "helper": {
+          "viewerPasswordRotate": "Enter a new viewer password below to rotate it. You do not need the current viewer password.",
+          "viewerPasswordNew": "Viewer logins get shared likes but cannot reach Settings, Trash, or any destructive action.",
+          "public": "Anonymous visitors can browse immediately, use browser-local favorites, and unlock admin access from More when needed.",
+          "disableFromPassword": "Saving this will turn off viewer logins and return the app to admin-only access.",
+          "disableFromPublic": "Saving this will disable public browsing and return the app to admin-only access.",
+          "off": "Viewer access is currently off, so only the admin password can unlock the app."
+        },
+        "buttons": {
+          "updateViewerPassword": "Update Viewer Password",
+          "enableViewerAccess": "Enable Viewer Access",
+          "savePublicAccess": "Save Public Access",
+          "enablePublicAccess": "Enable Public Access",
+          "disableViewerAccess": "Disable Viewer Access",
+          "saveViewerAccess": "Save Viewer Access"
+        },
+        "success": {
+          "password": "Viewer password access is enabled. The viewer password was saved.",
+          "public": "Public viewer access is enabled. Anonymous visitors can now browse with browser-local favorites.",
+          "off": "Viewer access has been turned off. Only admin logins are allowed now."
+        },
+        "error": "Unable to update viewer access."
+      },
+      "danger": {
+        "title": "Danger Zone",
+        "disableTitle": "Disable admin password",
+        "disableDescription": "Turn the admin password back off for this Foldergram instance.",
+        "showForm": "Disable Access",
+        "hideForm": "Hide Form",
+        "buttonLoading": "Disabling...",
+        "buttonIdle": "Disable Admin Password",
+        "signOut": "Sign Out",
+        "signOutError": "Unable to sign out.",
+        "missingCurrent": "Enter the current password to disable protection.",
+        "success": "The admin password has been disabled.",
+        "error": "Unable to disable the admin password."
+      },
+      "authProtection": {
+        "enabled": "Admin protection is active for this browser session. Use the controls below to rotate the admin password, configure viewer access, sign out, or turn protection off again.",
+        "disabled": "Protection is currently off. Anyone who can reach this app on your network can browse the library with full local access until you enable an admin password."
+      },
+      "validation": {
+        "minLength": "Password must be at least {count} characters.",
+        "empty": "Password cannot be empty.",
+        "mismatch": "The password confirmation does not match."
+      }
+    },
+    "status": {
+      "never": "Never",
+      "storage": {
+        "available": "Available",
+        "unavailable": "Unavailable"
+      },
+      "libraryStatus": {
+        "title": "Library Status",
+        "description": "Current storage and index state.",
+        "storage": "Storage",
+        "folders": "Folders",
+        "indexedPosts": "Indexed posts",
+        "indexedVideos": "Indexed videos"
+      },
+      "lastScan": {
+        "title": "Last Scan",
+        "description": "Most recent completed run tracked by the app.",
+        "status": "Status",
+        "finished": "Finished",
+        "filesScanned": "Files scanned",
+        "changes": "Changes",
+        "statusValues": {
+          "none": "No completed scans yet",
+          "completed": "completed",
+          "completedWithErrors": "completed with errors",
+          "failed": "failed",
+          "running": "running"
+        },
+        "changeValues": {
+          "new": "new",
+          "updated": "updated",
+          "removed": "removed"
+        }
+      }
+    }
+  },
+  "home": {
+    "sidebar": {
+      "ariaLabel": "Folder recommendations",
+      "suggestedFolders": "Suggested folders",
+      "viewLikes": "View likes",
+      "viewFavorites": "View favorites",
+      "openFolder": "Open",
+      "openSourceText": "Foldergram is open source.",
+      "viewOnGitHub": "View on GitHub"
+    }
+  },
+  "likes": {
+    "labels": {
+      "sharedCollection": "Likes",
+      "localCollection": "Favorites",
+      "sharedSection": "Liked posts",
+      "localSection": "Favorite posts"
+    },
+    "view": {
+      "rebuilding": "Rebuilding the library index. {label} will return after the refreshed library finishes loading.",
+      "sectionsAria": "{label} sections"
+    },
+    "states": {
+      "sharedEmptyTitle": "No liked posts yet",
+      "localEmptyTitle": "No favorites yet",
+      "sharedEmptyDescription": "Tap the heart under any post and it will appear here.",
+      "localEmptyDescription": "Tap the heart under any post and it will appear here in this browser.",
+      "sharedLoadingLabel": "Loading likes...",
+      "localLoadingLabel": "Loading favorites...",
+      "sharedErrorTitle": "Could not load likes",
+      "localErrorTitle": "Could not load favorites"
+    },
+    "actions": {
+      "likePost": "Like post",
+      "unlikePost": "Unlike post",
+      "favoritePost": "Favorite post",
+      "removeFavoriteFromPost": "Remove favorite from post"
+    },
+    "errors": {
+      "loadShared": "Unable to load likes",
+      "loadLocal": "Unable to load favorites",
+      "updateShared": "Unable to update likes",
+      "updateLocal": "Unable to update favorites"
+    }
+  },
+  "moments": {
+    "rails": {
+      "moments": {
+        "title": "Moments",
+        "description": "Memory capsules shaped by real capture dates from your library.",
+        "singularLabel": "Moment"
+      },
+      "highlights": {
+        "title": "Stories",
+        "description": "Curated story-style sets from your library when capture dates are sparse or synthetic.",
+        "singularLabel": "Story"
+      }
+    },
+    "capsules": {
+      "onThisDay": {
+        "title": "On This Day",
+        "subtitle": "{date} across previous years"
+      },
+      "thisWeekPreviousYears": {
+        "title": "This Week",
+        "subtitle": "{range} from previous years"
+      },
+      "fromLastYear": {
+        "title": "Last Year Around Now",
+        "subtitle": "A revisit to {monthYear}"
+      },
+      "highlightRecentBatches": {
+        "title": "Recent Batches",
+        "subtitle": "Latest runs gathered into one set",
+        "dateContextOne": "{count} batch",
+        "dateContextOther": "{count} batches"
+      },
+      "highlightForgottenFavorites": {
+        "title": "Forgotten Favorites",
+        "subtitle": "Older liked posts worth another look",
+        "dateContext": "Liked and older than 6 months"
+      },
+      "highlightDeepCuts": {
+        "title": "Deep Cuts",
+        "subtitle": "Older posts resurfaced from the archive",
+        "dateContext": "Older than 6 months"
+      },
+      "highlightLuckyDip": {
+        "title": "Lucky Dip",
+        "subtitle": "A playful mix from across the library",
+        "dateContext": "Stable for today"
+      }
+    },
+    "view": {
+      "rebuilding": "Rebuilding the library index. This view will repopulate when the refreshed home rail is ready.",
+      "loading": "Loading {label}...",
+      "loadError": "Could not load {label}",
+      "emptyTitle": "This {label} is empty",
+      "emptyDescription": "Try another {label} from the homepage.",
+      "postCount": "{count} posts"
+    }
+  },
+  "folder": {
+    "shared": {
+      "topLevelSourceFolder": "Top-level source folder"
+    },
+    "header": {
+      "openStories": "Open folder stories",
+      "openAvatar": "Open folder avatar",
+      "editButton": "Edit App Folder",
+      "shareButton": "Share folder",
+      "posts": "{count} posts",
+      "reels": "{count} reels",
+      "updated": "{date} updated",
+      "libraryPath": "Library path",
+      "expandDescription": "Expand description",
+      "collapseDescription": "Collapse description",
+      "errors": {
+        "updateProfile": "Failed to update profile"
+      }
+    },
+    "profileModal": {
+      "title": "Edit App Folder",
+      "namePlaceholder": "Folder display name",
+      "descriptionPlaceholder": "Add a description to this folder...",
+      "errors": {
+        "nameRequired": "Name is required."
+      }
+    },
+    "shareModal": {
+      "title": "Share Folder",
+      "publicUrl": "Public folder URL",
+      "accessSummaryTitle": "Current access",
+      "accessSummaryBoth": "Active share links: {count}. Password access: enabled.",
+      "accessSummaryLinks": "Active share links: {count}. Password access: off.",
+      "accessSummaryPassword": "Active share links: 0. Password access: enabled.",
+      "accessSummaryNone": "Active share links: 0. Password access: off.",
+      "independentMethods": "Share links and password access work independently. You can enable one or both.",
+      "linkSection": "Share links",
+      "linkDescription": "Anyone with an active link can open this folder without a password. Each link expires or can be revoked independently.",
+      "activeLinks": "{count} active",
+      "expiration": "Share link expiration",
+      "customExpiration": "Custom expiration",
+      "createLink": "Create Link",
+      "creating": "Creating...",
+      "createdLink": "Copy this link now",
+      "revoke": "Revoke",
+      "noLinks": "No share links yet.",
+      "passwordSection": "Password access",
+      "passwordDescription": "Anyone with the folder address and password can open it. This does not add password protection to share links.",
+      "passwordEnabled": "Enabled",
+      "passwordOff": "Off",
+      "passwordLabel": "Password",
+      "passwordPlaceholder": "Minimum 8 characters",
+      "setPassword": "Set Password",
+      "changePassword": "Change Password",
+      "removePassword": "Remove Password",
+      "copyPasswordUrl": "Copy Folder Address",
+      "passwordSharingHint": "Send the folder address and password separately.",
+      "neverExpires": "Never expires",
+      "expiresAt": "Expires {date}",
+      "linkMeta": "Token prefix {prefix}. Created {date}.",
+      "presets": {
+        "oneHour": "1 hour",
+        "day": "24 hours",
+        "week": "7 days",
+        "custom": "Custom",
+        "unlimited": "No expiry"
+      },
+      "status": {
+        "active": "Active",
+        "expired": "Expired",
+        "revoked": "Revoked"
+      },
+      "notices": {
+        "linkCreated": "Share link created. It opens without a password until it expires or is revoked.",
+        "linkRevoked": "Share link revoked.",
+        "linkRevokedWithPassword": "Share link revoked. Password access remains enabled.",
+        "passwordEnabled": "Password access enabled.",
+        "passwordEnabledWithLinks": "Password access enabled. Existing share links still work without a password.",
+        "passwordRemoved": "Password access removed.",
+        "passwordRemovedWithLinks": "Password access removed. Active share links still work."
+      },
+      "errors": {
+        "createLink": "Unable to create share link.",
+        "savePassword": "Unable to save folder password.",
+        "revokeLink": "Unable to revoke share link.",
+        "removePassword": "Unable to remove password access."
+      }
+    },
+    "tabs": {
+      "posts": "Posts",
+      "reels": "Reels",
+      "sections": "Folder sections"
+    }
+  },
+  "share": {
+    "loadingEyebrow": "Folder Share",
+    "loadingTitle": "Opening shared folder",
+    "passwordEyebrow": "Folder Share",
+    "passwordTitle": "Enter folder password",
+    "passwordDescription": "Enter the reusable folder password to continue.",
+    "passwordFallbackDescription": "This share link is no longer available. If you know the folder password, you can still access this folder.",
+    "passwordLabel": "Password",
+    "unlocking": "Unlocking...",
+    "unlock": "Unlock Folder",
+    "expiredTitle": "This share link is not available",
+    "expiredDescription": "The link may be expired, revoked, or missing its token.",
+    "errorTitle": "Could not open folder share",
+    "errorDescription": "Unable to load this folder share.",
+    "backToFolder": "Back to shared folder",
+    "postErrorTitle": "Could not load shared post"
+  },
+  "reels": {
+    "view": {
+      "libraryUnavailableTitle": "Library storage unavailable",
+      "loadErrorTitle": "Could not load reels",
+      "loadingTitle": "Loading reels",
+      "loadingDescription": "Pulling together a video-only queue from your indexed library.",
+      "emptyTitle": "No reels available",
+      "emptyDescription": "Add indexed videos to your library and they will show up here after the next scan.",
+      "navigationAria": "Reel navigation",
+      "previous": "Previous reel",
+      "next": "Next reel"
+    },
+    "rail": {
+      "hideDetails": "Hide reel details",
+      "showDetails": "Show reel details",
+      "downloadOriginal": "Download original file",
+      "openFolder": "Open folder"
+    },
+    "info": {
+      "ariaLabel": "Reel details",
+      "eyebrow": "Reel Details",
+      "hideDetails": "Hide reel details",
+      "openFolder": "Open folder",
+      "topLevelSourceFolder": "Top-level source folder",
+      "unavailable": "Unavailable",
+      "video": "Video",
+      "loadError": "Unable to load reel details.",
+      "resolution": "Resolution",
+      "length": "Length",
+      "size": "Size",
+      "format": "Format",
+      "loading": "Loading reel details...",
+      "folderPath": "Folder Path",
+      "mimeType": "MIME Type"
+    }
+  },
+  "post": {
+    "carousel": {
+      "label": "Carousel with {count} items",
+      "position": "{current} / {count}",
+      "previousItem": "Previous carousel item",
+      "nextItem": "Next carousel item",
+      "open": "Open carousel with {count} items"
+    },
+    "captionModal": {
+      "title": "Edit caption",
+      "captionLabel": "Caption",
+      "placeholder": "Write a caption...",
+      "resetToFilename": "Reset to filename",
+      "errors": {
+        "update": "Unable to update caption"
+      }
+    },
+    "viewer": {
+      "close": "Close post",
+      "previous": "Previous post",
+      "next": "Next post",
+      "showDetails": "Show post details",
+      "hideDetails": "Hide post details",
+      "togglePlayback": "Toggle playback",
+      "toggleSound": "Toggle sound",
+      "toggleFullscreen": "Toggle fullscreen",
+      "switchToPreviewQuality": "Switch to preview quality",
+      "switchToHdOriginal": "Switch to HD original",
+      "previewQuality": "Preview quality",
+      "hdOriginal": "HD original",
+      "openFolder": "Open folder",
+      "editCaption": "Edit caption",
+      "folderPath": "Folder Path",
+      "stats": {
+        "dimensions": "Dimensions",
+        "type": "Type",
+        "duration": "Duration",
+        "size": "Size",
+        "place": "Place"
+      },
+      "metadata": {
+        "location": "Location",
+        "camera": "Camera",
+        "lens": "Lens",
+        "aperture": "Aperture",
+        "shutter": "Shutter",
+        "iso": "ISO",
+        "focalLength": "Focal length"
+      },
+      "videoType": "Video ({mimeType})",
+      "setAsCover": "Set as folder cover",
+      "downloadOriginalFile": "Download original file",
+      "openOriginalFile": "Open original file",
+      "deletePost": "Delete post"
+    },
+    "feedCard": {
+      "openStories": "Open {name} stories",
+      "openFolderAvatar": "Open {name}",
+      "openReel": "Open reel",
+      "openPost": "Open post",
+      "moreOptions": "More options",
+      "delete": {
+        "title": "Delete this post?",
+        "messagePermanent": "This will permanently delete the post from the app and remove original media from disk.",
+        "messageTrash": "This will delete the post from the app and move it to Trash. The original file will stay on disk unless you choose permanent deletion.",
+        "confirmPermanent": "Permanently Delete",
+        "confirm": "Delete",
+        "deleteOriginalLabel": "Also permanently delete original file from disk",
+        "deleteOriginalDescription": "Keep this unchecked to move the post to Trash while keeping the source file on disk.",
+        "deleteOriginalWarning": "This will permanently delete the original file, thumbnail, and preview from disk. This action cannot be undone."
+      }
+    }
+  },
+  "collections": {
+    "shared": {
+      "defaultName": "All Posts",
+      "postCountOne": "{count} post",
+      "postCountOther": "{count} posts"
+    },
+    "bookmark": {
+      "dialogLabel": "Collections",
+      "title": "Collections",
+      "createCollection": "Create collection",
+      "namePlaceholder": "Collection name",
+      "empty": "No collections yet",
+      "savePost": "Save post",
+      "removeSavedPost": "Remove saved post",
+      "errors": {
+        "loadCollections": "Unable to load collections"
+      }
+    },
+    "list": {
+      "libraryUnavailableTitle": "Library storage unavailable",
+      "loadErrorTitle": "Could not load collections",
+      "loading": "Loading collections...",
+      "emptyTitle": "No collections yet",
+      "emptyDescription": "Saved posts will appear in All Posts."
+    },
+    "detail": {
+      "fallbackTitle": "Collection",
+      "libraryUnavailableTitle": "Library storage unavailable",
+      "loadErrorTitle": "Could not load collection",
+      "back": "Collections",
+      "options": "Collection options",
+      "actionsLabel": "Collection actions",
+      "emptyTitle": "{name} is empty",
+      "emptyDescriptionDefault": "Use the bookmark action under any post to save it here.",
+      "emptyDescriptionCustom": "Bookmarked posts assigned to this collection will appear here.",
+      "loading": "Loading collection...",
+      "menu": {
+        "delete": "Delete collection",
+        "edit": "Edit Collection",
+        "cancel": "Cancel"
+      },
+      "edit": {
+        "title": "Edit collection",
+        "saving": "Saving...",
+        "done": "Done",
+        "required": "Collection name is required.",
+        "createError": "Unable to create collection",
+        "updateError": "Unable to update collection"
+      },
+      "delete": {
+        "title": "Delete collection?",
+        "message": "When you delete this collection, the photos and videos will still be saved.",
+        "deleting": "Deleting...",
+        "confirm": "Delete",
+        "cancel": "Cancel",
+        "error": "Unable to delete collection"
+      }
+    }
+  },
+  "placesPage": {
+    "eyebrow": "Places",
+    "title": "All places",
+    "description": "Browse posts grouped from offline location data.",
+    "stats": {
+      "places": "Places",
+      "posts": "Posts"
+    },
+    "errors": {
+      "load": "Could not load places"
+    },
+    "searchPlaceholder": "Search names, regions, or coordinates...",
+    "sort": {
+      "postsDesc": "Most posts",
+      "nameAsc": "Name A-Z",
+      "nameDesc": "Name Z-A",
+      "countryAsc": "Country A-Z"
+    },
+    "resultsOne": "{count} result",
+    "resultsOther": "{count} results",
+    "loading": "Loading places...",
+    "emptyTitle": "No places indexed yet",
+    "emptyDescription": "Prepare offline place data and rebuild assignments from Settings to group posts by location.",
+    "noMatch": "No places match. Try a different search or sort.",
+    "metadataFallback": "Offline city-level place",
+    "postCountOne": "{count} post",
+    "postCountOther": "{count} posts",
+    "kinds": {
+      "manual": "Manual place",
+      "nearestCity": "Nearest city",
+      "cityMatch": "City match"
+    },
+    "readiness": {
+      "ready": "Ready",
+      "empty": "Empty"
+    }
+  },
+  "placePage": {
+    "errors": {
+      "load": "Could not load place"
+    },
+    "badge": "Offline place",
+    "coordinatesLabel": "coordinates",
+    "sourceLabel": "Source",
+    "approximateBadge": "Approximate city match",
+    "emptyTitle": "No posts for this place",
+    "emptyDescription": "Place assignments can be rebuilt from Settings after offline place data is prepared.",
+    "metadataFallback": "Offline city-level place",
+    "heroApproximate": "Grouped from stored photo GPS coordinates and matched to the nearest city for offline browsing.",
+    "heroExact": "Resolved from stored photo GPS coordinates and kept available offline.",
+    "postCountOne": "post",
+    "postCountOther": "posts",
+    "kind": {
+      "offline": "Offline",
+      "manual": "Manual",
+      "nearestCity": "Nearest city",
+      "city": "City",
+      "place": "place",
+      "match": "match"
+    }
+  },
+  "libraryPage": {
+    "eyebrow": "Library",
+    "title": "All folders",
+    "description": "Browse and search every indexed app folder.",
+    "stats": {
+      "folders": "Folders",
+      "posts": "Posts"
+    },
+    "errors": {
+      "load": "Could not load folders"
+    },
+    "searchPlaceholder": "Search names or path segments...",
+    "sort": {
+      "recentDesc": "Recently updated",
+      "imagesDesc": "Most posts",
+      "nameAsc": "Name A-Z",
+      "nameDesc": "Name Z-A",
+      "pathAsc": "Path A-Z"
+    },
+    "resultsOne": "{count} result",
+    "resultsOther": "{count} results",
+    "loading": "Loading folders...",
+    "emptyTitle": "No folders indexed yet",
+    "emptyDescription": "Add media-containing source folders under the gallery root and run a scan.",
+    "noMatch": "No folders match. Try a different search or filter.",
+    "topLevelSourceFolder": "Top-level source folder",
+    "postsCountOne": "{count} post",
+    "postsCountOther": "{count} posts",
+    "reelsCountOne": "{count} reel",
+    "reelsCountOther": "{count} reels",
+    "readiness": {
+      "ready": "Ready",
+      "empty": "Empty"
+    },
+    "moreOptions": "More options",
+    "openFolder": "Open folder",
+    "deleteFolder": "Delete folder",
+    "noRecentMedia": "No recent media",
+    "delete": {
+      "title": "Delete this app folder?",
+      "sourceTooTitle": "Delete the source folder too",
+      "sourceTooNoChildren": "Also remove the source folder itself instead of only deleting its direct posts.",
+      "sourceTooWithChildrenOne": "Also remove {count} child app folder and every file inside the subtree.",
+      "sourceTooWithChildrenOther": "Also remove {count} child app folders and every file inside the subtree.",
+      "warning": "Doing this will permanently delete the selected source folder and every child folder and file inside it, including unsupported files. This action cannot be undone.",
+      "directPostsOne": "{count} direct post",
+      "directPostsOther": "{count} direct posts",
+      "childFoldersOne": "{count} child app folder",
+      "childFoldersOther": "{count} child app folders",
+      "messageDeleteSource": "This will permanently delete {directPosts} and remove this source folder from the hard drive.",
+      "messageKeepChildren": "This will permanently delete {directPosts}. {childFolders} will be kept.",
+      "messageEmptyFolder": "This will permanently delete {directPosts}. The source folder itself will only be removed if it becomes empty.",
+      "confirmSubtree": "Delete folder subtree",
+      "confirmFolder": "Delete app folder",
+      "loadingSubtree": "Deleting subtree...",
+      "loadingFolder": "Deleting...",
+      "error": "Unable to delete this app folder."
+    }
+  },
+  "trashPage": {
+    "eyebrow": "Trash",
+    "title": "Deleted posts",
+    "description": "Posts moved here stay on disk until you permanently delete them.",
+    "selectedOne": "{count} selected post",
+    "selectedOther": "{count} selected posts",
+    "restoreButton": "Restore",
+    "deleteButton": "Permanently Delete",
+    "libraryUnavailableTitle": "Library storage unavailable",
+    "libraryUnavailableDescription": "Configured library storage is unavailable.",
+    "loadErrorTitle": "Could not load trash",
+    "loading": "Loading trash...",
+    "emptyTitle": "Trash is empty",
+    "emptyDescription": "Deleted posts will appear here so you can restore them or remove them permanently.",
+    "selectItem": "Select {label}",
+    "deselectItem": "Deselect {label}",
+    "trashedAt": "Trashed {date}",
+    "recently": "recently",
+    "openFolder": "Open folder",
+    "restoreDialog": {
+      "title": "Restore selected posts?",
+      "messageOne": "Restore {count} selected post to the app?",
+      "messageOther": "Restore {count} selected posts to the app?",
+      "confirm": "Restore",
+      "loading": "Restoring..."
+    },
+    "deleteDialog": {
+      "title": "Permanently delete selected posts?",
+      "messageOne": "This will permanently delete {count} selected post and remove the original file from disk.",
+      "messageOther": "This will permanently delete {count} selected posts and remove original files from disk.",
+      "confirm": "Permanently Delete",
+      "loading": "Deleting...",
+      "warning": "Original files, thumbnails, and previews will be removed permanently. This action cannot be undone."
+    },
+    "errors": {
+      "refresh": "Unable to refresh the updated library state.",
+      "processOne": "{count} post could not be processed.",
+      "processOther": "{count} posts could not be processed."
+    }
+  },
+  "explore": {
+    "back": "Back to explore posts",
+    "searchPlaceholder": "Search",
+    "clearSearch": "Clear search",
+    "recentTitle": "Recent",
+    "clearAll": "Clear all",
+    "tabsAria": "Search result tabs",
+    "tabs": {
+      "media": "Photos & Videos",
+      "folders": "App Folders"
+    },
+    "errors": {
+      "search": "Could not search posts",
+      "load": "Could not load explore"
+    },
+    "emptySearchTitle": "No matching photos or videos",
+    "emptySearchDescription": "Try a different filename or folder keyword.",
+    "loadingFolders": "Loading folders...",
+    "noFoldersFound": "No app folders found.",
+    "emptyTitle": "Nothing to explore yet",
+    "emptyDescription": "Index a few folders and this page will start surfacing posts here.",
+    "folderPostsOne": "{count} post",
+    "folderPostsOther": "{count} posts"
+  }
+}

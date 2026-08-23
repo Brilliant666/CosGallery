@@ -1,0 +1,1174 @@
+{
+  "common": {
+    "cancel": "Cancelar",
+    "close": "Cerrar",
+    "copy": "Copiar",
+    "description": "Descripción",
+    "loadMore": "Cargar más",
+    "loadingMore": "Cargando más...",
+    "name": "Nombre",
+    "newFeature": "Nueva función",
+    "open": "Abrir",
+    "retry": "Reintentar",
+    "save": "Guardar",
+    "saveChanges": "Guardar cambios",
+    "saved": "Guardado",
+    "saving": "Guardando...",
+    "youAreCaughtUp": "Ya viste todo",
+    "loading": "Cargando...",
+    "railViewer": {
+      "itemCountOne": "{count} elemento",
+      "itemCountOther": "{count} elementos",
+      "latestDate": "Último {date}",
+      "noRecentActivity": "Sin actividad reciente"
+    }
+  },
+  "app": {
+    "authLoading": {
+      "eyebrow": "Protección de acceso",
+      "title": "Verificando acceso",
+      "description": "Cargando el estado actual de la protección con contraseña."
+    }
+  },
+  "auth": {
+    "gate": {
+      "eyebrow": "Contraseña compartida",
+      "title": "Desbloquear Foldergram",
+      "passwordLabel": "Contraseña",
+      "descriptionPassword": "Esta biblioteca acepta la contraseña de administrador o la de visualización para el acceso local.",
+      "descriptionAdmin": "Esta biblioteca está protegida con la contraseña de administrador para acceso local y de homelab.",
+      "placeholderPassword": "Introduce la contraseña de administrador o de visualización",
+      "placeholderAdmin": "Introduce la contraseña de administrador",
+      "unlocking": "Desbloqueando...",
+      "unlock": "Desbloquear biblioteca",
+      "unableToSignIn": "No se pudo iniciar sesión."
+    },
+    "adminUnlock": {
+      "eyebrow": "Desbloqueo de administrador",
+      "title": "Desbloquear acceso de administrador",
+      "closeAria": "Cerrar el diálogo de desbloqueo de administrador",
+      "description": "Introduce la contraseña de administrador para abrir Ajustes, Papelera, escaneos, herramientas de reconstrucción y otras acciones solo para administradores.",
+      "passwordLabel": "Contraseña de administrador",
+      "placeholder": "Introduce la contraseña de administrador",
+      "unlocking": "Desbloqueando...",
+      "unlock": "Desbloquear administrador",
+      "unableToUnlock": "No se pudo desbloquear el acceso de administrador."
+    }
+  },
+  "nav": {
+    "primary": "Navegación principal",
+    "foldergramHome": "Inicio de Foldergram",
+    "home": "Inicio",
+    "reels": "Reels",
+    "search": "Buscar",
+    "library": "Biblioteca",
+    "places": "Lugares",
+    "collections": "Colecciones",
+    "more": "Más",
+    "trash": "Papelera",
+    "settings": "Ajustes",
+    "unlockAdmin": "Desbloquear admin",
+    "switchAppearance": "Cambiar apariencia",
+    "switchToDarkMode": "Cambiar al modo oscuro",
+    "switchToLightMode": "Cambiar al modo claro",
+    "signOut": "Cerrar sesión",
+    "returnToPublicView": "Volver a la vista pública",
+    "foldersSpotlight": "Carpetas destacadas",
+    "likesAriaLabel": "{label} ({count})",
+    "folderPosts": "{count} publicaciones"
+  },
+  "settings": {
+    "eyebrow": "Ajustes",
+    "title": "Controles de la biblioteca",
+    "description": "Administra escaneos, valores predeterminados de la app, acceso y el índice de la biblioteca.",
+    "sections": {
+      "navigation": "Secciones de ajustes",
+      "library": {
+        "label": "Escaneo y biblioteca",
+        "shortLabel": "Escaneo y biblioteca",
+        "description": "Indexa medios, reconstruye miniaturas y mantiene el índice de la biblioteca"
+      },
+      "general": {
+        "label": "Ajustes generales",
+        "description": "Modo de stories, carpetas excluidas y valores del feed"
+      },
+      "places": {
+        "label": "Lugares",
+        "description": "Búsqueda de ciudades sin conexión y asignación de lugares"
+      },
+      "access": {
+        "label": "Seguridad y acceso",
+        "shortLabel": "Seguridad y acceso",
+        "description": "Bloqueos con contraseña y roles de visualización"
+      },
+      "status": {
+        "label": "Estado del sistema",
+        "description": "Resumen de almacenamiento e historial de escaneos"
+      }
+    },
+    "places": {
+      "banner": {
+        "title": "Lugares a partir de los datos GPS de las fotos",
+        "description": "Agrupa las fotos con GPS por ciudad y etiquetas de ubicación sin conexión.",
+        "helper": "Prepara el conjunto de datos local de GeoNames y luego reconstruye las asignaciones de lugares para las fotos que ya están en tu biblioteca.",
+        "setup": "Configurar Lugares",
+        "dismissAria": "Descartar anuncio de Lugares",
+        "availableLater": "La descarga es opcional y la pestaña Lugares seguirá disponible más tarde en Configuración."
+      },
+      "section": {
+        "title": "Lugares sin conexión",
+        "description": "Prepara los datos de ciudades de GeoNames y luego reconstruye los enlaces de lugares a partir de las coordenadas existentes de las fotos.",
+        "prepared": "Preparado",
+        "notPrepared": "No preparado",
+        "datasetLabel": "Conjunto de datos",
+        "rowsLabel": "Filas",
+        "notImported": "No importado",
+        "importedAt": "Importado {value}.",
+        "fallbackDataset": "GeoNames cities500",
+        "prepareButton": "Preparar geodatos",
+        "preparingButton": "Preparando...",
+        "rebuildButton": "Reconstruir asignaciones de lugares",
+        "rebuildingButton": "Reconstruyendo...",
+        "loadStatusError": "No se pudo cargar el estado de lugares",
+        "actions": {
+          "ready": "Los datos de lugares sin conexión están listos.",
+          "prepareError": "No se pudieron preparar los datos de lugares sin conexión.",
+          "rebuilt": "Se reconstruyeron lugares para {assigned} de {processed} publicaciones.",
+          "rebuildError": "No se pudieron reconstruir las asignaciones de lugares."
+        }
+      }
+    },
+    "general": {
+      "migration": {
+        "eyebrow": "Migración de stories",
+        "title": "Esta biblioteca puede que ya use carpetas llamadas stories",
+        "description": "Foldergram ahora puede tratar stories/ como stories de perfil y destacados de forma predeterminada. Elige si quieres mantener el comportamiento heredado de las carpetas o cambiar al nuevo modo reservado de stories y luego vuelve a escanear la biblioteca.",
+        "dismissAria": "Descartar aviso de migración de stories",
+        "useFeature": "Usar función de Stories",
+        "keepLegacy": "Mantener comportamiento heredado",
+        "helper": "Elige aquí un modo y luego guárdalo abajo. Después ejecuta un escaneo de la biblioteca para que la estructura indexada coincida.",
+        "helperSaving": "Espera a que termine la actualización actual de ajustes."
+      },
+      "carouselsMigration": {
+        "eyebrow": "Migración de carruseles",
+        "title": "Esta biblioteca puede usar carpetas llamadas carousels",
+        "description": "Elige si AppFolder/carousels debe crear publicaciones con varios elementos o seguir como carpetas normales.",
+        "useFeature": "Usar publicaciones carrusel",
+        "keepFolders": "Mantener carpetas normales",
+        "helper": "Elige un modo y guárdalo abajo. Después, ejecuta un escaneo de la biblioteca para que las carpetas indexadas y las publicaciones carrusel coincidan."
+      },
+      "carouselsAnnouncement": {
+        "title": "Publicaciones carrusel",
+        "headline": "Las carpetas reservadas carousels/ pueden combinar varios archivos en una publicación",
+        "description": "Crea una carpeta hija directa dentro de AppFolder/carousels para cada carrusel y coloca directamente en ella entre 2 y 20 imágenes, imágenes animadas o vídeos. El orden natural de los nombres determina las diapositivas y el primer elemento se convierte en la portada. Los prefijos numéricos son opcionales.",
+        "dismissAria": "Descartar anuncio de publicaciones carrusel",
+        "showStructure": "Ver estructura de directorios de carruseles",
+        "hideStructure": "Ocultar estructura de directorios de carruseles"
+      },
+      "announcement": {
+        "title": "Stories",
+        "headline": "Las carpetas reservadas stories/ pueden alimentar las stories de las carpetas de la app",
+        "description": "Coloca medios directos en AppFolder/stories para el conjunto de stories del avatar y usa carpetas hijas directas para los círculos destacados. Las carpetas anidadas permanecen dentro del mismo destacado.",
+        "dismissAria": "Descartar anuncio de stories",
+        "showStructure": "Ver estructura de directorios",
+        "hideStructure": "Ocultar estructura de directorios"
+      },
+      "card": {
+        "title": "Ajustes generales",
+        "description": "Valores predeterminados de toda la app para idioma, títulos de carpetas anidadas, carpetas stories, carpetas excluidas, Inicio, Reels y carpetas de la app."
+      },
+      "language": {
+        "label": "Idioma de la aplicación",
+        "description": "Elige el idioma usado para la navegación, los diálogos y otras partes traducidas de la interfaz en este dispositivo.",
+        "helper": "Se aplica de inmediato en este navegador. Guarda los cambios abajo para convertir el idioma seleccionado en el predeterminado de toda la app. Las traducciones que falten usan el texto en inglés.",
+        "overrideNotice": "El valor predeterminado de la app es {savedLabel}. Este navegador está usando temporalmente {currentLabel} desde una configuración solo de este navegador. Guarda los cambios para convertir {currentLabel} en el predeterminado.",
+        "selectLabel": "Idioma de la aplicación",
+        "options": {
+          "en": "Inglés",
+          "es": "Español",
+          "zh": "Chino"
+        }
+      },
+      "homeFeed": {
+        "label": "Orden del feed de Inicio",
+        "description": "Elige el primer modo de feed que se muestra en Inicio.",
+        "closeMenuAria": "Cerrar menú de orden del feed de Inicio",
+        "options": {
+          "random": {
+            "label": "Aleatorio",
+            "description": "Mezcla estable."
+          },
+          "recent": {
+            "label": "Reciente",
+            "description": "Lo más nuevo primero."
+          },
+          "rediscover": {
+            "label": "Redescubrir",
+            "description": "Recupera selecciones más antiguas."
+          }
+        }
+      },
+      "reelsFeed": {
+        "label": "Orden del feed de Reels",
+        "description": "Elige el estilo de cola predeterminado cuando se abre Reels.",
+        "closeMenuAria": "Cerrar menú de orden del feed de Reels",
+        "options": {
+          "random": {
+            "label": "Aleatorio",
+            "description": "Mezcla estable para la sesión."
+          },
+          "recent": {
+            "label": "Reciente",
+            "description": "Los videos más nuevos primero."
+          },
+          "recommended": {
+            "label": "Recomendado",
+            "description": "Mezcla clasificada por afinidad."
+          }
+        }
+      },
+      "folderOrder": {
+        "label": "Orden de fotos de las carpetas de la app",
+        "description": "Elige el orden predeterminado de las fotos dentro de las carpetas de la app.",
+        "closeMenuAria": "Cerrar menú del orden de fotos de las carpetas de la app",
+        "options": {
+          "newest": {
+            "label": "Más nuevas primero",
+            "description": "Las fotos recientes aparecen primero."
+          },
+          "oldest": {
+            "label": "Más antiguas primero",
+            "description": "Las fotos anteriores aparecen primero."
+          }
+        }
+      },
+      "nestedFolderTitle": {
+        "label": "Formato del título de carpetas anidadas",
+        "description": "Elige cómo se nombran las carpetas anidadas de la app en toda la aplicación. Solo cambia la presentación.",
+        "closeMenuAria": "Cerrar menú del formato de título de carpetas anidadas",
+        "options": {
+          "folder": {
+            "label": "Solo nombre de la carpeta",
+            "description": "Muestra solo el nombre de la carpeta actual."
+          },
+          "parentPlusFolder": {
+            "label": "Padre + nombre de la carpeta",
+            "description": "Añade el padre inmediato como prefijo de las carpetas anidadas."
+          }
+        }
+      },
+      "storiesMode": {
+        "label": "Tratar las carpetas stories como carpetas normales de la app",
+        "scanRequired": "Requiere escaneo",
+        "explainAria": "Explicar la opción de carpetas stories",
+        "explainDescription": "Cuando esto permanece desactivado, AppFolder/stories se convierte en la fuente de las stories del avatar y de los círculos destacados. Actívalo solo si las carpetas llamadas literalmente stories deben seguir comportándose como carpetas normales en toda la app.",
+        "toggleLabel": "Cambiar el comportamiento de las carpetas stories",
+        "enabledDescription": "El modo heredado está activado. Las carpetas stories siguen siendo carpetas normales de la app en todas partes.",
+        "disabledDescription": "El modo reservado de stories está activado. AppFolder/stories alimenta las stories del avatar y los círculos destacados."
+      },
+      "carouselsMode": {
+        "label": "Tratar las carpetas carousels como carpetas normales",
+        "toggleLabel": "Cambiar el comportamiento de las carpetas carousels",
+        "enabledDescription": "El modo heredado está activo. Las carpetas carousels siguen siendo carpetas normales.",
+        "disabledDescription": "El modo carrusel está activo. Cada hijo directo de AppFolder/carousels se convierte en una publicación."
+      },
+      "excludedFolders": {
+        "label": "Carpetas de origen excluidas",
+        "description": "Omite carpetas coincidentes en cualquier lugar por nombre o por ruta relativa exacta bajo la raíz de la galería. Las rutas ocultas y el almacenamiento administrado por la app siguen excluyéndose automáticamente.",
+        "customRules": "Reglas personalizadas",
+        "envRulesLabel": "Reglas de entorno de solo lectura",
+        "envRulesDescription": "Cambia GALLERY_EXCLUDED_FOLDERS en .env o Docker y reinicia la app para actualizarlas.",
+        "envRulesEmpty": "No hay exclusiones de carpetas respaldadas por variables de entorno configuradas.",
+        "activeRulesLabel": "Reglas guardadas activas actualmente",
+        "activeRulesDescription": "Esto combina las reglas guardadas en el área de texto con cualquier entrada respaldada por variables de entorno. Las ediciones nuevas del área de texto aparecen aquí después de guardarlas.",
+        "activeRulesEmpty": "No hay reglas activas de carpetas excluidas guardadas o respaldadas por variables de entorno."
+      },
+      "actionNote": {
+        "loading": "Cargando las preferencias actuales de la app...",
+        "excludedAndOther": "Guarda las reglas de exclusión de carpetas junto con los otros cambios de toda la app. Después, ejecuta un escaneo de la biblioteca para reindexar correctamente los modos de carpetas reservadas y las carpetas excluidas.",
+        "excludedOnly": "Esto solo guarda las carpetas excluidas personalizadas. Después ejecuta un escaneo de la biblioteca para que esas carpetas desaparezcan del índice.",
+        "storiesAndDefaults": "Guarda juntos el comportamiento de las carpetas y los valores globales actualizados. Después, ejecuta un escaneo de la biblioteca para reindexar las carpetas afectadas.",
+        "storiesOnly": "Esto guarda el comportamiento de las carpetas reservadas. Después, ejecuta un escaneo de la biblioteca para reindexar con el modo seleccionado.",
+        "multipleDefaults": "Guarda juntos estos valores globales. El idioma se aplica de inmediato en este navegador; los visitantes de Inicio aún pueden cambiar de modo en la página principal; Reels, las carpetas de la app y los títulos de carpetas anidadas usan los valores predeterminados de la app.",
+        "languageOnly": "Esto cambia el idioma de inmediato en este navegador. Guárdalo también si quieres que el idioma seleccionado se convierta en el predeterminado de toda la app.",
+        "homeOnly": "Esto actualiza el primer modo de feed que se muestra en Inicio para esta app. Los visitantes aún pueden cambiar de modo desde la página principal.",
+        "reelsOnly": "Esto actualiza el estilo de cola usado cuando se abre Reels para esta app. Los visitantes no pueden cambiar de modo desde la página de Reels.",
+        "folderOnly": "Esto actualiza el orden de fotos predeterminado usado por las cuadrículas de carpetas de la app.",
+        "nestedFolderTitleOnly": "Esto actualiza cómo se etiquetan las carpetas anidadas de la app en toda la aplicación.",
+        "carouselReconciliation": "El modo de las carpetas de carrusel está guardado. Completa la acción de biblioteca indicada arriba para aplicarlo al índice.",
+        "idle": "Estos son los valores actuales de toda la app para idioma, Inicio, Reels, carpetas de la app, títulos de carpetas anidadas, carpetas stories, carpetas de carrusel y carpetas excluidas."
+      },
+      "rescanNotice": {
+        "rebuildRequired": "Guarda estos cambios y luego reconstruye el índice de la biblioteca para aplicar el comportamiento de carpetas seleccionado a la ubicación actual de la galería.",
+        "pendingRebuild": "Reconstruye el índice de la biblioteca para aplicar el modo guardado de las carpetas de carrusel a la ubicación actual de la galería.",
+        "pendingCarousels": "Ejecuta un escaneo de la biblioteca para aplicar el modo guardado de las carpetas de carrusel a las carpetas y publicaciones indexadas.",
+        "excludedAndStories": "Guarda estos cambios y luego ejecuta un escaneo de la biblioteca para actualizar el comportamiento de las carpetas reservadas y las carpetas excluidas.",
+        "excludedOnly": "Guarda este cambio y luego ejecuta un escaneo de la biblioteca antes de que las carpetas excluidas desaparezcan del índice.",
+        "storiesOnly": "Guarda este cambio y luego ejecuta un escaneo de la biblioteca antes de esperar que se actualicen las carpetas stories, las stories del avatar o los destacados.",
+        "carouselsOnly": "Guarda este cambio y luego ejecuta un escaneo de la biblioteca antes de esperar que se actualicen las publicaciones carrusel o las carpetas carousels.",
+        "storiesAndCarousels": "Guarda estos cambios y luego ejecuta un escaneo de la biblioteca antes de esperar que se actualice el comportamiento de las carpetas stories y carousels."
+      },
+      "feedback": {
+        "folderRulesSavedRebuild": "Se guardó el comportamiento de las carpetas. Reconstruye el índice de la biblioteca para aplicarlo a la ubicación actual de la galería.",
+        "settingsAndFolderRulesSaved": "Los ajustes se guardaron. Ejecuta un escaneo de la biblioteca para aplicar los cambios de reglas de carpetas.",
+        "folderRulesSaved": "Se guardó el comportamiento de las carpetas. Ejecuta un escaneo de la biblioteca para aplicar los cambios.",
+        "excludedFoldersSaved": "Se guardaron las carpetas excluidas. Ejecuta un escaneo de la biblioteca para aplicarlas.",
+        "settingsAndStoriesSaved": "Los ajustes se guardaron. Ejecuta un escaneo de la biblioteca para aplicar el cambio de carpetas stories.",
+        "storiesSaved": "Se guardó el comportamiento de las carpetas stories. Ejecuta un escaneo de la biblioteca para aplicarlo.",
+        "carouselsSaved": "Se guardó el comportamiento de las carpetas de carrusel. Ejecuta un escaneo de la biblioteca para aplicarlo.",
+        "defaultsSaved": "Se actualizaron los valores predeterminados de toda la app.",
+        "languageSaved": "El idioma predeterminado de la app se guardó como {label}.",
+        "homeSaved": "La página de Inicio ahora se abre con {label}.",
+        "reelsSaved": "Reels ahora se abre con {label}.",
+        "folderOrderSaved": "Las carpetas de la app ahora se abren con {label}.",
+        "nestedFolderTitleSaved": "Las carpetas anidadas de la app ahora usan {label}.",
+        "parts": {
+          "appLanguage": "idioma de la app",
+          "excludedFolders": "carpetas excluidas",
+          "storiesFolderHandling": "comportamiento de las carpetas stories",
+          "carouselsFolderHandling": "comportamiento de las carpetas de carrusel",
+          "homeFeedDefault": "predeterminado del feed de Inicio",
+          "reelsFeedDefault": "predeterminado de Reels",
+          "appFolderOrder": "orden de las carpetas de la app",
+          "nestedFolderTitles": "títulos de carpetas anidadas"
+        }
+      },
+      "errors": {
+        "validateExcludedFolders": "No se pudieron validar las reglas de carpetas excluidas.",
+        "update": "No se pudieron actualizar los ajustes generales.",
+        "partialUpdate": "Se guardaron algunos ajustes ({parts}), pero la actualización no terminó: {message}"
+      }
+    },
+    "library": {
+      "legacyMigration": {
+        "title": "Migración heredada de derivados pendiente",
+        "messageOne": "{count} registro de medio indexado aún usa las antiguas rutas reflejadas de miniaturas y vistas previas. Ejecuta Escanear biblioteca para moverlo al almacenamiento por clave de recurso.",
+        "messageOther": "{count} registros de medios indexados aún usan las antiguas rutas reflejadas de miniaturas y vistas previas. Ejecuta Escanear biblioteca para moverlos al almacenamiento por clave de recurso."
+      },
+      "carouselReconciliation": {
+        "title": "Actualización de carpetas de carrusel pendiente",
+        "scanDescription": "El modo guardado de las carpetas de carrusel aún no se ha aplicado al índice. Ejecuta Escanear biblioteca para actualizar las carpetas y publicaciones.",
+        "rebuildDescription": "El modo guardado de las carpetas de carrusel aún no se ha aplicado al índice. Usa Reconstruir índice de la biblioteca abajo para aplicarlo a la ubicación actual de la galería."
+      },
+      "scanCard": {
+        "title": "Escanear biblioteca",
+        "description": "Ejecuta un escaneo después de añadir carpetas o cuando quieras refrescar los medios indexados."
+      },
+      "statusLabel": {
+        "storageUnavailable": "Almacenamiento no disponible",
+        "scanInProgress": "Escaneo en progreso",
+        "rebuildActive": "Reconstrucción activa",
+        "ready": "Listo"
+      },
+      "scanButton": {
+        "active": "Escaneando biblioteca...",
+        "idle": "Ejecutar escaneo de la biblioteca"
+      },
+      "scanActionNote": {
+        "loading": "Cargando el estado actual de la biblioteca...",
+        "rebuildRequired": "Reconstruye primero el índice de la biblioteca porque cambió la ubicación de la galería.",
+        "otherTaskActive": "Hay otra tarea de biblioteca en ejecución. El progreso en vivo aparece en la barra de estado fija.",
+        "progress": "El progreso en vivo aparece en la barra de estado fija.",
+        "legacyMigration": "Ejecuta Escanear biblioteca para mover miniaturas y vistas previas reflejadas heredadas al diseño de almacenamiento con claves de recursos.",
+        "carouselReconciliation": "Ejecuta Escanear biblioteca para aplicar el modo guardado de las carpetas de carrusel a las carpetas y publicaciones indexadas.",
+        "idle": "Los escaneos comprueban medios añadidos, actualizados o faltantes."
+      },
+      "thumbnailCard": {
+        "title": "Regenerar miniaturas",
+        "description": "Reconstruye miniaturas del feed y del perfil más pósteres de video solo a partir de medios indexados. Los archivos originales no se ven afectados."
+      },
+      "thumbnailButton": {
+        "active": "Regenerando...",
+        "idle": "Regenerar miniaturas"
+      },
+      "thumbnailActionNote": {
+        "loading": "Cargando el estado actual de la biblioteca...",
+        "rebuildRequired": "No disponible hasta que se reconstruya el índice de la biblioteca para la nueva ubicación de la galería.",
+        "progress": "El progreso en vivo aparece en la barra de estado fija.",
+        "rebuildActive": "Espera a que termine la reconstrucción completa primero.",
+        "scanActive": "Espera a que termine el escaneo actual primero.",
+        "legacyMigration": "Esto conserva las rutas actuales de las miniaturas y no migra los derivados reflejados heredados. Ejecuta Escanear biblioteca para moverlos al almacenamiento con claves de recursos.",
+        "idle": "Usa esto para una actualización más rápida solo de miniaturas."
+      },
+      "dangerZone": {
+        "title": "Zona de peligro",
+        "recommended": "Recomendado",
+        "rebuildTitle": "Reconstruir índice de la biblioteca",
+        "rebuildDescription": "Restablece el índice de la biblioteca, reutiliza medios en caché coincidentes y genera solo los derivados faltantes desde la raíz actual de la galería.",
+        "currentGalleryRoot": "Raíz actual de la galería",
+        "previousGalleryRoot": "Raíz anterior de la galería"
+      },
+      "rebuildButton": {
+        "active": "Reconstruyendo...",
+        "idle": "Reconstruir índice de la biblioteca"
+      },
+      "rebuildActionNote": {
+        "loading": "Cargando el estado actual de la biblioteca...",
+        "progress": "El progreso en vivo aparece en la barra de estado fija.",
+        "thumbnailActive": "Espera a que termine primero la regeneración de miniaturas.",
+        "scanActive": "Espera a que termine el escaneo actual primero.",
+        "rebuildRequired": "Recomendado porque cambió la ubicación de la galería.",
+        "idle": "Usa esto para restablecer el índice y reutilizar derivados coincidentes del índice anterior de la biblioteca."
+      },
+      "dialogs": {
+        "rebuildTitle": "¿Reconstruir el índice actual de la biblioteca?",
+        "rebuildMessage": "Esto borrará las tablas indexadas de carpetas, publicaciones, me gusta e historial de escaneos, y luego volverá a escanear la raíz activa de la galería. Las miniaturas y vistas previas existentes del índice anterior se reutilizarán cuando sigan coincidiendo con los archivos actuales, y solo se generarán derivados faltantes o modificados. Los archivos originales de la galería no se eliminarán.",
+        "rebuildConfirm": "Reconstruir índice de la biblioteca",
+        "rebuildLoading": "Reconstruyendo...",
+        "thumbnailsTitle": "¿Regenerar solo miniaturas?",
+        "thumbnailsMessage": "Esto eliminará las miniaturas generadas del feed y del perfil más las imágenes póster de video, y luego las reconstruirá desde la biblioteca indexada actual usando la ruta de miniatura actual de cada elemento. Las vistas previas, los me gusta, el historial de escaneos y los registros indexados de la biblioteca no se cambiarán. Los archivos originales de la galería no se eliminarán.",
+        "thumbnailsConfirm": "Regenerar miniaturas",
+        "thumbnailsLoading": "Regenerando..."
+      },
+      "errors": {
+        "startScan": "No se pudo iniciar un escaneo de la biblioteca.",
+        "rebuild": "No se pudo reconstruir el índice actual de la biblioteca.",
+        "regenerate": "No se pudieron regenerar las miniaturas."
+      }
+    },
+    "notices": {
+      "scanWarning": {
+        "eyebrow": "Aviso de escaneo",
+        "title": "El escaneo terminó con {count} aviso estructural",
+        "title_plural": "El escaneo terminó con {count} avisos estructurales"
+      },
+      "scanError": {
+        "eyebrow": "El escaneo necesita atención",
+        "title": "El último escaneo terminó con errores",
+        "fullReportPrefix": "Informe completo:",
+        "dismissAria": "Descartar advertencia del escaneo",
+        "actionNote": "Ejecuta un nuevo escaneo de la biblioteca para reintentar medios fallidos y completar miniaturas o vistas previas faltantes.",
+        "messages": {
+          "genericNoDetails": "Algunos medios fallaron durante la última ejecución. Vuelve a escanear la biblioteca para reintentar cualquier archivo omitido y la generación de derivados.",
+          "ffmpegMissing": "Faltan herramientas de procesamiento de video en el entorno del servidor. Instala FFmpeg para que los escaneos puedan leer metadatos de video y generar derivados de video.",
+          "withReport": "Algunos medios fallaron durante la última ejecución. Revisa el error de ejemplo y la ruta del informe completo a continuación, luego vuelve a escanear la biblioteca para reintentar medios fallidos y la generación de derivados.",
+          "withSample": "Algunos medios fallaron durante la última ejecución. Revisa el error de ejemplo a continuación, luego vuelve a escanear la biblioteca para reintentar cualquier archivo omitido y la generación de derivados."
+        },
+        "detailMore": "{line} (+{count} más)"
+      },
+      "ignoredRootMedia": {
+        "dismissAria": "Descartar advertencia de la raíz de la galería",
+        "messageOne": "Se está ignorando {count} archivo compatible en la raíz de la galería. Muévelo a una carpeta dentro de la raíz de la galería para crear carpetas de la app. Los archivos colocados directamente en la raíz de la galería se ignoran.",
+        "messageOther": "Se están ignorando {count} archivos compatibles en la raíz de la galería. Muévelos a una carpeta dentro de la raíz de la galería para crear carpetas de la app. Los archivos colocados directamente en la raíz de la galería se ignoran."
+      }
+    },
+    "access": {
+      "section": {
+        "title": "Acceso de administrador y visor",
+        "description": "Protege las acciones de administrador con una contraseña de administrador y, opcionalmente, emite una contraseña de visor separada para sesiones solo de navegación.",
+        "locked": "Admin bloqueado",
+        "open": "Acceso abierto"
+      },
+      "fields": {
+        "adminPassword": "Contraseña de administrador",
+        "confirmPassword": "Confirmar contraseña",
+        "currentPassword": "Contraseña actual",
+        "newPassword": "Nueva contraseña",
+        "confirmNewPassword": "Confirmar nueva contraseña",
+        "viewerPassword": "Contraseña del visor",
+        "confirmViewerPassword": "Confirmar contraseña del visor"
+      },
+      "placeholders": {
+        "minimumLength": "Mínimo {count} caracteres",
+        "repeatPassword": "Repite la contraseña",
+        "enterNewViewerPassword": "Introduce una nueva contraseña de visor",
+        "repeatNewViewerPassword": "Repite la nueva contraseña del visor",
+        "repeatViewerPassword": "Repite la contraseña del visor"
+      },
+      "enable": {
+        "description": "La contraseña de administrador se almacena como un hash de una sola vía y desbloquea este navegador con una cookie de sesión firmada.",
+        "buttonLoading": "Activando...",
+        "buttonIdle": "Activar contraseña de administrador",
+        "success": "La contraseña de administrador ya está activada para esta instancia de Foldergram.",
+        "error": "No se pudo activar la contraseña de administrador."
+      },
+      "change": {
+        "title": "Cambiar contraseña de administrador",
+        "description": "Actualiza la contraseña de administrador e invalida las sesiones anteriores.",
+        "showForm": "Cambiar contraseña",
+        "hideForm": "Ocultar formulario",
+        "helper": "Usa al menos 8 caracteres. Cambiar la contraseña cerrará las sesiones anteriores.",
+        "buttonLoading": "Actualizando...",
+        "buttonIdle": "Cambiar contraseña de administrador",
+        "missingCurrent": "Introduce la contraseña actual para cambiarla.",
+        "success": "La contraseña de administrador se actualizó y las sesiones existentes fueron invalidadas.",
+        "error": "No se pudo cambiar la contraseña de administrador."
+      },
+      "viewer": {
+        "title": "Acceso de visor",
+        "description": "Emite una contraseña solo para navegación para sesiones de visor o abre la biblioteca para la visualización pública anónima.",
+        "modes": {
+          "adminOnlyTitle": "Solo administrador",
+          "adminOnlyDescription": "Solo la contraseña de administrador puede desbloquear la app.",
+          "viewerPasswordTitle": "Contraseña de visor",
+          "viewerPasswordDescription": "Permite un inicio de sesión de visor separado que puede navegar y usar me gusta compartidos sin ver controles de administrador.",
+          "publicTitle": "Público",
+          "publicDescription": "Permite la navegación anónima con favoritos locales del navegador mientras mantiene el desbloqueo de administrador disponible desde Más."
+        },
+        "status": {
+          "adminPasswordOff": "Contraseña de admin desactivada",
+          "viewerPasswordOn": "Contraseña de visor activada",
+          "publicViewerOn": "Visor público activado",
+          "adminOnly": "Solo administrador"
+        },
+        "summary": {
+          "enableAdminFirst": "Activa primero la contraseña de administrador",
+          "viewerPasswordEnabled": "El acceso con contraseña de visor está activado",
+          "publicEnabled": "El acceso de visor público está activado",
+          "off": "El acceso de visor está desactivado"
+        },
+        "summaryCopy": {
+          "enableAdminFirst": "La configuración de acceso de visor estará disponible después de activar la contraseña de administrador.",
+          "viewerPasswordEnabled": "Los visores pueden iniciar sesión con la contraseña de visor separada, usar me gusta compartidos y navegar sin controles de administrador. Para reemplazar esa contraseña, introduce una nueva abajo. No se requiere la contraseña actual del visor.",
+          "publicEnabled": "Cualquiera que pueda acceder a este Foldergram puede navegar sin iniciar sesión. Los favoritos permanecen solo en el navegador actual, y los administradores pueden elevar desde Más con la contraseña de administrador.",
+          "off": "Solo la contraseña de administrador puede desbloquear la app en este momento. Activa el modo de contraseña de visor abajo si quieres un inicio de sesión solo de navegación."
+        },
+        "helper": {
+          "viewerPasswordRotate": "Introduce una nueva contraseña de visor abajo para rotarla. No necesitas la contraseña actual del visor.",
+          "viewerPasswordNew": "Los inicios de sesión de visor obtienen me gusta compartidos pero no pueden acceder a Configuración, Papelera ni a ninguna acción destructiva.",
+          "public": "Los visitantes anónimos pueden navegar de inmediato, usar favoritos locales del navegador y desbloquear acceso de administrador desde Más cuando sea necesario.",
+          "disableFromPassword": "Guardar esto desactivará los inicios de sesión de visor y devolverá la app al acceso solo de administrador.",
+          "disableFromPublic": "Guardar esto desactivará la navegación pública y devolverá la app al acceso solo de administrador.",
+          "off": "El acceso de visor está desactivado, así que solo la contraseña de administrador puede desbloquear la app."
+        },
+        "buttons": {
+          "updateViewerPassword": "Actualizar contraseña de visor",
+          "enableViewerAccess": "Activar acceso de visor",
+          "savePublicAccess": "Guardar acceso público",
+          "enablePublicAccess": "Activar acceso público",
+          "disableViewerAccess": "Desactivar acceso de visor",
+          "saveViewerAccess": "Guardar acceso de visor"
+        },
+        "success": {
+          "password": "El acceso con contraseña de visor está activado. La contraseña del visor se guardó.",
+          "public": "El acceso público de visor está activado. Los visitantes anónimos ya pueden navegar con favoritos locales del navegador.",
+          "off": "El acceso de visor se ha desactivado. Ahora solo se permiten inicios de sesión de administrador."
+        },
+        "error": "No se pudo actualizar el acceso de visor."
+      },
+      "danger": {
+        "title": "Zona de peligro",
+        "disableTitle": "Desactivar contraseña de administrador",
+        "disableDescription": "Vuelve a desactivar la contraseña de administrador para esta instancia de Foldergram.",
+        "showForm": "Desactivar acceso",
+        "hideForm": "Ocultar formulario",
+        "buttonLoading": "Desactivando...",
+        "buttonIdle": "Desactivar contraseña de administrador",
+        "signOut": "Cerrar sesión",
+        "signOutError": "No se pudo cerrar la sesión.",
+        "missingCurrent": "Introduce la contraseña actual para desactivar la protección.",
+        "success": "La contraseña de administrador se ha desactivado.",
+        "error": "No se pudo desactivar la contraseña de administrador."
+      },
+      "authProtection": {
+        "enabled": "La protección de administrador está activa para esta sesión del navegador. Usa los controles de abajo para rotar la contraseña de administrador, configurar el acceso de visor, cerrar sesión o volver a desactivar la protección.",
+        "disabled": "La protección está desactivada actualmente. Cualquiera que pueda acceder a esta app en tu red puede navegar por la biblioteca con acceso local completo hasta que actives una contraseña de administrador."
+      },
+      "validation": {
+        "minLength": "La contraseña debe tener al menos {count} caracteres.",
+        "empty": "La contraseña no puede estar vacía.",
+        "mismatch": "La confirmación de la contraseña no coincide."
+      }
+    },
+    "status": {
+      "never": "Nunca",
+      "storage": {
+        "available": "Disponible",
+        "unavailable": "No disponible"
+      },
+      "libraryStatus": {
+        "title": "Estado de la biblioteca",
+        "description": "Estado actual del almacenamiento y del índice.",
+        "storage": "Almacenamiento",
+        "folders": "Carpetas",
+        "indexedPosts": "Publicaciones indexadas",
+        "indexedVideos": "Videos indexados"
+      },
+      "lastScan": {
+        "title": "Último escaneo",
+        "description": "La ejecución completada más reciente registrada por la app.",
+        "status": "Estado",
+        "finished": "Finalizado",
+        "filesScanned": "Archivos escaneados",
+        "changes": "Cambios",
+        "statusValues": {
+          "none": "Aún no hay escaneos completados",
+          "completed": "completado",
+          "completedWithErrors": "completado con errores",
+          "failed": "fallido",
+          "running": "en ejecución"
+        },
+        "changeValues": {
+          "new": "nuevos",
+          "updated": "actualizados",
+          "removed": "eliminados"
+        }
+      }
+    }
+  },
+  "home": {
+    "sidebar": {
+      "ariaLabel": "Recomendaciones de carpetas",
+      "suggestedFolders": "Carpetas sugeridas",
+      "viewLikes": "Ver me gusta",
+      "viewFavorites": "Ver favoritos",
+      "openFolder": "Abrir",
+      "openSourceText": "Foldergram es de código abierto.",
+      "viewOnGitHub": "Ver en GitHub"
+    }
+  },
+  "likes": {
+    "labels": {
+      "sharedCollection": "Me gusta",
+      "localCollection": "Favoritos",
+      "sharedSection": "Publicaciones con me gusta",
+      "localSection": "Publicaciones favoritas"
+    },
+    "view": {
+      "rebuilding": "Se está reconstruyendo el índice de la biblioteca. {label} volverá cuando termine de cargarse la biblioteca actualizada.",
+      "sectionsAria": "Secciones de {label}"
+    },
+    "states": {
+      "sharedEmptyTitle": "Aún no hay publicaciones con me gusta",
+      "localEmptyTitle": "Aún no hay favoritos",
+      "sharedEmptyDescription": "Toca el corazón debajo de cualquier publicación y aparecerá aquí.",
+      "localEmptyDescription": "Toca el corazón debajo de cualquier publicación y aparecerá aquí en este navegador.",
+      "sharedLoadingLabel": "Cargando me gusta...",
+      "localLoadingLabel": "Cargando favoritos...",
+      "sharedErrorTitle": "No se pudieron cargar los me gusta",
+      "localErrorTitle": "No se pudieron cargar los favoritos"
+    },
+    "actions": {
+      "likePost": "Marcar me gusta en la publicación",
+      "unlikePost": "Quitar me gusta de la publicación",
+      "favoritePost": "Agregar publicación a favoritos",
+      "removeFavoriteFromPost": "Quitar publicación de favoritos"
+    },
+    "errors": {
+      "loadShared": "No se pudieron cargar los me gusta",
+      "loadLocal": "No se pudieron cargar los favoritos",
+      "updateShared": "No se pudieron actualizar los me gusta",
+      "updateLocal": "No se pudieron actualizar los favoritos"
+    }
+  },
+  "moments": {
+    "rails": {
+      "moments": {
+        "title": "Momentos",
+        "description": "Cápsulas de recuerdos formadas por las fechas reales de captura de tu biblioteca.",
+        "singularLabel": "Momento"
+      },
+      "highlights": {
+        "title": "Historias",
+        "description": "Conjuntos de estilo story seleccionados de tu biblioteca cuando las fechas de captura son escasas o sintéticas.",
+        "singularLabel": "Historia"
+      }
+    },
+    "capsules": {
+      "onThisDay": {
+        "title": "Un día como hoy",
+        "subtitle": "{date} en años anteriores"
+      },
+      "thisWeekPreviousYears": {
+        "title": "Esta semana",
+        "subtitle": "{range} en años anteriores"
+      },
+      "fromLastYear": {
+        "title": "Por estas fechas el año pasado",
+        "subtitle": "Un repaso a {monthYear}"
+      },
+      "highlightRecentBatches": {
+        "title": "Lotes recientes",
+        "subtitle": "Las últimas tandas reunidas en un solo set",
+        "dateContextOne": "{count} lote",
+        "dateContextOther": "{count} lotes"
+      },
+      "highlightForgottenFavorites": {
+        "title": "Favoritos olvidados",
+        "subtitle": "Publicaciones antiguas con me gusta que merece la pena volver a ver",
+        "dateContext": "Con me gusta y con más de 6 meses"
+      },
+      "highlightDeepCuts": {
+        "title": "Joyas ocultas",
+        "subtitle": "Publicaciones antiguas rescatadas del archivo",
+        "dateContext": "Con más de 6 meses"
+      },
+      "highlightLuckyDip": {
+        "title": "Sorpresa aleatoria",
+        "subtitle": "Una mezcla juguetona de toda la biblioteca",
+        "dateContext": "Estable por hoy"
+      }
+    },
+    "view": {
+      "rebuilding": "Se está reconstruyendo el índice de la biblioteca. Esta vista volverá a poblarse cuando el carril de inicio renovado esté listo.",
+      "loading": "Cargando {label}...",
+      "loadError": "No se pudo cargar {label}",
+      "emptyTitle": "Este {label} está vacío",
+      "emptyDescription": "Prueba otro {label} desde la página de inicio.",
+      "postCount": "{count} publicaciones"
+    }
+  },
+  "folder": {
+    "shared": {
+      "topLevelSourceFolder": "Carpeta fuente de nivel superior"
+    },
+    "header": {
+      "openStories": "Abrir stories de la carpeta",
+      "openAvatar": "Abrir avatar de la carpeta",
+      "editButton": "Editar carpeta de la app",
+      "shareButton": "Compartir carpeta",
+      "posts": "{count} publicaciones",
+      "reels": "{count} reels",
+      "updated": "{date} actualizado",
+      "libraryPath": "Ruta de la biblioteca",
+      "expandDescription": "Expandir descripción",
+      "collapseDescription": "Contraer descripción",
+      "errors": {
+        "updateProfile": "No se pudo actualizar el perfil"
+      }
+    },
+    "profileModal": {
+      "title": "Editar carpeta de la app",
+      "namePlaceholder": "Nombre visible de la carpeta",
+      "descriptionPlaceholder": "Añade una descripción a esta carpeta...",
+      "errors": {
+        "nameRequired": "El nombre es obligatorio."
+      }
+    },
+    "shareModal": {
+      "title": "Compartir carpeta",
+      "publicUrl": "URL pública de la carpeta",
+      "accessSummaryTitle": "Acceso actual",
+      "accessSummaryBoth": "Enlaces activos: {count}. Acceso con contraseña: habilitado.",
+      "accessSummaryLinks": "Enlaces activos: {count}. Acceso con contraseña: desactivado.",
+      "accessSummaryPassword": "Enlaces activos: 0. Acceso con contraseña: habilitado.",
+      "accessSummaryNone": "Enlaces activos: 0. Acceso con contraseña: desactivado.",
+      "independentMethods": "Los enlaces y el acceso con contraseña funcionan de forma independiente. Puedes habilitar uno o ambos.",
+      "linkSection": "Enlaces compartidos",
+      "linkDescription": "Cualquiera que tenga un enlace activo puede abrir esta carpeta sin contraseña. Cada enlace caduca o puede revocarse de forma independiente.",
+      "activeLinks": "{count} activos",
+      "expiration": "Caducidad del enlace",
+      "customExpiration": "Caducidad personalizada",
+      "createLink": "Crear enlace",
+      "creating": "Creando...",
+      "createdLink": "Copia este enlace ahora",
+      "revoke": "Revocar",
+      "noLinks": "Todavía no hay enlaces compartidos.",
+      "passwordSection": "Acceso con contraseña",
+      "passwordDescription": "Cualquiera que tenga la dirección de la carpeta y la contraseña puede abrirla. Esto no protege los enlaces compartidos con contraseña.",
+      "passwordEnabled": "Activada",
+      "passwordOff": "Desactivada",
+      "passwordLabel": "Contraseña",
+      "passwordPlaceholder": "Mínimo 8 caracteres",
+      "setPassword": "Establecer contraseña",
+      "changePassword": "Cambiar contraseña",
+      "removePassword": "Quitar contraseña",
+      "copyPasswordUrl": "Copiar dirección de la carpeta",
+      "passwordSharingHint": "Envía la dirección de la carpeta y la contraseña por separado.",
+      "neverExpires": "No caduca",
+      "expiresAt": "Caduca {date}",
+      "linkMeta": "Prefijo del token {prefix}. Creado {date}.",
+      "presets": {
+        "oneHour": "1 hora",
+        "day": "24 horas",
+        "week": "7 días",
+        "custom": "Personalizada",
+        "unlimited": "Sin caducidad"
+      },
+      "status": {
+        "active": "Activo",
+        "expired": "Caducado",
+        "revoked": "Revocado"
+      },
+      "notices": {
+        "linkCreated": "Enlace creado. Se abre sin contraseña hasta que caduque o sea revocado.",
+        "linkRevoked": "Enlace compartido revocado.",
+        "linkRevokedWithPassword": "Enlace compartido revocado. El acceso con contraseña sigue habilitado.",
+        "passwordEnabled": "Acceso con contraseña habilitado.",
+        "passwordEnabledWithLinks": "Acceso con contraseña habilitado. Los enlaces existentes siguen funcionando sin contraseña.",
+        "passwordRemoved": "Acceso con contraseña eliminado.",
+        "passwordRemovedWithLinks": "Acceso con contraseña eliminado. Los enlaces activos siguen funcionando."
+      },
+      "errors": {
+        "createLink": "No se pudo crear el enlace.",
+        "savePassword": "No se pudo guardar la contraseña de la carpeta.",
+        "revokeLink": "No se pudo revocar el enlace compartido.",
+        "removePassword": "No se pudo eliminar el acceso con contraseña."
+      }
+    },
+    "tabs": {
+      "posts": "Publicaciones",
+      "reels": "Reels",
+      "sections": "Secciones de carpeta"
+    }
+  },
+  "share": {
+    "loadingEyebrow": "Carpeta compartida",
+    "loadingTitle": "Abriendo carpeta compartida",
+    "passwordEyebrow": "Carpeta compartida",
+    "passwordTitle": "Introduce la contraseña de la carpeta",
+    "passwordDescription": "Introduce la contraseña reutilizable de la carpeta para continuar.",
+    "passwordFallbackDescription": "Este enlace compartido ya no está disponible. Si conoces la contraseña de la carpeta, todavía puedes acceder a ella.",
+    "passwordLabel": "Contraseña",
+    "unlocking": "Desbloqueando...",
+    "unlock": "Desbloquear carpeta",
+    "expiredTitle": "Este enlace compartido no está disponible",
+    "expiredDescription": "El enlace puede estar caducado, revocado o sin token.",
+    "errorTitle": "No se pudo abrir la carpeta compartida",
+    "errorDescription": "No se pudo cargar esta carpeta compartida.",
+    "backToFolder": "Volver a la carpeta compartida",
+    "postErrorTitle": "No se pudo cargar la publicación compartida"
+  },
+  "reels": {
+    "view": {
+      "libraryUnavailableTitle": "Almacenamiento de la biblioteca no disponible",
+      "loadErrorTitle": "No se pudieron cargar los reels",
+      "loadingTitle": "Cargando reels",
+      "loadingDescription": "Preparando una cola solo de video a partir de tu biblioteca indexada.",
+      "emptyTitle": "No hay reels disponibles",
+      "emptyDescription": "Agrega videos indexados a tu biblioteca y aparecerán aquí después del próximo escaneo.",
+      "navigationAria": "Navegación de reels",
+      "previous": "Reel anterior",
+      "next": "Siguiente reel"
+    },
+    "rail": {
+      "hideDetails": "Ocultar detalles del reel",
+      "showDetails": "Mostrar detalles del reel",
+      "downloadOriginal": "Descargar archivo original",
+      "openFolder": "Abrir carpeta"
+    },
+    "info": {
+      "ariaLabel": "Detalles del reel",
+      "eyebrow": "Detalles del reel",
+      "hideDetails": "Ocultar detalles del reel",
+      "openFolder": "Abrir carpeta",
+      "topLevelSourceFolder": "Carpeta fuente de nivel superior",
+      "unavailable": "No disponible",
+      "video": "Video",
+      "loadError": "No se pudieron cargar los detalles del reel.",
+      "resolution": "Resolución",
+      "length": "Duración",
+      "size": "Tamaño",
+      "format": "Formato",
+      "loading": "Cargando detalles del reel...",
+      "folderPath": "Ruta de la carpeta",
+      "mimeType": "Tipo MIME"
+    }
+  },
+  "post": {
+    "carousel": {
+      "label": "Carrusel con {count} elementos",
+      "position": "{current} / {count}",
+      "previousItem": "Elemento anterior del carrusel",
+      "nextItem": "Elemento siguiente del carrusel",
+      "open": "Abrir carrusel con {count} elementos"
+    },
+    "captionModal": {
+      "title": "Editar descripción",
+      "captionLabel": "Descripción",
+      "placeholder": "Escribe una descripción...",
+      "resetToFilename": "Restablecer al nombre del archivo",
+      "errors": {
+        "update": "No se pudo actualizar la descripción"
+      }
+    },
+    "viewer": {
+      "close": "Cerrar publicación",
+      "previous": "Publicación anterior",
+      "next": "Siguiente publicación",
+      "showDetails": "Mostrar detalles de la publicación",
+      "hideDetails": "Ocultar detalles de la publicación",
+      "togglePlayback": "Alternar reproducción",
+      "toggleSound": "Alternar sonido",
+      "toggleFullscreen": "Alternar pantalla completa",
+      "switchToPreviewQuality": "Cambiar a calidad de vista previa",
+      "switchToHdOriginal": "Cambiar al original en HD",
+      "previewQuality": "Calidad de vista previa",
+      "hdOriginal": "Original en HD",
+      "openFolder": "Abrir carpeta",
+      "editCaption": "Editar descripción",
+      "folderPath": "Ruta de la carpeta",
+      "stats": {
+        "dimensions": "Dimensiones",
+        "type": "Tipo",
+        "duration": "Duración",
+        "size": "Tamaño",
+        "place": "Lugar"
+      },
+      "metadata": {
+        "location": "Ubicación",
+        "camera": "Cámara",
+        "lens": "Lente",
+        "aperture": "Apertura",
+        "shutter": "Obturación",
+        "iso": "ISO",
+        "focalLength": "Distancia focal"
+      },
+      "videoType": "Video ({mimeType})",
+      "setAsCover": "Establecer como portada de la carpeta",
+      "downloadOriginalFile": "Descargar archivo original",
+      "openOriginalFile": "Abrir archivo original",
+      "deletePost": "Eliminar publicación"
+    },
+    "feedCard": {
+      "openStories": "Abrir historias de {name}",
+      "openFolderAvatar": "Abrir {name}",
+      "openReel": "Abrir reel",
+      "openPost": "Abrir publicación",
+      "moreOptions": "Más opciones",
+      "delete": {
+        "title": "¿Eliminar esta publicación?",
+        "messagePermanent": "Esto eliminará permanentemente la publicación de la app y quitará el archivo original del disco.",
+        "messageTrash": "Esto eliminará la publicación de la app y la moverá a la Papelera. El archivo original seguirá en el disco a menos que elijas la eliminación permanente.",
+        "confirmPermanent": "Eliminar permanentemente",
+        "confirm": "Eliminar",
+        "deleteOriginalLabel": "Eliminar también de forma permanente el archivo original del disco",
+        "deleteOriginalDescription": "Déjalo desmarcado para mover la publicación a la Papelera mientras conservas el archivo fuente en el disco.",
+        "deleteOriginalWarning": "Esto eliminará permanentemente del disco el archivo original, la miniatura y la vista previa. Esta acción no se puede deshacer."
+      }
+    }
+  },
+  "collections": {
+    "shared": {
+      "defaultName": "Todas las publicaciones",
+      "postCountOne": "{count} publicación",
+      "postCountOther": "{count} publicaciones"
+    },
+    "bookmark": {
+      "dialogLabel": "Colecciones",
+      "title": "Colecciones",
+      "createCollection": "Crear colección",
+      "namePlaceholder": "Nombre de la colección",
+      "empty": "Aún no hay colecciones",
+      "savePost": "Guardar publicación",
+      "removeSavedPost": "Quitar publicación guardada",
+      "errors": {
+        "loadCollections": "No se pudieron cargar las colecciones"
+      }
+    },
+    "list": {
+      "libraryUnavailableTitle": "Almacenamiento de la biblioteca no disponible",
+      "loadErrorTitle": "No se pudieron cargar las colecciones",
+      "loading": "Cargando colecciones...",
+      "emptyTitle": "Aún no hay colecciones",
+      "emptyDescription": "Las publicaciones guardadas aparecerán en Todas las publicaciones."
+    },
+    "detail": {
+      "fallbackTitle": "Colección",
+      "libraryUnavailableTitle": "Almacenamiento de la biblioteca no disponible",
+      "loadErrorTitle": "No se pudo cargar la colección",
+      "back": "Colecciones",
+      "options": "Opciones de la colección",
+      "actionsLabel": "Acciones de la colección",
+      "emptyTitle": "{name} está vacía",
+      "emptyDescriptionDefault": "Usa la acción de marcador debajo de cualquier publicación para guardarla aquí.",
+      "emptyDescriptionCustom": "Las publicaciones guardadas asignadas a esta colección aparecerán aquí.",
+      "loading": "Cargando colección...",
+      "menu": {
+        "delete": "Eliminar colección",
+        "edit": "Editar colección",
+        "cancel": "Cancelar"
+      },
+      "edit": {
+        "title": "Editar colección",
+        "saving": "Guardando...",
+        "done": "Listo",
+        "required": "El nombre de la colección es obligatorio.",
+        "createError": "No se pudo crear la colección",
+        "updateError": "No se pudo actualizar la colección"
+      },
+      "delete": {
+        "title": "¿Eliminar colección?",
+        "message": "Cuando elimines esta colección, las fotos y los videos seguirán guardados.",
+        "deleting": "Eliminando...",
+        "confirm": "Eliminar",
+        "cancel": "Cancelar",
+        "error": "No se pudo eliminar la colección"
+      }
+    }
+  },
+  "placesPage": {
+    "eyebrow": "Lugares",
+    "title": "Todos los lugares",
+    "description": "Explora publicaciones agrupadas a partir de datos de ubicación sin conexión.",
+    "stats": {
+      "places": "Lugares",
+      "posts": "Publicaciones"
+    },
+    "errors": {
+      "load": "No se pudieron cargar los lugares"
+    },
+    "searchPlaceholder": "Buscar nombres, regiones o coordenadas...",
+    "sort": {
+      "postsDesc": "Más publicaciones",
+      "nameAsc": "Nombre A-Z",
+      "nameDesc": "Nombre Z-A",
+      "countryAsc": "País A-Z"
+    },
+    "resultsOne": "{count} resultado",
+    "resultsOther": "{count} resultados",
+    "loading": "Cargando lugares...",
+    "emptyTitle": "Aún no hay lugares indexados",
+    "emptyDescription": "Prepara los datos de lugares sin conexión y reconstruye las asignaciones desde Configuración para agrupar publicaciones por ubicación.",
+    "noMatch": "No hay lugares que coincidan. Prueba otra búsqueda u orden.",
+    "metadataFallback": "Lugar sin conexión a nivel de ciudad",
+    "postCountOne": "{count} publicación",
+    "postCountOther": "{count} publicaciones",
+    "kinds": {
+      "manual": "Lugar manual",
+      "nearestCity": "Ciudad más cercana",
+      "cityMatch": "Coincidencia de ciudad"
+    },
+    "readiness": {
+      "ready": "Listo",
+      "empty": "Vacío"
+    }
+  },
+  "placePage": {
+    "errors": {
+      "load": "No se pudo cargar el lugar"
+    },
+    "badge": "Lugar sin conexión",
+    "coordinatesLabel": "coordenadas",
+    "sourceLabel": "Origen",
+    "approximateBadge": "Coincidencia aproximada de ciudad",
+    "emptyTitle": "No hay publicaciones para este lugar",
+    "emptyDescription": "Las asignaciones de lugares se pueden reconstruir desde Configuración después de preparar los datos de lugares sin conexión.",
+    "metadataFallback": "Lugar sin conexión a nivel de ciudad",
+    "heroApproximate": "Agrupado a partir de coordenadas GPS almacenadas en las fotos y asociado con la ciudad más cercana para la navegación sin conexión.",
+    "heroExact": "Resuelto a partir de coordenadas GPS almacenadas en las fotos y mantenido disponible sin conexión.",
+    "postCountOne": "publicación",
+    "postCountOther": "publicaciones",
+    "kind": {
+      "offline": "Sin conexión",
+      "manual": "Manual",
+      "nearestCity": "Ciudad más cercana",
+      "city": "Ciudad",
+      "place": "lugar",
+      "match": "coincidencia"
+    }
+  },
+  "libraryPage": {
+    "eyebrow": "Biblioteca",
+    "title": "Todas las carpetas",
+    "description": "Explora y busca cada carpeta de la app indexada.",
+    "stats": {
+      "folders": "Carpetas",
+      "posts": "Publicaciones"
+    },
+    "errors": {
+      "load": "No se pudieron cargar las carpetas"
+    },
+    "searchPlaceholder": "Buscar nombres o segmentos de ruta...",
+    "sort": {
+      "recentDesc": "Actualizadas recientemente",
+      "imagesDesc": "Más publicaciones",
+      "nameAsc": "Nombre A-Z",
+      "nameDesc": "Nombre Z-A",
+      "pathAsc": "Ruta A-Z"
+    },
+    "resultsOne": "{count} resultado",
+    "resultsOther": "{count} resultados",
+    "loading": "Cargando carpetas...",
+    "emptyTitle": "Aún no hay carpetas indexadas",
+    "emptyDescription": "Añade carpetas fuente con medios dentro de la raíz de la galería y ejecuta un escaneo.",
+    "noMatch": "No hay carpetas que coincidan. Prueba otra búsqueda o filtro.",
+    "topLevelSourceFolder": "Carpeta fuente de nivel superior",
+    "postsCountOne": "{count} publicación",
+    "postsCountOther": "{count} publicaciones",
+    "reelsCountOne": "{count} reel",
+    "reelsCountOther": "{count} reels",
+    "readiness": {
+      "ready": "Listo",
+      "empty": "Vacío"
+    },
+    "moreOptions": "Más opciones",
+    "openFolder": "Abrir carpeta",
+    "deleteFolder": "Eliminar carpeta",
+    "noRecentMedia": "No hay medios recientes",
+    "delete": {
+      "title": "¿Eliminar esta carpeta de la app?",
+      "sourceTooTitle": "Eliminar también la carpeta fuente",
+      "sourceTooNoChildren": "También elimina la propia carpeta fuente en lugar de borrar solo sus publicaciones directas.",
+      "sourceTooWithChildrenOne": "También elimina {count} carpeta hija de la app y todos los archivos dentro del subárbol.",
+      "sourceTooWithChildrenOther": "También elimina {count} carpetas hijas de la app y todos los archivos dentro del subárbol.",
+      "warning": "Esto eliminará permanentemente la carpeta fuente seleccionada y cada carpeta hija y archivo dentro de ella, incluidos los archivos no compatibles. Esta acción no se puede deshacer.",
+      "directPostsOne": "{count} publicación directa",
+      "directPostsOther": "{count} publicaciones directas",
+      "childFoldersOne": "{count} carpeta hija de la app",
+      "childFoldersOther": "{count} carpetas hijas de la app",
+      "messageDeleteSource": "Esto eliminará permanentemente {directPosts} y quitará esta carpeta fuente del disco duro.",
+      "messageKeepChildren": "Esto eliminará permanentemente {directPosts}. Se conservarán {childFolders}.",
+      "messageEmptyFolder": "Esto eliminará permanentemente {directPosts}. La propia carpeta fuente solo se eliminará si queda vacía.",
+      "confirmSubtree": "Eliminar subárbol de carpetas",
+      "confirmFolder": "Eliminar carpeta de la app",
+      "loadingSubtree": "Eliminando subárbol...",
+      "loadingFolder": "Eliminando...",
+      "error": "No se pudo eliminar esta carpeta de la app."
+    }
+  },
+  "trashPage": {
+    "eyebrow": "Papelera",
+    "title": "Publicaciones eliminadas",
+    "description": "Las publicaciones movidas aquí permanecen en el disco hasta que las elimines de forma permanente.",
+    "selectedOne": "{count} publicación seleccionada",
+    "selectedOther": "{count} publicaciones seleccionadas",
+    "restoreButton": "Restaurar",
+    "deleteButton": "Eliminar permanentemente",
+    "libraryUnavailableTitle": "Almacenamiento de la biblioteca no disponible",
+    "libraryUnavailableDescription": "El almacenamiento configurado de la biblioteca no está disponible.",
+    "loadErrorTitle": "No se pudo cargar la papelera",
+    "loading": "Cargando papelera...",
+    "emptyTitle": "La papelera está vacía",
+    "emptyDescription": "Las publicaciones eliminadas aparecerán aquí para que puedas restaurarlas o quitarlas permanentemente.",
+    "selectItem": "Seleccionar {label}",
+    "deselectItem": "Deseleccionar {label}",
+    "trashedAt": "En papelera {date}",
+    "recently": "recientemente",
+    "openFolder": "Abrir carpeta",
+    "restoreDialog": {
+      "title": "¿Restaurar las publicaciones seleccionadas?",
+      "messageOne": "¿Restaurar {count} publicación seleccionada en la app?",
+      "messageOther": "¿Restaurar {count} publicaciones seleccionadas en la app?",
+      "confirm": "Restaurar",
+      "loading": "Restaurando..."
+    },
+    "deleteDialog": {
+      "title": "¿Eliminar permanentemente las publicaciones seleccionadas?",
+      "messageOne": "Esto eliminará permanentemente {count} publicación seleccionada y quitará el archivo original del disco.",
+      "messageOther": "Esto eliminará permanentemente {count} publicaciones seleccionadas y quitará los archivos originales del disco.",
+      "confirm": "Eliminar permanentemente",
+      "loading": "Eliminando...",
+      "warning": "Los archivos originales, las miniaturas y las vistas previas se eliminarán permanentemente. Esta acción no se puede deshacer."
+    },
+    "errors": {
+      "refresh": "No se pudo refrescar el estado actualizado de la biblioteca.",
+      "processOne": "No se pudo procesar {count} publicación.",
+      "processOther": "No se pudieron procesar {count} publicaciones."
+    }
+  },
+  "explore": {
+    "back": "Volver a publicaciones de explorar",
+    "searchPlaceholder": "Buscar",
+    "clearSearch": "Borrar búsqueda",
+    "recentTitle": "Reciente",
+    "clearAll": "Borrar todo",
+    "tabsAria": "Pestañas de resultados de búsqueda",
+    "tabs": {
+      "media": "Fotos y videos",
+      "folders": "Carpetas de la app"
+    },
+    "errors": {
+      "search": "No se pudieron buscar publicaciones",
+      "load": "No se pudo cargar Explorar"
+    },
+    "emptySearchTitle": "No hay fotos ni videos que coincidan",
+    "emptySearchDescription": "Prueba con otro nombre de archivo o palabra clave de carpeta.",
+    "loadingFolders": "Cargando carpetas...",
+    "noFoldersFound": "No se encontraron carpetas de la app.",
+    "emptyTitle": "Todavía no hay nada para explorar",
+    "emptyDescription": "Indexa algunas carpetas y esta página empezará a mostrar publicaciones aquí.",
+    "folderPostsOne": "{count} publicación",
+    "folderPostsOther": "{count} publicaciones"
+  }
+}

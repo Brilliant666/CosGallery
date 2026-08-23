@@ -1,0 +1,20 @@
+services:
+  foldergram:
+    image: ghcr.io/foldergram/foldergram:latest
+    ports:
+      - "4141:4141"
+    environment:
+      IMAGE_DETAIL_SOURCE: preview
+      DERIVATIVE_MODE: eager
+      # Optional: skip specific source folders by name or by exact relative path.
+      # GALLERY_EXCLUDED_FOLDERS: "@eaDir,thumbnails,Archive/cache"
+      # Optional: enable read-only public demo behavior.
+      # PUBLIC_DEMO_MODE: "1"
+      # Optional when the browser-visible origin differs from the upstream Node host.
+      # CSRF_TRUSTED_ORIGINS: https://foldergram.example.com
+    volumes:
+      - ./data/gallery:/app/data/gallery
+      - ./data/db:/app/data/db
+      - ./data/thumbnails:/app/data/thumbnails
+      - ./data/previews:/app/data/previews
+    restart: unless-stopped

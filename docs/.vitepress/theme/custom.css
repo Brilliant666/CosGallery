@@ -1,0 +1,259 @@
+:root {
+  --vp-c-brand-1: #6366f1;
+  --vp-c-brand-2: #8b5cf6;
+  --vp-c-brand-3: #ec4899;
+  --vp-c-brand-soft: rgba(99, 102, 241, 0.14);
+  --vp-button-brand-bg: #6366f1;
+  --vp-button-brand-hover-bg: #4f46e5;
+  --vp-button-brand-active-bg: #4338ca;
+  --vp-home-hero-image-background-image:
+    radial-gradient(circle at center, rgba(244, 114, 182, 0.12) 0%, rgba(129, 140, 248, 0.1) 46%, transparent 74%);
+  --vp-home-hero-image-filter: drop-shadow(0 18px 36px rgba(99, 102, 241, 0.16));
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Constrain image-based feature icons — VPImage is a direct child of .box, no .icon wrapper */
+.VPFeature .box > .VPImage {
+  width: 28px !important;
+  height: 28px !important;
+  max-width: 28px !important;
+  object-fit: contain;
+  margin-bottom: 20px;
+}
+
+.VPHero .text {
+  font-size: 2.2rem !important;
+  line-height: 1.3 !important;
+}
+
+.VPHome .VPHero {
+  overflow: visible !important;
+}
+
+/* .heading .name.clip gradient is handled by rainbow.css when on the homepage */
+
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.VPHome .VPHero {
+  position: relative;
+  overflow: hidden;
+}
+
+.VPHome .VPHero.has-image .image-container {
+  position: relative;
+}
+
+/* VitePress-native .image-bg element — driven by --vp-home-hero-image-background-image */
+.VPHome .VPHero.has-image .image-bg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 340px;
+  height: 340px;
+  background: var(--vp-home-hero-image-background-image);
+  filter: var(--vp-home-hero-image-filter);
+  opacity: 0.85;
+  transition:
+    transform 1.4s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 1.4s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 1.4s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+/* Zoom-out effect on hover — same as vite-library */
+.VPHome .VPHero.has-image:hover .image-bg {
+  transform: translate(-50%, -50%) scale(0.7);
+  opacity: 0.22;
+  filter: blur(62px);
+}
+
+.VPNavBarTitle .title {
+  font-size: 1.2rem !important;
+  font-weight: 600 !important;
+}
+
+.VPNavBarTitle .title::after {
+  content: var(--foldergram-docs-version);
+  display: inline-block;
+  margin-left: 0.38rem;
+  font-size: 0.48em;
+  line-height: 1;
+  vertical-align: super;
+  color: var(--vp-c-text-2);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.VPNavBarTitle .logo {
+  width: 28px !important;
+  height: 28px !important;
+  margin-right: 8px !important;
+}
+
+.featured-on {
+  margin: 2.5rem auto 0;
+  padding: 1.25rem 1rem 0;
+  max-width: 720px;
+  text-align: center;
+}
+
+.featured-on-title {
+  margin: 0 0 0.85rem;
+  color: var(--vp-c-text-2);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.featured-on-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem 1rem;
+}
+
+.featured-on-badges a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 54px;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.featured-on-badges a:hover {
+  opacity: 0.88;
+  transform: translateY(-1px);
+}
+
+.featured-on-badges img {
+  display: block;
+  max-width: min(250px, 100%);
+  height: auto;
+}
+
+.featured-on-badge-dark {
+  display: none !important;
+}
+
+.dark .featured-on-badge-light {
+  display: none !important;
+}
+
+.dark .featured-on-badge-dark {
+  display: block !important;
+}
+
+.cs-feature {
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  padding: 1.5rem;
+  transition: border-color 0.25s, box-shadow 0.25s;
+  position: relative;
+}
+
+.cs-feature:hover {
+  border-color: var(--vp-c-brand-1);
+  box-shadow: 0 4px 24px rgba(99, 102, 241, 0.08);
+}
+
+.cs-feature-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  margin-bottom: 0.875rem;
+}
+
+.cs-feature-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin-bottom: 0.875rem;
+}
+
+.cs-feature h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.cs-feature p {
+  padding-top: 6px;
+  margin-bottom: 0;
+  line-height: 1.65;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--vp-c-text-2);
+}
+
+.cs-feature li {
+  line-height: 24px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--vp-c-text-2);
+}
+
+@media (max-width: 640px) {
+  .VPHero .text {
+    font-size: 1.8rem !important;
+    line-height: 1.25 !important;
+  }
+
+  .VPHome .VPHero.has-image .image-container::before {
+    width: 320px;
+    height: 320px;
+    left: 45%;
+  }
+
+  .VPHome .VPHero.has-image .image-container::after {
+    width: 340px;
+    height: 340px;
+    left: 57%;
+  }
+
+  .cs-feature {
+    padding: 1.25rem;
+  }
+
+  .featured-on {
+    margin-top: 2rem;
+    margin-bottom: 0.75rem;
+    padding-inline: 0;
+  }
+
+  .featured-on-badges {
+    gap: 0.6rem;
+  }
+}

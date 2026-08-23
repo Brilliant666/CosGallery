@@ -1,0 +1,6 @@
+services:
+  foldergram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: foldergram:local

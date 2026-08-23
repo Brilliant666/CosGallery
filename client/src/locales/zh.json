@@ -1,0 +1,1174 @@
+{
+  "common": {
+    "cancel": "取消",
+    "close": "关闭",
+    "copy": "复制",
+    "description": "描述",
+    "loadMore": "加载更多",
+    "loadingMore": "正在加载更多...",
+    "name": "名称",
+    "newFeature": "新功能",
+    "open": "打开",
+    "retry": "重试",
+    "save": "保存",
+    "saveChanges": "保存更改",
+    "saved": "已保存",
+    "saving": "保存中...",
+    "youAreCaughtUp": "你已经看到最新内容了",
+    "loading": "加载中...",
+    "railViewer": {
+      "itemCountOne": "{count} 项",
+      "itemCountOther": "{count} 项",
+      "latestDate": "最新 {date}",
+      "noRecentActivity": "最近没有活动"
+    }
+  },
+  "app": {
+    "authLoading": {
+      "eyebrow": "访问保护",
+      "title": "正在检查访问权限",
+      "description": "正在加载当前密码保护状态。"
+    }
+  },
+  "auth": {
+    "gate": {
+      "eyebrow": "共享密码",
+      "title": "解锁 Foldergram",
+      "passwordLabel": "密码",
+      "descriptionPassword": "此图库接受管理员密码或查看者密码进行本地访问。",
+      "descriptionAdmin": "此图库使用管理员密码进行本地和 homelab 访问保护。",
+      "placeholderPassword": "输入管理员或查看者密码",
+      "placeholderAdmin": "输入管理员密码",
+      "unlocking": "正在解锁...",
+      "unlock": "解锁图库",
+      "unableToSignIn": "无法登录。"
+    },
+    "adminUnlock": {
+      "eyebrow": "管理员解锁",
+      "title": "解锁管理员访问",
+      "closeAria": "关闭管理员解锁对话框",
+      "description": "输入管理员密码以打开设置、回收站、扫描、重建工具和其他仅限管理员的操作。",
+      "passwordLabel": "管理员密码",
+      "placeholder": "输入管理员密码",
+      "unlocking": "正在解锁...",
+      "unlock": "解锁管理员",
+      "unableToUnlock": "无法解锁管理员访问。"
+    }
+  },
+  "nav": {
+    "primary": "主导航",
+    "foldergramHome": "Foldergram 首页",
+    "home": "首页",
+    "reels": "短片",
+    "search": "搜索",
+    "library": "图库",
+    "places": "地点",
+    "collections": "收藏集",
+    "more": "更多",
+    "trash": "回收站",
+    "settings": "设置",
+    "unlockAdmin": "解锁管理员",
+    "switchAppearance": "切换外观",
+    "switchToDarkMode": "切换到深色模式",
+    "switchToLightMode": "切换到浅色模式",
+    "signOut": "退出登录",
+    "returnToPublicView": "返回公开视图",
+    "foldersSpotlight": "精选文件夹",
+    "likesAriaLabel": "{label} ({count})",
+    "folderPosts": "{count} 个帖子"
+  },
+  "settings": {
+    "eyebrow": "设置",
+    "title": "图库控制",
+    "description": "管理扫描、应用默认项、访问权限和图库索引。",
+    "sections": {
+      "navigation": "设置分区",
+      "library": {
+        "label": "扫描与图库",
+        "shortLabel": "扫描与图库",
+        "description": "索引媒体、重建缩略图并维护图库索引"
+      },
+      "general": {
+        "label": "常规设置",
+        "description": "Stories 模式、排除文件夹和动态流默认项"
+      },
+      "places": {
+        "label": "地点",
+        "description": "离线城市查找和地点分配"
+      },
+      "access": {
+        "label": "安全与访问",
+        "shortLabel": "安全与访问",
+        "description": "密码锁和查看角色"
+      },
+      "status": {
+        "label": "系统状态",
+        "description": "存储概览和扫描历史"
+      }
+    },
+    "places": {
+      "banner": {
+        "title": "基于照片 GPS 数据的地点",
+        "description": "按离线城市和位置标签对带 GPS 的照片进行分组。",
+        "helper": "准备本地 GeoNames 数据集，然后为图库中已有的照片重建地点分配。",
+        "setup": "设置地点",
+        "dismissAria": "关闭地点公告",
+        "availableLater": "下载是可选的，之后也可以继续在设置中的“地点”标签页里使用。"
+      },
+      "section": {
+        "title": "离线地点",
+        "description": "准备 GeoNames 城市数据，然后根据现有照片坐标重建地点链接。",
+        "prepared": "已准备",
+        "notPrepared": "未准备",
+        "datasetLabel": "数据集",
+        "rowsLabel": "行数",
+        "notImported": "未导入",
+        "importedAt": "已导入于 {value}。",
+        "fallbackDataset": "GeoNames cities500",
+        "prepareButton": "准备地理数据",
+        "preparingButton": "准备中...",
+        "rebuildButton": "重建地点分配",
+        "rebuildingButton": "重建中...",
+        "loadStatusError": "无法加载地点状态",
+        "actions": {
+          "ready": "离线地点数据已就绪。",
+          "prepareError": "无法准备离线地点数据。",
+          "rebuilt": "已为 {processed} 篇帖子中的 {assigned} 篇重建地点。",
+          "rebuildError": "无法重建地点分配。"
+        }
+      }
+    },
+    "general": {
+      "migration": {
+        "eyebrow": "Stories 迁移",
+        "title": "此图库可能已经在使用名为 stories 的文件夹",
+        "description": "Foldergram 现在默认可以将 stories/ 视为资料 stories 和精选内容。请选择保留旧版文件夹行为，或切换到新的保留 stories 模式，然后重新扫描图库。",
+        "dismissAria": "关闭 stories 迁移提示",
+        "useFeature": "使用 Stories 功能",
+        "keepLegacy": "保留旧版行为",
+        "helper": "先在这里选择模式，再在下方保存。随后运行一次图库扫描，让索引后的文件夹结构与之匹配。",
+        "helperSaving": "请先等待当前设置更新完成。"
+      },
+      "carouselsMigration": {
+        "eyebrow": "轮播迁移",
+        "title": "此图库可能已使用名为 carousels 的文件夹",
+        "description": "请选择 AppFolder/carousels 用于创建多媒体帖子，还是继续作为普通文件夹。",
+        "useFeature": "使用轮播帖子",
+        "keepFolders": "保留普通文件夹",
+        "helper": "请在此选择模式并在下方保存。随后运行一次图库扫描，使已索引文件夹与轮播帖子保持一致。"
+      },
+      "carouselsAnnouncement": {
+        "title": "轮播帖子",
+        "headline": "保留的 carousels/ 文件夹可以将多个媒体文件组合成一个帖子",
+        "description": "在 AppFolder/carousels 中为每个轮播创建一个直接子文件夹，然后在其中直接放入 2–20 个图片、动图或视频。幻灯片按文件名的自然顺序排列，第一项将作为封面。数字文件名前缀并非必需。",
+        "dismissAria": "关闭轮播帖子公告",
+        "showStructure": "查看轮播目录结构",
+        "hideStructure": "隐藏轮播目录结构"
+      },
+      "announcement": {
+        "title": "Stories",
+        "headline": "保留的 stories/ 文件夹可以驱动应用文件夹的 Stories",
+        "description": "将直接媒体放入 AppFolder/stories 作为头像 story 集合，并使用直接子文件夹作为精选圆圈。嵌套文件夹会保留在同一个精选胶囊中。",
+        "dismissAria": "关闭 stories 公告",
+        "showStructure": "查看目录结构",
+        "hideStructure": "隐藏目录结构"
+      },
+      "card": {
+        "title": "常规设置",
+        "description": "适用于语言、嵌套文件夹标题、stories 文件夹、排除文件夹、首页、短片和应用文件夹的全局默认项。"
+      },
+      "language": {
+        "label": "应用语言",
+        "description": "选择此设备上用于导航、对话框和其他已翻译应用界面的语言。",
+        "helper": "会立即在当前浏览器中生效。在下方保存更改后，所选语言也会成为整个应用的默认语言。缺失翻译时会回退到英文。",
+        "overrideNotice": "应用默认语言是{savedLabel}。当前浏览器正通过仅限此浏览器的设置临时使用{currentLabel}。保存更改即可将{currentLabel}设为默认语言。",
+        "selectLabel": "应用语言",
+        "options": {
+          "en": "英语",
+          "es": "西班牙语",
+          "zh": "中文"
+        }
+      },
+      "homeFeed": {
+        "label": "首页动态流排序",
+        "description": "选择首页打开时显示的首个动态流模式。",
+        "closeMenuAria": "关闭首页动态流排序菜单",
+        "options": {
+          "random": {
+            "label": "随机",
+            "description": "稳定洗牌。"
+          },
+          "recent": {
+            "label": "最新",
+            "description": "最新内容优先。"
+          },
+          "rediscover": {
+            "label": "重新发现",
+            "description": "让较早的精选内容再次出现。"
+          }
+        }
+      },
+      "reelsFeed": {
+        "label": "短片动态流排序",
+        "description": "选择打开短片时使用的默认队列样式。",
+        "closeMenuAria": "关闭短片动态流排序菜单",
+        "options": {
+          "random": {
+            "label": "随机",
+            "description": "稳定的会话洗牌。"
+          },
+          "recent": {
+            "label": "最新",
+            "description": "最新视频优先。"
+          },
+          "recommended": {
+            "label": "推荐",
+            "description": "按偏好排序的混合队列。"
+          }
+        }
+      },
+      "folderOrder": {
+        "label": "应用文件夹照片顺序",
+        "description": "选择应用文件夹内照片的默认排序方式。",
+        "closeMenuAria": "关闭应用文件夹照片顺序菜单",
+        "options": {
+          "newest": {
+            "label": "最新优先",
+            "description": "较新的照片显示在前。"
+          },
+          "oldest": {
+            "label": "最旧优先",
+            "description": "较早的照片显示在前。"
+          }
+        }
+      },
+      "nestedFolderTitle": {
+        "label": "嵌套文件夹标题格式",
+        "description": "选择整个应用中嵌套应用文件夹的显示名称方式。此项只影响展示。",
+        "closeMenuAria": "关闭嵌套文件夹标题格式菜单",
+        "options": {
+          "folder": {
+            "label": "仅文件夹名称",
+            "description": "只显示当前文件夹名称。"
+          },
+          "parentPlusFolder": {
+            "label": "父级 + 文件夹名称",
+            "description": "为嵌套文件夹加上其直接父级前缀。"
+          }
+        }
+      },
+      "storiesMode": {
+        "label": "将 stories 文件夹视为普通应用文件夹",
+        "scanRequired": "需要扫描",
+        "explainAria": "解释 stories 文件夹设置",
+        "explainDescription": "关闭此选项时，AppFolder/stories 会成为头像 stories 和精选圆圈的来源。仅当名称恰好为 stories 的文件夹应继续在整个应用中表现为普通文件夹时，才应开启此选项。",
+        "toggleLabel": "切换 stories 文件夹行为",
+        "enabledDescription": "旧版模式已启用。stories 文件夹会继续在所有位置作为普通应用文件夹。",
+        "disabledDescription": "保留 stories 模式已启用。AppFolder/stories 会驱动头像 stories 和精选圆圈。"
+      },
+      "carouselsMode": {
+        "label": "将 carousels 文件夹视为普通应用文件夹",
+        "toggleLabel": "切换 carousels 文件夹行为",
+        "enabledDescription": "旧版模式已启用。carousels 文件夹仍是普通应用文件夹。",
+        "disabledDescription": "轮播模式已启用。AppFolder/carousels 的每个直接子文件夹会成为一篇帖子。"
+      },
+      "excludedFolders": {
+        "label": "排除的源文件夹",
+        "description": "按名称或图库根目录下的精确相对路径跳过匹配文件夹。隐藏路径和应用管理的存储仍会自动排除。",
+        "customRules": "自定义规则",
+        "envRulesLabel": "只读环境规则",
+        "envRulesDescription": "在 .env 或 Docker 中更改 GALLERY_EXCLUDED_FOLDERS 并重启应用，即可更新这些规则。",
+        "envRulesEmpty": "当前未配置任何环境变量支持的文件夹排除规则。",
+        "activeRulesLabel": "当前生效的已保存规则",
+        "activeRulesDescription": "这里会合并文本区域中保存的规则与所有环境变量支持的条目。新的文本区域编辑会在保存后显示在这里。",
+        "activeRulesEmpty": "当前没有生效的已保存或环境变量支持的文件夹排除规则。"
+      },
+      "actionNote": {
+        "loading": "正在加载当前应用偏好...",
+        "excludedAndOther": "将文件夹排除规则与其他全局更改一起保存。随后运行一次图库扫描，以便保留文件夹模式和排除文件夹正确重新索引。",
+        "excludedOnly": "这只会保存自定义排除文件夹。随后运行一次图库扫描，以便这些文件夹从索引中消失。",
+        "storiesAndDefaults": "将文件夹行为与更新后的全局默认项一起保存。随后运行一次图库扫描，以重新索引受影响的文件夹。",
+        "storiesOnly": "这会保存保留文件夹的处理方式。随后运行一次图库扫描，以所选模式重新建立索引。",
+        "multipleDefaults": "一起保存这些全局默认项。语言会立即在当前浏览器中生效；首页访问者仍可在主页上切换模式；短片、应用文件夹和嵌套文件夹标题使用应用默认项。",
+        "languageOnly": "这会立即更改当前浏览器中的语言。如需让所选语言也成为整个应用的默认语言，请再保存一次。",
+        "homeOnly": "这会更新此应用首页打开时显示的首个动态流模式。访问者仍可从主页切换模式。",
+        "reelsOnly": "这会更新此应用打开短片时使用的队列样式。访问者无法从短片页面切换模式。",
+        "folderOnly": "这会更新应用文件夹网格使用的默认照片顺序。",
+        "nestedFolderTitleOnly": "这会更新整个应用中嵌套应用文件夹的标签显示方式。",
+        "carouselReconciliation": "轮播文件夹模式已保存。请完成上方提示的图库操作，将其应用到索引。",
+        "idle": "这些是当前适用于语言、首页、短片、应用文件夹、嵌套文件夹标题、stories 文件夹、轮播文件夹和排除文件夹的全局默认项。"
+      },
+      "rescanNotice": {
+        "rebuildRequired": "保存这些更改后，请重建图库索引，以便将所选文件夹行为应用到当前图库位置。",
+        "pendingRebuild": "请重建图库索引，以将已保存的轮播文件夹模式应用到当前图库位置。",
+        "pendingCarousels": "请运行一次图库扫描，将已保存的轮播文件夹模式应用到已索引的文件夹和帖子。",
+        "excludedAndStories": "保存这些更改后，请运行一次图库扫描，以更新保留文件夹行为和排除文件夹。",
+        "excludedOnly": "保存此更改后，请先运行一次图库扫描，再期待排除文件夹从索引中消失。",
+        "storiesOnly": "保存此更改后，请先运行一次图库扫描，再期待 stories 文件夹、头像 stories 或精选内容更新。",
+        "carouselsOnly": "保存此更改后，请先运行一次图库扫描，再期待轮播帖子或 carousels 文件夹更新。",
+        "storiesAndCarousels": "保存这些更改后，请先运行一次图库扫描，再期待 stories 和 carousels 文件夹行为更新。"
+      },
+      "feedback": {
+        "folderRulesSavedRebuild": "文件夹行为已保存。请重建图库索引，以将其应用到当前图库位置。",
+        "settingsAndFolderRulesSaved": "设置已保存。请运行一次图库扫描以应用文件夹规则更改。",
+        "folderRulesSaved": "文件夹行为已保存。请运行一次图库扫描以应用这些更改。",
+        "excludedFoldersSaved": "排除文件夹已保存。请运行一次图库扫描以应用它们。",
+        "settingsAndStoriesSaved": "设置已保存。请运行一次图库扫描以应用 stories 文件夹更改。",
+        "storiesSaved": "stories 文件夹行为已保存。请运行一次图库扫描以应用它。",
+        "carouselsSaved": "轮播文件夹处理方式已保存。请运行一次图库扫描以应用更改。",
+        "defaultsSaved": "全局默认项已更新。",
+        "languageSaved": "应用语言默认值已保存为{label}。",
+        "homeSaved": "首页现在会以 {label} 打开。",
+        "reelsSaved": "短片现在会以 {label} 打开。",
+        "folderOrderSaved": "应用文件夹现在会以 {label} 打开。",
+        "nestedFolderTitleSaved": "嵌套应用文件夹现在使用 {label}。",
+        "parts": {
+          "appLanguage": "应用语言",
+          "excludedFolders": "排除文件夹",
+          "storiesFolderHandling": "stories 文件夹行为",
+          "carouselsFolderHandling": "轮播文件夹处理",
+          "homeFeedDefault": "首页动态默认项",
+          "reelsFeedDefault": "短片默认项",
+          "appFolderOrder": "应用文件夹顺序",
+          "nestedFolderTitles": "嵌套文件夹标题"
+        }
+      },
+      "errors": {
+        "validateExcludedFolders": "无法验证已排除文件夹规则。",
+        "update": "无法更新常规设置。",
+        "partialUpdate": "部分设置已保存（{parts}），但更新未能完成：{message}"
+      }
+    },
+    "library": {
+      "legacyMigration": {
+        "title": "旧版派生资源迁移待处理",
+        "messageOne": "{count} 条已索引媒体记录仍在使用旧的镜像缩略图和预览路径。运行“扫描图库”即可将其迁移到资源键存储。",
+        "messageOther": "{count} 条已索引媒体记录仍在使用旧的镜像缩略图和预览路径。运行“扫描图库”即可将它们迁移到资源键存储。"
+      },
+      "carouselReconciliation": {
+        "title": "轮播文件夹更新待处理",
+        "scanDescription": "已保存的轮播文件夹模式尚未应用到索引。请运行“扫描图库”以更新文件夹和帖子。",
+        "rebuildDescription": "已保存的轮播文件夹模式尚未应用到索引。请使用下方的“重建图库索引”，将其应用到当前图库位置。"
+      },
+      "scanCard": {
+        "title": "扫描图库",
+        "description": "在添加文件夹后，或你想刷新已索引媒体时运行一次扫描。"
+      },
+      "statusLabel": {
+        "storageUnavailable": "存储不可用",
+        "scanInProgress": "扫描进行中",
+        "rebuildActive": "重建进行中",
+        "ready": "就绪"
+      },
+      "scanButton": {
+        "active": "正在扫描图库...",
+        "idle": "运行图库扫描"
+      },
+      "scanActionNote": {
+        "loading": "正在加载当前图库状态...",
+        "rebuildRequired": "由于图库位置已更改，请先重建图库索引。",
+        "otherTaskActive": "当前还有其他图库任务正在运行。实时进度会显示在置顶状态栏中。",
+        "progress": "实时进度会显示在置顶状态栏中。",
+        "legacyMigration": "运行“扫描图库”可将旧的镜像缩略图和预览图迁移到资源键存储布局。",
+        "carouselReconciliation": "运行“扫描图库”，将已保存的轮播文件夹模式应用到已索引的文件夹和帖子。",
+        "idle": "扫描会检查新增、更新或缺失的媒体。"
+      },
+      "thumbnailCard": {
+        "title": "重新生成缩略图",
+        "description": "仅从已索引媒体重建动态流和资料缩略图以及视频封面。原始文件不会受到影响。"
+      },
+      "thumbnailButton": {
+        "active": "正在重新生成...",
+        "idle": "重新生成缩略图"
+      },
+      "thumbnailActionNote": {
+        "loading": "正在加载当前图库状态...",
+        "rebuildRequired": "在为新的图库位置重建索引之前，此操作不可用。",
+        "progress": "实时进度会显示在置顶状态栏中。",
+        "rebuildActive": "请先等待完整重建完成。",
+        "scanActive": "请先等待当前扫描完成。",
+        "legacyMigration": "此操作会保留当前缩略图路径，不会迁移旧的镜像衍生资源。请改为运行“扫描图库”以将其迁移到资源键存储。",
+        "idle": "需要更快的纯缩略图刷新时可使用此操作。"
+      },
+      "dangerZone": {
+        "title": "危险区域",
+        "recommended": "推荐",
+        "rebuildTitle": "重建图库索引",
+        "rebuildDescription": "重置图库索引，复用可匹配的缓存媒体，并仅从当前图库根目录生成缺失的衍生资源。",
+        "currentGalleryRoot": "当前图库根目录",
+        "previousGalleryRoot": "上一个图库根目录"
+      },
+      "rebuildButton": {
+        "active": "正在重建...",
+        "idle": "重建图库索引"
+      },
+      "rebuildActionNote": {
+        "loading": "正在加载当前图库状态...",
+        "progress": "实时进度会显示在置顶状态栏中。",
+        "thumbnailActive": "请先等待缩略图重新生成完成。",
+        "scanActive": "请先等待当前扫描完成。",
+        "rebuildRequired": "由于图库位置已更改，建议执行此操作。",
+        "idle": "使用此操作可以重置索引，并复用上一个图库索引中仍可匹配的衍生资源。"
+      },
+      "dialogs": {
+        "rebuildTitle": "要重建当前图库索引吗？",
+        "rebuildMessage": "此操作会清空文件夹、帖子、喜欢和扫描历史等已索引数据库表，然后重新扫描当前启用的图库根目录。若之前索引中的缩略图和预览仍与当前文件匹配，则会继续复用，并只生成缺失或已更改的衍生资源。图库中的原始文件不会被删除。",
+        "rebuildConfirm": "重建图库索引",
+        "rebuildLoading": "重建中...",
+        "thumbnailsTitle": "只重新生成缩略图？",
+        "thumbnailsMessage": "此操作会删除已生成的动态流和资料缩略图以及视频封面图，然后根据当前索引图库中每个项目的现有缩略图路径重新生成。预览图、喜欢、扫描历史和已索引图库记录都不会改变。图库中的原始文件不会被删除。",
+        "thumbnailsConfirm": "重新生成缩略图",
+        "thumbnailsLoading": "重新生成中..."
+      },
+      "errors": {
+        "startScan": "无法启动图库扫描。",
+        "rebuild": "无法重建当前图库索引。",
+        "regenerate": "无法重新生成缩略图。"
+      }
+    },
+    "notices": {
+      "scanWarning": {
+        "eyebrow": "扫描警告",
+        "title": "扫描完成，发现 {count} 个结构警告",
+        "title_plural": "扫描完成，发现 {count} 个结构警告"
+      },
+      "scanError": {
+        "eyebrow": "扫描需要注意",
+        "title": "上一次扫描已完成，但包含错误",
+        "fullReportPrefix": "完整报告：",
+        "dismissAria": "关闭扫描警告",
+        "actionNote": "重新运行一次图库扫描，以重试失败的媒体并补齐缺失的缩略图或预览图。",
+        "messages": {
+          "genericNoDetails": "上一次运行期间有部分媒体处理失败。请再次扫描图库，以重试遗漏的文件和衍生资源生成。",
+          "ffmpegMissing": "服务器环境缺少视频处理工具。请安装 FFmpeg，这样扫描才能读取视频元数据并生成视频衍生资源。",
+          "withReport": "上一次运行期间有部分媒体处理失败。请查看下面的示例错误和完整报告路径，然后再次扫描图库，以重试失败的媒体和衍生资源生成。",
+          "withSample": "上一次运行期间有部分媒体处理失败。请查看下面的示例错误，然后再次扫描图库，以重试遗漏的文件和衍生资源生成。"
+        },
+        "detailMore": "{line}（另有 {count} 条）"
+      },
+      "ignoredRootMedia": {
+        "dismissAria": "关闭图库根目录警告",
+        "messageOne": "图库根目录中有 {count} 个受支持文件被忽略。请把它移到图库根目录下的某个文件夹中，以创建应用文件夹。直接放在图库根目录中的文件会被忽略。",
+        "messageOther": "图库根目录中有 {count} 个受支持文件被忽略。请把它们移到图库根目录下的某个文件夹中，以创建应用文件夹。直接放在图库根目录中的文件会被忽略。"
+      }
+    },
+    "access": {
+      "section": {
+        "title": "管理员与访客访问",
+        "description": "使用管理员密码保护管理操作，并可选择为仅浏览会话单独提供访客密码。",
+        "locked": "管理员已锁定",
+        "open": "开放访问"
+      },
+      "fields": {
+        "adminPassword": "管理员密码",
+        "confirmPassword": "确认密码",
+        "currentPassword": "当前密码",
+        "newPassword": "新密码",
+        "confirmNewPassword": "确认新密码",
+        "viewerPassword": "访客密码",
+        "confirmViewerPassword": "确认访客密码"
+      },
+      "placeholders": {
+        "minimumLength": "至少 {count} 个字符",
+        "repeatPassword": "再次输入密码",
+        "enterNewViewerPassword": "输入新的访客密码",
+        "repeatNewViewerPassword": "再次输入新的访客密码",
+        "repeatViewerPassword": "再次输入访客密码"
+      },
+      "enable": {
+        "description": "管理员密码会以单向哈希方式保存，并通过签名会话 Cookie 解锁当前浏览器。",
+        "buttonLoading": "启用中...",
+        "buttonIdle": "启用管理员密码",
+        "success": "此 Foldergram 实例现已启用管理员密码。",
+        "error": "无法启用管理员密码。"
+      },
+      "change": {
+        "title": "更改管理员密码",
+        "description": "更新管理员密码并使旧会话失效。",
+        "showForm": "更改密码",
+        "hideForm": "隐藏表单",
+        "helper": "请至少使用 8 个字符。更改密码会使旧会话退出登录。",
+        "buttonLoading": "更新中...",
+        "buttonIdle": "更改管理员密码",
+        "missingCurrent": "请输入当前密码以继续更改。",
+        "success": "管理员密码已更新，现有会话已失效。",
+        "error": "无法更改管理员密码。"
+      },
+      "viewer": {
+        "title": "访客访问",
+        "description": "为访客会话提供仅浏览密码，或将图库开放为匿名公共浏览。",
+        "modes": {
+          "adminOnlyTitle": "仅管理员",
+          "adminOnlyDescription": "只有管理员密码可以解锁应用。",
+          "viewerPasswordTitle": "访客密码",
+          "viewerPasswordDescription": "允许使用单独的访客登录浏览，并使用共享喜欢功能，但不会显示管理员控制项。",
+          "publicTitle": "公开",
+          "publicDescription": "允许匿名浏览，并使用浏览器本地收藏，同时仍可从“更多”中使用管理员解锁。"
+        },
+        "status": {
+          "adminPasswordOff": "管理员密码已关闭",
+          "viewerPasswordOn": "访客密码已开启",
+          "publicViewerOn": "公开访客已开启",
+          "adminOnly": "仅管理员"
+        },
+        "summary": {
+          "enableAdminFirst": "请先启用管理员密码",
+          "viewerPasswordEnabled": "访客密码访问已开启",
+          "publicEnabled": "公开访客访问已开启",
+          "off": "访客访问当前已关闭"
+        },
+        "summaryCopy": {
+          "enableAdminFirst": "启用管理员密码后，访客访问设置才会可用。",
+          "viewerPasswordEnabled": "访客可以使用单独的访客密码登录、使用共享喜欢功能，并且在没有管理员控制项的情况下浏览。若要替换该密码，请在下方输入新密码。不需要当前访客密码。",
+          "publicEnabled": "任何能访问这个 Foldergram 的人都可以无需登录直接浏览。收藏仅保存在当前浏览器中，管理员仍可通过“更多”中的管理员密码提权。",
+          "off": "当前只有管理员密码可以解锁应用。如果你希望提供仅浏览登录，请在下方开启访客密码模式。"
+        },
+        "helper": {
+          "viewerPasswordRotate": "在下方输入新的访客密码即可轮换，不需要当前访客密码。",
+          "viewerPasswordNew": "访客登录可以使用共享喜欢，但无法访问设置、回收站或任何破坏性操作。",
+          "public": "匿名访客可以立即浏览、使用浏览器本地收藏，并在需要时从“更多”中解锁管理员访问。",
+          "disableFromPassword": "保存后将关闭访客登录，并恢复为仅管理员访问。",
+          "disableFromPublic": "保存后将关闭公开浏览，并恢复为仅管理员访问。",
+          "off": "访客访问当前已关闭，因此只有管理员密码可以解锁应用。"
+        },
+        "buttons": {
+          "updateViewerPassword": "更新访客密码",
+          "enableViewerAccess": "启用访客访问",
+          "savePublicAccess": "保存公开访问",
+          "enablePublicAccess": "启用公开访问",
+          "disableViewerAccess": "关闭访客访问",
+          "saveViewerAccess": "保存访客访问"
+        },
+        "success": {
+          "password": "访客密码访问已启用，访客密码已保存。",
+          "public": "公开访客访问已启用。匿名访客现在可以使用浏览器本地收藏进行浏览。",
+          "off": "访客访问已关闭。现在只允许管理员登录。"
+        },
+        "error": "无法更新访客访问。"
+      },
+      "danger": {
+        "title": "危险区域",
+        "disableTitle": "关闭管理员密码",
+        "disableDescription": "为这个 Foldergram 实例重新关闭管理员密码。",
+        "showForm": "关闭访问",
+        "hideForm": "隐藏表单",
+        "buttonLoading": "关闭中...",
+        "buttonIdle": "关闭管理员密码",
+        "signOut": "退出登录",
+        "signOutError": "无法退出登录。",
+        "missingCurrent": "请输入当前密码以关闭保护。",
+        "success": "管理员密码已关闭。",
+        "error": "无法关闭管理员密码。"
+      },
+      "authProtection": {
+        "enabled": "当前浏览器会话已启用管理员保护。你可以使用下方控件轮换管理员密码、配置访客访问、退出登录，或再次关闭保护。",
+        "disabled": "当前保护已关闭。任何能在你的网络中访问此应用的人，在你启用管理员密码之前都可以完整浏览图库。"
+      },
+      "validation": {
+        "minLength": "密码至少需要 {count} 个字符。",
+        "empty": "密码不能为空。",
+        "mismatch": "两次输入的密码不一致。"
+      }
+    },
+    "status": {
+      "never": "从未",
+      "storage": {
+        "available": "可用",
+        "unavailable": "不可用"
+      },
+      "libraryStatus": {
+        "title": "图库状态",
+        "description": "当前存储与索引状态。",
+        "storage": "存储",
+        "folders": "文件夹",
+        "indexedPosts": "已索引帖子",
+        "indexedVideos": "已索引视频"
+      },
+      "lastScan": {
+        "title": "上次扫描",
+        "description": "应用记录的最近一次已完成运行。",
+        "status": "状态",
+        "finished": "完成时间",
+        "filesScanned": "已扫描文件",
+        "changes": "变更",
+        "statusValues": {
+          "none": "还没有已完成的扫描",
+          "completed": "已完成",
+          "completedWithErrors": "已完成但有错误",
+          "failed": "失败",
+          "running": "进行中"
+        },
+        "changeValues": {
+          "new": "新增",
+          "updated": "已更新",
+          "removed": "已移除"
+        }
+      }
+    }
+  },
+  "home": {
+    "sidebar": {
+      "ariaLabel": "文件夹推荐",
+      "suggestedFolders": "推荐文件夹",
+      "viewLikes": "查看赞过",
+      "viewFavorites": "查看收藏",
+      "openFolder": "打开",
+      "openSourceText": "Foldergram 是开源的。",
+      "viewOnGitHub": "在 GitHub 上查看"
+    }
+  },
+  "likes": {
+    "labels": {
+      "sharedCollection": "赞过",
+      "localCollection": "收藏",
+      "sharedSection": "已赞帖子",
+      "localSection": "收藏帖子"
+    },
+    "view": {
+      "rebuilding": "正在重建图库索引。刷新后的图库加载完成后，{label} 会重新出现。",
+      "sectionsAria": "{label} 分区"
+    },
+    "states": {
+      "sharedEmptyTitle": "还没有赞过的帖子",
+      "localEmptyTitle": "还没有收藏内容",
+      "sharedEmptyDescription": "点按任意帖子下方的心形，它就会出现在这里。",
+      "localEmptyDescription": "点按任意帖子下方的心形，它就会出现在此浏览器中的这里。",
+      "sharedLoadingLabel": "正在加载赞过内容...",
+      "localLoadingLabel": "正在加载收藏...",
+      "sharedErrorTitle": "无法加载赞过内容",
+      "localErrorTitle": "无法加载收藏"
+    },
+    "actions": {
+      "likePost": "点赞帖子",
+      "unlikePost": "取消点赞",
+      "favoritePost": "收藏帖子",
+      "removeFavoriteFromPost": "取消收藏帖子"
+    },
+    "errors": {
+      "loadShared": "无法加载赞过内容",
+      "loadLocal": "无法加载收藏",
+      "updateShared": "无法更新赞过内容",
+      "updateLocal": "无法更新收藏"
+    }
+  },
+  "moments": {
+    "rails": {
+      "moments": {
+        "title": "时刻",
+        "description": "根据图库中真实拍摄日期整理出的回忆胶囊。",
+        "singularLabel": "时刻"
+      },
+      "highlights": {
+        "title": "故事",
+        "description": "当拍摄日期稀少或是合成日期时，从图库中整理出的故事风格合集。",
+        "singularLabel": "故事"
+      }
+    },
+    "capsules": {
+      "onThisDay": {
+        "title": "历史上的今天",
+        "subtitle": "{date} 在往年此日"
+      },
+      "thisWeekPreviousYears": {
+        "title": "本周回顾",
+        "subtitle": "{range} 的往年回顾"
+      },
+      "fromLastYear": {
+        "title": "去年此时",
+        "subtitle": "重温 {monthYear}"
+      },
+      "highlightRecentBatches": {
+        "title": "近期批次",
+        "subtitle": "将最近几次拍摄合并为一个合集",
+        "dateContextOne": "{count} 个批次",
+        "dateContextOther": "{count} 个批次"
+      },
+      "highlightForgottenFavorites": {
+        "title": "被遗忘的最爱",
+        "subtitle": "值得再看一眼的旧赞帖子",
+        "dateContext": "已点赞且早于 6 个月"
+      },
+      "highlightDeepCuts": {
+        "title": "旧藏精选",
+        "subtitle": "从档案中重新浮现的旧帖子",
+        "dateContext": "早于 6 个月"
+      },
+      "highlightLuckyDip": {
+        "title": "随机惊喜",
+        "subtitle": "来自整个图库的轻松混合",
+        "dateContext": "今天内保持稳定"
+      }
+    },
+    "view": {
+      "rebuilding": "正在重建图库索引。刷新后的首页故事栏准备好后，此视图会重新填充。",
+      "loading": "正在加载{label}...",
+      "loadError": "无法加载{label}",
+      "emptyTitle": "这个{label}是空的",
+      "emptyDescription": "请从首页尝试另一个{label}。",
+      "postCount": "{count} 个帖子"
+    }
+  },
+  "folder": {
+    "shared": {
+      "topLevelSourceFolder": "顶层源文件夹"
+    },
+    "header": {
+      "openStories": "打开文件夹 stories",
+      "openAvatar": "打开文件夹头像",
+      "editButton": "编辑应用文件夹",
+      "shareButton": "共享文件夹",
+      "posts": "{count} 个帖子",
+      "reels": "{count} 条短片",
+      "updated": "{date} 已更新",
+      "libraryPath": "图库路径",
+      "expandDescription": "展开描述",
+      "collapseDescription": "收起描述",
+      "errors": {
+        "updateProfile": "更新资料失败"
+      }
+    },
+    "profileModal": {
+      "title": "编辑应用文件夹",
+      "namePlaceholder": "文件夹显示名称",
+      "descriptionPlaceholder": "为此文件夹添加描述...",
+      "errors": {
+        "nameRequired": "名称为必填项。"
+      }
+    },
+    "shareModal": {
+      "title": "共享文件夹",
+      "publicUrl": "公开文件夹 URL",
+      "accessSummaryTitle": "当前访问方式",
+      "accessSummaryBoth": "有效共享链接：{count}。密码访问：已启用。",
+      "accessSummaryLinks": "有效共享链接：{count}。密码访问：已关闭。",
+      "accessSummaryPassword": "有效共享链接：0。密码访问：已启用。",
+      "accessSummaryNone": "有效共享链接：0。密码访问：已关闭。",
+      "independentMethods": "共享链接和密码访问彼此独立。你可以启用其中一种或同时启用两种。",
+      "linkSection": "共享链接",
+      "linkDescription": "任何拥有有效链接的人无需密码即可打开此文件夹。每个链接会独立过期，也可单独撤销。",
+      "activeLinks": "{count} 个有效",
+      "expiration": "共享链接过期时间",
+      "customExpiration": "自定义过期时间",
+      "createLink": "创建链接",
+      "creating": "正在创建...",
+      "createdLink": "现在复制此链接",
+      "revoke": "撤销",
+      "noLinks": "还没有共享链接。",
+      "passwordSection": "密码访问",
+      "passwordDescription": "任何拥有文件夹地址和密码的人都可以打开它。这不会为共享链接添加密码保护。",
+      "passwordEnabled": "已启用",
+      "passwordOff": "已关闭",
+      "passwordLabel": "密码",
+      "passwordPlaceholder": "至少 8 个字符",
+      "setPassword": "设置密码",
+      "changePassword": "更改密码",
+      "removePassword": "移除密码",
+      "copyPasswordUrl": "复制文件夹地址",
+      "passwordSharingHint": "请分别发送文件夹地址和密码。",
+      "neverExpires": "永不过期",
+      "expiresAt": "{date} 过期",
+      "linkMeta": "令牌前缀 {prefix}。创建于 {date}。",
+      "presets": {
+        "oneHour": "1 小时",
+        "day": "24 小时",
+        "week": "7 天",
+        "custom": "自定义",
+        "unlimited": "不过期"
+      },
+      "status": {
+        "active": "有效",
+        "expired": "已过期",
+        "revoked": "已撤销"
+      },
+      "notices": {
+        "linkCreated": "共享链接已创建。在过期或撤销之前，该链接无需密码即可打开。",
+        "linkRevoked": "共享链接已撤销。",
+        "linkRevokedWithPassword": "共享链接已撤销。密码访问仍然启用。",
+        "passwordEnabled": "密码访问已启用。",
+        "passwordEnabledWithLinks": "密码访问已启用。现有共享链接仍无需密码即可使用。",
+        "passwordRemoved": "密码访问已移除。",
+        "passwordRemovedWithLinks": "密码访问已移除。有效共享链接仍可使用。"
+      },
+      "errors": {
+        "createLink": "无法创建共享链接。",
+        "savePassword": "无法保存文件夹密码。",
+        "revokeLink": "无法撤销共享链接。",
+        "removePassword": "无法移除密码访问。"
+      }
+    },
+    "tabs": {
+      "posts": "帖子",
+      "reels": "短片",
+      "sections": "文件夹分区"
+    }
+  },
+  "share": {
+    "loadingEyebrow": "文件夹共享",
+    "loadingTitle": "正在打开共享文件夹",
+    "passwordEyebrow": "文件夹共享",
+    "passwordTitle": "输入文件夹密码",
+    "passwordDescription": "输入可重复使用的文件夹密码以继续。",
+    "passwordFallbackDescription": "此共享链接已不可用。如果你知道文件夹密码，仍可访问此文件夹。",
+    "passwordLabel": "密码",
+    "unlocking": "正在解锁...",
+    "unlock": "解锁文件夹",
+    "expiredTitle": "此共享链接不可用",
+    "expiredDescription": "此链接可能已过期、已撤销或缺少令牌。",
+    "errorTitle": "无法打开文件夹共享",
+    "errorDescription": "无法加载此文件夹共享。",
+    "backToFolder": "返回共享文件夹",
+    "postErrorTitle": "无法加载共享帖子"
+  },
+  "reels": {
+    "view": {
+      "libraryUnavailableTitle": "图库存储不可用",
+      "loadErrorTitle": "无法加载短片",
+      "loadingTitle": "正在加载短片",
+      "loadingDescription": "正在从已索引的图库中整理仅包含视频的队列。",
+      "emptyTitle": "暂无可用短片",
+      "emptyDescription": "将已索引的视频添加到图库后，它们会在下一次扫描后出现在这里。",
+      "navigationAria": "短片导航",
+      "previous": "上一条短片",
+      "next": "下一条短片"
+    },
+    "rail": {
+      "hideDetails": "隐藏短片详情",
+      "showDetails": "显示短片详情",
+      "downloadOriginal": "下载原始文件",
+      "openFolder": "打开文件夹"
+    },
+    "info": {
+      "ariaLabel": "短片详情",
+      "eyebrow": "短片详情",
+      "hideDetails": "隐藏短片详情",
+      "openFolder": "打开文件夹",
+      "topLevelSourceFolder": "顶级源文件夹",
+      "unavailable": "不可用",
+      "video": "视频",
+      "loadError": "无法加载短片详情。",
+      "resolution": "分辨率",
+      "length": "时长",
+      "size": "大小",
+      "format": "格式",
+      "loading": "正在加载短片详情...",
+      "folderPath": "文件夹路径",
+      "mimeType": "MIME 类型"
+    }
+  },
+  "post": {
+    "carousel": {
+      "label": "包含 {count} 项的轮播帖子",
+      "position": "{current} / {count}",
+      "previousItem": "上一个轮播项目",
+      "nextItem": "下一个轮播项目",
+      "open": "打开包含 {count} 项的轮播帖子"
+    },
+    "captionModal": {
+      "title": "编辑说明",
+      "captionLabel": "说明",
+      "placeholder": "写点说明...",
+      "resetToFilename": "重置为文件名",
+      "errors": {
+        "update": "无法更新说明"
+      }
+    },
+    "viewer": {
+      "close": "关闭帖子",
+      "previous": "上一条帖子",
+      "next": "下一条帖子",
+      "showDetails": "显示帖子详情",
+      "hideDetails": "隐藏帖子详情",
+      "togglePlayback": "切换播放",
+      "toggleSound": "切换声音",
+      "toggleFullscreen": "切换全屏",
+      "switchToPreviewQuality": "切换到预览画质",
+      "switchToHdOriginal": "切换到高清原片",
+      "previewQuality": "预览画质",
+      "hdOriginal": "高清原片",
+      "openFolder": "打开文件夹",
+      "editCaption": "编辑说明",
+      "folderPath": "文件夹路径",
+      "stats": {
+        "dimensions": "尺寸",
+        "type": "类型",
+        "duration": "时长",
+        "size": "大小",
+        "place": "地点"
+      },
+      "metadata": {
+        "location": "位置",
+        "camera": "相机",
+        "lens": "镜头",
+        "aperture": "光圈",
+        "shutter": "快门",
+        "iso": "ISO",
+        "focalLength": "焦距"
+      },
+      "videoType": "视频（{mimeType}）",
+      "setAsCover": "设为文件夹封面",
+      "downloadOriginalFile": "下载原始文件",
+      "openOriginalFile": "打开原始文件",
+      "deletePost": "删除帖子"
+    },
+    "feedCard": {
+      "openStories": "打开 {name} 的动态",
+      "openFolderAvatar": "打开 {name}",
+      "openReel": "打开短片",
+      "openPost": "打开帖子",
+      "moreOptions": "更多选项",
+      "delete": {
+        "title": "删除这条帖子？",
+        "messagePermanent": "这会从应用中永久删除这条帖子，并从磁盘移除原始媒体文件。",
+        "messageTrash": "这会从应用中删除这条帖子并将其移入回收站。除非你选择永久删除，否则原始文件仍会保留在磁盘上。",
+        "confirmPermanent": "永久删除",
+        "confirm": "删除",
+        "deleteOriginalLabel": "同时从磁盘永久删除原始文件",
+        "deleteOriginalDescription": "保持未勾选可将帖子移入回收站，同时保留磁盘上的源文件。",
+        "deleteOriginalWarning": "这会从磁盘永久删除原始文件、缩略图和预览图。此操作无法撤销。"
+      }
+    }
+  },
+  "collections": {
+    "shared": {
+      "defaultName": "全部帖子",
+      "postCountOne": "{count} 篇帖子",
+      "postCountOther": "{count} 篇帖子"
+    },
+    "bookmark": {
+      "dialogLabel": "合集",
+      "title": "合集",
+      "createCollection": "创建合集",
+      "namePlaceholder": "合集名称",
+      "empty": "还没有合集",
+      "savePost": "收藏帖子",
+      "removeSavedPost": "取消收藏帖子",
+      "errors": {
+        "loadCollections": "无法加载合集"
+      }
+    },
+    "list": {
+      "libraryUnavailableTitle": "图库存储不可用",
+      "loadErrorTitle": "无法加载合集",
+      "loading": "正在加载合集...",
+      "emptyTitle": "还没有合集",
+      "emptyDescription": "已保存的帖子会显示在“全部帖子”中。"
+    },
+    "detail": {
+      "fallbackTitle": "合集",
+      "libraryUnavailableTitle": "图库存储不可用",
+      "loadErrorTitle": "无法加载合集",
+      "back": "合集",
+      "options": "合集选项",
+      "actionsLabel": "合集操作",
+      "emptyTitle": "{name}为空",
+      "emptyDescriptionDefault": "在任意帖子下方使用收藏操作即可把它保存到这里。",
+      "emptyDescriptionCustom": "分配到此合集的已收藏帖子会显示在这里。",
+      "loading": "正在加载合集...",
+      "menu": {
+        "delete": "删除合集",
+        "edit": "编辑合集",
+        "cancel": "取消"
+      },
+      "edit": {
+        "title": "编辑合集",
+        "saving": "保存中...",
+        "done": "完成",
+        "required": "合集名称为必填项。",
+        "createError": "无法创建合集",
+        "updateError": "无法更新合集"
+      },
+      "delete": {
+        "title": "删除此合集？",
+        "message": "删除此合集后，照片和视频仍会保留为已保存状态。",
+        "deleting": "删除中...",
+        "confirm": "删除",
+        "cancel": "取消",
+        "error": "无法删除合集"
+      }
+    }
+  },
+  "placesPage": {
+    "eyebrow": "地点",
+    "title": "全部地点",
+    "description": "浏览根据离线位置数据分组的帖子。",
+    "stats": {
+      "places": "地点",
+      "posts": "帖子"
+    },
+    "errors": {
+      "load": "无法加载地点"
+    },
+    "searchPlaceholder": "搜索名称、地区或坐标...",
+    "sort": {
+      "postsDesc": "帖子最多",
+      "nameAsc": "名称 A-Z",
+      "nameDesc": "名称 Z-A",
+      "countryAsc": "国家 A-Z"
+    },
+    "resultsOne": "{count} 个结果",
+    "resultsOther": "{count} 个结果",
+    "loading": "正在加载地点...",
+    "emptyTitle": "还没有已索引的地点",
+    "emptyDescription": "先在设置中准备离线地点数据并重建分配，然后即可按位置对帖子分组。",
+    "noMatch": "没有匹配的地点。请尝试其他搜索词或排序。",
+    "metadataFallback": "离线城市级地点",
+    "postCountOne": "{count} 篇帖子",
+    "postCountOther": "{count} 篇帖子",
+    "kinds": {
+      "manual": "手动地点",
+      "nearestCity": "最近城市",
+      "cityMatch": "城市匹配"
+    },
+    "readiness": {
+      "ready": "就绪",
+      "empty": "空"
+    }
+  },
+  "placePage": {
+    "errors": {
+      "load": "无法加载地点"
+    },
+    "badge": "离线地点",
+    "coordinatesLabel": "坐标",
+    "sourceLabel": "来源",
+    "approximateBadge": "近似城市匹配",
+    "emptyTitle": "此地点没有帖子",
+    "emptyDescription": "准备好离线地点数据后，可以在设置中重建地点分配。",
+    "metadataFallback": "离线城市级地点",
+    "heroApproximate": "根据已存储的照片 GPS 坐标分组，并匹配到最近城市，以便离线浏览。",
+    "heroExact": "根据已存储的照片 GPS 坐标解析，并保持离线可用。",
+    "postCountOne": "帖子",
+    "postCountOther": "帖子",
+    "kind": {
+      "offline": "离线",
+      "manual": "手动",
+      "nearestCity": "最近城市",
+      "city": "城市",
+      "place": "地点",
+      "match": "匹配"
+    }
+  },
+  "libraryPage": {
+    "eyebrow": "图库",
+    "title": "全部文件夹",
+    "description": "浏览并搜索所有已索引的应用文件夹。",
+    "stats": {
+      "folders": "文件夹",
+      "posts": "帖子"
+    },
+    "errors": {
+      "load": "无法加载文件夹"
+    },
+    "searchPlaceholder": "搜索名称或路径片段...",
+    "sort": {
+      "recentDesc": "最近更新",
+      "imagesDesc": "帖子最多",
+      "nameAsc": "名称 A-Z",
+      "nameDesc": "名称 Z-A",
+      "pathAsc": "路径 A-Z"
+    },
+    "resultsOne": "{count} 个结果",
+    "resultsOther": "{count} 个结果",
+    "loading": "正在加载文件夹...",
+    "emptyTitle": "还没有已索引的文件夹",
+    "emptyDescription": "在图库根目录下添加包含媒体的源文件夹，然后运行一次扫描。",
+    "noMatch": "没有匹配的文件夹。请尝试其他搜索或筛选。",
+    "topLevelSourceFolder": "顶级源文件夹",
+    "postsCountOne": "{count} 篇帖子",
+    "postsCountOther": "{count} 篇帖子",
+    "reelsCountOne": "{count} 条短片",
+    "reelsCountOther": "{count} 条短片",
+    "readiness": {
+      "ready": "就绪",
+      "empty": "空"
+    },
+    "moreOptions": "更多选项",
+    "openFolder": "打开文件夹",
+    "deleteFolder": "删除文件夹",
+    "noRecentMedia": "没有最近媒体",
+    "delete": {
+      "title": "删除此应用文件夹？",
+      "sourceTooTitle": "同时删除源文件夹",
+      "sourceTooNoChildren": "除了删除该文件夹的直接帖子外，也一并删除源文件夹本身。",
+      "sourceTooWithChildrenOne": "同时删除 {count} 个子应用文件夹及其子树中的所有文件。",
+      "sourceTooWithChildrenOther": "同时删除 {count} 个子应用文件夹及其子树中的所有文件。",
+      "warning": "这样做会永久删除所选源文件夹及其内部的所有子文件夹和文件，包括不受支持的文件。此操作无法撤销。",
+      "directPostsOne": "{count} 个直接帖子",
+      "directPostsOther": "{count} 个直接帖子",
+      "childFoldersOne": "{count} 个子应用文件夹",
+      "childFoldersOther": "{count} 个子应用文件夹",
+      "messageDeleteSource": "这会永久删除 {directPosts}，并从硬盘中移除此源文件夹。",
+      "messageKeepChildren": "这会永久删除 {directPosts}。{childFolders} 会被保留。",
+      "messageEmptyFolder": "这会永久删除 {directPosts}。仅当源文件夹变为空时，它本身才会被移除。",
+      "confirmSubtree": "删除文件夹子树",
+      "confirmFolder": "删除应用文件夹",
+      "loadingSubtree": "正在删除子树...",
+      "loadingFolder": "正在删除...",
+      "error": "无法删除此应用文件夹。"
+    }
+  },
+  "trashPage": {
+    "eyebrow": "回收站",
+    "title": "已删除的帖子",
+    "description": "移到这里的帖子会保留在磁盘上，直到你将其永久删除。",
+    "selectedOne": "已选 {count} 条帖子",
+    "selectedOther": "已选 {count} 条帖子",
+    "restoreButton": "恢复",
+    "deleteButton": "永久删除",
+    "libraryUnavailableTitle": "图库存储不可用",
+    "libraryUnavailableDescription": "当前配置的图库存储不可用。",
+    "loadErrorTitle": "无法加载回收站",
+    "loading": "正在加载回收站...",
+    "emptyTitle": "回收站为空",
+    "emptyDescription": "已删除的帖子会显示在这里，方便你恢复或永久移除。",
+    "selectItem": "选择 {label}",
+    "deselectItem": "取消选择 {label}",
+    "trashedAt": "{date} 已移入回收站",
+    "recently": "刚刚",
+    "openFolder": "打开文件夹",
+    "restoreDialog": {
+      "title": "恢复所选帖子？",
+      "messageOne": "要将所选的 {count} 条帖子恢复到应用中吗？",
+      "messageOther": "要将所选的 {count} 条帖子恢复到应用中吗？",
+      "confirm": "恢复",
+      "loading": "正在恢复..."
+    },
+    "deleteDialog": {
+      "title": "永久删除所选帖子？",
+      "messageOne": "这将永久删除所选的 {count} 条帖子，并从磁盘移除原始文件。",
+      "messageOther": "这将永久删除所选的 {count} 条帖子，并从磁盘移除原始文件。",
+      "confirm": "永久删除",
+      "loading": "正在删除...",
+      "warning": "原始文件、缩略图和预览图都会被永久删除。此操作无法撤销。"
+    },
+    "errors": {
+      "refresh": "无法刷新更新后的图库状态。",
+      "processOne": "有 {count} 条帖子无法处理。",
+      "processOther": "有 {count} 条帖子无法处理。"
+    }
+  },
+  "explore": {
+    "back": "返回探索帖子",
+    "searchPlaceholder": "搜索",
+    "clearSearch": "清除搜索",
+    "recentTitle": "最近",
+    "clearAll": "清除全部",
+    "tabsAria": "搜索结果标签页",
+    "tabs": {
+      "media": "照片和视频",
+      "folders": "应用文件夹"
+    },
+    "errors": {
+      "search": "无法搜索帖子",
+      "load": "无法加载探索页"
+    },
+    "emptySearchTitle": "没有匹配的照片或视频",
+    "emptySearchDescription": "请尝试其他文件名或文件夹关键词。",
+    "loadingFolders": "正在加载文件夹...",
+    "noFoldersFound": "未找到应用文件夹。",
+    "emptyTitle": "暂时没有可探索内容",
+    "emptyDescription": "先为几个文件夹建立索引，这个页面就会开始在这里展示帖子。",
+    "folderPostsOne": "{count} 篇帖子",
+    "folderPostsOther": "{count} 篇帖子"
+  }
+}

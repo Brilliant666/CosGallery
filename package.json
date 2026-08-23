@@ -1,0 +1,32 @@
+{
+  "name": "foldergram",
+  "private": true,
+  "version": "1.2.2",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@10.28.0",
+  "workspaces": [
+    "server",
+    "client",
+    "docs"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"node scripts/run-workspace-script.mjs server dev\" \"node scripts/run-workspace-script.mjs client dev\" \"node scripts/run-workspace-script.mjs docs dev\"",
+    "dev:server": "node scripts/run-workspace-script.mjs server dev",
+    "dev:client": "node scripts/run-workspace-script.mjs client dev",
+    "dev:docs": "node scripts/run-workspace-script.mjs docs dev",
+    "build": "node scripts/run-workspace-script.mjs server build && node scripts/run-workspace-script.mjs client build",
+    "start": "cross-env NODE_ENV=production node scripts/run-workspace-script.mjs server start",
+    "migrate": "node scripts/run-workspace-script.mjs server migrate",
+    "build:server": "node scripts/run-workspace-script.mjs server build",
+    "build:client": "node scripts/run-workspace-script.mjs client build",
+    "build:docs": "node scripts/run-workspace-script.mjs docs build",
+    "rescan": "node scripts/run-workspace-script.mjs server rescan",
+    "test": "node scripts/run-workspace-script.mjs server test && node scripts/run-workspace-script.mjs client test",
+    "test:server": "node scripts/run-workspace-script.mjs server test",
+    "test:client": "node scripts/run-workspace-script.mjs client test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "cross-env": "^10.0.0"
+  }
+}
