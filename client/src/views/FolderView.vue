@@ -151,6 +151,7 @@
             <FolderGrid
               :items="foldersStore.currentImages"
               :variant="activeTab"
+              show-work-labels
             />
             <div class="pt-6">
               <InfiniteLoader

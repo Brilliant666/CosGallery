@@ -30,6 +30,14 @@
           <span class="i-fluent-square-multiple-24-filled w-[0.9rem] h-[0.9rem] text-white" />
           <span class="text-[0.65rem] font-semibold leading-none tabular-nums">{{ item.itemCount ?? item.mediaItems?.length }}</span>
         </div>
+        <div
+          v-if="showWorkLabels && formatCosGalleryWorkLabel(item)"
+          class="pointer-events-none absolute inset-x-0 bottom-0 bg-[linear-gradient(180deg,rgba(9,11,16,0)_0%,rgba(9,11,16,0.82)_78%)] px-2 pb-2 pt-8 text-center text-white"
+        >
+          <span class="line-clamp-2 text-[0.76rem] font-semibold leading-[1.25] drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+            {{ formatCosGalleryWorkLabel(item) }}
+          </span>
+        </div>
       </a>
     </RouterLink>
   </section>
@@ -41,6 +49,7 @@ import { useI18n } from 'vue-i18n';
 
 import { useAppStore } from '../stores/app';
 import type { FeedItem, SharedFeedItem } from '../types/api';
+import { formatCosGalleryWorkLabel } from '../utils/cos-gallery-titles';
 import { formatMediaDuration } from '../utils/media';
 import ResilientImage from './ResilientImage.vue';
 
@@ -50,11 +59,13 @@ const props = withDefaults(
     variant?: 'square' | 'posts' | 'reels';
     columns?: 'adaptive' | 'three';
     sharedSlug?: string | null;
+    showWorkLabels?: boolean;
   }>(),
   {
     variant: 'square',
     columns: 'adaptive',
-    sharedSlug: null
+    sharedSlug: null,
+    showWorkLabels: false
   }
 );
 
