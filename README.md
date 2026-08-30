@@ -50,7 +50,7 @@ pnpm --dir server import:hcf-tags -- "path/to/hcf-tags.json"
 - Album cover labels come from `CostuanArchiveManager` metadata, not from album folder names. Export `costuan-archive-*.json` from the extension and import it with:
 
 ```bash
-pnpm import:costuan-archive -- "path/to/costuan-archive.json"
+pnpm --dir server import:costuan-archive "path/to/costuan-archive.json"
 ```
 
 The importer associates albums by Costuan's stable `sourceOrder` (`NO.001`, `NO.002`, and so on), then persists the creator ID plus `works[].label` in SQLite. Full folder names, media-count summaries, and archive sizes are not used as visible labels.
