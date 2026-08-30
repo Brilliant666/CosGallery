@@ -47,6 +47,14 @@ GALLERY_ROOT/
 pnpm --dir server import:hcf-tags -- "path/to/hcf-tags.json"
 ```
 
+- Album cover labels come from `CostuanArchiveManager` metadata, not from album folder names. Export `costuan-archive-*.json` from the extension and import it with:
+
+```bash
+pnpm import:costuan-archive -- "path/to/costuan-archive.json"
+```
+
+The importer associates albums by Costuan's stable `sourceOrder` (`NO.001`, `NO.002`, and so on), then persists the creator ID plus `works[].label` in SQLite. Full folder names, media-count summaries, and archive sizes are not used as visible labels.
+
 Use `PUBLIC_DEMO_MODE=1` when the media tree must remain read-only. In CosGallery mode, creator rating updates still write only to the SQLite metadata database.
 
 Foldergram is a self-hosted web application that turns your local folders into a beautiful, instagram-style feed and profile. It turns your local folder to app folders (profiles), and serves a lightning-fast Progressive Web App (PWA).

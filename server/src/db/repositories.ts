@@ -1223,6 +1223,21 @@ export const postRepository = {
     return database.prepare('SELECT * FROM posts WHERE source_path = ?').get(sourcePath) as PostRecord | undefined;
   },
 
+  listCarouselRecordsByFolder(folderId: number): PostRecord[] {
+    return database
+      .prepare(
+        `SELECT * FROM posts
+         WHERE folder_id = ? AND post_type = 'carousel' AND is_deleted = 0 AND is_trashed = 0
+         ORDER BY source_path COLLATE NOCASE ASC, id ASC`
+      )
+      .all(folderId) as unknown as PostRecord[];
+  },
+
+  setCaption(id: number, caption: string | null): boolean {
+    const result = database.prepare('UPDATE posts SET caption = ?, updated_at = ? WHERE id = ?').run(caption, nowIso(), id);
+    return Number(result.changes ?? 0) > 0;
+  },
+
   findByImageId(imageId: number): PostRecord | undefined {
     const row = database.prepare('SELECT post_id FROM post_items WHERE image_id = ? LIMIT 1').get(imageId) as { post_id: number } | undefined;
     return row ? this.findById(row.post_id) : undefined;
@@ -1998,7 +2013,7 @@ export const postRepository = {
 
   updateCaption(id: number, caption: string | null): PostDetail | undefined {
     const resolvedId = id;
-    database.prepare('UPDATE posts SET caption = ?, updated_at = ? WHERE id = ?').run(caption, nowIso(), resolvedId);
+    this.setCaption(resolvedId, caption);
     return this.getPostDetail(resolvedId);
   },
 

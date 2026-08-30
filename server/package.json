@@ -12,6 +12,7 @@
     "start": "node dist/scripts/migrate.js && node dist/index.js",
     "rescan": "tsx src/scripts/rescan.ts",
     "import:hcf-tags": "tsx src/scripts/import-hcf-tags.ts",
+    "import:costuan-archive": "tsx src/scripts/import-costuan-archive.ts",
     "test": "vitest run --config vitest.config.ts test/"
   },
   "dependencies": {
