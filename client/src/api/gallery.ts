@@ -302,6 +302,48 @@ export async function updateImageCaption(id: number, caption: string | null) {
   return payload.image;
 }
 
+export function fetchCosGalleryWorks(
+  page = 1,
+  limit = 24,
+  contentRating?: 'R15' | 'R18',
+  query?: string
+) {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (contentRating) params.set('contentRating', contentRating);
+  if (query?.trim()) params.set('q', query.trim());
+  return requestJson<PaginatedFeed>(`/api/cos-gallery/works?${params.toString()}`);
+}
+
+export function fetchCosGalleryCreators(
+  contentRating?: 'R15' | 'R18' | 'unclassified',
+  query?: string
+) {
+  const params = new URLSearchParams();
+  if (contentRating) params.set('contentRating', contentRating);
+  if (query?.trim()) params.set('q', query.trim());
+  const suffix = params.size > 0 ? `?${params.toString()}` : '';
+  return requestJson<import('../types/api').CosGalleryCreatorsPayload>(`/api/cos-gallery/creators${suffix}`);
+}
+
+export function updateCreatorContentRating(id: number, contentRating: 'R15' | 'R18') {
+  return requestJson<{ ok: true; creator: import('../types/api').CosGalleryCreator }>(
+    `/api/cos-gallery/creators/${id}/content-rating`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ contentRating })
+    }
+  );
+}
+
+export async function updatePostContentRating(id: number, contentRating: 'R15' | 'R18') {
+  return requestJson<import('../types/api').PostContentRatingMutationResult>(`/api/posts/${id}/content-rating`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ contentRating })
+  });
+}
+
 export function fetchLikes() {
   return requestJson<LikesPayload>('/api/likes');
 }

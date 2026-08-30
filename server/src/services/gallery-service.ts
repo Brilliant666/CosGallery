@@ -23,6 +23,7 @@ import {
   appSettingsRepository,
   collectionConstants,
   collectionRepository,
+  creatorRatingRepository,
   folderRepository,
   folderScanStateRepository,
   imageRepository,
@@ -192,7 +193,8 @@ function parseFeedMode(value: string | null): FeedMode {
 }
 
 function getDefaultHomeFeedMode(): FeedMode {
-  return parseFeedMode(appSettingsRepository.get(HOME_FEED_DEFAULT_MODE_SETTING_KEY));
+  const storedMode = appSettingsRepository.get(HOME_FEED_DEFAULT_MODE_SETTING_KEY);
+  return storedMode === null && appConfig.cosGalleryMode ? 'recent' : parseFeedMode(storedMode);
 }
 
 function parseSupportedLocale(value: string | null): SupportedLocale | null {
@@ -704,6 +706,7 @@ function buildFolderSummary(folder: FolderSummaryRecord) {
       parentFolderName: getParentFolderDisplayName(folder.folder_path),
       folderPath: folder.folder_path,
       breadcrumb: getPathBreadcrumb(folder.folder_path),
+      contentRating: folder.content_rating,
       imageCount: folder.image_count,
       postCount: folder.post_count,
       videoCount: folder.video_count,
@@ -732,6 +735,7 @@ function buildFolderSummary(folder: FolderSummaryRecord) {
     parentFolderName: getParentFolderDisplayName(folder.folder_path),
     folderPath: folder.folder_path,
     breadcrumb: getPathBreadcrumb(folder.folder_path),
+    contentRating: folder.content_rating,
     imageCount: folder.image_count,
     postCount: folder.post_count,
     videoCount: folder.video_count,
@@ -1293,6 +1297,71 @@ function listFallbackAvatarStoryItems(
 }
 
 export const galleryService = {
+  getCosGalleryCreators(contentRating?: 'R15' | 'R18' | 'unclassified', query?: string) {
+    if (!storageService.getState().libraryAvailable) {
+      return { items: [], total: 0 };
+    }
+
+    const normalizedQuery = query?.trim().toLocaleLowerCase() ?? '';
+    const derivativeVersion = getDerivativeAssetVersion();
+    const items = creatorRatingRepository
+      .listCreators()
+      .filter((creator) => {
+        if (contentRating === 'unclassified' && creator.contentRating !== null) return false;
+        if (contentRating && contentRating !== 'unclassified' && creator.contentRating !== contentRating) return false;
+        return !normalizedQuery || creator.name.toLocaleLowerCase().includes(normalizedQuery);
+      })
+      .map((creator) => ({
+        id: creator.id,
+        slug: creator.slug,
+        name: creator.name,
+        folderPath: creator.folderPath,
+        workCount: Number(creator.workCount),
+        latestWorkAt: creator.latestWorkAt === null ? null : Number(creator.latestWorkAt),
+        contentRating: creator.contentRating,
+        ratingSourceCount: Number(creator.ratingSourceCount),
+        ratingConflict: Boolean(creator.ratingConflict),
+        coverImageId: creator.coverImageId,
+        coverUrl: creator.coverThumbnailPath
+          ? toPublicMediaUrl('/thumbnails', creator.coverThumbnailPath, derivativeVersion)
+          : null,
+        coverWidth: creator.coverWidth,
+        coverHeight: creator.coverHeight
+      }));
+
+    return { items, total: items.length };
+  },
+
+  updateCreatorContentRating(id: number, contentRating: 'R15' | 'R18') {
+    const folder = folderRepository.getById(id);
+    if (!folder || folder.role !== 'normal') return null;
+    creatorRatingRepository.upsertSource({
+      folderId: folder.id,
+      source: 'manual',
+      sourceCreatorId: 'local',
+      sourceDisplayName: folder.name,
+      rating: contentRating,
+      isManual: true,
+      observedAt: Date.now()
+    });
+    return this.getCosGalleryCreators(undefined, folder.name).items.find((creator) => creator.id === id) ?? null;
+  },
+
+  getCosGalleryWorks(
+    page: number,
+    limit: number,
+    contentRating?: 'R15' | 'R18',
+    query?: string
+  ) {
+    if (!storageService.getState().libraryAvailable) {
+      return { items: [], page, limit, total: 0, hasMore: false };
+    }
+
+    const total = postRepository.countCosGalleryWorks(contentRating, query);
+    const items = postRepository.listCosGalleryWorks(page, limit, contentRating, query);
+    return buildPaginatedPayload(mapFeedItems(items), page, limit, total);
+  },
+
   getFeed(page: number, limit: number, mode: FeedMode = 'random', randomSeed?: number) {
     if (!storageService.getState().libraryAvailable) {
       return {
@@ -1583,6 +1652,20 @@ export const galleryService = {
 
     const updated = imageRepository.getImageDetail(post.id, undefined, false, defaultFolderImageOrder);
     return updated ? mapImageDetail(updated, getDerivativeAssetVersion()) : null;
+  },
+
+  updatePostContentRating(id: number, contentRating: 'R15' | 'R18') {
+    if (!storageService.getState().libraryAvailable) {
+      return null;
+    }
+
+    const post = postRepository.findById(id);
+    if (!post || post.is_deleted || post.is_trashed) {
+      return null;
+    }
+
+    const updated = postRepository.updateContentRating(id, contentRating);
+    return updated ? { id: updated.id, contentRating: updated.content_rating } : null;
   },
 
   setFolderAvatar(slug: string, imageId: number) {

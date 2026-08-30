@@ -21,12 +21,15 @@ export const BASELINE_MIGRATION_VERSION = '000001';
 const CAPTION_MIGRATION_VERSION = '000002';
 const FOLDER_SHARES_MIGRATION_VERSION = '000004';
 const POSTS_MIGRATION_VERSION = '000005';
+const COS_GALLERY_MIGRATION_VERSION = '000007';
+const CREATOR_RATINGS_MIGRATION_VERSION = '000008';
 const SCHEMA_MIGRATIONS_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY)';
 const APP_SCHEMA_TABLES = [
   'folders',
   'images',
   'posts',
   'post_items',
+  'creator_rating_sources',
   'places',
   'scan_runs',
   'app_settings',
@@ -491,6 +494,9 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     return;
   }
 
+  const hasCosGalleryMigration = migrationVersionExists(database, COS_GALLERY_MIGRATION_VERSION);
+  const hasCreatorRatingsMigration = migrationVersionExists(database, CREATOR_RATINGS_MIGRATION_VERSION);
+
   validateRequiredColumns(database, 'folders', [
     { name: 'carousel_owner_folder_id', type: 'INTEGER', notNull: false, defaultValue: null }
   ]);
@@ -498,7 +504,7 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     { name: 'warning_count', type: 'INTEGER', notNull: true, defaultValue: '0' },
     { name: 'warning_text', type: 'TEXT', notNull: false, defaultValue: null }
   ]);
-  validateRequiredColumns(database, 'posts', [
+  const requiredPostColumns: RequiredColumn[] = [
     { name: 'id', type: 'INTEGER', notNull: true, primaryKeyPosition: 1 },
     { name: 'folder_id', type: 'INTEGER', notNull: true },
     { name: 'place_id', type: 'INTEGER', notNull: false },
@@ -514,7 +520,30 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     { name: 'trashed_at', type: 'TEXT', notNull: false },
     { name: 'created_at', type: 'TEXT', notNull: true, defaultValue: 'CURRENT_TIMESTAMP' },
     { name: 'updated_at', type: 'TEXT', notNull: true, defaultValue: 'CURRENT_TIMESTAMP' }
-  ]);
+  ];
+  if (hasCosGalleryMigration) {
+    requiredPostColumns.splice(5, 0, {
+      name: 'content_rating',
+      type: 'TEXT',
+      notNull: true,
+      defaultValue: "'R15'"
+    });
+  }
+  if (hasCreatorRatingsMigration) {
+    validateRequiredColumns(database, 'creator_rating_sources', [
+      { name: 'folder_id', type: 'INTEGER', notNull: true, primaryKeyPosition: 1 },
+      { name: 'source', type: 'TEXT', notNull: true, primaryKeyPosition: 2 },
+      { name: 'source_creator_id', type: 'TEXT', notNull: true, primaryKeyPosition: 3 },
+      { name: 'source_display_name', type: 'TEXT', notNull: true },
+      { name: 'rating', type: 'TEXT', notNull: true },
+      { name: 'is_manual', type: 'INTEGER', notNull: true, defaultValue: '0' },
+      { name: 'observed_at', type: 'INTEGER', notNull: false },
+      { name: 'metadata_json', type: 'TEXT', notNull: false },
+      { name: 'created_at', type: 'TEXT', notNull: true, defaultValue: 'CURRENT_TIMESTAMP' },
+      { name: 'updated_at', type: 'TEXT', notNull: true, defaultValue: 'CURRENT_TIMESTAMP' }
+    ]);
+  }
+  validateRequiredColumns(database, 'posts', requiredPostColumns);
   validateRequiredColumns(database, 'post_items', [
     { name: 'post_id', type: 'INTEGER', notNull: true, primaryKeyPosition: 1 },
     { name: 'image_id', type: 'INTEGER', notNull: true, primaryKeyPosition: 0 },
@@ -530,7 +559,7 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     { name: 'created_at', type: 'TEXT', notNull: true, defaultValue: 'CURRENT_TIMESTAMP' }
   ]);
 
-  const requiredIndexes = [
+  const requiredIndexes: Array<readonly [string, string, readonly string[], boolean]> = [
     ['posts', 'idx_posts_folder_visible_sort', ['folder_id', 'is_deleted', 'is_trashed', 'sort_timestamp', 'id'], false],
     ['posts', 'idx_posts_visible_sort', ['is_deleted', 'is_trashed', 'sort_timestamp', 'id'], false],
     ['posts', 'idx_posts_type_visibility', ['post_type', 'is_deleted', 'is_trashed'], false],
@@ -543,7 +572,21 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     ['collection_items', 'idx_collection_items_post', ['post_id'], false],
     ['collection_items', 'idx_collection_items_created', ['collection_id', 'created_at', 'post_id'], false],
     ['folders', 'idx_folders_carousel_owner', ['carousel_owner_folder_id'], false]
-  ] as const;
+  ];
+  if (hasCosGalleryMigration) {
+    requiredIndexes.push([
+      'posts',
+      'idx_posts_content_rating_visible_sort',
+      ['content_rating', 'is_deleted', 'is_trashed', 'sort_timestamp', 'id'],
+      false
+    ]);
+  }
+  if (hasCreatorRatingsMigration) {
+    requiredIndexes.push(
+      ['creator_rating_sources', 'idx_creator_rating_sources_folder', ['folder_id', 'is_manual', 'rating'], false],
+      ['creator_rating_sources', 'idx_creator_rating_sources_source', ['source', 'source_creator_id'], false]
+    );
+  }
   for (const [tableName, indexName, columns, unique] of requiredIndexes) {
     validateRequiredIndex(database, tableName, indexName, [...columns], unique);
   }
@@ -555,6 +598,9 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
   validateForeignKey(database, 'posts', 'place_id', 'places', 'id', 'SET NULL');
   validateForeignKey(database, 'post_items', 'post_id', 'posts', 'id', 'CASCADE');
   validateForeignKey(database, 'post_items', 'image_id', 'images', 'id', 'CASCADE');
+  if (hasCreatorRatingsMigration) {
+    validateForeignKey(database, 'creator_rating_sources', 'folder_id', 'folders', 'id', 'CASCADE');
+  }
   validateForeignKey(database, 'likes', 'post_id', 'posts', 'id', 'CASCADE');
   validateForeignKey(database, 'collection_items', 'collection_id', 'collections', 'id', 'CASCADE');
   validateForeignKey(database, 'collection_items', 'post_id', 'posts', 'id', 'CASCADE');
@@ -568,9 +614,21 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
   validateCheckConstraint(
     database,
     'post_items',
-    /CHECK\s*\(\s*position\s*>=\s*1\s+AND\s+position\s*<=\s*20\s*\)/i,
-    'the position range check constraint'
+    hasCosGalleryMigration
+      ? /CHECK\s*\(\s*position\s*>=\s*1\s*\)/i
+      : /CHECK\s*\(\s*position\s*>=\s*1\s+AND\s+position\s*<=\s*20\s*\)/i,
+    hasCosGalleryMigration
+      ? 'the positive position check constraint'
+      : 'the bounded position check constraint'
   );
+  if (hasCosGalleryMigration) {
+    validateCheckConstraint(
+      database,
+      'posts',
+      /CHECK\s*\(\s*content_rating\s+IN\s*\(\s*'R15'\s*,\s*'R18'\s*\)\s*\)/i,
+      'the content_rating R15/R18 check constraint'
+    );
+  }
 
   assertNoRows(
     database,
@@ -596,7 +654,7 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
        JOIN post_items ON post_items.post_id = posts.id
        GROUP BY posts.id, posts.post_type
        HAVING (posts.post_type = 'single' AND COUNT(*) <> 1)
-          OR (posts.post_type = 'carousel' AND (COUNT(*) < 2 OR COUNT(*) > 20))
+          OR (posts.post_type = 'carousel' AND COUNT(*) < 2)
      )`,
     'post(s) have an item count inconsistent with post_type'
   );

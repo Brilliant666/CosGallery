@@ -11,6 +11,16 @@ export function blockPublicDemoMutations(
   response: express.Response,
   next: express.NextFunction
 ): void {
+  const isCosGalleryRatingUpdate =
+    appConfig.cosGalleryMode &&
+    request.method.toUpperCase() === 'PATCH' &&
+    /^\/api\/cos-gallery\/creators\/\d+\/content-rating$/.test(request.originalUrl.split('?')[0] ?? '');
+
+  if (isCosGalleryRatingUpdate) {
+    next();
+    return;
+  }
+
   if (!appConfig.publicDemoMode || !MUTATING_METHODS.has(request.method.toUpperCase())) {
     next();
     return;

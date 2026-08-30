@@ -71,6 +71,14 @@ const reelsQuerySchema = paginationQuerySchema.extend({
 const mediaSearchQuerySchema = paginationQuerySchema.extend({
   q: z.string().trim().min(1).max(160)
 });
+const cosGalleryWorksQuerySchema = paginationQuerySchema.extend({
+  contentRating: z.enum(['R15', 'R18']).optional(),
+  q: z.string().trim().max(160).optional()
+});
+const cosGalleryCreatorsQuerySchema = z.object({
+  contentRating: z.enum(['R15', 'R18', 'unclassified']).optional(),
+  q: z.string().trim().max(160).optional()
+});
 const homeFeedDefaultBodySchema = z.object({
   defaultMode: z.enum(['recent', 'rediscover', 'random'])
 });
@@ -128,6 +136,10 @@ export const patchImageCaptionBodySchema = z
   .transform((body) => ({
     caption: body.caption === '' ? null : body.caption ?? null
   }));
+
+export const patchPostContentRatingBodySchema = z.object({
+  contentRating: z.enum(['R15', 'R18'])
+});
 
 export const folderCoverBodySchema = z.object({
   imageId: z.coerce.number().int().positive()
@@ -1119,6 +1131,47 @@ router.patch(['/posts/:id/caption', '/images/:id/caption'], requireCapability('c
     ok: true,
     image
   });
+});
+
+router.get('/cos-gallery/works', (request, response) => {
+  const query = cosGalleryWorksQuerySchema.parse(request.query);
+  response.json(
+    galleryService.getCosGalleryWorks(
+      query.page,
+      query.limit,
+      query.contentRating,
+      query.q
+    )
+  );
+});
+
+router.get('/cos-gallery/creators', (request, response) => {
+  const query = cosGalleryCreatorsQuerySchema.parse(request.query);
+  response.json(galleryService.getCosGalleryCreators(query.contentRating, query.q));
+});
+
+router.patch('/cos-gallery/creators/:id/content-rating', requireCapability('canManageLibrary', 'Admin access is required.'), (request, response) => {
+  const params = imageIdSchema.parse(request.params);
+  const body = patchPostContentRatingBodySchema.parse(request.body);
+  const creator = galleryService.updateCreatorContentRating(params.id, body.contentRating);
+  if (!creator) {
+    response.status(404).json({ message: 'Creator not found' });
+    return;
+  }
+  response.json({ ok: true, creator });
+});
+
+router.patch('/posts/:id/content-rating', requireCapability('canManageLibrary', 'Admin access is required.'), (request, response) => {
+  const params = imageIdSchema.parse(request.params);
+  const body = patchPostContentRatingBodySchema.parse(request.body);
+  const result = galleryService.updatePostContentRating(params.id, body.contentRating);
+
+  if (!result) {
+    response.status(404).json({ message: 'Post not found' });
+    return;
+  }
+
+  response.json({ ok: true, ...result });
 });
 
 router.get(['/posts/:id/collections', '/images/:id/collections'], requireCapability('canUseSharedCollections', 'Authentication required.'), (request, response) => {

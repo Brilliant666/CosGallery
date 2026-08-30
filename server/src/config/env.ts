@@ -13,6 +13,7 @@ export const repositoryRoot = path.resolve(moduleDirectory, '../../..');
 dotenv.config({ path: path.join(repositoryRoot, '.env') });
 
 const envSchema = z.object({
+  SERVER_HOST: z.string().default('127.0.0.1'),
   SERVER_PORT: z.coerce.number().int().positive().optional(),
   DEV_SERVER_PORT: z.coerce.number().int().positive().optional(),
   DEV_CLIENT_PORT: z.coerce.number().int().positive().optional(),
@@ -27,6 +28,7 @@ const envSchema = z.object({
   SCAN_DISCOVERY_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   SCAN_DERIVATIVE_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   PUBLIC_DEMO_MODE: z.string().optional(),
+  COS_GALLERY_MODE: z.string().optional(),
   CSRF_TRUSTED_ORIGINS: z.string().optional(),
   GALLERY_EXCLUDED_FOLDERS: z.string().optional(),
   IMAGE_DETAIL_SOURCE: z.enum(['preview', 'original']).default('preview'),
@@ -101,6 +103,7 @@ const previewsDir = resolveConfiguredPath(parsed.PREVIEWS_DIR, path.join(dataRoo
 const scanErrorReportDir = path.join(dataRoot, 'scan-errors');
 const logVerbose = parseBooleanFlag(parsed.LOG_VERBOSE);
 const publicDemoMode = parseBooleanFlag(parsed.PUBLIC_DEMO_MODE);
+const cosGalleryMode = parseBooleanFlag(parsed.COS_GALLERY_MODE);
 const csrfTrustedOrigins = parseConfiguredOrigins(parsed.CSRF_TRUSTED_ORIGINS);
 const galleryExcludedFolders = parseExcludedFolderRulesFromEnv(parsed.GALLERY_EXCLUDED_FOLDERS);
 
@@ -137,6 +140,7 @@ const managedGalleryRelativeIgnores = uniq(
 );
 
 export const appConfig = {
+  host: parsed.SERVER_HOST,
   port: serverPort,
   devClientPort,
   devClientPorts,
@@ -154,6 +158,7 @@ export const appConfig = {
   logVerbose,
   scanMediaErrorMode: parsed.SCAN_MEDIA_ERROR_MODE,
   publicDemoMode,
+  cosGalleryMode,
   csrfTrustedOrigins,
   scanDiscoveryConcurrency: parsed.SCAN_DISCOVERY_CONCURRENCY,
   scanDerivativeConcurrency: parsed.SCAN_DERIVATIVE_CONCURRENCY,

@@ -26,6 +26,29 @@
 
 ---
 
+## CosGallery adaptation
+
+This repository is the creator-focused CosGallery build. With `COS_GALLERY_MODE=1`, the filesystem hierarchy is interpreted as:
+
+```text
+GALLERY_ROOT/
+  Creator/
+    Album/
+      photo-or-video
+```
+
+- The original Foldergram home feed and navigation remain available.
+- **Library** shows one card per creator; selecting a creator opens all of that creator's albums.
+- A creator cover uses the first image from the newest album that contains photos, so a newer video-only album does not replace the photo cover.
+- R15/R18 is creator-level metadata. Sources are stored independently so later platform imports can coexist. A manual value takes precedence; otherwise any R18 source makes the creator R18, followed by R15 and then unclassified.
+- HentaiClub JSON is an initial metadata source, not the permanent or exclusive authority. Import it with:
+
+```bash
+pnpm --dir server import:hcf-tags -- "path/to/hcf-tags.json"
+```
+
+Use `PUBLIC_DEMO_MODE=1` when the media tree must remain read-only. In CosGallery mode, creator rating updates still write only to the SQLite metadata database.
+
 Foldergram is a self-hosted web application that turns your local folders into a beautiful, instagram-style feed and profile. It turns your local folder to app folders (profiles), and serves a lightning-fast Progressive Web App (PWA).
 
 Foldergram indexes supported media from a configured `GALLERY_ROOT`, stores metadata in SQLite, generates thumbnails and previews, and serves a fast feed-style web app for local browsing. Derivatives can be generated during scans or lazily on first request, and image detail pages can be configured to use generated previews or originals. The current app includes Home, Reels, Explore, Library, Likes, Moments or Highlights, App Folder pages, post detail views, original-media download controls, delete actions, scan controls, and rebuild tools.

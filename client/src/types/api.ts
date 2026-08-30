@@ -56,6 +56,7 @@ export interface UpdateExcludedFoldersSettingResult extends ExcludedFoldersSetti
 }
 
 export type PostType = 'single' | 'carousel';
+export type ContentRating = 'R15' | 'R18';
 
 export interface PostMediaItem {
   imageId: number;
@@ -88,6 +89,7 @@ export interface FeedItem {
   sourcePath?: string;
   caption?: string | null;
   carouselTitle?: string | null;
+  contentRating?: ContentRating;
   postType?: PostType;
   width: number;
   height: number;
@@ -133,6 +135,7 @@ export interface FolderSummary {
   parentFolderName?: string | null;
   folderPath: string;
   breadcrumb: string | null;
+  contentRating: ContentRating;
   imageCount: number;
   videoCount: number;
   latestImageMtimeMs: number | null;
@@ -489,6 +492,33 @@ export type RestoreImageResult = DeleteImageResult;
 export interface ImageCaptionMutationResult {
   ok: boolean;
   image: ImageDetail;
+}
+
+export interface CosGalleryCreator {
+  id: number;
+  slug: string;
+  name: string;
+  folderPath: string;
+  workCount: number;
+  latestWorkAt: number | null;
+  contentRating: ContentRating | null;
+  ratingSourceCount: number;
+  ratingConflict: boolean;
+  coverImageId: number | null;
+  coverUrl: string | null;
+  coverWidth: number | null;
+  coverHeight: number | null;
+}
+
+export interface CosGalleryCreatorsPayload {
+  items: CosGalleryCreator[];
+  total: number;
+}
+
+export interface PostContentRatingMutationResult {
+  ok: boolean;
+  id: number;
+  contentRating: ContentRating;
 }
 
 export interface DeleteFolderResult {

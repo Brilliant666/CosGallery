@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS posts (
   place_id INTEGER NULL,
   source_path TEXT NOT NULL UNIQUE,
   post_type TEXT NOT NULL DEFAULT 'single',
+  content_rating TEXT NOT NULL DEFAULT 'R15',
   caption TEXT NULL,
   sort_timestamp INTEGER NOT NULL,
   taken_at INTEGER NULL,
@@ -76,7 +77,8 @@ CREATE TABLE IF NOT EXISTS posts (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE,
   FOREIGN KEY (place_id) REFERENCES places(id) ON DELETE SET NULL,
-  CHECK (post_type IN ('single', 'carousel'))
+  CHECK (post_type IN ('single', 'carousel')),
+  CHECK (content_rating IN ('R15', 'R18'))
 );
 
 CREATE TABLE IF NOT EXISTS post_items (
@@ -86,7 +88,24 @@ CREATE TABLE IF NOT EXISTS post_items (
   PRIMARY KEY (post_id, position),
   FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
   FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
-  CHECK (position >= 1 AND position <= 20)
+  CHECK (position >= 1)
+);
+
+CREATE TABLE IF NOT EXISTS creator_rating_sources (
+  folder_id INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  source_creator_id TEXT NOT NULL,
+  source_display_name TEXT NOT NULL,
+  rating TEXT NOT NULL,
+  is_manual INTEGER NOT NULL DEFAULT 0,
+  observed_at INTEGER NULL,
+  metadata_json TEXT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (folder_id, source, source_creator_id),
+  FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE,
+  CHECK (rating IN ('R15', 'R18')),
+  CHECK (is_manual IN (0, 1))
 );
 
 CREATE TABLE IF NOT EXISTS places (
@@ -217,9 +236,12 @@ CREATE INDEX IF NOT EXISTS idx_posts_type_visibility ON posts(post_type, is_dele
 CREATE INDEX IF NOT EXISTS idx_posts_place_visibility ON posts(place_id, is_deleted, is_trashed, sort_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_source_path ON posts(source_path);
 CREATE INDEX IF NOT EXISTS idx_posts_trashed_listing ON posts(is_trashed, is_deleted, trashed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_content_rating_visible_sort ON posts(content_rating, is_deleted, is_trashed, sort_timestamp DESC, id DESC);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_post_items_image_id ON post_items(image_id);
 CREATE INDEX IF NOT EXISTS idx_post_items_post_id ON post_items(post_id, position);
+CREATE INDEX IF NOT EXISTS idx_creator_rating_sources_folder ON creator_rating_sources(folder_id, is_manual, rating);
+CREATE INDEX IF NOT EXISTS idx_creator_rating_sources_source ON creator_rating_sources(source, source_creator_id);
 
 CREATE INDEX IF NOT EXISTS idx_places_slug ON places(slug);
 CREATE INDEX IF NOT EXISTS idx_places_display_name ON places(display_name);

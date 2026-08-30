@@ -2,7 +2,7 @@ import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vu
 
 import HomeView from '../views/HomeView.vue';
 import PostView from '../views/PostView.vue';
-import LibraryView from '../views/LibraryView.vue';
+import LibraryView from '../views/CosGalleryHomeView.vue';
 import LikesView from '../views/LikesView.vue';
 import CollectionsView from '../views/CollectionsView.vue';
 import CollectionView from '../views/CollectionView.vue';

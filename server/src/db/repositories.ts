@@ -7,6 +7,8 @@ import type {
   CollectionMembershipRecord,
   CollectionRecord,
   CollectionSummaryRecord,
+  CosGalleryCreatorRecord,
+  CreatorRatingSourceRecord,
   FeedImage,
   FeedPost,
   FolderAvatarSource,
@@ -217,6 +219,7 @@ const BASE_POST_SELECT_SQL = `
     images.filename,
     posts.caption AS caption,
     posts.post_type AS postType,
+    posts.content_rating AS contentRating,
     posts.source_path AS sourcePath,
     images.width,
     images.height,
@@ -228,6 +231,7 @@ const BASE_POST_SELECT_SQL = `
     images.playback_strategy AS playbackStrategy,
     posts.sort_timestamp AS sortTimestamp,
     posts.taken_at AS takenAt,
+    (SELECT COUNT(*) FROM post_items AS all_post_items WHERE all_post_items.post_id = posts.id) AS itemCount,
     ${POST_SAVED_SELECT_SQL},
     places.id AS placeId,
     places.slug AS placeSlug,
@@ -244,6 +248,14 @@ const BASE_POST_SELECT_SQL = `
 const FOLDER_SUMMARY_SELECT_SQL = `
   SELECT
     folders.*,
+    CASE WHEN EXISTS (
+      SELECT 1
+      FROM posts rating_posts
+      WHERE rating_posts.folder_id = folders.id
+        AND rating_posts.is_deleted = 0
+        AND rating_posts.is_trashed = 0
+        AND rating_posts.content_rating = 'R18'
+    ) THEN 'R18' ELSE 'R15' END AS content_rating,
     (
       SELECT COUNT(*)
       FROM posts
@@ -1431,6 +1443,73 @@ export const postRepository = {
     return this.hydratePostItems(posts);
   },
 
+  listCosGalleryWorks(
+    page: number,
+    limit: number,
+    contentRating?: 'R15' | 'R18',
+    query?: string
+  ): FeedPost[] {
+    const clauses = [VISIBLE_POST_WHERE_SQL];
+    const params: Array<string | number> = [];
+    if (contentRating) {
+      clauses.push('posts.content_rating = ?');
+      params.push(contentRating);
+    }
+    const normalizedQuery = query?.trim().toLocaleLowerCase();
+    if (normalizedQuery) {
+      const pattern = `%${escapeLikePattern(normalizedQuery)}%`;
+      clauses.push(`(
+        LOWER(posts.source_path) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(posts.caption, '')) LIKE ? ESCAPE '\\'
+        OR LOWER(folders.name) LIKE ? ESCAPE '\\'
+      )`);
+      params.push(pattern, pattern, pattern);
+    }
+
+    const offset = (page - 1) * limit;
+    const posts = database.prepare(
+      `
+      ${BASE_POST_SELECT_SQL}
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY posts.sort_timestamp DESC, posts.id DESC
+      LIMIT ? OFFSET ?
+      `
+    ).all(...params, limit, offset) as unknown as FeedPost[];
+    return posts.map((post) => ({
+      ...post,
+      mediaItems: []
+    }));
+  },
+
+  countCosGalleryWorks(contentRating?: 'R15' | 'R18', query?: string): number {
+    const clauses = [VISIBLE_POST_WHERE_SQL];
+    const params: string[] = [];
+    if (contentRating) {
+      clauses.push('posts.content_rating = ?');
+      params.push(contentRating);
+    }
+    const normalizedQuery = query?.trim().toLocaleLowerCase();
+    if (normalizedQuery) {
+      const pattern = `%${escapeLikePattern(normalizedQuery)}%`;
+      clauses.push(`(
+        LOWER(posts.source_path) LIKE ? ESCAPE '\\'
+        OR LOWER(COALESCE(posts.caption, '')) LIKE ? ESCAPE '\\'
+        OR LOWER(folders.name) LIKE ? ESCAPE '\\'
+      )`);
+      params.push(pattern, pattern, pattern);
+    }
+
+    const row = database.prepare(
+      `
+      SELECT COUNT(*) AS count
+      FROM posts
+      INNER JOIN folders ON folders.id = posts.folder_id
+      WHERE ${clauses.join(' AND ')}
+      `
+    ).get(...params) as { count: number };
+    return Number(row.count);
+  },
+
   countFeed(): number {
     return Number(
       (database.prepare(`SELECT COUNT(*) AS count FROM posts WHERE ${VISIBLE_POST_WHERE_UNSCOPED_SQL}`).get() as { count: number }).count
@@ -1923,6 +2002,13 @@ export const postRepository = {
     return this.getPostDetail(resolvedId);
   },
 
+  updateContentRating(id: number, contentRating: 'R15' | 'R18'): PostRecord | undefined {
+    const result = database
+      .prepare('UPDATE posts SET content_rating = ?, updated_at = ? WHERE id = ?')
+      .run(contentRating, nowIso(), id);
+    return Number(result.changes ?? 0) > 0 ? this.findById(id) : undefined;
+  },
+
   softDeletePost(id: number): void {
     const deletedAt = nowIso();
     database.prepare('UPDATE posts SET is_deleted = 1, deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE id = ?').run(deletedAt, deletedAt, id);
@@ -2063,6 +2149,146 @@ export const postRepository = {
 
   countCarousels(): number {
     return Number((database.prepare("SELECT COUNT(*) AS count FROM posts WHERE post_type = 'carousel' AND is_deleted = 0 AND is_trashed = 0").get() as { count: number }).count);
+  }
+};
+
+export const creatorRatingRepository = {
+  upsertSource(input: {
+    folderId: number;
+    source: string;
+    sourceCreatorId: string;
+    sourceDisplayName: string;
+    rating: 'R15' | 'R18';
+    isManual?: boolean;
+    observedAt?: number | null;
+    metadata?: unknown;
+  }): CreatorRatingSourceRecord {
+    const timestamp = nowIso();
+    const metadataJson = input.metadata === undefined ? null : JSON.stringify(input.metadata);
+    database.prepare(
+      `
+      INSERT INTO creator_rating_sources (
+        folder_id, source, source_creator_id, source_display_name, rating,
+        is_manual, observed_at, metadata_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(folder_id, source, source_creator_id) DO UPDATE SET
+        source_display_name = excluded.source_display_name,
+        rating = excluded.rating,
+        is_manual = excluded.is_manual,
+        observed_at = excluded.observed_at,
+        metadata_json = excluded.metadata_json,
+        updated_at = excluded.updated_at
+      `
+    ).run(
+      input.folderId,
+      input.source,
+      input.sourceCreatorId,
+      input.sourceDisplayName,
+      input.rating,
+      input.isManual ? 1 : 0,
+      input.observedAt ?? null,
+      metadataJson,
+      timestamp,
+      timestamp
+    );
+    return database.prepare(
+      `SELECT * FROM creator_rating_sources
+       WHERE folder_id = ? AND source = ? AND source_creator_id = ?`
+    ).get(input.folderId, input.source, input.sourceCreatorId) as unknown as CreatorRatingSourceRecord;
+  },
+
+  listByFolder(folderId: number): CreatorRatingSourceRecord[] {
+    return database.prepare(
+      `SELECT * FROM creator_rating_sources
+       WHERE folder_id = ?
+       ORDER BY is_manual DESC, source ASC, source_display_name ASC`
+    ).all(folderId) as unknown as CreatorRatingSourceRecord[];
+  },
+
+  deleteBySource(source: string): number {
+    const result = database.prepare(
+      'DELETE FROM creator_rating_sources WHERE source = ? AND is_manual = 0'
+    ).run(source);
+    return Number(result.changes ?? 0);
+  },
+
+  listCreators(): CosGalleryCreatorRecord[] {
+    return database.prepare(
+      `
+      WITH ranked_photos AS (
+        SELECT
+          posts.folder_id,
+          images.id AS cover_image_id,
+          images.thumbnail_path AS cover_thumbnail_path,
+          images.width AS cover_width,
+          images.height AS cover_height,
+          ROW_NUMBER() OVER (
+            PARTITION BY posts.folder_id
+            ORDER BY posts.sort_timestamp DESC, posts.id DESC, post_items.position ASC
+          ) AS photo_rank
+        FROM posts
+        JOIN post_items ON post_items.post_id = posts.id
+        JOIN images ON images.id = post_items.image_id
+        WHERE posts.is_deleted = 0
+          AND posts.is_trashed = 0
+          AND images.is_deleted = 0
+          AND images.is_trashed = 0
+          AND images.media_type = 'image'
+      ),
+      creator_works AS (
+        SELECT
+          folder_id,
+          COUNT(*) AS work_count,
+          MAX(sort_timestamp) AS latest_work_at
+        FROM posts
+        WHERE is_deleted = 0 AND is_trashed = 0
+        GROUP BY folder_id
+      )
+      SELECT
+        folders.id,
+        folders.slug,
+        folders.name,
+        folders.folder_path AS folderPath,
+        creator_works.work_count AS workCount,
+        creator_works.latest_work_at AS latestWorkAt,
+        COALESCE(
+          (
+            SELECT manual_rating.rating
+            FROM creator_rating_sources manual_rating
+            WHERE manual_rating.folder_id = folders.id
+              AND manual_rating.is_manual = 1
+            ORDER BY manual_rating.updated_at DESC
+            LIMIT 1
+          ),
+          CASE
+            WHEN EXISTS (
+              SELECT 1 FROM creator_rating_sources rating_r18
+              WHERE rating_r18.folder_id = folders.id AND rating_r18.rating = 'R18'
+            ) THEN 'R18'
+            WHEN EXISTS (
+              SELECT 1 FROM creator_rating_sources rating_r15
+              WHERE rating_r15.folder_id = folders.id AND rating_r15.rating = 'R15'
+            ) THEN 'R15'
+            ELSE NULL
+          END
+        ) AS contentRating,
+        (SELECT COUNT(*) FROM creator_rating_sources sources WHERE sources.folder_id = folders.id) AS ratingSourceCount,
+        CASE WHEN
+          EXISTS (SELECT 1 FROM creator_rating_sources r15 WHERE r15.folder_id = folders.id AND r15.rating = 'R15')
+          AND EXISTS (SELECT 1 FROM creator_rating_sources r18 WHERE r18.folder_id = folders.id AND r18.rating = 'R18')
+        THEN 1 ELSE 0 END AS ratingConflict,
+        ranked_photos.cover_image_id AS coverImageId,
+        ranked_photos.cover_thumbnail_path AS coverThumbnailPath,
+        ranked_photos.cover_width AS coverWidth,
+        ranked_photos.cover_height AS coverHeight
+      FROM folders
+      JOIN creator_works ON creator_works.folder_id = folders.id
+      LEFT JOIN ranked_photos
+        ON ranked_photos.folder_id = folders.id AND ranked_photos.photo_rank = 1
+      WHERE folders.role = 'normal'
+      ORDER BY creator_works.latest_work_at DESC, folders.name COLLATE NOCASE ASC
+      `
+    ).all() as unknown as CosGalleryCreatorRecord[];
   }
 };
 

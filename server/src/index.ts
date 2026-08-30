@@ -28,7 +28,7 @@ import { watcherService } from "./services/watcher-service.js";
 
 function logServerReady(): void {
   if (!appConfig.isDevelopment) {
-    log.info(`HTTP server listening on http://localhost:${appConfig.port}`);
+    log.info(`HTTP server listening on http://${appConfig.host}:${appConfig.port}`);
     return;
   }
 
@@ -72,7 +72,7 @@ async function bootstrap(): Promise<void> {
     process.exitCode = 1;
   });
 
-  server.listen(appConfig.port, () => {
+  server.listen(appConfig.port, appConfig.host, () => {
     logServerReady();
     const startupAction = scannerService.handleStartup("startup");
     if (startupAction === "blocked") {

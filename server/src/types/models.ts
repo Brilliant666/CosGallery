@@ -7,6 +7,7 @@ export type FolderAvatarSource = 'auto' | 'manual' | 'cover';
 export type FolderRole = 'normal' | 'story_root' | 'story_capsule' | 'carousel_source';
 export type PlaceKind = 'city' | 'approximate_spot' | 'manual';
 export type PostType = 'single' | 'carousel';
+export type ContentRating = 'R15' | 'R18';
 
 export interface ImageExifData {
   cameraMake?: string;
@@ -61,6 +62,7 @@ export interface PlaceRecord {
 }
 
 export interface FolderSummaryRecord extends FolderRecord {
+  content_rating: ContentRating;
   image_count: number;
   post_count: number;
   carousel_count: number;
@@ -69,6 +71,35 @@ export interface FolderSummaryRecord extends FolderRecord {
   has_avatar_story?: number | null;
   summary_avatar_image_id?: number | null;
   summary_avatar_thumbnail_path?: string | null;
+}
+
+export interface CreatorRatingSourceRecord {
+  folder_id: number;
+  source: string;
+  source_creator_id: string;
+  source_display_name: string;
+  rating: ContentRating;
+  is_manual: number;
+  observed_at: number | null;
+  metadata_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CosGalleryCreatorRecord {
+  id: number;
+  slug: string;
+  name: string;
+  folderPath: string;
+  workCount: number;
+  latestWorkAt: number | null;
+  contentRating: ContentRating | null;
+  ratingSourceCount: number;
+  ratingConflict: number;
+  coverImageId: number | null;
+  coverThumbnailPath: string | null;
+  coverWidth: number | null;
+  coverHeight: number | null;
 }
 
 export interface ImageRecord {
@@ -113,6 +144,7 @@ export interface PostRecord {
   place_id: number | null;
   source_path: string;
   post_type: PostType;
+  content_rating: ContentRating;
   caption: string | null;
   sort_timestamp: number;
   taken_at: number | null;
@@ -246,6 +278,7 @@ export interface FeedImage {
   sourcePath?: string;
   caption: string | null;
   carouselTitle?: string | null;
+  contentRating?: ContentRating;
   width: number;
   height: number;
   mediaType: MediaType;

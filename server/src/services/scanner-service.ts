@@ -712,6 +712,15 @@ class ScannerService {
       return scanRunRepository.latest();
     }
 
+    if (appConfig.cosGalleryMode) {
+      const options = resolveFullScanOptions({
+        repairUnchangedDerivatives: false,
+        allowDerivativeMigration: false
+      });
+      await this.enqueue(async () => this.performFullScan(reason, options));
+      return scanRunRepository.latest();
+    }
+
     await this.enqueue(async () => this.performIncrementalScan(relativePaths, reason));
     return scanRunRepository.latest();
   }
@@ -1486,6 +1495,132 @@ class ScannerService {
     return storyResults;
   }
 
+  private async scanCreatorWorks(
+    sourceFolder: SourceFolderCandidate,
+    existingFolders: FolderRecord[],
+    usedSlugs: Set<string>,
+    folderScanStates: Map<string, FolderScanStateRecord>,
+    derivativeJobs: Map<string, DerivativeJob>,
+    errors: ScanErrorCollector,
+    options: FullScanOptions,
+    context: ImageProcessingContext,
+    excludedFolderRules: string[]
+  ): Promise<ReservedCarouselScanResult> {
+    const creatorEntries = await fs
+      .readdir(sourceFolder.absolutePath, { withFileTypes: true })
+      .catch((error: unknown) => {
+        const filesystemError = error as NodeJS.ErrnoException;
+        if (filesystemError.code === 'ENOENT') {
+          return null;
+        }
+        throw error;
+      });
+
+    if (!creatorEntries) {
+      return { ownerFolder: null, results: [] };
+    }
+
+    const ownerFolder = this.resolveFolder(
+      existingFolders,
+      usedSlugs,
+      sourceFolder.relativePath,
+      { role: 'normal' }
+    ).folder;
+    const workEntries = creatorEntries
+      .filter((entry) => {
+        if (!entry.isDirectory()) return false;
+        const relativePath = normalizePath(`${sourceFolder.relativePath}/${entry.name}`);
+        return (
+          !isHiddenPath(relativePath) &&
+          !this.isManagedGalleryPath(relativePath) &&
+          !matchesExcludedFolder(relativePath, excludedFolderRules)
+        );
+      })
+      .sort((a, b) => compareNaturalFilename(a.name, b.name));
+
+    const activeWorkPaths: string[] = [];
+    const results: SourceFolderScanResult[] = [];
+
+    for (const workEntry of workEntries) {
+      const workRelativePath = normalizePath(`${sourceFolder.relativePath}/${workEntry.name}`);
+      const workAbsolutePath = path.join(sourceFolder.absolutePath, workEntry.name);
+      const recursiveFiles = await this.collectRecursiveMediaFiles(
+        workAbsolutePath,
+        workRelativePath,
+        excludedFolderRules
+      );
+      recursiveFiles.sort((a, b) => compareNaturalFilename(a.relativePath, b.relativePath));
+      if (recursiveFiles.length === 0) continue;
+
+      activeWorkPaths.push(workRelativePath);
+      this.setProgress({
+        currentFolder: workRelativePath,
+        discoveredImages: this.progress.discoveredImages + recursiveFiles.length
+      });
+
+      const statResult = await this.statIndexedFiles(recursiveFiles, errors);
+      const result = await this.scanIndexedFolderFiles({
+        folderPath: workRelativePath,
+        scannedFileCount: recursiveFiles.length,
+        activeRelativePaths: statResult.activeRelativePaths,
+        discoveredFiles: statResult.discoveredFiles,
+        existingFolders,
+        usedSlugs,
+        folderScanStates,
+        derivativeJobs,
+        errors,
+        options,
+        context,
+        logLabel: 'Creator work indexed',
+        role: 'carousel_source',
+        carouselOwnerFolderId: ownerFolder.id,
+        folderHadErrors: statResult.folderHadErrors
+      });
+
+      const indexedImages = statResult.discoveredFiles
+        .map((file) => imageRepository.getByRelativePath(normalizePath(file.relativePath)))
+        .filter((image): image is ImageRecord => Boolean(image))
+        .sort((a, b) => compareNaturalFilename(a.relative_path, b.relative_path));
+
+      if (indexedImages.length > 0) {
+        const firstItem = indexedImages[0];
+        const existingPost = postRepository.findBySourcePath(workRelativePath);
+        const newestItemTimestamp = Math.max(...indexedImages.map((image) => image.sort_timestamp));
+
+        postRepository.upsertPostWithItems({
+          existingPostId: existingPost?.id,
+          id: !existingPost && indexedImages.length === 1 ? firstItem.id : undefined,
+          folderId: ownerFolder.id,
+          placeId: firstItem.place_id,
+          postType: indexedImages.length > 1 ? 'carousel' : 'single',
+          sourcePath: workRelativePath,
+          caption: existingPost?.caption ?? null,
+          takenAt: firstItem.taken_at,
+          takenAtSource: firstItem.taken_at_source,
+          sortTimestamp: newestItemTimestamp,
+          isDeleted: 0,
+          isTrashed: existingPost?.is_trashed ?? 0
+        }, indexedImages.map((image, index) => ({
+          imageId: image.id,
+          position: index + 1
+        })));
+      }
+
+      results.push(result);
+      log.info(
+        joinLogParts([
+          'Creator work indexed',
+          workRelativePath,
+          formatStep('media', recursiveFiles.length)
+        ])
+      );
+    }
+
+    postRepository.softDeleteMissingByFolder(ownerFolder.id, activeWorkPaths);
+    folderRepository.syncAvatarSelection(ownerFolder.id);
+    return { ownerFolder, results };
+  }
+
   private async scanReservedCarousels(
     sourceFolder: SourceFolderCandidate,
     existingFolders: FolderRecord[],
@@ -2244,24 +2379,32 @@ class ScannerService {
         }
       };
 
-      await this.walkMediaSourceFolders(appConfig.galleryRoot, async (sourceFolder) => {
-        discoveredSourceFolders += 1;
-        const result = await this.scanSourceFolder(
-          sourceFolder,
-          existingFolders,
-          usedSlugs,
-          folderScanStates,
-          derivativeJobs,
-          errors,
-          options,
-          imageProcessingContext
-        );
+      if (appConfig.cosGalleryMode) {
+        const creatorEntries = await fs.readdir(appConfig.galleryRoot, { withFileTypes: true });
+        const creators = creatorEntries
+          .filter((entry) => {
+            if (!entry.isDirectory()) return false;
+            const relativePath = normalizePath(entry.name);
+            return (
+              !isHiddenPath(relativePath) &&
+              !this.isManagedGalleryPath(relativePath) &&
+              !matchesExcludedFolder(relativePath, excludedFolderRules)
+            );
+          })
+          .sort((a, b) => compareNaturalFilename(a.name, b.name));
 
-        applyScanResult(result);
+        for (const creator of creators) {
+          const sourceFolder = {
+            absolutePath: path.join(appConfig.galleryRoot, creator.name),
+            relativePath: normalizePath(creator.name)
+          };
+          discoveredSourceFolders += 1;
+          this.setProgress({
+            discoveredFolders: this.progress.discoveredFolders + 1,
+            currentFolder: sourceFolder.relativePath
+          });
 
-        if (!treatStoriesAsFolders && result.folder && result.discoveredDirectImages) {
-          const storyResults = await this.scanStoryFoldersForOwnerFolder(
-            result.folder,
+          const creatorScan = await this.scanCreatorWorks(
             sourceFolder,
             existingFolders,
             usedSlugs,
@@ -2273,44 +2416,85 @@ class ScannerService {
             excludedFolderRules
           );
 
-          for (const storyResult of storyResults) {
-            if (storyResult.folder) discoveredFolderIds.add(storyResult.folder.id);
-            applyScanResult(storyResult);
-          }
-        }
-
-        if (!treatCarouselsAsFolders) {
-          const carouselScan = await this.scanReservedCarousels(
-            sourceFolder,
-            existingFolders,
-            usedSlugs,
-            folderScanStates,
-            derivativeJobs,
-            errors,
-            warnings,
-            options,
-            imageProcessingContext,
-            excludedFolderRules
-          );
-          const ownerFolder = carouselScan.ownerFolder ?? result.folder;
-          const carouselResults = carouselScan.results;
-
-          if (carouselResults.length > 0 && ownerFolder) {
+          if (creatorScan.ownerFolder) {
             activeFolderPaths.add(sourceFolder.relativePath);
-            discoveredFolderIds.add(ownerFolder.id);
+            discoveredFolderIds.add(creatorScan.ownerFolder.id);
+          }
+          for (const workResult of creatorScan.results) {
+            if (workResult.folder) discoveredFolderIds.add(workResult.folder.id);
+            applyScanResult(workResult);
           }
 
-          for (const carouselResult of carouselResults) {
-            if (carouselResult.folder) discoveredFolderIds.add(carouselResult.folder.id);
-            applyScanResult(carouselResult);
-          }
+          this.setProgress({ processedFolders: this.progress.processedFolders + 1 });
+          this.logProgress('folder');
         }
+      } else {
+        await this.walkMediaSourceFolders(appConfig.galleryRoot, async (sourceFolder) => {
+          discoveredSourceFolders += 1;
+          const result = await this.scanSourceFolder(
+            sourceFolder,
+            existingFolders,
+            usedSlugs,
+            folderScanStates,
+            derivativeJobs,
+            errors,
+            options,
+            imageProcessingContext
+          );
 
-        this.setProgress({
-          processedFolders: this.progress.processedFolders + 1
-        });
-        this.logProgress('folder');
-      }, null, treatStoriesAsFolders, treatCarouselsAsFolders, excludedFolderRules);
+          applyScanResult(result);
+
+          if (!treatStoriesAsFolders && result.folder && result.discoveredDirectImages) {
+            const storyResults = await this.scanStoryFoldersForOwnerFolder(
+              result.folder,
+              sourceFolder,
+              existingFolders,
+              usedSlugs,
+              folderScanStates,
+              derivativeJobs,
+              errors,
+              options,
+              imageProcessingContext,
+              excludedFolderRules
+            );
+
+            for (const storyResult of storyResults) {
+              if (storyResult.folder) discoveredFolderIds.add(storyResult.folder.id);
+              applyScanResult(storyResult);
+            }
+          }
+
+          if (!treatCarouselsAsFolders) {
+            const carouselScan = await this.scanReservedCarousels(
+              sourceFolder,
+              existingFolders,
+              usedSlugs,
+              folderScanStates,
+              derivativeJobs,
+              errors,
+              warnings,
+              options,
+              imageProcessingContext,
+              excludedFolderRules
+            );
+            const ownerFolder = carouselScan.ownerFolder ?? result.folder;
+            const carouselResults = carouselScan.results;
+
+            if (carouselResults.length > 0 && ownerFolder) {
+              activeFolderPaths.add(sourceFolder.relativePath);
+              discoveredFolderIds.add(ownerFolder.id);
+            }
+
+            for (const carouselResult of carouselResults) {
+              if (carouselResult.folder) discoveredFolderIds.add(carouselResult.folder.id);
+              applyScanResult(carouselResult);
+            }
+          }
+
+          this.setProgress({ processedFolders: this.progress.processedFolders + 1 });
+          this.logProgress('folder');
+        }, null, treatStoriesAsFolders, treatCarouselsAsFolders, excludedFolderRules);
+      }
 
       for (const folder of existingFolders) {
         if (!discoveredFolderIds.has(folder.id)) {

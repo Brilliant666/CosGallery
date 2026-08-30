@@ -14,20 +14,6 @@
           </div>
         </div>
       </button>
-      <RouterLink v-else-if="folder.avatarImageId" custom :to="buildAvatarRoute(folder.avatarImageId)" v-slot="{ href, navigate }">
-        <a
-          :href="href"
-          class="block rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text/55 focus-visible:ring-offset-4 focus-visible:ring-offset-bg"
-          :aria-label="t('folder.header.openAvatar')"
-          @click="handleAvatarNavigation($event, navigate)"
-        >
-          <div class="rounded-full p-[0.22rem] shadow-[0_12px_24px_rgba(99,115,129,0.12)] transition-transform duration-[180ms] hover:scale-[1.02]" style="background: rgba(43, 48, 54, 0.8);">
-            <div class="rounded-full bg-bg p-[0.22rem]">
-              <Avatar class="w-[9.35rem] h-[9.35rem] max-md:w-[7.75rem] max-md:h-[7.75rem]" :name="displayFolderTitle" :src="folder.avatarUrl" />
-            </div>
-          </div>
-        </a>
-      </RouterLink>
       <div v-else class="rounded-full p-[0.22rem] shadow-[0_12px_24px_rgba(99,115,129,0.12)]" style="background: rgba(43, 48, 54, 0.8);">
         <div class="rounded-full bg-bg p-[0.22rem]">
           <Avatar class="w-[9.35rem] h-[9.35rem] max-md:w-[7.75rem] max-md:h-[7.75rem]" :name="displayFolderTitle" :src="folder.avatarUrl" />
@@ -119,7 +105,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { RouterLink, useRoute } from 'vue-router';
 import type { FolderSummary } from '../types/api';
 import { formatFolderTitle } from '../utils/folder-titles';
 import Avatar from './Avatar.vue';
@@ -141,7 +126,6 @@ const emit = defineEmits<{
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const foldersStore = useFoldersStore();
-const route = useRoute();
 const { locale, t } = useI18n();
 
 const isEditingProfile = ref(false);
@@ -245,24 +229,6 @@ async function syncDescriptionOverflow() {
   }
 
   syncingDescriptionOverflow = false;
-}
-
-function buildAvatarRoute(id: number) {
-  return {
-    name: 'image',
-    params: { id: String(id) },
-    query: route.query
-  };
-}
-
-function handleAvatarNavigation(event: MouseEvent, navigate: () => void) {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-    return;
-  }
-
-  event.preventDefault();
-  appStore.setImageModalBackground(route.fullPath);
-  navigate();
 }
 
 watch(

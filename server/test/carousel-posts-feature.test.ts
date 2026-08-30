@@ -440,13 +440,17 @@ describe.sequential('carousel posts feature', () => {
     await fs.mkdir(carouselsRoot, { recursive: true });
     await fs.writeFile(path.join(albumPath, 'single.jpg'), 'single-media');
 
-    const createCarousel = async (name: string) => {
+    const createCarousel = async (name: string, itemCount = 2) => {
       const carouselPath = path.join(carouselsRoot, name);
       await fs.mkdir(carouselPath, { recursive: true });
-      await fs.writeFile(path.join(carouselPath, '01.jpg'), `${name}-first`);
-      await fs.writeFile(path.join(carouselPath, '02.jpg'), `${name}-second-slide`);
+      for (let index = 1; index <= itemCount; index += 1) {
+        const filename = `${String(index).padStart(2, '0')}.jpg`;
+        await fs.writeFile(path.join(carouselPath, filename), `${name}-slide-${index}`);
+      }
     };
-    await createCarousel('carousel-a');
+    // Three items make the intended cross-namespace numeric ID collision
+    // deterministic even when the filesystem yields child folders first.
+    await createCarousel('carousel-a', 3);
     await createCarousel('carousel-b');
     await scannerService.scanAll('manual');
 
@@ -455,7 +459,8 @@ describe.sequential('carousel posts feature', () => {
     const carouselB = initialFeed.find((post) => post.sourcePath?.endsWith('/carousel-b'))!;
     const carouselAItems = postRepository.listImageRecords(carouselA.id);
     const carouselBItems = postRepository.listImageRecords(carouselB.id);
-    expect(carouselAItems[1].id).toBe(carouselB.id);
+    const collidingLegacyImage = carouselAItems.find((item) => item.id === carouselB.id);
+    expect(collidingLegacyImage).toBeDefined();
 
     const canonicalDetail = await requestApp(app, 'GET', `/api/posts/${carouselB.id}`);
     expect(canonicalDetail.status).toBe(200);
@@ -463,42 +468,42 @@ describe.sequential('carousel posts feature', () => {
     expect(canonicalDetail.body.mediaItems.map((item: { filename: string }) => item.filename)).toEqual(['01.jpg', '02.jpg']);
     expect(canonicalDetail.body.sourcePath).toContain('carousel-b');
 
-    const legacyDetail = await requestApp(app, 'GET', `/api/images/${carouselAItems[1].id}`);
+    const legacyDetail = await requestApp(app, 'GET', `/api/images/${collidingLegacyImage!.id}`);
     expect(legacyDetail.status).toBe(200);
     expect(legacyDetail.body.id).toBe(carouselA.id);
     expect(legacyDetail.body.sourcePath).toContain('carousel-a');
 
     expect((await requestApp(app, 'PATCH', `/api/posts/${carouselB.id}/caption`, { caption: 'Canonical B' })).status).toBe(200);
-    expect((await requestApp(app, 'PATCH', `/api/images/${carouselAItems[1].id}/caption`, { caption: 'Legacy A' })).status).toBe(200);
+    expect((await requestApp(app, 'PATCH', `/api/images/${collidingLegacyImage!.id}/caption`, { caption: 'Legacy A' })).status).toBe(200);
     expect(postRepository.findById(carouselB.id)?.caption).toBe('Canonical B');
     expect(postRepository.findById(carouselA.id)?.caption).toBe('Legacy A');
 
     expect((await requestApp(app, 'POST', `/api/posts/${carouselB.id}/like`)).body).toMatchObject({ id: carouselB.id, liked: true });
     expect((await requestApp(app, 'DELETE', `/api/posts/${carouselB.id}/like`)).body).toMatchObject({ id: carouselB.id, liked: false });
-    expect((await requestApp(app, 'POST', `/api/images/${carouselAItems[1].id}/like`)).body).toMatchObject({ id: carouselA.id, liked: true });
-    expect((await requestApp(app, 'DELETE', `/api/images/${carouselAItems[1].id}/like`)).body).toMatchObject({ id: carouselA.id, liked: false });
+    expect((await requestApp(app, 'POST', `/api/images/${collidingLegacyImage!.id}/like`)).body).toMatchObject({ id: carouselA.id, liked: true });
+    expect((await requestApp(app, 'DELETE', `/api/images/${collidingLegacyImage!.id}/like`)).body).toMatchObject({ id: carouselA.id, liked: false });
 
     expect((await requestApp(app, 'POST', `/api/posts/${carouselB.id}/save`)).body).toMatchObject({ id: carouselB.id, isSaved: true });
     expect((await requestApp(app, 'DELETE', `/api/posts/${carouselB.id}/save`)).body).toMatchObject({ id: carouselB.id, isSaved: false });
-    expect((await requestApp(app, 'POST', `/api/images/${carouselAItems[1].id}/save`)).body).toMatchObject({ id: carouselA.id, isSaved: true });
-    expect((await requestApp(app, 'DELETE', `/api/images/${carouselAItems[1].id}/save`)).body).toMatchObject({ id: carouselA.id, isSaved: false });
+    expect((await requestApp(app, 'POST', `/api/images/${collidingLegacyImage!.id}/save`)).body).toMatchObject({ id: carouselA.id, isSaved: true });
+    expect((await requestApp(app, 'DELETE', `/api/images/${collidingLegacyImage!.id}/save`)).body).toMatchObject({ id: carouselA.id, isSaved: false });
 
     const collectionResponse = await requestApp(app, 'POST', '/api/collections', { name: 'Collision checks' });
     const collectionSlug = collectionResponse.body.collection.slug as string;
     expect((await requestApp(app, 'POST', `/api/collections/${collectionSlug}/posts/${carouselB.id}`)).body.id).toBe(carouselB.id);
     expect((await requestApp(app, 'DELETE', `/api/collections/${collectionSlug}/posts/${carouselB.id}`)).body.id).toBe(carouselB.id);
-    expect((await requestApp(app, 'POST', `/api/collections/${collectionSlug}/images/${carouselAItems[1].id}`)).body.id).toBe(carouselA.id);
-    expect((await requestApp(app, 'DELETE', `/api/collections/${collectionSlug}/images/${carouselAItems[1].id}`)).body.id).toBe(carouselA.id);
+    expect((await requestApp(app, 'POST', `/api/collections/${collectionSlug}/images/${collidingLegacyImage!.id}`)).body.id).toBe(carouselA.id);
+    expect((await requestApp(app, 'DELETE', `/api/collections/${collectionSlug}/images/${collidingLegacyImage!.id}`)).body.id).toBe(carouselA.id);
 
     expect((await requestApp(app, 'POST', `/api/posts/${carouselB.id}/trash`)).body.id).toBe(carouselB.id);
     expect(postRepository.findById(carouselA.id)?.is_trashed).toBe(0);
     expect((await requestApp(app, 'POST', `/api/posts/${carouselB.id}/restore`)).body.id).toBe(carouselB.id);
-    expect((await requestApp(app, 'POST', `/api/images/${carouselAItems[1].id}/trash`)).body.id).toBe(carouselA.id);
+    expect((await requestApp(app, 'POST', `/api/images/${collidingLegacyImage!.id}/trash`)).body.id).toBe(carouselA.id);
     expect(postRepository.findById(carouselB.id)?.is_trashed).toBe(0);
-    expect((await requestApp(app, 'POST', `/api/images/${carouselAItems[1].id}/restore`)).body.id).toBe(carouselA.id);
+    expect((await requestApp(app, 'POST', `/api/images/${collidingLegacyImage!.id}/restore`)).body.id).toBe(carouselA.id);
 
     expect((await requestApp(app, 'GET', `/api/share/posts/${carouselB.id}`)).body.id).toBe(carouselB.id);
-    expect((await requestApp(app, 'GET', `/api/share/images/${carouselAItems[1].id}`)).body.id).toBe(carouselA.id);
+    expect((await requestApp(app, 'GET', `/api/share/images/${collidingLegacyImage!.id}`)).body.id).toBe(carouselA.id);
 
     expect((await requestApp(app, 'GET', '/api/places')).body).toEqual({ items: [] });
     const place = placeRepository.upsertCity({
@@ -534,6 +539,7 @@ describe.sequential('carousel posts feature', () => {
     await createCarousel('carousel-c');
     await createCarousel('carousel-d');
     await createCarousel('carousel-e');
+    await createCarousel('carousel-f');
     await scannerService.scanAll('manual');
     const coverImage = imageRepository.getByRelativePath('album/cover.jpg')!;
     const collidingCoverPost = postRepository.findById(coverImage.id)!;
@@ -569,7 +575,7 @@ describe.sequential('carousel posts feature', () => {
       await expect(fs.stat(path.join(appConfig.galleryRoot, image.relative_path))).resolves.toBeDefined();
     }
 
-    expect((await requestApp(app, 'DELETE', `/api/images/${carouselAItems[1].id}`)).body.id).toBe(carouselA.id);
+    expect((await requestApp(app, 'DELETE', `/api/images/${collidingLegacyImage!.id}`)).body.id).toBe(carouselA.id);
     for (const image of carouselAItems) {
       await expect(fs.stat(path.join(appConfig.galleryRoot, image.relative_path))).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(fs.stat(path.join(appConfig.thumbnailsDir, image.thumbnail_path))).rejects.toMatchObject({ code: 'ENOENT' });
