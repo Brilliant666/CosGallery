@@ -1,8 +1,16 @@
 import { defineConfig, presetIcons, presetWind4 } from "unocss";
 import transformerDirectives from "@unocss/transformer-directives";
+import { icons as fluentIcons } from "@iconify-json/fluent";
 
 export default defineConfig({
-  presets: [presetWind4(), presetIcons()],
+  presets: [
+    presetWind4(),
+    presetIcons({
+      collections: {
+        fluent: () => fluentIcons,
+      },
+    }),
+  ],
   transformers: [transformerDirectives()],
   safelist: [
     "i-fluent-home-16-filled",
