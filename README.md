@@ -86,11 +86,13 @@ The second-stage bridge turns reconciled Costuan gaps into an idempotent downloa
 1. Keep the Chrome default download directory at `G:\cos待入库`.
 2. Generate all missing tasks, or generate tasks for one creator from their expanded details.
 3. Generate a one-time plugin connection token and paste it into `CostuanArchiveManager`.
-4. Connect the extension to `http://127.0.0.1:4141`, then claim one task at a time.
+4. Connect the extension to `http://127.0.0.1:4141`, then start automatic staging.
 
 Only creators already present in the read-only `G:\cos图集` reconciliation are eligible. For those creators, active Costuan works that are absent locally and have a successful Baidu delivery record are queued. Every task stores the stable Costuan source order, saved Baidu folder, and an isolated target such as `G:\cos待入库\rua阮阮\014.7z`. Re-generating the plan does not duplicate existing tasks, and stale pending tasks for creators outside the local gallery are removed.
 
-The local bridge is bound to loopback access and authenticated with a generated token. The token is shown once; generating another token invalidates the previous one. When a Baidu download is handled by Chrome, the extension uses `chrome.downloads.onDeterminingFilename` to provide the creator-relative path and reports `claimed`, `downloading`, `downloaded`, or `failed` back to the ledger. Downloads handed to the Baidu desktop client cannot be redirected by a Chrome extension and must be marked complete manually after saving them to the same creator directory.
+The local bridge is bound to loopback access and authenticated with a generated token. The token is shown once; generating another token invalidates the previous one. The extension claims all missing works for one creator, creates or reuses `我的网盘/cos待入库/<creator ID>`, traverses Baidu's virtualized source list, selects the exact missing archives, and copies them as one batch. It verifies the target folder before reporting `staged`, then continues with the next creator. `staged` means the archives are present in the Baidu inbox; it does not mean they have been downloaded, extracted, or ingested into the local gallery.
+
+The accepted baseline workflow, status semantics, safety boundaries, and the 2026-08-31 milestone snapshot are recorded in [docs/cosgallery-basic-pipeline.md](docs/cosgallery-basic-pipeline.md).
 
 The importer associates albums by Costuan's stable `sourceOrder` (`NO.001`, `NO.002`, and so on), then persists the creator ID plus `works[].label` in SQLite. Full folder names, media-count summaries, and archive sizes are not used as visible labels.
 
