@@ -12,6 +12,7 @@ const TOKEN_HEADER = 'x-cosgallery-bridge-token';
 const taskStatusSchema = z.enum([
   'pending',
   'claimed',
+  'staged',
   'downloading',
   'downloaded',
   'ingested',
@@ -25,7 +26,8 @@ const listQuerySchema = z.object({
 });
 const claimBodySchema = z.object({
   workerId: z.string().trim().min(1).max(120),
-  limit: z.coerce.number().int().min(1).max(20).default(1)
+  limit: z.coerce.number().int().min(1).max(500).default(500),
+  seedTaskId: z.coerce.number().int().positive().optional()
 });
 const updateBodySchema = z.object({
   status: taskStatusSchema,

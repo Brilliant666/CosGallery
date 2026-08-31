@@ -5,6 +5,7 @@ import { databaseManager } from '../db/database.js';
 export type ArchiveDownloadTaskStatus =
   | 'pending'
   | 'claimed'
+  | 'staged'
   | 'downloading'
   | 'downloaded'
   | 'ingested'
@@ -66,6 +67,7 @@ export type ArchiveDownloadPlanResult = {
 const TASK_STATUSES: ArchiveDownloadTaskStatus[] = [
   'pending',
   'claimed',
+  'staged',
   'downloading',
   'downloaded',
   'ingested',
@@ -75,7 +77,8 @@ const TASK_STATUSES: ArchiveDownloadTaskStatus[] = [
 
 const ALLOWED_TRANSITIONS: Record<ArchiveDownloadTaskStatus, Set<ArchiveDownloadTaskStatus>> = {
   pending: new Set(['claimed', 'cancelled']),
-  claimed: new Set(['pending', 'downloading', 'downloaded', 'failed', 'cancelled']),
+  claimed: new Set(['pending', 'staged', 'downloading', 'downloaded', 'failed', 'cancelled']),
+  staged: new Set(['pending', 'downloaded', 'ingested', 'failed', 'cancelled']),
   downloading: new Set(['downloaded', 'failed', 'cancelled']),
   downloaded: new Set(['ingested', 'failed']),
   ingested: new Set(),
@@ -293,7 +296,7 @@ export class ArchiveDownloadTaskService {
        SET status = 'ingested', completed_at = COALESCE(completed_at, ?), updated_at = ?,
            last_error = NULL
        WHERE provider = ?
-         AND status IN ('pending', 'failed', 'downloaded')
+         AND status IN ('pending', 'failed', 'staged', 'downloaded')
          AND source_work_id IN (
            SELECT source_works.id
            FROM archive_catalog_source_works source_works
@@ -346,8 +349,8 @@ export class ArchiveDownloadTaskService {
        ORDER BY
          CASE tasks.status
            WHEN 'pending' THEN 0 WHEN 'failed' THEN 1 WHEN 'claimed' THEN 2
-           WHEN 'downloading' THEN 3 WHEN 'downloaded' THEN 4 WHEN 'ingested' THEN 5
-           ELSE 6
+           WHEN 'staged' THEN 3 WHEN 'downloading' THEN 4 WHEN 'downloaded' THEN 5
+           WHEN 'ingested' THEN 6 ELSE 7
          END,
          CASE creators.preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,
          creators.id,
@@ -370,10 +373,10 @@ export class ArchiveDownloadTaskService {
     };
   }
 
-  claim(options: { workerId: string; limit?: number }): ArchiveDownloadTask[] {
+  claim(options: { workerId: string; limit?: number; seedTaskId?: number }): ArchiveDownloadTask[] {
     const workerId = options.workerId.trim().slice(0, 120);
     if (!workerId) throw new Error('下载工作端标识不能为空。');
-    const limit = Math.min(20, Math.max(1, options.limit ?? 1));
+    const limit = Math.min(500, Math.max(1, options.limit ?? 1));
     const timestamp = nowIso();
     const ids: number[] = [];
 
@@ -381,23 +384,84 @@ export class ArchiveDownloadTaskService {
 
     this.database.exec('BEGIN IMMEDIATE');
     try {
+      const seed = options.seedTaskId
+        ? this.database.prepare(
+          `SELECT tasks.id, works.creator_id, source_works.collection_id, tasks.provider,
+                  tasks.status, tasks.claimed_by
+           FROM archive_catalog_download_tasks tasks
+           JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id
+           JOIN archive_catalog_works works ON works.id = source_works.work_id
+           WHERE tasks.id = ?`
+        ).get(options.seedTaskId) as {
+          id: number;
+          creator_id: number;
+          collection_id: number;
+          provider: string;
+          status: ArchiveDownloadTaskStatus;
+          claimed_by: string | null;
+        } | undefined
+        : this.database.prepare(
+          `SELECT tasks.id, works.creator_id, source_works.collection_id, tasks.provider,
+                  tasks.status, tasks.claimed_by
+           FROM archive_catalog_download_tasks tasks
+           JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id
+           JOIN archive_catalog_works works ON works.id = source_works.work_id
+           JOIN archive_catalog_creators creators ON creators.id = works.creator_id
+           WHERE tasks.status IN ('pending', 'failed')
+             AND EXISTS (
+               SELECT 1
+               FROM archive_catalog_local_creator_folders local_creator_folders
+               WHERE local_creator_folders.creator_id = works.creator_id
+                 AND local_creator_folders.is_active = 1
+             )
+           ORDER BY CASE creators.preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,
+                    creators.id, source_works.source_order, tasks.id
+           LIMIT 1`
+        ).get() as {
+          id: number;
+          creator_id: number;
+          collection_id: number;
+          provider: string;
+          status: ArchiveDownloadTaskStatus;
+          claimed_by: string | null;
+        } | undefined;
+
+      if (!seed) {
+        this.database.exec('COMMIT');
+        return [];
+      }
+      if (!['pending', 'failed', 'claimed'].includes(seed.status)) {
+        throw new Error(`下载任务 ${seed.id} 当前状态为 ${seed.status}，不能组成博主批次。`);
+      }
+      if (seed.status === 'claimed' && seed.claimed_by && seed.claimed_by !== workerId) {
+        throw new Error('下载任务已由其他工作端领取。');
+      }
+
       const rows = this.database.prepare(
-        `SELECT tasks.id
+        `SELECT tasks.id, tasks.status, tasks.claimed_by
          FROM archive_catalog_download_tasks tasks
          JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id
          JOIN archive_catalog_works works ON works.id = source_works.work_id
-         JOIN archive_catalog_creators creators ON creators.id = works.creator_id
-         WHERE tasks.status IN ('pending', 'failed')
+         WHERE works.creator_id = ?
+           AND source_works.collection_id = ?
+           AND tasks.provider = ?
+           AND (
+             tasks.status IN ('pending', 'failed')
+             OR (tasks.status = 'claimed' AND tasks.claimed_by = ?)
+           )
            AND EXISTS (
              SELECT 1
              FROM archive_catalog_local_creator_folders local_creator_folders
              WHERE local_creator_folders.creator_id = works.creator_id
                AND local_creator_folders.is_active = 1
            )
-         ORDER BY CASE creators.preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,
-                  creators.id, source_works.source_order, tasks.id
+         ORDER BY source_works.source_order, tasks.id
          LIMIT ?`
-      ).all(limit) as Array<{ id: number }>;
+      ).all(seed.creator_id, seed.collection_id, seed.provider, workerId, limit) as Array<{
+        id: number;
+        status: ArchiveDownloadTaskStatus;
+        claimed_by: string | null;
+      }>;
       const update = this.database.prepare(
         `UPDATE archive_catalog_download_tasks
          SET status = 'claimed', claimed_by = ?, claimed_at = ?, updated_at = ?,
@@ -405,6 +469,10 @@ export class ArchiveDownloadTaskService {
          WHERE id = ? AND status IN ('pending', 'failed')`
       );
       for (const row of rows) {
+        if (row.status === 'claimed' && row.claimed_by === workerId) {
+          ids.push(row.id);
+          continue;
+        }
         const result = update.run(workerId, timestamp, timestamp, row.id);
         if (Number(result.changes ?? 0) > 0) ids.push(row.id);
       }

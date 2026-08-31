@@ -93,6 +93,7 @@ const archiveCatalogQuerySchema = z.object({
 const archiveDownloadTaskStatusSchema = z.enum([
   'pending',
   'claimed',
+  'staged',
   'downloading',
   'downloaded',
   'ingested',

@@ -27,13 +27,14 @@
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 2</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">缺失作品下载队列</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            仅检查 G:\cos图集 中已存在并匹配到博主 ID 的目录；为这些博主已转存到百度网盘、但本地尚未关联的 Costuan 作品生成任务。Chrome 下载根目录设为下方路径后，插件会把文件分流到“博主 ID/序号.7z”。
+            仅检查 G:\cos图集 中已存在并匹配到博主 ID 的目录；为这些博主已转存到百度网盘、但本地尚未关联的 Costuan 作品生成任务。插件会按博主批量复制缺失压缩包到“我的网盘/cos待入库/博主 ID”，供你随后整目录下载。
           </p>
         </div>
-        <div v-if="downloadTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
+        <div v-if="downloadTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-6">
           <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ downloadTasks.summary.total }}</strong>全部</span>
           <span class="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800"><strong class="block text-base">{{ downloadTasks.summary.pending }}</strong>待下载</span>
           <span class="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700"><strong class="block text-base">{{ downloadTasks.summary.downloading + downloadTasks.summary.claimed }}</strong>处理中</span>
+          <span class="rounded-xl bg-violet-50 px-3 py-2 text-xs text-violet-700"><strong class="block text-base">{{ downloadTasks.summary.staged }}</strong>网盘待下载</span>
           <span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700"><strong class="block text-base">{{ downloadTasks.summary.downloaded + downloadTasks.summary.ingested }}</strong>已完成</span>
           <span class="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700"><strong class="block text-base">{{ downloadTasks.summary.failed }}</strong>失败</span>
         </div>
@@ -341,6 +342,7 @@ function downloadStatusLabel(status: ArchiveDownloadTaskStatus) {
   return ({
     pending: '待下载',
     claimed: '已领取',
+    staged: '网盘待下载',
     downloading: '下载中',
     downloaded: '已下载',
     ingested: '已入库',

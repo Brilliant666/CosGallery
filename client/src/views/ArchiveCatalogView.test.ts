@@ -103,6 +103,7 @@ describe('ArchiveCatalogView', () => {
         total: 1,
         pending: 1,
         claimed: 0,
+        staged: 0,
         downloading: 0,
         downloaded: 0,
         ingested: 0,

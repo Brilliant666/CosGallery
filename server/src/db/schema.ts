@@ -389,7 +389,7 @@ CREATE TABLE IF NOT EXISTS archive_catalog_download_tasks (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(source_work_id, provider),
   FOREIGN KEY (source_work_id) REFERENCES archive_catalog_source_works(id) ON DELETE CASCADE,
-  CHECK (status IN ('pending', 'claimed', 'downloading', 'downloaded', 'ingested', 'failed', 'cancelled')),
+  CHECK (status IN ('pending', 'claimed', 'staged', 'downloading', 'downloaded', 'ingested', 'failed', 'cancelled')),
   CHECK (attempt_count >= 0)
 );
 

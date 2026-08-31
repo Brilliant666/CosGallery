@@ -170,9 +170,14 @@ describe('archive catalog first-stage pipeline', () => {
     ]);
     expect(queryService.getCreatorDetail(999_999)).toBeNull();
 
+    database.prepare(
+      `UPDATE archive_catalog_local_works
+       SET is_active = 0
+       WHERE folder_name = 'rua阮阮 NO.003 第三套'`
+    ).run();
     const downloadService = new ArchiveDownloadTaskService(database);
     expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toEqual({
-      created: 1,
+      created: 2,
       existing: 0,
       removedOutOfScope: 0,
       reconciledLocal: 0,
@@ -182,7 +187,7 @@ describe('archive catalog first-stage pipeline', () => {
     });
     expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
       created: 0,
-      existing: 1
+      existing: 2
     });
     database.prepare(
       `UPDATE archive_catalog_local_creator_folders
@@ -192,7 +197,7 @@ describe('archive catalog first-stage pipeline', () => {
     expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
       created: 0,
       existing: 0,
-      removedOutOfScope: 1
+      removedOutOfScope: 2
     });
     database.prepare(
       `UPDATE archive_catalog_local_creator_folders
@@ -200,12 +205,12 @@ describe('archive catalog first-stage pipeline', () => {
        WHERE creator_id = (SELECT id FROM archive_catalog_creators WHERE canonical_name = 'rua阮阮')`
     ).run();
     expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
-      created: 1,
+      created: 2,
       existing: 0,
       removedOutOfScope: 0
     });
     const pendingTasks = downloadService.list({ status: 'pending' });
-    expect(pendingTasks.summary).toMatchObject({ total: 1, pending: 1 });
+    expect(pendingTasks.summary).toMatchObject({ total: 2, pending: 2 });
     expect(pendingTasks.items[0]).toMatchObject({
       creatorName: 'rua阮阮',
       sourceOrder: 2,
@@ -214,20 +219,23 @@ describe('archive catalog first-stage pipeline', () => {
       targetRelativeDirectory: 'rua阮阮',
       targetFilename: '002.7z'
     });
-    const claimed = downloadService.claim({ workerId: 'test-extension', limit: 1 });
-    expect(claimed[0]).toMatchObject({ status: 'claimed', attemptCount: 1, claimedBy: 'test-extension' });
-    const downloading = downloadService.update(claimed[0].id, {
-      status: 'downloading',
+    const firstClaim = downloadService.claim({ workerId: 'test-extension', limit: 1 });
+    expect(firstClaim).toHaveLength(1);
+    expect(firstClaim[0]).toMatchObject({ status: 'claimed', attemptCount: 1, claimedBy: 'test-extension' });
+    const expandedClaim = downloadService.claim({
       workerId: 'test-extension',
-      downloadId: '42'
+      limit: 500,
+      seedTaskId: firstClaim[0].id
     });
-    expect(downloading).toMatchObject({ status: 'downloading', downloadId: '42' });
-    const downloaded = downloadService.update(claimed[0].id, {
-      status: 'downloaded',
-      workerId: 'test-extension',
-      downloadId: '42'
-    });
-    expect(downloaded?.completedAt).toBeTruthy();
+    expect(expandedClaim).toHaveLength(2);
+    expect(expandedClaim.map((task) => task.targetFilename)).toEqual(['002.7z', '003.7z']);
+    for (const task of expandedClaim) {
+      expect(downloadService.update(task.id, {
+        status: 'staged',
+        workerId: 'test-extension'
+      })).toMatchObject({ status: 'staged' });
+    }
+    expect(downloadService.list().summary).toMatchObject({ staged: 2, claimed: 0 });
 
     const bridge = new ArchiveBridgeService(database);
     expect(bridge.isConfigured()).toBe(false);

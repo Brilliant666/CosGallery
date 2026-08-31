@@ -604,6 +604,7 @@ export interface ArchiveCatalogCreatorDetail extends ArchiveCatalogCreator {
 export type ArchiveDownloadTaskStatus =
   | 'pending'
   | 'claimed'
+  | 'staged'
   | 'downloading'
   | 'downloaded'
   | 'ingested'
@@ -614,6 +615,7 @@ export interface ArchiveDownloadTaskSummary {
   total: number;
   pending: number;
   claimed: number;
+  staged: number;
   downloading: number;
   downloaded: number;
   ingested: number;
