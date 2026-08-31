@@ -53,6 +53,30 @@ pnpm --dir server import:hcf-tags -- "path/to/hcf-tags.json"
 pnpm --dir server import:costuan-archive "path/to/costuan-archive.json"
 ```
 
+### Archive catalog and read-only reconciliation
+
+CosGallery now keeps a source-neutral archive catalog alongside Foldergram's media index. The catalog exists before local media does, so a creator may have 17 Costuan works while only 13 local folders are present. HentaiClub is imported once as the initial curated creator seed; Costuan is represented as the first resource platform; Baidu is stored separately as one delivery provider.
+
+Run the complete first-stage import and read-only reconciliation with:
+
+```bash
+pnpm --dir server catalog:bootstrap -- \
+  --hcf "path/to/hcf-tags.json" \
+  --costuan "path/to/costuan-archive.json" \
+  --gallery-root "G:\\cos图集" \
+  --report "data/catalog/archive-catalog-report.json"
+```
+
+The command:
+
+- creates or updates creators, aliases, source identities, collections, works and delivery records idempotently;
+- scans only each creator's direct child directories as works and recursively counts their media;
+- matches local works to Costuan primarily by stable `NO.xxx`/three-digit source order;
+- reports local matches, missing source works and unresolved local folders;
+- never renames, moves, deletes or writes inside the configured gallery root.
+
+The generated report is JSON so later download and ingestion stages can consume the exact missing-work queue. Re-running the command updates observations without duplicating creators or works.
+
 The importer associates albums by Costuan's stable `sourceOrder` (`NO.001`, `NO.002`, and so on), then persists the creator ID plus `works[].label` in SQLite. Full folder names, media-count summaries, and archive sizes are not used as visible labels.
 
 Use `PUBLIC_DEMO_MODE=1` when the media tree must remain read-only. In CosGallery mode, creator rating updates still write only to the SQLite metadata database.

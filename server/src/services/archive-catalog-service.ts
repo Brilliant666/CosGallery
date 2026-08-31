@@ -1,0 +1,1070 @@
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
+
+import { z } from 'zod';
+
+import { databaseManager } from '../db/database.js';
+import { normalizeCreatorIdentity } from './creator-rating-import-service.js';
+
+const hcfSeedSchema = z.object({
+  format: z.literal('hcf-tag-preferences'),
+  version: z.number().int().positive(),
+  exportedAt: z.string().optional(),
+  state: z.object({
+    liked: z.array(z.string().trim().min(1)).default([]),
+    kept: z.array(z.string().trim().min(1)).default([])
+  }),
+  contentRatings: z.object({
+    entries: z.array(z.object({
+      name: z.string().trim().min(1),
+      rating: z.enum(['r15', 'r18']),
+      checkedAt: z.number().finite().nullable().optional()
+    })).default([])
+  })
+});
+
+const costuanWorkSchema = z.object({
+  order: z.number().int().min(0).optional(),
+  sourceOrder: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  rawTitle: z.string().optional(),
+  mediaSummary: z.string().optional()
+}).passthrough();
+
+const costuanRecordSchema = z.object({
+  creatorId: z.string().optional(),
+  creatorName: z.string().trim().min(1),
+  aliases: z.array(z.string()).default([]),
+  preference: z.string().optional(),
+  rating: z.string().optional(),
+  costuan: z.object({
+    postId: z.string().trim().min(1),
+    title: z.string().trim().min(1),
+    url: z.string().optional(),
+    collectionCount: z.number().int().min(0).nullable().optional(),
+    resourceDirectoryText: z.string().optional(),
+    checkedAt: z.string().optional(),
+    works: z.array(costuanWorkSchema).default([])
+  }).passthrough(),
+  baidu: z.object({
+    sourceFolderName: z.string().optional(),
+    destinationPath: z.string().optional(),
+    status: z.string().optional(),
+    transferredAt: z.string().optional()
+  }).passthrough().nullable().optional(),
+  local: z.object({ folderName: z.string().optional() }).passthrough().nullable().optional()
+}).passthrough();
+
+const costuanArchiveSchema = z.object({
+  format: z.literal('costuan-archive-metadata'),
+  version: z.number().int().positive(),
+  exportedAt: z.string().optional(),
+  records: z.record(costuanRecordSchema)
+});
+
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
+const ADVERTISEMENT_EXTENSIONS = new Set(['.html', '.htm', '.txt']);
+
+type MatchStatus = 'matched' | 'unmatched' | 'ambiguous';
+
+type LocalWorkSnapshot = {
+  relativePath: string;
+  absolutePath: string;
+  folderName: string;
+  parsedSourceOrder: number | null;
+  imageCount: number;
+  videoCount: number;
+  advertisementFileCount: number;
+  otherFileCount: number;
+  totalBytes: number;
+};
+
+type LocalCreatorSnapshot = {
+  relativePath: string;
+  absolutePath: string;
+  folderName: string;
+  works: LocalWorkSnapshot[];
+};
+
+type RemoteWorkRow = {
+  work_id: number;
+  source_order: number | null;
+  source_order_label: string | null;
+  source_title: string;
+};
+
+export type HcfSeedImportResult = {
+  source: 'hentaiclub';
+  total: number;
+  created: number;
+  updated: number;
+  liked: number;
+  kept: number;
+  r15: number;
+  r18: number;
+};
+
+export type CostuanCatalogImportResult = {
+  source: 'costuan';
+  records: number;
+  matchedCreators: number;
+  unmatchedCreators: string[];
+  importedWorks: number;
+  addedWorks: number;
+  updatedWorks: number;
+  deliveries: number;
+};
+
+export type LocalReconciliationResult = {
+  rootPath: string;
+  creatorFolders: number;
+  matchedCreatorFolders: number;
+  unmatchedCreatorFolders: string[];
+  ambiguousCreatorFolders: string[];
+  localWorks: number;
+  matchedWorks: number;
+  unmatchedWorks: number;
+  ambiguousWorks: number;
+};
+
+export type CreatorReconciliationReport = {
+  creatorId: number;
+  creatorName: string;
+  preference: 'liked' | 'kept' | null;
+  rating: 'R15' | 'R18' | null;
+  remoteWorks: number;
+  localWorks: number;
+  matchedWorks: number;
+  missingWorks: Array<{
+    workId: number;
+    source: string;
+    collectionId: string;
+    sourceOrder: number | null;
+    sourceOrderLabel: string | null;
+    title: string;
+  }>;
+  unresolvedLocalWorks: Array<{
+    folderName: string;
+    relativePath: string;
+    parsedSourceOrder: number | null;
+    status: MatchStatus;
+  }>;
+};
+
+export type ArchiveCatalogReport = {
+  generatedAt: string;
+  rootPath: string | null;
+  summary: {
+    creators: number;
+    creatorsWithRemoteWorks: number;
+    creatorsWithLocalWorks: number;
+    remoteWorks: number;
+    localWorks: number;
+    matchedWorks: number;
+    missingWorks: number;
+    unresolvedCreatorFolders: number;
+    unresolvedLocalWorks: number;
+  };
+  unresolvedCreatorFolders: Array<{
+    folderName: string;
+    relativePath: string;
+    status: 'unmatched' | 'ambiguous';
+  }>;
+  creators: CreatorReconciliationReport[];
+};
+
+function asNumber(value: number | bigint): number {
+  return typeof value === 'bigint' ? Number(value) : value;
+}
+
+function withTransaction<T>(database: DatabaseSync, operation: () => T): T {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const result = operation();
+    database.exec('COMMIT');
+    return result;
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function toPosixRelative(value: string): string {
+  return value.split(path.sep).join('/');
+}
+
+function collectionCreatorAlias(title: string): string | null {
+  const match = title.match(/^(.+?)\s*COS(?:PLAY)?/i);
+  return match?.[1]?.trim() || null;
+}
+
+function sha256(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+export function parseArchiveSourceOrder(value: string): number | null {
+  const leaf = path.basename(value.replace(/\\/g, '/'));
+  const explicit = leaf.match(/\bNO\.?\s*(\d{1,4})\b/i);
+  const middle = leaf.match(/(?:^|[\s_\-–—])(\d{3,4})(?=\s|[《【\[(])/);
+  const leading = leaf.match(/^(\d{3,4})(?=[^\d.\/-])/);
+  const match = explicit || middle || leading;
+  if (!match) return null;
+  const order = Number(match[1]);
+  return Number.isInteger(order) && order >= 0 ? order : null;
+}
+
+function normalizeWorkTitle(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/\s*[\[【][^\]】]+[\]】]\s*$/u, '')
+    .replace(/^.*?\bNO\.?\s*\d{1,4}\b/iu, '')
+    .replace(/^[\s_\-–—:：]+/u, '')
+    .replace(/[\s_\-–—:：·・.《》【】[\]()（）]+/gu, '');
+}
+
+async function inspectWorkDirectory(rootPath: string, workPath: string): Promise<LocalWorkSnapshot> {
+  let imageCount = 0;
+  let videoCount = 0;
+  let advertisementFileCount = 0;
+  let otherFileCount = 0;
+  let totalBytes = 0;
+  const pending = [workPath];
+
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const absolutePath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(absolutePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+
+      const extension = path.extname(entry.name).toLocaleLowerCase();
+      const stat = await fs.stat(absolutePath);
+      totalBytes += stat.size;
+      if (IMAGE_EXTENSIONS.has(extension)) imageCount += 1;
+      else if (VIDEO_EXTENSIONS.has(extension)) videoCount += 1;
+      else if (ADVERTISEMENT_EXTENSIONS.has(extension)) advertisementFileCount += 1;
+      else otherFileCount += 1;
+    }
+  }
+
+  return {
+    relativePath: toPosixRelative(path.relative(rootPath, workPath)),
+    absolutePath: workPath,
+    folderName: path.basename(workPath),
+    parsedSourceOrder: parseArchiveSourceOrder(path.basename(workPath)),
+    imageCount,
+    videoCount,
+    advertisementFileCount,
+    otherFileCount,
+    totalBytes
+  };
+}
+
+async function scanLocalRoot(
+  rootPath: string,
+  onProgress?: (message: string) => void
+): Promise<LocalCreatorSnapshot[]> {
+  const resolvedRoot = path.resolve(rootPath);
+  const rootStat = await fs.stat(resolvedRoot);
+  if (!rootStat.isDirectory()) throw new Error(`图库根目录不是文件夹：${resolvedRoot}`);
+
+  const creatorEntries = (await fs.readdir(resolvedRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }));
+  const snapshots: LocalCreatorSnapshot[] = [];
+
+  for (const [index, creatorEntry] of creatorEntries.entries()) {
+    onProgress?.(`[${index + 1}/${creatorEntries.length}] 只读扫描 ${creatorEntry.name}`);
+    const creatorPath = path.join(resolvedRoot, creatorEntry.name);
+    const workEntries = (await fs.readdir(creatorPath, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }));
+    const works: LocalWorkSnapshot[] = [];
+    for (const workEntry of workEntries) {
+      works.push(await inspectWorkDirectory(resolvedRoot, path.join(creatorPath, workEntry.name)));
+    }
+    snapshots.push({
+      relativePath: toPosixRelative(path.relative(resolvedRoot, creatorPath)),
+      absolutePath: creatorPath,
+      folderName: creatorEntry.name,
+      works
+    });
+  }
+
+  return snapshots;
+}
+
+export class ArchiveCatalogService {
+  constructor(private readonly database: DatabaseSync = databaseManager.connection) {}
+
+  async importHentaiclubSeed(filePath: string): Promise<HcfSeedImportResult> {
+    const resolvedPath = path.resolve(filePath);
+    const sourceBuffer = await fs.readFile(resolvedPath);
+    const document = hcfSeedSchema.parse(JSON.parse(sourceBuffer.toString('utf8')));
+    const preferenceByName = new Map<string, 'liked' | 'kept'>();
+    for (const name of document.state.kept) preferenceByName.set(name, 'kept');
+    for (const name of document.state.liked) preferenceByName.set(name, 'liked');
+    const ratingByName = new Map(document.contentRatings.entries.map((entry) => [entry.name, entry]));
+    const names = [...document.state.liked, ...document.state.kept]
+      .filter((name, index, values) => values.indexOf(name) === index);
+    const importedAt = new Date().toISOString();
+    const result: HcfSeedImportResult = {
+      source: 'hentaiclub',
+      total: names.length,
+      created: 0,
+      updated: 0,
+      liked: document.state.liked.length,
+      kept: document.state.kept.length,
+      r15: 0,
+      r18: 0
+    };
+
+    withTransaction(this.database, () => {
+      const findSource = this.database.prepare(
+        `SELECT creator_id FROM archive_catalog_creator_sources
+         WHERE source = 'hentaiclub' AND source_creator_id = ?`
+      );
+      const insertCreator = this.database.prepare(
+        `INSERT INTO archive_catalog_creators (
+           canonical_name, normalized_name, preference, effective_rating,
+           seed_source, seed_source_creator_id
+         ) VALUES (?, ?, ?, ?, 'hentaiclub', ?)`
+      );
+      const updateCreator = this.database.prepare(
+        `UPDATE archive_catalog_creators SET
+           canonical_name = ?, normalized_name = ?, preference = ?, effective_rating = ?,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      );
+      const upsertSource = this.database.prepare(
+        `INSERT INTO archive_catalog_creator_sources (
+           creator_id, source, source_creator_id, source_display_name, source_url,
+           metadata_json, first_seen_at, last_seen_at
+         ) VALUES (?, 'hentaiclub', ?, ?, NULL, ?, ?, ?)
+         ON CONFLICT(source, source_creator_id) DO UPDATE SET
+           creator_id = excluded.creator_id,
+           source_display_name = excluded.source_display_name,
+           metadata_json = excluded.metadata_json,
+           last_seen_at = excluded.last_seen_at`
+      );
+      const upsertAlias = this.database.prepare(
+        `INSERT INTO archive_catalog_creator_aliases (
+           creator_id, alias, normalized_alias, source
+         ) VALUES (?, ?, ?, 'hentaiclub')
+         ON CONFLICT(creator_id, source, normalized_alias) DO UPDATE SET
+           alias = excluded.alias, updated_at = CURRENT_TIMESTAMP`
+      );
+
+      for (const name of names) {
+        const preference = preferenceByName.get(name) ?? null;
+        const ratingEntry = ratingByName.get(name);
+        const rating = ratingEntry?.rating.toUpperCase() as 'R15' | 'R18' | undefined;
+        if (rating === 'R18') result.r18 += 1;
+        else if (rating === 'R15') result.r15 += 1;
+        const existing = findSource.get(name) as { creator_id: number } | undefined;
+        let creatorId: number;
+        if (existing) {
+          creatorId = existing.creator_id;
+          updateCreator.run(name, normalizeCreatorIdentity(name), preference, rating ?? null, creatorId);
+          result.updated += 1;
+        } else {
+          const inserted = insertCreator.run(
+            name,
+            normalizeCreatorIdentity(name),
+            preference,
+            rating ?? null,
+            name
+          );
+          creatorId = asNumber(inserted.lastInsertRowid);
+          result.created += 1;
+        }
+        upsertSource.run(
+          creatorId,
+          name,
+          name,
+          JSON.stringify({
+            exportedAt: document.exportedAt ?? null,
+            checkedAt: ratingEntry?.checkedAt ?? null,
+            preference
+          }),
+          importedAt,
+          importedAt
+        );
+        upsertAlias.run(creatorId, name, normalizeCreatorIdentity(name));
+      }
+
+      this.recordImportRun({
+        source: 'hentaiclub',
+        format: document.format,
+        version: String(document.version),
+        sourcePath: resolvedPath,
+        checksum: sha256(sourceBuffer),
+        importedAt,
+        stats: result
+      });
+    });
+
+    return result;
+  }
+
+  async importCostuanArchive(filePath: string): Promise<CostuanCatalogImportResult> {
+    const resolvedPath = path.resolve(filePath);
+    const sourceBuffer = await fs.readFile(resolvedPath);
+    const document = costuanArchiveSchema.parse(JSON.parse(sourceBuffer.toString('utf8')));
+    const observedAt = document.exportedAt ?? new Date().toISOString();
+    const result: CostuanCatalogImportResult = {
+      source: 'costuan',
+      records: Object.keys(document.records).length,
+      matchedCreators: 0,
+      unmatchedCreators: [],
+      importedWorks: 0,
+      addedWorks: 0,
+      updatedWorks: 0,
+      deliveries: 0
+    };
+
+    withTransaction(this.database, () => {
+      for (const record of Object.values(document.records)) {
+        const titleAlias = collectionCreatorAlias(record.costuan.title);
+        const candidateNames = [
+          record.creatorName,
+          record.creatorId ?? '',
+          ...record.aliases,
+          record.local?.folderName ?? '',
+          titleAlias ?? ''
+        ].filter(Boolean);
+        const creatorMatches = this.findCreatorIdsByAliases(candidateNames);
+        if (creatorMatches.length !== 1) {
+          result.unmatchedCreators.push(record.creatorName);
+          continue;
+        }
+
+        const creatorId = creatorMatches[0];
+        result.matchedCreators += 1;
+        for (const alias of candidateNames) this.upsertAlias(creatorId, alias, 'costuan');
+        this.upsertCreatorSource({
+          creatorId,
+          source: 'costuan',
+          sourceCreatorId: `collection:${record.costuan.postId}`,
+          sourceDisplayName: record.creatorName,
+          sourceUrl: record.costuan.url ?? null,
+          observedAt,
+          metadata: { identityKind: 'collection-derived', creatorId: record.creatorId ?? null }
+        });
+
+        const collectionId = this.upsertCollection({
+          creatorId,
+          sourceCollectionId: record.costuan.postId,
+          title: record.costuan.title,
+          sourceUrl: record.costuan.url ?? null,
+          declaredWorkCount: record.costuan.collectionCount ?? null,
+          rawDirectoryText: record.costuan.resourceDirectoryText ?? null,
+          observedAt,
+          metadata: record.costuan
+        });
+
+        this.database.prepare(
+          `UPDATE archive_catalog_source_works
+           SET is_active = 0
+           WHERE collection_id = ? AND source = 'costuan'`
+        ).run(collectionId);
+
+        for (const work of record.costuan.works) {
+          const sourceOrder = work.order ?? parseArchiveSourceOrder(work.sourceOrder);
+          const sourceWorkId = work.sourceOrder || (sourceOrder === null ? work.label : `NO.${String(sourceOrder).padStart(3, '0')}`);
+          const existing = this.database.prepare(
+            `SELECT id, work_id FROM archive_catalog_source_works
+             WHERE collection_id = ? AND source_work_id = ?`
+          ).get(collectionId, sourceWorkId) as { id: number; work_id: number } | undefined;
+          let workId: number;
+          if (existing) {
+            workId = existing.work_id;
+            this.database.prepare(
+              `UPDATE archive_catalog_works
+               SET display_title = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?`
+            ).run(work.label, workId);
+            this.database.prepare(
+              `UPDATE archive_catalog_source_works SET
+                 source_order = ?, source_order_label = ?, source_title = ?, raw_title = ?,
+                 media_summary = ?, metadata_json = ?, is_active = 1, last_seen_at = ?
+               WHERE id = ?`
+            ).run(
+              sourceOrder,
+              work.sourceOrder,
+              work.label,
+              work.rawTitle ?? null,
+              work.mediaSummary ?? null,
+              JSON.stringify(work),
+              observedAt,
+              existing.id
+            );
+            result.updatedWorks += 1;
+          } else {
+            const insertedWork = this.database.prepare(
+              `INSERT INTO archive_catalog_works (creator_id, display_title)
+               VALUES (?, ?)`
+            ).run(creatorId, work.label);
+            workId = asNumber(insertedWork.lastInsertRowid);
+            this.database.prepare(
+              `INSERT INTO archive_catalog_source_works (
+                 work_id, collection_id, source, source_work_id, source_order,
+                 source_order_label, source_title, raw_title, media_summary,
+                 metadata_json, first_seen_at, last_seen_at
+               ) VALUES (?, ?, 'costuan', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).run(
+              workId,
+              collectionId,
+              sourceWorkId,
+              sourceOrder,
+              work.sourceOrder,
+              work.label,
+              work.rawTitle ?? null,
+              work.mediaSummary ?? null,
+              JSON.stringify(work),
+              observedAt,
+              observedAt
+            );
+            result.addedWorks += 1;
+          }
+          result.importedWorks += 1;
+        }
+
+        if (record.baidu) {
+          const deliveryKey = record.baidu.sourceFolderName || 'primary';
+          this.database.prepare(
+            `INSERT INTO archive_catalog_deliveries (
+               collection_id, provider, delivery_key, delivery_type, status,
+               source_folder_name, destination_path, transferred_at, metadata_json,
+               first_seen_at, last_seen_at
+             ) VALUES (?, 'baidu', ?, 'share-folder', ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(collection_id, provider, delivery_key) DO UPDATE SET
+               status = excluded.status,
+               source_folder_name = excluded.source_folder_name,
+               destination_path = excluded.destination_path,
+               transferred_at = excluded.transferred_at,
+               metadata_json = excluded.metadata_json,
+               last_seen_at = excluded.last_seen_at`
+          ).run(
+            collectionId,
+            deliveryKey,
+            record.baidu.status ?? null,
+            record.baidu.sourceFolderName ?? null,
+            record.baidu.destinationPath ?? null,
+            record.baidu.transferredAt ?? null,
+            JSON.stringify(record.baidu),
+            observedAt,
+            observedAt
+          );
+          result.deliveries += 1;
+        }
+      }
+
+      this.recordImportRun({
+        source: 'costuan',
+        format: document.format,
+        version: String(document.version),
+        sourcePath: resolvedPath,
+        checksum: sha256(sourceBuffer),
+        importedAt: new Date().toISOString(),
+        stats: result
+      });
+    });
+
+    return result;
+  }
+
+  async reconcileLocalRoot(
+    rootPath: string,
+    onProgress?: (message: string) => void
+  ): Promise<LocalReconciliationResult> {
+    const resolvedRoot = path.resolve(rootPath);
+    const snapshots = await scanLocalRoot(resolvedRoot, onProgress);
+    const scannedAt = new Date().toISOString();
+    const result: LocalReconciliationResult = {
+      rootPath: resolvedRoot,
+      creatorFolders: snapshots.length,
+      matchedCreatorFolders: 0,
+      unmatchedCreatorFolders: [],
+      ambiguousCreatorFolders: [],
+      localWorks: 0,
+      matchedWorks: 0,
+      unmatchedWorks: 0,
+      ambiguousWorks: 0
+    };
+
+    withTransaction(this.database, () => {
+      const existingFolders = this.database.prepare(
+        `SELECT id FROM archive_catalog_local_creator_folders WHERE root_path = ?`
+      ).all(resolvedRoot) as Array<{ id: number }>;
+      for (const folder of existingFolders) {
+        this.database.prepare(
+          `UPDATE archive_catalog_local_works SET is_active = 0 WHERE local_creator_folder_id = ?`
+        ).run(folder.id);
+      }
+      this.database.prepare(
+        `UPDATE archive_catalog_local_creator_folders SET is_active = 0 WHERE root_path = ?`
+      ).run(resolvedRoot);
+
+      for (const creatorSnapshot of snapshots) {
+        const creatorMatches = this.findCreatorIdsByAliases([creatorSnapshot.folderName]);
+        const creatorId = creatorMatches.length === 1 ? creatorMatches[0] : null;
+        const creatorStatus: MatchStatus = creatorMatches.length === 1
+          ? 'matched'
+          : creatorMatches.length > 1 ? 'ambiguous' : 'unmatched';
+        if (creatorStatus === 'matched') result.matchedCreatorFolders += 1;
+        else if (creatorStatus === 'ambiguous') result.ambiguousCreatorFolders.push(creatorSnapshot.folderName);
+        else result.unmatchedCreatorFolders.push(creatorSnapshot.folderName);
+
+        const localFolderId = this.upsertLocalCreatorFolder({
+          creatorId,
+          rootPath: resolvedRoot,
+          snapshot: creatorSnapshot,
+          status: creatorStatus,
+          method: creatorStatus === 'matched' ? 'normalized-alias' : null,
+          scannedAt
+        });
+        const remoteWorks = creatorId === null ? [] : this.listRemoteWorks(creatorId);
+        const byOrder = new Map<number, RemoteWorkRow[]>();
+        const byTitle = new Map<string, RemoteWorkRow[]>();
+        for (const remoteWork of remoteWorks) {
+          if (remoteWork.source_order !== null) {
+            const values = byOrder.get(remoteWork.source_order) ?? [];
+            values.push(remoteWork);
+            byOrder.set(remoteWork.source_order, values);
+          }
+          const normalizedTitle = normalizeWorkTitle(remoteWork.source_title);
+          const values = byTitle.get(normalizedTitle) ?? [];
+          values.push(remoteWork);
+          byTitle.set(normalizedTitle, values);
+        }
+        const claimedWorkIds = new Set<number>();
+
+        for (const workSnapshot of creatorSnapshot.works) {
+          result.localWorks += 1;
+          let matches: RemoteWorkRow[] = [];
+          let matchMethod: string | null = null;
+          if (creatorId !== null && workSnapshot.parsedSourceOrder !== null) {
+            matches = byOrder.get(workSnapshot.parsedSourceOrder) ?? [];
+            if (matches.length > 0) matchMethod = 'costuan-source-order';
+          }
+          if (creatorId !== null && matches.length === 0) {
+            const normalizedLocalTitle = normalizeWorkTitle(workSnapshot.folderName);
+            matches = byTitle.get(normalizedLocalTitle) ?? [];
+            if (matches.length > 0) matchMethod = 'normalized-title';
+          }
+
+          let status: MatchStatus;
+          let workId: number | null = null;
+          if (matches.length === 1 && !claimedWorkIds.has(matches[0].work_id)) {
+            status = 'matched';
+            workId = matches[0].work_id;
+            claimedWorkIds.add(workId);
+            result.matchedWorks += 1;
+          } else if (matches.length > 1 || (matches.length === 1 && claimedWorkIds.has(matches[0].work_id))) {
+            status = 'ambiguous';
+            result.ambiguousWorks += 1;
+          } else {
+            status = 'unmatched';
+            result.unmatchedWorks += 1;
+          }
+
+          this.upsertLocalWork({
+            localFolderId,
+            workId,
+            snapshot: workSnapshot,
+            status,
+            method: status === 'matched' ? matchMethod : null,
+            scannedAt
+          });
+        }
+      }
+    });
+
+    return result;
+  }
+
+  buildReconciliationReport(rootPath?: string): ArchiveCatalogReport {
+    const resolvedRoot = rootPath ? path.resolve(rootPath) : null;
+    const creators = this.database.prepare(
+      `SELECT id, canonical_name, preference, effective_rating
+       FROM archive_catalog_creators
+       ORDER BY canonical_name COLLATE NOCASE`
+    ).all() as Array<{
+      id: number;
+      canonical_name: string;
+      preference: 'liked' | 'kept' | null;
+      effective_rating: 'R15' | 'R18' | null;
+    }>;
+    const remoteRows = this.database.prepare(
+      `SELECT
+         works.creator_id,
+         works.id AS work_id,
+         source_works.source,
+         collections.source_collection_id,
+         source_works.source_order,
+         source_works.source_order_label,
+         source_works.source_title
+       FROM archive_catalog_source_works source_works
+       JOIN archive_catalog_works works ON works.id = source_works.work_id
+       JOIN archive_catalog_collections collections ON collections.id = source_works.collection_id
+       WHERE source_works.is_active = 1 AND collections.is_active = 1`
+    ).all() as Array<{
+      creator_id: number;
+      work_id: number;
+      source: string;
+      source_collection_id: string;
+      source_order: number | null;
+      source_order_label: string | null;
+      source_title: string;
+    }>;
+    const localRows = this.database.prepare(
+      `SELECT
+         local_folders.creator_id,
+         local_works.work_id,
+         local_works.folder_name,
+         local_works.relative_path,
+         local_works.parsed_source_order,
+         local_works.match_status
+       FROM archive_catalog_local_works local_works
+       JOIN archive_catalog_local_creator_folders local_folders
+         ON local_folders.id = local_works.local_creator_folder_id
+       WHERE local_works.is_active = 1
+         AND local_folders.is_active = 1
+         AND (? IS NULL OR local_folders.root_path = ?)`
+    ).all(resolvedRoot, resolvedRoot) as Array<{
+      creator_id: number | null;
+      work_id: number | null;
+      folder_name: string;
+      relative_path: string;
+      parsed_source_order: number | null;
+      match_status: MatchStatus;
+    }>;
+    const unresolvedCreatorFolders = this.database.prepare(
+      `SELECT folder_name, relative_path, match_status
+       FROM archive_catalog_local_creator_folders
+       WHERE is_active = 1
+         AND match_status <> 'matched'
+         AND (? IS NULL OR root_path = ?)
+       ORDER BY folder_name COLLATE NOCASE`
+    ).all(resolvedRoot, resolvedRoot) as Array<{
+      folder_name: string;
+      relative_path: string;
+      match_status: 'unmatched' | 'ambiguous';
+    }>;
+
+    const remoteByCreator = new Map<number, typeof remoteRows>();
+    const localByCreator = new Map<number, typeof localRows>();
+    for (const row of remoteRows) {
+      const rows = remoteByCreator.get(row.creator_id) ?? [];
+      rows.push(row);
+      remoteByCreator.set(row.creator_id, rows);
+    }
+    for (const row of localRows) {
+      if (row.creator_id === null) continue;
+      const rows = localByCreator.get(row.creator_id) ?? [];
+      rows.push(row);
+      localByCreator.set(row.creator_id, rows);
+    }
+
+    const reports: CreatorReconciliationReport[] = [];
+    for (const creator of creators) {
+      const remote = remoteByCreator.get(creator.id) ?? [];
+      const local = localByCreator.get(creator.id) ?? [];
+      if (remote.length === 0 && local.length === 0) continue;
+      const matchedWorkIds = new Set(local.flatMap((row) => row.work_id === null ? [] : [row.work_id]));
+      reports.push({
+        creatorId: creator.id,
+        creatorName: creator.canonical_name,
+        preference: creator.preference,
+        rating: creator.effective_rating,
+        remoteWorks: remote.length,
+        localWorks: local.length,
+        matchedWorks: matchedWorkIds.size,
+        missingWorks: remote
+          .filter((row) => !matchedWorkIds.has(row.work_id))
+          .sort((left, right) => (left.source_order ?? Number.MAX_SAFE_INTEGER) - (right.source_order ?? Number.MAX_SAFE_INTEGER))
+          .map((row) => ({
+            workId: row.work_id,
+            source: row.source,
+            collectionId: row.source_collection_id,
+            sourceOrder: row.source_order,
+            sourceOrderLabel: row.source_order_label,
+            title: row.source_title
+          })),
+        unresolvedLocalWorks: local
+          .filter((row) => row.work_id === null)
+          .map((row) => ({
+            folderName: row.folder_name,
+            relativePath: row.relative_path,
+            parsedSourceOrder: row.parsed_source_order,
+            status: row.match_status
+          }))
+      });
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      rootPath: resolvedRoot,
+      summary: {
+        creators: creators.length,
+        creatorsWithRemoteWorks: reports.filter((report) => report.remoteWorks > 0).length,
+        creatorsWithLocalWorks: reports.filter((report) => report.localWorks > 0).length,
+        remoteWorks: reports.reduce((sum, report) => sum + report.remoteWorks, 0),
+        localWorks: reports.reduce((sum, report) => sum + report.localWorks, 0),
+        matchedWorks: reports.reduce((sum, report) => sum + report.matchedWorks, 0),
+        missingWorks: reports.reduce((sum, report) => sum + report.missingWorks.length, 0),
+        unresolvedCreatorFolders: unresolvedCreatorFolders.length,
+        unresolvedLocalWorks: reports.reduce((sum, report) => sum + report.unresolvedLocalWorks.length, 0)
+      },
+      unresolvedCreatorFolders: unresolvedCreatorFolders.map((folder) => ({
+        folderName: folder.folder_name,
+        relativePath: folder.relative_path,
+        status: folder.match_status
+      })),
+      creators: reports.sort((left, right) =>
+        right.missingWorks.length - left.missingWorks.length
+        || left.creatorName.localeCompare(right.creatorName, 'zh-CN')
+      )
+    };
+  }
+
+  private findCreatorIdsByAliases(names: string[]): number[] {
+    const ids = new Set<number>();
+    const findAlias = this.database.prepare(
+      `SELECT creator_id FROM archive_catalog_creator_aliases WHERE normalized_alias = ?`
+    );
+    const findName = this.database.prepare(
+      `SELECT id FROM archive_catalog_creators WHERE normalized_name = ?`
+    );
+    for (const normalized of new Set(names.map(normalizeCreatorIdentity).filter(Boolean))) {
+      for (const row of findAlias.all(normalized) as Array<{ creator_id: number }>) ids.add(row.creator_id);
+      for (const row of findName.all(normalized) as Array<{ id: number }>) ids.add(row.id);
+    }
+    return [...ids];
+  }
+
+  private upsertAlias(creatorId: number, alias: string, source: string): void {
+    const normalized = normalizeCreatorIdentity(alias);
+    if (!normalized) return;
+    this.database.prepare(
+      `INSERT INTO archive_catalog_creator_aliases (
+         creator_id, alias, normalized_alias, source
+       ) VALUES (?, ?, ?, ?)
+       ON CONFLICT(creator_id, source, normalized_alias) DO UPDATE SET
+         alias = excluded.alias, updated_at = CURRENT_TIMESTAMP`
+    ).run(creatorId, alias.trim(), normalized, source);
+  }
+
+  private upsertCreatorSource(input: {
+    creatorId: number;
+    source: string;
+    sourceCreatorId: string;
+    sourceDisplayName: string;
+    sourceUrl: string | null;
+    observedAt: string;
+    metadata: unknown;
+  }): void {
+    this.database.prepare(
+      `INSERT INTO archive_catalog_creator_sources (
+         creator_id, source, source_creator_id, source_display_name, source_url,
+         metadata_json, first_seen_at, last_seen_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source, source_creator_id) DO UPDATE SET
+         creator_id = excluded.creator_id,
+         source_display_name = excluded.source_display_name,
+         source_url = excluded.source_url,
+         metadata_json = excluded.metadata_json,
+         last_seen_at = excluded.last_seen_at`
+    ).run(
+      input.creatorId,
+      input.source,
+      input.sourceCreatorId,
+      input.sourceDisplayName,
+      input.sourceUrl,
+      JSON.stringify(input.metadata),
+      input.observedAt,
+      input.observedAt
+    );
+  }
+
+  private upsertCollection(input: {
+    creatorId: number;
+    sourceCollectionId: string;
+    title: string;
+    sourceUrl: string | null;
+    declaredWorkCount: number | null;
+    rawDirectoryText: string | null;
+    observedAt: string;
+    metadata: unknown;
+  }): number {
+    this.database.prepare(
+      `INSERT INTO archive_catalog_collections (
+         creator_id, source, source_collection_id, title, source_url,
+         declared_work_count, raw_directory_text, metadata_json, observed_at
+       ) VALUES (?, 'costuan', ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source, source_collection_id) DO UPDATE SET
+         creator_id = excluded.creator_id,
+         title = excluded.title,
+         source_url = excluded.source_url,
+         declared_work_count = excluded.declared_work_count,
+         raw_directory_text = excluded.raw_directory_text,
+         metadata_json = excluded.metadata_json,
+         observed_at = excluded.observed_at,
+         is_active = 1,
+         updated_at = CURRENT_TIMESTAMP`
+    ).run(
+      input.creatorId,
+      input.sourceCollectionId,
+      input.title,
+      input.sourceUrl,
+      input.declaredWorkCount,
+      input.rawDirectoryText,
+      JSON.stringify(input.metadata),
+      input.observedAt
+    );
+    const row = this.database.prepare(
+      `SELECT id FROM archive_catalog_collections
+       WHERE source = 'costuan' AND source_collection_id = ?`
+    ).get(input.sourceCollectionId) as { id: number };
+    return row.id;
+  }
+
+  private listRemoteWorks(creatorId: number): RemoteWorkRow[] {
+    return this.database.prepare(
+      `SELECT
+         source_works.work_id,
+         source_works.source_order,
+         source_works.source_order_label,
+         source_works.source_title
+       FROM archive_catalog_source_works source_works
+       JOIN archive_catalog_collections collections ON collections.id = source_works.collection_id
+       WHERE collections.creator_id = ?
+         AND collections.source = 'costuan'
+         AND collections.is_active = 1
+         AND source_works.source = 'costuan'
+         AND source_works.is_active = 1`
+    ).all(creatorId) as RemoteWorkRow[];
+  }
+
+  private upsertLocalCreatorFolder(input: {
+    creatorId: number | null;
+    rootPath: string;
+    snapshot: LocalCreatorSnapshot;
+    status: MatchStatus;
+    method: string | null;
+    scannedAt: string;
+  }): number {
+    this.database.prepare(
+      `INSERT INTO archive_catalog_local_creator_folders (
+         creator_id, root_path, relative_path, absolute_path, folder_name,
+         match_status, match_method, scanned_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(root_path, relative_path) DO UPDATE SET
+         creator_id = excluded.creator_id,
+         absolute_path = excluded.absolute_path,
+         folder_name = excluded.folder_name,
+         match_status = excluded.match_status,
+         match_method = excluded.match_method,
+         is_active = 1,
+         scanned_at = excluded.scanned_at,
+         updated_at = CURRENT_TIMESTAMP`
+    ).run(
+      input.creatorId,
+      input.rootPath,
+      input.snapshot.relativePath,
+      input.snapshot.absolutePath,
+      input.snapshot.folderName,
+      input.status,
+      input.method,
+      input.scannedAt
+    );
+    const row = this.database.prepare(
+      `SELECT id FROM archive_catalog_local_creator_folders
+       WHERE root_path = ? AND relative_path = ?`
+    ).get(input.rootPath, input.snapshot.relativePath) as { id: number };
+    return row.id;
+  }
+
+  private upsertLocalWork(input: {
+    localFolderId: number;
+    workId: number | null;
+    snapshot: LocalWorkSnapshot;
+    status: MatchStatus;
+    method: string | null;
+    scannedAt: string;
+  }): void {
+    const workRelativePath = input.snapshot.relativePath.split('/').slice(1).join('/');
+    this.database.prepare(
+      `INSERT INTO archive_catalog_local_works (
+         local_creator_folder_id, work_id, relative_path, absolute_path, folder_name,
+         parsed_source_order, image_count, video_count, advertisement_file_count,
+         other_file_count, total_bytes, match_status, match_method, scanned_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(local_creator_folder_id, relative_path) DO UPDATE SET
+         work_id = excluded.work_id,
+         absolute_path = excluded.absolute_path,
+         folder_name = excluded.folder_name,
+         parsed_source_order = excluded.parsed_source_order,
+         image_count = excluded.image_count,
+         video_count = excluded.video_count,
+         advertisement_file_count = excluded.advertisement_file_count,
+         other_file_count = excluded.other_file_count,
+         total_bytes = excluded.total_bytes,
+         match_status = excluded.match_status,
+         match_method = excluded.match_method,
+         is_active = 1,
+         scanned_at = excluded.scanned_at,
+         updated_at = CURRENT_TIMESTAMP`
+    ).run(
+      input.localFolderId,
+      input.workId,
+      workRelativePath,
+      input.snapshot.absolutePath,
+      input.snapshot.folderName,
+      input.snapshot.parsedSourceOrder,
+      input.snapshot.imageCount,
+      input.snapshot.videoCount,
+      input.snapshot.advertisementFileCount,
+      input.snapshot.otherFileCount,
+      input.snapshot.totalBytes,
+      input.status,
+      input.method,
+      input.scannedAt
+    );
+  }
+
+  private recordImportRun(input: {
+    source: string;
+    format: string;
+    version: string;
+    sourcePath: string;
+    checksum: string;
+    importedAt: string;
+    stats: unknown;
+  }): void {
+    this.database.prepare(
+      `INSERT INTO archive_catalog_import_runs (
+         source, source_format, source_version, source_path,
+         source_sha256, imported_at, stats_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      input.source,
+      input.format,
+      input.version,
+      input.sourcePath,
+      input.checksum,
+      input.importedAt,
+      JSON.stringify(input.stats)
+    );
+  }
+}

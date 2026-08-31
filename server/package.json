@@ -13,6 +13,7 @@
     "rescan": "tsx src/scripts/rescan.ts",
     "import:hcf-tags": "tsx src/scripts/import-hcf-tags.ts",
     "import:costuan-archive": "tsx src/scripts/import-costuan-archive.ts",
+    "catalog:bootstrap": "tsx src/scripts/archive-catalog-bootstrap.ts",
     "test": "vitest run --config vitest.config.ts test/"
   },
   "dependencies": {

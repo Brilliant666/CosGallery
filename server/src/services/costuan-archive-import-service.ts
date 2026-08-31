@@ -7,7 +7,7 @@ import { folderRepository, postRepository } from '../db/repositories.js';
 import { normalizeCreatorIdentity } from './creator-rating-import-service.js';
 
 const costuanWorkSchema = z.object({
-  order: z.number().int().positive().optional(),
+  order: z.number().int().min(0).optional(),
   sourceOrder: z.string().trim().min(1),
   label: z.string().trim().min(1),
   rawTitle: z.string().optional(),
@@ -43,7 +43,7 @@ export function parseCostuanSourceOrder(value: string): number | null {
   const match = leaf.match(/(?:^|[\s_\-–—])(?:NO\.?\s*)?(\d{1,4})(?=\s|[^\d]|$)/i);
   if (!match) return null;
   const order = Number(match[1]);
-  return Number.isInteger(order) && order > 0 ? order : null;
+  return Number.isInteger(order) && order >= 0 ? order : null;
 }
 
 export function buildCostuanWorkCaption(creatorName: string, label: string): string {

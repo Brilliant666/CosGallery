@@ -9,6 +9,7 @@ describe('Costuan archive metadata helpers', () => {
   it('uses only the stable source order to associate local works', () => {
     expect(parseCostuanSourceOrder('rua阮阮/rua阮阮 013 arbitrary local name')).toBe(13);
     expect(parseCostuanSourceOrder('小小奶瓶儿@虎牙 - NO.003 another name')).toBe(3);
+    expect(parseCostuanSourceOrder('桜桃喵/NO.000 微博配图')).toBe(0);
     expect(parseCostuanSourceOrder('作品名称中没有平台序号')).toBeNull();
   });
 
