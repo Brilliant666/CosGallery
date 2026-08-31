@@ -77,6 +77,8 @@ The command:
 
 The generated report is JSON so later download and ingestion stages can consume the exact missing-work queue. Re-running the command updates observations without duplicating creators or works.
 
+Administrators can inspect the same ledger at `/archive-catalog`. The management page provides preference, rating and ingestion-state filters, source/local/missing totals, and on-demand creator details without writing to the configured gallery root.
+
 The importer associates albums by Costuan's stable `sourceOrder` (`NO.001`, `NO.002`, and so on), then persists the creator ID plus `works[].label` in SQLite. Full folder names, media-count summaries, and archive sizes are not used as visible labels.
 
 Use `PUBLIC_DEMO_MODE=1` when the media tree must remain read-only. In CosGallery mode, creator rating updates still write only to the SQLite metadata database.

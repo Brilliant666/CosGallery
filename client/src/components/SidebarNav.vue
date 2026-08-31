@@ -324,6 +324,21 @@
             <span>{{ t('nav.trash') }}</span>
           </RouterLink>
 
+          <RouterLink v-if="authStore.canAccessSettings" custom :to="{ name: 'archive-catalog' }" v-slot="{ href, navigate, isActive }">
+            <a
+              :href="href"
+              class="flex items-center gap-[0.95rem] px-[1.2rem] py-[1rem] text-[0.98rem] text-text transition-colors duration-150 hover:bg-surface-hover"
+              @click="handleSettingsNavigate($event, navigate)"
+            >
+              <span
+                class="w-[1.18rem] h-[1.18rem] shrink-0"
+                :class="isActive ? 'i-fluent-database-20-filled' : 'i-fluent-database-20-regular'"
+                aria-hidden="true"
+              />
+              <span>{{ t('nav.archiveCatalog') }}</span>
+            </a>
+          </RouterLink>
+
           <RouterLink v-if="authStore.canAccessSettings" custom :to="{ name: 'settings' }" v-slot="{ href, navigate, isActive }">
             <a
               :href="href"

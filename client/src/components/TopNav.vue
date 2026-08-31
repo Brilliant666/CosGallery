@@ -150,6 +150,22 @@
               <span>{{ t('nav.trash') }}</span>
             </RouterLink>
 
+            <RouterLink v-if="authStore.canAccessSettings" custom :to="{ name: 'archive-catalog' }" v-slot="{ href, navigate, isActive }">
+              <a
+                :href="href"
+                class="mobile-nav__menu-item"
+                :class="isActive ? menuItemActiveClass : ''"
+                @click="handleSettingsNavigate($event, navigate)"
+              >
+                <span
+                  class="mobile-nav__menu-icon"
+                  :class="isActive ? 'i-fluent-database-20-filled' : 'i-fluent-database-20-regular'"
+                  aria-hidden="true"
+                />
+                <span>{{ t('nav.archiveCatalog') }}</span>
+              </a>
+            </RouterLink>
+
             <RouterLink v-if="authStore.canAccessSettings" custom :to="{ name: 'settings' }" v-slot="{ href, navigate, isActive }">
               <a
                 :href="href"
@@ -239,7 +255,7 @@ const showPlacesNav = computed(() => placesStore.items.length > 0 && placesStore
 const isPlacesRoute = computed(() => route.name === 'places' || route.name === 'place');
 const isLikesRoute = computed(() => route.name === 'likes');
 const isCollectionsRoute = computed(() => route.name === 'collections' || route.name === 'collection');
-const isStaticMoreRoute = computed(() => route.name === 'trash' || route.name === 'settings' || isCollectionsRoute.value);
+const isStaticMoreRoute = computed(() => route.name === 'trash' || route.name === 'settings' || route.name === 'archive-catalog' || isCollectionsRoute.value);
 const mobileNavActiveClass = 'mobile-nav__item--active';
 const menuItemActiveClass = 'mobile-nav__menu-item--active';
 const moreButtonClasses = computed(() => ({

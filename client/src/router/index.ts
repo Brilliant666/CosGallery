@@ -19,6 +19,7 @@ import { useAppStore } from '../stores/app';
 import { useAuthStore } from '../stores/auth';
 import { pinia } from '../stores/pinia';
 import SettingsView from '../views/SettingsView.vue';
+import ArchiveCatalogView from '../views/ArchiveCatalogView.vue';
 import type { AuthCapabilities } from '../types/api';
 
 type RouteCapability = keyof AuthCapabilities;
@@ -111,6 +112,14 @@ export const router = createRouter({
       path: '/settings',
       name: 'settings',
       component: SettingsView,
+      meta: {
+        requiredCapability: 'canAccessSettings'
+      }
+    },
+    {
+      path: '/archive-catalog',
+      name: 'archive-catalog',
+      component: ArchiveCatalogView,
       meta: {
         requiredCapability: 'canAccessSettings'
       }

@@ -2,6 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 
 import { AUTH_PASSWORD_MAX_LENGTH, AUTH_PASSWORD_MIN_LENGTH, authService } from '../services/auth-service.js';
+import { ArchiveCatalogQueryService } from '../services/archive-catalog-query-service.js';
 import {
   FOLDER_SHARE_PASSWORD_MAX_LENGTH,
   FOLDER_SHARE_PASSWORD_MIN_LENGTH,
@@ -77,6 +78,14 @@ const cosGalleryWorksQuerySchema = paginationQuerySchema.extend({
 });
 const cosGalleryCreatorsQuerySchema = z.object({
   contentRating: z.enum(['R15', 'R18', 'unclassified']).optional(),
+  q: z.string().trim().max(160).optional()
+});
+const archiveCatalogQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  preference: z.enum(['liked', 'kept']).optional(),
+  rating: z.enum(['R15', 'R18']).optional(),
+  state: z.enum(['missing', 'complete', 'no-local', 'no-source', 'unresolved']).optional(),
   q: z.string().trim().max(160).optional()
 });
 const homeFeedDefaultBodySchema = z.object({
@@ -1160,6 +1169,38 @@ router.patch('/cos-gallery/creators/:id/content-rating', requireCapability('canM
   }
   response.json({ ok: true, creator });
 });
+
+router.get(
+  '/admin/archive-catalog',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (request, response) => {
+    const query = archiveCatalogQuerySchema.parse(request.query);
+    const service = new ArchiveCatalogQueryService();
+    response.json(service.listCreators({
+      page: query.page,
+      limit: query.limit,
+      preference: query.preference,
+      rating: query.rating,
+      state: query.state,
+      query: query.q
+    }));
+  }
+);
+
+router.get(
+  '/admin/archive-catalog/creators/:id',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (request, response) => {
+    const params = imageIdSchema.parse(request.params);
+    const service = new ArchiveCatalogQueryService();
+    const creator = service.getCreatorDetail(params.id);
+    if (!creator) {
+      response.status(404).json({ message: 'Archive catalog creator not found' });
+      return;
+    }
+    response.json(creator);
+  }
+);
 
 router.patch('/posts/:id/content-rating', requireCapability('canManageLibrary', 'Admin access is required.'), (request, response) => {
   const params = imageIdSchema.parse(request.params);

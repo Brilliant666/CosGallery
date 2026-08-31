@@ -336,6 +336,33 @@ export function updateCreatorContentRating(id: number, contentRating: 'R15' | 'R
   );
 }
 
+export function fetchArchiveCatalog(options: {
+  page?: number;
+  limit?: number;
+  preference?: import('../types/api').ArchiveCatalogPreference;
+  rating?: 'R15' | 'R18';
+  state?: import('../types/api').ArchiveCatalogState;
+  query?: string;
+} = {}) {
+  const params = new URLSearchParams({
+    page: String(options.page ?? 1),
+    limit: String(options.limit ?? 50)
+  });
+  if (options.preference) params.set('preference', options.preference);
+  if (options.rating) params.set('rating', options.rating);
+  if (options.state) params.set('state', options.state);
+  if (options.query?.trim()) params.set('q', options.query.trim());
+  return requestJson<import('../types/api').ArchiveCatalogCreatorsPayload>(
+    `/api/admin/archive-catalog?${params.toString()}`
+  );
+}
+
+export function fetchArchiveCatalogCreator(id: number) {
+  return requestJson<import('../types/api').ArchiveCatalogCreatorDetail>(
+    `/api/admin/archive-catalog/creators/${id}`
+  );
+}
+
 export async function updatePostContentRating(id: number, contentRating: 'R15' | 'R18') {
   return requestJson<import('../types/api').PostContentRatingMutationResult>(`/api/posts/${id}/content-rating`, {
     method: 'PATCH',

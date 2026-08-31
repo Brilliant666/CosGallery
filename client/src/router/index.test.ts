@@ -181,6 +181,17 @@ vi.mock('../views/SettingsView.vue', async () => {
   };
 });
 
+vi.mock('../views/ArchiveCatalogView.vue', async () => {
+  const { defineComponent } = await import('vue');
+
+  return {
+    default: defineComponent({
+      name: 'ArchiveCatalogView',
+      template: '<div data-test="archive-catalog-view">archive-catalog-view</div>'
+    })
+  };
+});
+
 import { router } from './index';
 import { canAccessRoute } from './index';
 import { useAuthStore } from '../stores/auth';
@@ -313,6 +324,32 @@ describe('router', () => {
     await flushPromises();
     expect(router.currentRoute.value.name).toBe('collection');
     expect(router.currentRoute.value.params.slug).toBe('saved');
+  });
+
+  it('keeps the archive catalog restricted to administrators', () => {
+    const authStore = useAuthStore(pinia);
+    authStore.$patch({
+      ready: true,
+      capabilities: {
+        canManageLibrary: false,
+        canDeleteMedia: false,
+        canAccessSettings: false,
+        canUseSharedLikes: false,
+        canUseLocalFavorites: false,
+        canUseSharedCollections: false,
+        canUseLocalCollections: false
+      }
+    });
+
+    expect(canAccessRoute(router.resolve('/archive-catalog'))).toBe(false);
+
+    authStore.$patch({
+      capabilities: {
+        ...authStore.capabilities,
+        canAccessSettings: true
+      }
+    });
+    expect(canAccessRoute(router.resolve('/archive-catalog'))).toBe(true);
   });
 
   it('keeps shared folder routes outside normal app capability checks', () => {

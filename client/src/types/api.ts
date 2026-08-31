@@ -515,6 +515,92 @@ export interface CosGalleryCreatorsPayload {
   total: number;
 }
 
+export type ArchiveCatalogPreference = 'liked' | 'kept';
+export type ArchiveCatalogState = 'missing' | 'complete' | 'no-local' | 'no-source' | 'unresolved';
+
+export interface ArchiveCatalogSummary {
+  creators: number;
+  liked: number;
+  kept: number;
+  r15: number;
+  r18: number;
+  creatorsWithSources: number;
+  creatorsWithLocalWorks: number;
+  sourceCollections: number;
+  remoteWorks: number;
+  localWorks: number;
+  matchedWorks: number;
+  missingWorks: number;
+  unresolvedCreatorFolders: number;
+  unresolvedLocalWorks: number;
+}
+
+export interface ArchiveCatalogCreator {
+  id: number;
+  name: string;
+  preference: ArchiveCatalogPreference | null;
+  rating: ContentRating | null;
+  sourceCollections: number;
+  remoteWorks: number;
+  localWorks: number;
+  matchedWorks: number;
+  missingWorks: number;
+  unresolvedLocalWorks: number;
+  latestSourceObservation: string | null;
+}
+
+export interface ArchiveCatalogCreatorsPayload {
+  summary: ArchiveCatalogSummary;
+  items: ArchiveCatalogCreator[];
+  page: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+}
+
+export interface ArchiveCatalogCreatorDetail extends ArchiveCatalogCreator {
+  aliases: Array<{ alias: string; source: string }>;
+  sources: Array<{
+    source: string;
+    sourceCreatorId: string;
+    displayName: string;
+    url: string | null;
+    firstSeenAt: string;
+    lastSeenAt: string;
+  }>;
+  collections: Array<{
+    id: number;
+    source: string;
+    sourceCollectionId: string;
+    title: string;
+    url: string | null;
+    declaredWorkCount: number | null;
+    observedAt: string;
+    deliveries: Array<{
+      provider: string;
+      type: string;
+      status: string | null;
+      sourceFolderName: string | null;
+      destinationPath: string | null;
+      transferredAt: string | null;
+    }>;
+  }>;
+  missing: Array<{
+    workId: number;
+    source: string;
+    sourceCollectionId: string;
+    sourceOrder: number | null;
+    sourceOrderLabel: string | null;
+    title: string;
+  }>;
+  unresolved: Array<{
+    folderName: string;
+    relativePath: string;
+    parsedSourceOrder: number | null;
+    status: 'unmatched' | 'ambiguous';
+  }>;
+}
+
 export interface PostContentRatingMutationResult {
   ok: boolean;
   id: number;

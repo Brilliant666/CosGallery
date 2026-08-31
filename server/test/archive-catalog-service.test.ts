@@ -10,6 +10,7 @@ import {
   ArchiveCatalogService,
   parseArchiveSourceOrder
 } from '../src/services/archive-catalog-service.js';
+import { ArchiveCatalogQueryService } from '../src/services/archive-catalog-query-service.js';
 
 describe('archive catalog first-stage pipeline', () => {
   let tempRoot: string;
@@ -132,6 +133,37 @@ describe('archive catalog first-stage pipeline', () => {
     const secondCostuanImport = await service.importCostuanArchive(costuanPath);
     expect(secondCostuanImport).toMatchObject({ importedWorks: 4, addedWorks: 0, updatedWorks: 4 });
     expect(database.prepare('SELECT COUNT(*) AS count FROM archive_catalog_works').get()).toEqual({ count: 4 });
+
+    const queryService = new ArchiveCatalogQueryService(database);
+    const catalog = queryService.listCreators({ page: 1, limit: 50, state: 'missing' });
+    expect(catalog.summary).toMatchObject({
+      creators: 2,
+      liked: 1,
+      kept: 1,
+      sourceCollections: 2,
+      remoteWorks: 4,
+      localWorks: 3,
+      matchedWorks: 3,
+      missingWorks: 1
+    });
+    expect(catalog.total).toBe(1);
+    expect(catalog.items[0]).toMatchObject({
+      name: 'rua阮阮',
+      preference: 'liked',
+      rating: 'R18',
+      remoteWorks: 3,
+      localWorks: 2,
+      missingWorks: 1
+    });
+    expect(queryService.listCreators({ page: 1, limit: 50, query: 'lunananya' }).items[0]?.name).toBe('lunana');
+
+    const detail = queryService.getCreatorDetail(catalog.items[0].id);
+    expect(detail?.collections).toHaveLength(1);
+    expect(detail?.collections[0].deliveries).toHaveLength(1);
+    expect(detail?.missing).toEqual([
+      expect.objectContaining({ sourceOrder: 2, sourceOrderLabel: 'NO.002', title: '第二套' })
+    ]);
+    expect(queryService.getCreatorDetail(999_999)).toBeNull();
   });
 
   it('accepts Costuan zero-order extras while rejecting date-like folder prefixes', () => {
