@@ -363,6 +363,40 @@ export function fetchArchiveCatalogCreator(id: number) {
   );
 }
 
+export function fetchArchiveDownloadTasks(options: {
+  status?: import('../types/api').ArchiveDownloadTaskStatus;
+  creatorId?: number;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 100) });
+  if (options.status) params.set('status', options.status);
+  if (options.creatorId) params.set('creatorId', String(options.creatorId));
+  return requestJson<import('../types/api').ArchiveDownloadTasksPayload>(
+    `/api/admin/archive-catalog/download-tasks?${params.toString()}`
+  );
+}
+
+export function planArchiveDownloadTasks(targetRoot: string, creatorIds?: number[]) {
+  return requestJson<import('../types/api').ArchiveDownloadPlanResult>(
+    '/api/admin/archive-catalog/download-tasks/plan',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ targetRoot, creatorIds, provider: 'baidu' })
+    }
+  );
+}
+
+export function fetchArchiveBridgeStatus() {
+  return requestJson<{ configured: boolean }>('/api/admin/archive-catalog/bridge-token');
+}
+
+export function rotateArchiveBridgeToken() {
+  return requestJson<{ token: string }>('/api/admin/archive-catalog/bridge-token', {
+    method: 'POST'
+  });
+}
+
 export async function updatePostContentRating(id: number, contentRating: 'R15' | 'R18') {
   return requestJson<import('../types/api').PostContentRatingMutationResult>(`/api/posts/${id}/content-rating`, {
     method: 'PATCH',

@@ -601,6 +601,74 @@ export interface ArchiveCatalogCreatorDetail extends ArchiveCatalogCreator {
   }>;
 }
 
+export type ArchiveDownloadTaskStatus =
+  | 'pending'
+  | 'claimed'
+  | 'downloading'
+  | 'downloaded'
+  | 'ingested'
+  | 'failed'
+  | 'cancelled';
+
+export interface ArchiveDownloadTaskSummary {
+  total: number;
+  pending: number;
+  claimed: number;
+  downloading: number;
+  downloaded: number;
+  ingested: number;
+  failed: number;
+  cancelled: number;
+}
+
+export interface ArchiveDownloadTask {
+  id: number;
+  creatorId: number;
+  creatorName: string;
+  preference: ArchiveCatalogPreference | null;
+  rating: ContentRating | null;
+  workId: number;
+  sourceWorkId: number;
+  collectionId: number;
+  source: string;
+  sourceCollectionId: string;
+  sourceOrder: number;
+  sourceOrderLabel: string | null;
+  title: string;
+  provider: string;
+  sourceFolderName: string;
+  destinationPath: string;
+  targetRoot: string;
+  targetRelativeDirectory: string;
+  targetFilename: string;
+  status: ArchiveDownloadTaskStatus;
+  claimedBy: string | null;
+  claimedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  downloadId: string | null;
+  attemptCount: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ArchiveDownloadTasksPayload {
+  summary: ArchiveDownloadTaskSummary;
+  items: ArchiveDownloadTask[];
+  total: number;
+}
+
+export interface ArchiveDownloadPlanResult {
+  created: number;
+  existing: number;
+  removedOutOfScope: number;
+  reconciledLocal: number;
+  skippedWithoutOrder: number;
+  skippedWithoutDelivery: number;
+  targetRoot: string;
+}
+
 export interface PostContentRatingMutationResult {
   ok: boolean;
   id: number;

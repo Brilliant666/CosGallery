@@ -8,6 +8,7 @@ import { requireApiAuthentication, requireMediaAuthentication } from './middlewa
 import { requireTrustedMutationRequest } from './middleware/csrf-protection.js';
 import { blockPublicDemoMutations } from './middleware/public-demo-mode.js';
 import { apiRouter } from './routes/api.js';
+import { archiveBridgeRouter } from './routes/archive-bridge.js';
 import { authService } from './services/auth-service.js';
 import { lazyThumbnailsRouter, lazyPreviewsRouter } from './routes/lazy-derivatives.js';
 import { createProtectedStaticOptions } from './utils/media-response.js';
@@ -36,6 +37,7 @@ export function createApp() {
     applyApiNoStoreHeaders(response);
     next();
   });
+  app.use('/api/archive-bridge', archiveBridgeRouter);
   app.use('/api', blockPublicDemoMutations, requireTrustedMutationRequest, requireApiAuthentication, apiRouter);
 
   if (appConfig.nodeEnv === 'production') {

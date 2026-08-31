@@ -1,0 +1,521 @@
+import { DatabaseSync } from 'node:sqlite';
+
+import { databaseManager } from '../db/database.js';
+
+export type ArchiveDownloadTaskStatus =
+  | 'pending'
+  | 'claimed'
+  | 'downloading'
+  | 'downloaded'
+  | 'ingested'
+  | 'failed'
+  | 'cancelled';
+
+export type ArchiveDownloadTask = {
+  id: number;
+  creatorId: number;
+  creatorName: string;
+  preference: 'liked' | 'kept' | null;
+  rating: 'R15' | 'R18' | null;
+  workId: number;
+  sourceWorkId: number;
+  collectionId: number;
+  source: string;
+  sourceCollectionId: string;
+  sourceOrder: number;
+  sourceOrderLabel: string | null;
+  title: string;
+  provider: string;
+  sourceFolderName: string;
+  destinationPath: string;
+  targetRoot: string;
+  targetRelativeDirectory: string;
+  targetFilename: string;
+  status: ArchiveDownloadTaskStatus;
+  claimedBy: string | null;
+  claimedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  downloadId: string | null;
+  attemptCount: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ArchiveDownloadTaskSummary = Record<ArchiveDownloadTaskStatus, number> & {
+  total: number;
+};
+
+export type ArchiveDownloadTaskPayload = {
+  summary: ArchiveDownloadTaskSummary;
+  items: ArchiveDownloadTask[];
+  total: number;
+};
+
+export type ArchiveDownloadPlanResult = {
+  created: number;
+  existing: number;
+  removedOutOfScope: number;
+  reconciledLocal: number;
+  skippedWithoutOrder: number;
+  skippedWithoutDelivery: number;
+  targetRoot: string;
+};
+
+const TASK_STATUSES: ArchiveDownloadTaskStatus[] = [
+  'pending',
+  'claimed',
+  'downloading',
+  'downloaded',
+  'ingested',
+  'failed',
+  'cancelled'
+];
+
+const ALLOWED_TRANSITIONS: Record<ArchiveDownloadTaskStatus, Set<ArchiveDownloadTaskStatus>> = {
+  pending: new Set(['claimed', 'cancelled']),
+  claimed: new Set(['pending', 'downloading', 'downloaded', 'failed', 'cancelled']),
+  downloading: new Set(['downloaded', 'failed', 'cancelled']),
+  downloaded: new Set(['ingested', 'failed']),
+  ingested: new Set(),
+  failed: new Set(['pending', 'claimed', 'cancelled']),
+  cancelled: new Set(['pending'])
+};
+
+type TaskRow = {
+  id: number;
+  creator_id: number;
+  creator_name: string;
+  preference: 'liked' | 'kept' | null;
+  rating: 'R15' | 'R18' | null;
+  work_id: number;
+  source_work_id: number;
+  collection_id: number;
+  source: string;
+  source_collection_id: string;
+  source_order: number;
+  source_order_label: string | null;
+  source_title: string;
+  provider: string;
+  source_folder_name: string;
+  destination_path: string;
+  target_root: string;
+  target_relative_directory: string;
+  target_filename: string;
+  status: ArchiveDownloadTaskStatus;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  download_id: string | null;
+  attempt_count: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type PlanCandidateRow = {
+  source_work_id: number;
+  source_order: number | null;
+  creator_name: string;
+  delivery_id: number | null;
+};
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+export function normalizeArchiveInboxRoot(value: string): string {
+  const normalized = value.trim().replace(/[\\/]+$/u, '');
+  if (!normalized) throw new Error('待入库根目录不能为空。');
+  if (normalized.length > 500) throw new Error('待入库根目录过长。');
+  return normalized;
+}
+
+export function sanitizeArchiveDirectoryName(value: string): string {
+  const sanitized = value
+    .normalize('NFKC')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '_')
+    .replace(/[. ]+$/gu, '')
+    .trim();
+  return sanitized || '未命名博主';
+}
+
+function buildTargetFilename(sourceOrder: number): string {
+  return `${String(sourceOrder).padStart(3, '0')}.7z`;
+}
+
+function mapTask(row: TaskRow): ArchiveDownloadTask {
+  return {
+    id: row.id,
+    creatorId: row.creator_id,
+    creatorName: row.creator_name,
+    preference: row.preference,
+    rating: row.rating,
+    workId: row.work_id,
+    sourceWorkId: row.source_work_id,
+    collectionId: row.collection_id,
+    source: row.source,
+    sourceCollectionId: row.source_collection_id,
+    sourceOrder: row.source_order,
+    sourceOrderLabel: row.source_order_label,
+    title: row.source_title,
+    provider: row.provider,
+    sourceFolderName: row.source_folder_name,
+    destinationPath: row.destination_path,
+    targetRoot: row.target_root,
+    targetRelativeDirectory: row.target_relative_directory,
+    targetFilename: row.target_filename,
+    status: row.status,
+    claimedBy: row.claimed_by,
+    claimedAt: row.claimed_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    downloadId: row.download_id,
+    attemptCount: row.attempt_count,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export class ArchiveDownloadTaskService {
+  constructor(private readonly database: DatabaseSync = databaseManager.connection) {}
+
+  planMissing(options: { targetRoot: string; creatorIds?: number[]; provider?: string }): ArchiveDownloadPlanResult {
+    const targetRoot = normalizeArchiveInboxRoot(options.targetRoot);
+    const provider = options.provider ?? 'baidu';
+    const creatorIds = [...new Set(options.creatorIds ?? [])];
+    const reconciledLocal = this.reconcileAlreadyLocalTasks(provider);
+    const removedOutOfScope = this.removeOutOfScopeTasks(provider);
+    const creatorFilter = creatorIds.length
+      ? `AND works.creator_id IN (${creatorIds.map(() => '?').join(', ')})`
+      : '';
+    const candidates = this.database.prepare(
+      `SELECT source_works.id AS source_work_id,
+              source_works.source_order,
+              creators.canonical_name AS creator_name,
+              deliveries.id AS delivery_id
+       FROM archive_catalog_source_works source_works
+       JOIN archive_catalog_works works ON works.id = source_works.work_id
+       JOIN archive_catalog_creators creators ON creators.id = works.creator_id
+       JOIN archive_catalog_collections collections ON collections.id = source_works.collection_id
+       LEFT JOIN archive_catalog_deliveries deliveries
+         ON deliveries.id = (
+           SELECT candidate.id
+           FROM archive_catalog_deliveries candidate
+           WHERE candidate.collection_id = collections.id
+             AND candidate.provider = ?
+             AND candidate.status IN ('saved', 'already-saved')
+           ORDER BY candidate.transferred_at DESC, candidate.id DESC
+           LIMIT 1
+         )
+       WHERE source_works.source = 'costuan'
+         AND source_works.is_active = 1
+         AND collections.is_active = 1
+         AND EXISTS (
+           SELECT 1
+           FROM archive_catalog_local_creator_folders local_creator_folders
+           WHERE local_creator_folders.creator_id = works.creator_id
+             AND local_creator_folders.is_active = 1
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM archive_catalog_local_works local_works
+           JOIN archive_catalog_local_creator_folders local_folders
+             ON local_folders.id = local_works.local_creator_folder_id
+           WHERE local_works.work_id = works.id
+             AND local_works.is_active = 1
+             AND local_folders.is_active = 1
+         )
+         ${creatorFilter}
+       ORDER BY creators.id, source_works.source_order, source_works.id`
+    ).all(provider, ...creatorIds) as PlanCandidateRow[];
+
+    const insert = this.database.prepare(
+      `INSERT INTO archive_catalog_download_tasks (
+         source_work_id, provider, target_root, target_relative_directory,
+         target_filename, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+       ON CONFLICT(source_work_id, provider) DO NOTHING`
+    );
+    let created = 0;
+    let existing = 0;
+    let skippedWithoutOrder = 0;
+    let skippedWithoutDelivery = 0;
+    const timestamp = nowIso();
+
+    this.database.exec('BEGIN');
+    try {
+      for (const candidate of candidates) {
+        if (candidate.source_order === null) {
+          skippedWithoutOrder += 1;
+          continue;
+        }
+        if (candidate.delivery_id === null) {
+          skippedWithoutDelivery += 1;
+          continue;
+        }
+        const result = insert.run(
+          candidate.source_work_id,
+          provider,
+          targetRoot,
+          sanitizeArchiveDirectoryName(candidate.creator_name),
+          buildTargetFilename(candidate.source_order),
+          timestamp,
+          timestamp
+        );
+        if (Number(result.changes ?? 0) > 0) created += 1;
+        else existing += 1;
+      }
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+
+    return {
+      created,
+      existing,
+      removedOutOfScope,
+      reconciledLocal,
+      skippedWithoutOrder,
+      skippedWithoutDelivery,
+      targetRoot
+    };
+  }
+
+  private reconcileAlreadyLocalTasks(provider: string): number {
+    const timestamp = nowIso();
+    const result = this.database.prepare(
+      `UPDATE archive_catalog_download_tasks
+       SET status = 'ingested', completed_at = COALESCE(completed_at, ?), updated_at = ?,
+           last_error = NULL
+       WHERE provider = ?
+         AND status IN ('pending', 'failed', 'downloaded')
+         AND source_work_id IN (
+           SELECT source_works.id
+           FROM archive_catalog_source_works source_works
+           JOIN archive_catalog_local_works local_works ON local_works.work_id = source_works.work_id
+           JOIN archive_catalog_local_creator_folders local_folders
+             ON local_folders.id = local_works.local_creator_folder_id
+           WHERE local_works.is_active = 1
+             AND local_folders.is_active = 1
+         )`
+    ).run(timestamp, timestamp, provider);
+    return Number(result.changes ?? 0);
+  }
+
+  private removeOutOfScopeTasks(provider: string): number {
+    const result = this.database.prepare(
+      `DELETE FROM archive_catalog_download_tasks
+       WHERE provider = ?
+         AND status IN ('pending', 'failed', 'cancelled')
+         AND source_work_id IN (
+           SELECT source_works.id
+           FROM archive_catalog_source_works source_works
+           JOIN archive_catalog_works works ON works.id = source_works.work_id
+           WHERE NOT EXISTS (
+             SELECT 1
+             FROM archive_catalog_local_creator_folders local_creator_folders
+             WHERE local_creator_folders.creator_id = works.creator_id
+               AND local_creator_folders.is_active = 1
+           )
+         )`
+    ).run(provider);
+    return Number(result.changes ?? 0);
+  }
+
+  list(options: { status?: ArchiveDownloadTaskStatus; creatorId?: number; limit?: number } = {}): ArchiveDownloadTaskPayload {
+    const clauses: string[] = [];
+    const parameters: Array<string | number> = [];
+    if (options.status) {
+      clauses.push('tasks.status = ?');
+      parameters.push(options.status);
+    }
+    if (options.creatorId) {
+      clauses.push('works.creator_id = ?');
+      parameters.push(options.creatorId);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const limit = Math.min(500, Math.max(1, options.limit ?? 100));
+    const items = this.database.prepare(
+      `${this.taskSelectSql()}
+       ${where}
+       ORDER BY
+         CASE tasks.status
+           WHEN 'pending' THEN 0 WHEN 'failed' THEN 1 WHEN 'claimed' THEN 2
+           WHEN 'downloading' THEN 3 WHEN 'downloaded' THEN 4 WHEN 'ingested' THEN 5
+           ELSE 6
+         END,
+         CASE creators.preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,
+         creators.id,
+         source_works.source_order,
+         tasks.id
+       LIMIT ?`
+    ).all(...parameters, limit) as TaskRow[];
+    const totalRow = this.database.prepare(
+      `SELECT COUNT(*) AS count
+       FROM archive_catalog_download_tasks tasks
+       JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id
+       JOIN archive_catalog_works works ON works.id = source_works.work_id
+       ${where}`
+    ).get(...parameters) as { count: number };
+
+    return {
+      summary: this.getSummary(),
+      items: items.map(mapTask),
+      total: totalRow.count
+    };
+  }
+
+  claim(options: { workerId: string; limit?: number }): ArchiveDownloadTask[] {
+    const workerId = options.workerId.trim().slice(0, 120);
+    if (!workerId) throw new Error('下载工作端标识不能为空。');
+    const limit = Math.min(20, Math.max(1, options.limit ?? 1));
+    const timestamp = nowIso();
+    const ids: number[] = [];
+
+    this.reconcileAlreadyLocalTasks('baidu');
+
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const rows = this.database.prepare(
+        `SELECT tasks.id
+         FROM archive_catalog_download_tasks tasks
+         JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id
+         JOIN archive_catalog_works works ON works.id = source_works.work_id
+         JOIN archive_catalog_creators creators ON creators.id = works.creator_id
+         WHERE tasks.status IN ('pending', 'failed')
+           AND EXISTS (
+             SELECT 1
+             FROM archive_catalog_local_creator_folders local_creator_folders
+             WHERE local_creator_folders.creator_id = works.creator_id
+               AND local_creator_folders.is_active = 1
+           )
+         ORDER BY CASE creators.preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,
+                  creators.id, source_works.source_order, tasks.id
+         LIMIT ?`
+      ).all(limit) as Array<{ id: number }>;
+      const update = this.database.prepare(
+        `UPDATE archive_catalog_download_tasks
+         SET status = 'claimed', claimed_by = ?, claimed_at = ?, updated_at = ?,
+             attempt_count = attempt_count + 1, last_error = NULL
+         WHERE id = ? AND status IN ('pending', 'failed')`
+      );
+      for (const row of rows) {
+        const result = update.run(workerId, timestamp, timestamp, row.id);
+        if (Number(result.changes ?? 0) > 0) ids.push(row.id);
+      }
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+
+    return ids.map((id) => this.get(id)).filter((task): task is ArchiveDownloadTask => task !== null);
+  }
+
+  update(id: number, patch: {
+    status: ArchiveDownloadTaskStatus;
+    downloadId?: string | null;
+    error?: string | null;
+    workerId?: string;
+  }): ArchiveDownloadTask | null {
+    const current = this.get(id);
+    if (!current) return null;
+    if (patch.status !== current.status && !ALLOWED_TRANSITIONS[current.status].has(patch.status)) {
+      throw new Error(`下载任务不能从 ${current.status} 变更为 ${patch.status}。`);
+    }
+    if (current.claimedBy && patch.workerId && current.claimedBy !== patch.workerId) {
+      throw new Error('下载任务已由其他工作端领取。');
+    }
+    const timestamp = nowIso();
+    const startedAt = patch.status === 'downloading' && !current.startedAt ? timestamp : current.startedAt;
+    const completedAt = ['downloaded', 'ingested'].includes(patch.status) ? timestamp : null;
+    this.database.prepare(
+      `UPDATE archive_catalog_download_tasks
+       SET status = ?, download_id = COALESCE(?, download_id), last_error = ?,
+           started_at = ?, completed_at = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(
+      patch.status,
+      patch.downloadId ?? null,
+      patch.error?.trim().slice(0, 1000) || null,
+      startedAt,
+      completedAt,
+      timestamp,
+      id
+    );
+    return this.get(id);
+  }
+
+  get(id: number): ArchiveDownloadTask | null {
+    const row = this.database.prepare(
+      `${this.taskSelectSql()} WHERE tasks.id = ?`
+    ).get(id) as TaskRow | undefined;
+    return row ? mapTask(row) : null;
+  }
+
+  private getSummary(): ArchiveDownloadTaskSummary {
+    const summary = Object.fromEntries(TASK_STATUSES.map((status) => [status, 0])) as ArchiveDownloadTaskSummary;
+    summary.total = 0;
+    const rows = this.database.prepare(
+      `SELECT status, COUNT(*) AS count
+       FROM archive_catalog_download_tasks
+       GROUP BY status`
+    ).all() as Array<{ status: ArchiveDownloadTaskStatus; count: number }>;
+    for (const row of rows) {
+      summary[row.status] = row.count;
+      summary.total += row.count;
+    }
+    return summary;
+  }
+
+  private taskSelectSql(): string {
+    return `SELECT tasks.id,
+                   creators.id AS creator_id,
+                   creators.canonical_name AS creator_name,
+                   creators.preference,
+                   creators.effective_rating AS rating,
+                   works.id AS work_id,
+                   source_works.id AS source_work_id,
+                   collections.id AS collection_id,
+                   source_works.source,
+                   collections.source_collection_id,
+                   source_works.source_order,
+                   source_works.source_order_label,
+                   source_works.source_title,
+                   tasks.provider,
+                   COALESCE(deliveries.source_folder_name, '') AS source_folder_name,
+                   COALESCE(deliveries.destination_path, '') AS destination_path,
+                   tasks.target_root,
+                   tasks.target_relative_directory,
+                   tasks.target_filename,
+                   tasks.status,
+                   tasks.claimed_by,
+                   tasks.claimed_at,
+                   tasks.started_at,
+                   tasks.completed_at,
+                   tasks.download_id,
+                   tasks.attempt_count,
+                   tasks.last_error,
+                   tasks.created_at,
+                   tasks.updated_at
+            FROM archive_catalog_download_tasks tasks
+            JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id
+            JOIN archive_catalog_works works ON works.id = source_works.work_id
+            JOIN archive_catalog_creators creators ON creators.id = works.creator_id
+            JOIN archive_catalog_collections collections ON collections.id = source_works.collection_id
+            LEFT JOIN archive_catalog_deliveries deliveries
+              ON deliveries.id = (
+                SELECT candidate.id
+                FROM archive_catalog_deliveries candidate
+                WHERE candidate.collection_id = collections.id
+                  AND candidate.provider = tasks.provider
+                ORDER BY candidate.transferred_at DESC, candidate.id DESC
+                LIMIT 1
+              )`;
+  }
+}

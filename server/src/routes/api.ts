@@ -3,6 +3,8 @@ import { z } from 'zod';
 
 import { AUTH_PASSWORD_MAX_LENGTH, AUTH_PASSWORD_MIN_LENGTH, authService } from '../services/auth-service.js';
 import { ArchiveCatalogQueryService } from '../services/archive-catalog-query-service.js';
+import { ArchiveBridgeService } from '../services/archive-bridge-service.js';
+import { ArchiveDownloadTaskService } from '../services/archive-download-task-service.js';
 import {
   FOLDER_SHARE_PASSWORD_MAX_LENGTH,
   FOLDER_SHARE_PASSWORD_MIN_LENGTH,
@@ -87,6 +89,25 @@ const archiveCatalogQuerySchema = z.object({
   rating: z.enum(['R15', 'R18']).optional(),
   state: z.enum(['missing', 'complete', 'no-local', 'no-source', 'unresolved']).optional(),
   q: z.string().trim().max(160).optional()
+});
+const archiveDownloadTaskStatusSchema = z.enum([
+  'pending',
+  'claimed',
+  'downloading',
+  'downloaded',
+  'ingested',
+  'failed',
+  'cancelled'
+]);
+const archiveDownloadTaskQuerySchema = z.object({
+  status: archiveDownloadTaskStatusSchema.optional(),
+  creatorId: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100)
+});
+const archiveDownloadPlanBodySchema = z.object({
+  targetRoot: z.string().trim().min(1).max(500),
+  creatorIds: z.array(z.number().int().positive()).max(1000).optional(),
+  provider: z.literal('baidu').default('baidu')
 });
 const homeFeedDefaultBodySchema = z.object({
   defaultMode: z.enum(['recent', 'rediscover', 'random'])
@@ -1184,6 +1205,44 @@ router.get(
       state: query.state,
       query: query.q
     }));
+  }
+);
+
+router.get(
+  '/admin/archive-catalog/download-tasks',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (request, response) => {
+    const query = archiveDownloadTaskQuerySchema.parse(request.query);
+    const service = new ArchiveDownloadTaskService();
+    response.json(service.list(query));
+  }
+);
+
+router.post(
+  '/admin/archive-catalog/download-tasks/plan',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  (request, response) => {
+    const body = archiveDownloadPlanBodySchema.parse(request.body);
+    const service = new ArchiveDownloadTaskService();
+    response.json(service.planMissing(body));
+  }
+);
+
+router.get(
+  '/admin/archive-catalog/bridge-token',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (_request, response) => {
+    const service = new ArchiveBridgeService();
+    response.json({ configured: service.isConfigured() });
+  }
+);
+
+router.post(
+  '/admin/archive-catalog/bridge-token',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  (_request, response) => {
+    const service = new ArchiveBridgeService();
+    response.json({ token: service.rotateToken() });
   }
 );
 

@@ -21,6 +21,63 @@
       </article>
     </div>
 
+    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="缺失作品下载队列">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 2</p>
+          <h2 class="mt-1 mb-0 text-lg font-semibold">缺失作品下载队列</h2>
+          <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
+            仅检查 G:\cos图集 中已存在并匹配到博主 ID 的目录；为这些博主已转存到百度网盘、但本地尚未关联的 Costuan 作品生成任务。Chrome 下载根目录设为下方路径后，插件会把文件分流到“博主 ID/序号.7z”。
+          </p>
+        </div>
+        <div v-if="downloadTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
+          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ downloadTasks.summary.total }}</strong>全部</span>
+          <span class="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800"><strong class="block text-base">{{ downloadTasks.summary.pending }}</strong>待下载</span>
+          <span class="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700"><strong class="block text-base">{{ downloadTasks.summary.downloading + downloadTasks.summary.claimed }}</strong>处理中</span>
+          <span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700"><strong class="block text-base">{{ downloadTasks.summary.downloaded + downloadTasks.summary.ingested }}</strong>已完成</span>
+          <span class="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700"><strong class="block text-base">{{ downloadTasks.summary.failed }}</strong>失败</span>
+        </div>
+      </div>
+
+      <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto_auto]">
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">
+          Chrome 默认下载根目录
+          <input v-model="inboxRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text outline-none focus:border-accent" autocomplete="off" />
+        </label>
+        <button type="button" data-test="plan-downloads" class="h-11 self-end rounded-xl bg-accent px-5 text-sm font-semibold text-white disabled:opacity-50" :disabled="planningDownloads" @click="planDownloads()">
+          {{ planningDownloads ? '正在生成…' : '生成现有博主缺失任务' }}
+        </button>
+        <button type="button" class="h-11 self-end rounded-xl border border-border bg-bg px-5 text-sm font-semibold text-text disabled:opacity-50" :disabled="rotatingBridgeToken" @click="rotateBridgeToken">
+          {{ bridgeConfigured ? '重新生成插件密钥' : '生成插件连接密钥' }}
+        </button>
+      </div>
+
+      <p v-if="downloadNotice" data-test="download-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ downloadNotice }}</p>
+      <div v-if="bridgeToken" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm text-amber-900">
+        <strong>请立即复制到 CostuanArchiveManager；页面刷新后不再显示。</strong>
+        <div class="mt-2 flex gap-2">
+          <input :value="bridgeToken" readonly class="h-10 min-w-0 flex-1 rounded-lg border border-amber-300 bg-white px-3 font-mono text-xs" />
+          <button type="button" class="rounded-lg border border-amber-300 bg-white px-4 text-xs font-semibold" @click="copyBridgeToken">复制</button>
+        </div>
+      </div>
+
+      <div v-if="downloadTasks?.items.length" class="mt-4 overflow-x-auto rounded-xl border border-border">
+        <table class="w-full min-w-[52rem] border-collapse text-left text-sm">
+          <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主</th><th class="p-3">作品</th><th class="p-3">网盘目录</th><th class="p-3">本地目标</th><th class="p-3">状态</th></tr></thead>
+          <tbody>
+            <tr v-for="task in downloadTasks.items.slice(0, 20)" :key="task.id" class="border-t border-border">
+              <td class="p-3 font-semibold">{{ task.creatorName }}</td>
+              <td class="p-3"><span class="font-semibold">{{ task.sourceOrderLabel ?? task.targetFilename }}</span><small class="mt-0.5 block text-muted">{{ task.title }}</small></td>
+              <td class="p-3 font-mono text-xs">{{ task.destinationPath }}/{{ task.sourceFolderName }}</td>
+              <td class="p-3 font-mono text-xs">{{ task.targetRelativeDirectory }}\{{ task.targetFilename }}</td>
+              <td class="p-3">{{ downloadStatusLabel(task.status) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="downloadTasks.total > 20" class="m-0 border-t border-border p-3 text-center text-xs text-muted">管理页预览前 20 条；插件按完整队列领取。</p>
+      </div>
+    </section>
+
     <form class="mb-5 grid gap-3 rounded-2xl border border-border bg-surface p-4 shadow-sm lg:grid-cols-[minmax(14rem,1fr)_repeat(3,minmax(9rem,0.22fr))_auto]" @submit.prevent="applyFilters">
       <label class="grid gap-1.5 text-xs font-semibold text-muted">
         搜索博主
@@ -133,9 +190,12 @@
             <section>
               <div class="mb-2 flex items-center justify-between gap-3">
                 <h2 class="m-0 text-sm font-semibold">待收录作品</h2>
-                <span class="text-xs font-semibold" :class="details[creator.id].missing.length ? 'text-amber-600' : 'text-emerald-600'">
-                  {{ details[creator.id].missing.length }} 套
-                </span>
+                <div class="flex items-center gap-3">
+                  <button v-if="details[creator.id].missing.length && creator.localWorks > 0" type="button" class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold" @click="planDownloads(creator.id)">只生成此博主任务</button>
+                  <span class="text-xs font-semibold" :class="details[creator.id].missing.length ? 'text-amber-600' : 'text-emerald-600'">
+                    {{ details[creator.id].missing.length }} 套
+                  </span>
+                </div>
               </div>
               <div v-if="details[creator.id].missing.length" class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 <article v-for="work in details[creator.id].missing" :key="work.workId" class="rounded-xl border border-border bg-surface px-3.5 py-3">
@@ -181,13 +241,22 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, ref } from 'vue';
 
-import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
+import {
+  fetchArchiveBridgeStatus,
+  fetchArchiveCatalog,
+  fetchArchiveCatalogCreator,
+  fetchArchiveDownloadTasks,
+  planArchiveDownloadTasks,
+  rotateArchiveBridgeToken
+} from '../api/gallery';
 import type {
   ArchiveCatalogCreator,
   ArchiveCatalogCreatorDetail,
   ArchiveCatalogPreference,
   ArchiveCatalogState,
   ArchiveCatalogSummary,
+  ArchiveDownloadTaskStatus,
+  ArchiveDownloadTasksPayload,
   ContentRating
 } from '../types/api';
 
@@ -221,6 +290,13 @@ const expandedCreatorId = ref<number | null>(null);
 const detailLoadingId = ref<number | null>(null);
 const details = ref<Record<number, ArchiveCatalogCreatorDetail>>({});
 const detailErrors = ref<Record<number, string>>({});
+const inboxRoot = ref('G:\\cos待入库');
+const downloadTasks = ref<ArchiveDownloadTasksPayload | null>(null);
+const planningDownloads = ref(false);
+const downloadNotice = ref('');
+const bridgeConfigured = ref(false);
+const bridgeToken = ref('');
+const rotatingBridgeToken = ref(false);
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)));
 const summaryCards = computed(() => summary.value ? [
@@ -259,6 +335,58 @@ function statusLabel(creator: ArchiveCatalogCreator) {
 function deliveryLabel(delivery: ArchiveCatalogCreatorDetail['collections'][number]['deliveries'][number]) {
   const provider = delivery.provider === 'baidu' ? '百度网盘' : delivery.provider;
   return delivery.status ? `${provider}：${delivery.status}` : provider;
+}
+
+function downloadStatusLabel(status: ArchiveDownloadTaskStatus) {
+  return ({
+    pending: '待下载',
+    claimed: '已领取',
+    downloading: '下载中',
+    downloaded: '已下载',
+    ingested: '已入库',
+    failed: '失败',
+    cancelled: '已取消'
+  } as const)[status];
+}
+
+async function loadDownloadTasks() {
+  downloadTasks.value = await fetchArchiveDownloadTasks({ limit: 100 });
+}
+
+async function planDownloads(creatorId?: number) {
+  planningDownloads.value = true;
+  downloadNotice.value = '';
+  try {
+    const result = await planArchiveDownloadTasks(inboxRoot.value, creatorId ? [creatorId] : undefined);
+    const cleanupNotice = result.removedOutOfScope > 0 ? `已移除 ${result.removedOutOfScope} 条非本地博主任务；` : '';
+    const reconcileNotice = result.reconciledLocal > 0 ? `已将 ${result.reconciledLocal} 条本地已有任务标记为已入库；` : '';
+    downloadNotice.value = `${cleanupNotice}${reconcileNotice}已新增 ${result.created} 条任务，已有 ${result.existing} 条；${result.skippedWithoutDelivery} 条因尚无可用百度转存记录而跳过。目标根目录：${result.targetRoot}`;
+    await loadDownloadTasks();
+  } catch (reason) {
+    downloadNotice.value = reason instanceof Error ? reason.message : '无法生成下载任务';
+  } finally {
+    planningDownloads.value = false;
+  }
+}
+
+async function rotateBridgeToken() {
+  rotatingBridgeToken.value = true;
+  downloadNotice.value = '';
+  try {
+    const result = await rotateArchiveBridgeToken();
+    bridgeToken.value = result.token;
+    bridgeConfigured.value = true;
+    downloadNotice.value = '新密钥已生成；旧密钥立即失效。';
+  } catch (reason) {
+    downloadNotice.value = reason instanceof Error ? reason.message : '无法生成插件连接密钥';
+  } finally {
+    rotatingBridgeToken.value = false;
+  }
+}
+
+async function copyBridgeToken() {
+  await navigator.clipboard.writeText(bridgeToken.value);
+  downloadNotice.value = '插件连接密钥已复制。';
 }
 
 async function loadCatalog() {
@@ -327,7 +455,13 @@ async function toggleCreator(creatorId: number) {
   }
 }
 
-onMounted(loadCatalog);
+onMounted(async () => {
+  await Promise.all([
+    loadCatalog(),
+    loadDownloadTasks().catch(() => undefined),
+    fetchArchiveBridgeStatus().then((result) => { bridgeConfigured.value = result.configured; }).catch(() => undefined)
+  ]);
+});
 </script>
 
 <style scoped>

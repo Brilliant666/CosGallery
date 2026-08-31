@@ -11,6 +11,11 @@ import {
   parseArchiveSourceOrder
 } from '../src/services/archive-catalog-service.js';
 import { ArchiveCatalogQueryService } from '../src/services/archive-catalog-query-service.js';
+import {
+  ArchiveDownloadTaskService,
+  sanitizeArchiveDirectoryName
+} from '../src/services/archive-download-task-service.js';
+import { ArchiveBridgeService } from '../src/services/archive-bridge-service.js';
 
 describe('archive catalog first-stage pipeline', () => {
   let tempRoot: string;
@@ -164,11 +169,79 @@ describe('archive catalog first-stage pipeline', () => {
       expect.objectContaining({ sourceOrder: 2, sourceOrderLabel: 'NO.002', title: '第二套' })
     ]);
     expect(queryService.getCreatorDetail(999_999)).toBeNull();
+
+    const downloadService = new ArchiveDownloadTaskService(database);
+    expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toEqual({
+      created: 1,
+      existing: 0,
+      removedOutOfScope: 0,
+      reconciledLocal: 0,
+      skippedWithoutOrder: 0,
+      skippedWithoutDelivery: 0,
+      targetRoot: 'G:\\cos待入库'
+    });
+    expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
+      created: 0,
+      existing: 1
+    });
+    database.prepare(
+      `UPDATE archive_catalog_local_creator_folders
+       SET is_active = 0
+       WHERE creator_id = (SELECT id FROM archive_catalog_creators WHERE canonical_name = 'rua阮阮')`
+    ).run();
+    expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
+      created: 0,
+      existing: 0,
+      removedOutOfScope: 1
+    });
+    database.prepare(
+      `UPDATE archive_catalog_local_creator_folders
+       SET is_active = 1
+       WHERE creator_id = (SELECT id FROM archive_catalog_creators WHERE canonical_name = 'rua阮阮')`
+    ).run();
+    expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
+      created: 1,
+      existing: 0,
+      removedOutOfScope: 0
+    });
+    const pendingTasks = downloadService.list({ status: 'pending' });
+    expect(pendingTasks.summary).toMatchObject({ total: 1, pending: 1 });
+    expect(pendingTasks.items[0]).toMatchObject({
+      creatorName: 'rua阮阮',
+      sourceOrder: 2,
+      sourceFolderName: '360',
+      targetRoot: 'G:\\cos待入库',
+      targetRelativeDirectory: 'rua阮阮',
+      targetFilename: '002.7z'
+    });
+    const claimed = downloadService.claim({ workerId: 'test-extension', limit: 1 });
+    expect(claimed[0]).toMatchObject({ status: 'claimed', attemptCount: 1, claimedBy: 'test-extension' });
+    const downloading = downloadService.update(claimed[0].id, {
+      status: 'downloading',
+      workerId: 'test-extension',
+      downloadId: '42'
+    });
+    expect(downloading).toMatchObject({ status: 'downloading', downloadId: '42' });
+    const downloaded = downloadService.update(claimed[0].id, {
+      status: 'downloaded',
+      workerId: 'test-extension',
+      downloadId: '42'
+    });
+    expect(downloaded?.completedAt).toBeTruthy();
+
+    const bridge = new ArchiveBridgeService(database);
+    expect(bridge.isConfigured()).toBe(false);
+    const token = bridge.rotateToken();
+    expect(bridge.isConfigured()).toBe(true);
+    expect(bridge.verifyToken(token)).toBe(true);
+    expect(bridge.verifyToken(`${token}x`)).toBe(false);
   });
 
   it('accepts Costuan zero-order extras while rejecting date-like folder prefixes', () => {
     expect(parseArchiveSourceOrder('000桜桃喵 微博配图')).toBe(0);
     expect(parseArchiveSourceOrder('桜桃喵 NO.226 紫色韵味')).toBe(226);
     expect(parseArchiveSourceOrder('2025.03.24更新')).toBeNull();
+    expect(sanitizeArchiveDirectoryName('wendydydydy_酱油')).toBe('wendydydydy_酱油');
+    expect(sanitizeArchiveDirectoryName('A/B:*?')).toBe('A_B___');
   });
 });
