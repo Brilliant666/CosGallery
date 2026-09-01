@@ -11,6 +11,7 @@ import {
 import { ArchiveCatalogQueryService } from '../services/archive-catalog-query-service.js';
 import { ArchiveBridgeService } from '../services/archive-bridge-service.js';
 import { ArchiveDownloadTaskService } from '../services/archive-download-task-service.js';
+import { ArchiveMetadataTaskService } from '../services/archive-metadata-task-service.js';
 import {
   FOLDER_SHARE_PASSWORD_MAX_LENGTH,
   FOLDER_SHARE_PASSWORD_MIN_LENGTH,
@@ -115,6 +116,13 @@ const archiveDownloadPlanBodySchema = z.object({
   targetRoot: z.string().trim().min(1).max(500),
   creatorIds: z.array(z.number().int().positive()).max(1000).optional(),
   provider: z.literal('baidu').default('baidu')
+});
+const archiveMetadataTaskQuerySchema = z.object({
+  status: z.enum(['pending', 'claimed', 'completed', 'not_found', 'failed', 'cancelled']).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100)
+});
+const archiveMetadataPlanBodySchema = z.object({
+  retryNotFound: z.boolean().default(false)
 });
 const homeFeedDefaultBodySchema = z.object({
   defaultMode: z.enum(['recent', 'rediscover', 'random'])
@@ -1234,6 +1242,26 @@ router.post(
     const result = service.planMissing(body);
     appSettingsRepository.set(ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY, result.targetRoot);
     response.json(result);
+  }
+);
+
+router.get(
+  '/admin/archive-catalog/metadata-tasks',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (request, response) => {
+    const query = archiveMetadataTaskQuerySchema.parse(request.query);
+    const service = new ArchiveMetadataTaskService();
+    response.json(service.list({ source: 'costuan', ...query }));
+  }
+);
+
+router.post(
+  '/admin/archive-catalog/metadata-tasks/plan',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  (request, response) => {
+    const body = archiveMetadataPlanBodySchema.parse(request.body ?? {});
+    const service = new ArchiveMetadataTaskService();
+    response.json(service.planLocalOnly({ source: 'costuan', retryNotFound: body.retryNotFound }));
   }
 );
 

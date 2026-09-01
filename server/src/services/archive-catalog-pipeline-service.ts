@@ -18,6 +18,10 @@ import {
   type ArchiveDownloadPlanResult,
   type ArchiveDownloadTaskSummary
 } from './archive-download-task-service.js';
+import {
+  ArchiveMetadataTaskService,
+  type ArchiveMetadataPlanResult
+} from './archive-metadata-task-service.js';
 
 export type ArchiveCatalogPipelineResult = {
   refreshedAt: string;
@@ -26,6 +30,7 @@ export type ArchiveCatalogPipelineResult = {
   reportPath: string;
   plan: ArchiveDownloadPlanResult;
   tasks: ArchiveDownloadTaskSummary;
+  metadata: ArchiveMetadataPlanResult;
 };
 
 type ArchiveCatalogPipelineOptions = {
@@ -68,6 +73,7 @@ export class ArchiveCatalogPipelineService {
     );
     const catalogService = new ArchiveCatalogService(this.database);
     const downloadService = new ArchiveDownloadTaskService(this.database);
+    const metadataService = new ArchiveMetadataTaskService(this.database);
 
     options.onProgress?.('正在只读核对图库账本……');
     const local = await catalogService.reconcileLocalRoot(galleryRoot, options.onProgress);
@@ -83,6 +89,8 @@ export class ArchiveCatalogPipelineService {
 
     options.onProgress?.('正在生成现有博主缺失任务……');
     const plan = downloadService.planMissing({ targetRoot, provider: 'baidu' });
+    options.onProgress?.('正在生成本地博主元数据采集任务……');
+    const metadata = metadataService.planLocalOnly({ source: 'costuan' });
     const refreshedAt = new Date().toISOString();
     this.setSettings([
       { key: ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY, value: plan.targetRoot },
@@ -95,7 +103,8 @@ export class ArchiveCatalogPipelineService {
       report: report.summary,
       reportPath,
       plan,
-      tasks: downloadService.list({ limit: 1 }).summary
+      tasks: downloadService.list({ limit: 1 }).summary,
+      metadata
     };
   }
 }

@@ -387,6 +387,28 @@ export function planArchiveDownloadTasks(targetRoot: string, creatorIds?: number
   );
 }
 
+export function fetchArchiveMetadataTasks(options: {
+  status?: import('../types/api').ArchiveMetadataTaskStatus;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 100) });
+  if (options.status) params.set('status', options.status);
+  return requestJson<import('../types/api').ArchiveMetadataTasksPayload>(
+    `/api/admin/archive-catalog/metadata-tasks?${params.toString()}`
+  );
+}
+
+export function planArchiveMetadataTasks(retryNotFound = false) {
+  return requestJson<import('../types/api').ArchiveMetadataPlanResult>(
+    '/api/admin/archive-catalog/metadata-tasks/plan',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ retryNotFound })
+    }
+  );
+}
+
 export function fetchArchiveBridgeStatus() {
   return requestJson<{ configured: boolean }>('/api/admin/archive-catalog/bridge-token');
 }

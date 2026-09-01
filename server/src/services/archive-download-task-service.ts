@@ -305,9 +305,9 @@ export class ArchiveDownloadTaskService {
     const result = this.database.prepare(
       `UPDATE archive_catalog_download_tasks
        SET status = 'ingested', completed_at = COALESCE(completed_at, ?), updated_at = ?,
-           last_error = NULL
+           claimed_by = NULL, claimed_at = NULL, last_error = NULL
        WHERE provider = ?
-         AND status IN ('pending', 'failed', 'staged', 'downloaded')
+         AND status IN ('pending', 'claimed', 'failed', 'staged', 'downloaded')
          AND source_work_id IN (
            SELECT source_works.id
            FROM archive_catalog_source_works source_works

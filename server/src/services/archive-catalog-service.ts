@@ -64,6 +64,8 @@ const costuanArchiveSchema = z.object({
   records: z.record(costuanRecordSchema)
 });
 
+export type CostuanArchiveRecord = z.infer<typeof costuanRecordSchema>;
+
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
 const ADVERTISEMENT_EXTENSIONS = new Set(['.html', '.htm', '.txt']);
@@ -224,6 +226,25 @@ function normalizeWorkTitle(value: string): string {
     .replace(/^.*?\bNO\.?\s*\d{1,4}\b/iu, '')
     .replace(/^[\s_\-–—:：]+/u, '')
     .replace(/[\s_\-–—:：·・.《》【】[\]()（）]+/gu, '');
+}
+
+function creatorPrefixedWorkTitleCandidates(value: string, creatorNames: string[]): string[] {
+  const normalizedTitle = normalizeWorkTitle(value);
+  if (!normalizedTitle) return [];
+
+  const candidates = new Set<string>();
+  const normalizedCreatorNames = [...new Set(
+    creatorNames
+      .map(normalizeWorkTitle)
+      .filter((name) => name.length > 0)
+  )].sort((left, right) => right.length - left.length);
+
+  for (const creatorName of normalizedCreatorNames) {
+    if (!normalizedTitle.startsWith(creatorName)) continue;
+    const titleWithoutCreator = normalizedTitle.slice(creatorName.length);
+    if (titleWithoutCreator) candidates.add(titleWithoutCreator);
+  }
+  return [...candidates];
 }
 
 async function inspectWorkDirectory(rootPath: string, workPath: string): Promise<LocalWorkSnapshot> {
@@ -420,10 +441,41 @@ export class ArchiveCatalogService {
     const resolvedPath = path.resolve(filePath);
     const sourceBuffer = await fs.readFile(resolvedPath);
     const document = costuanArchiveSchema.parse(JSON.parse(sourceBuffer.toString('utf8')));
-    const observedAt = document.exportedAt ?? new Date().toISOString();
+    return this.importCostuanRecords(Object.values(document.records), {
+      observedAt: document.exportedAt ?? new Date().toISOString(),
+      sourcePath: resolvedPath,
+      sourceVersion: String(document.version),
+      checksum: sha256(sourceBuffer)
+    });
+  }
+
+  importCostuanRecord(
+    recordInput: unknown,
+    options: { observedAt?: string; sourcePath?: string } = {}
+  ): CostuanCatalogImportResult {
+    const record = costuanRecordSchema.parse(recordInput);
+    const serialized = Buffer.from(JSON.stringify(record));
+    return this.importCostuanRecords([record], {
+      observedAt: options.observedAt ?? record.costuan.checkedAt ?? new Date().toISOString(),
+      sourcePath: options.sourcePath ?? `bridge:costuan:${record.costuan.postId}`,
+      sourceVersion: 'bridge-v1',
+      checksum: sha256(serialized)
+    });
+  }
+
+  private importCostuanRecords(
+    records: CostuanArchiveRecord[],
+    importMetadata: {
+      observedAt: string;
+      sourcePath: string;
+      sourceVersion: string;
+      checksum: string;
+    }
+  ): CostuanCatalogImportResult {
+    const observedAt = importMetadata.observedAt;
     const result: CostuanCatalogImportResult = {
       source: 'costuan',
-      records: Object.keys(document.records).length,
+      records: records.length,
       matchedCreators: 0,
       unmatchedCreators: [],
       importedWorks: 0,
@@ -433,7 +485,7 @@ export class ArchiveCatalogService {
     };
 
     withTransaction(this.database, () => {
-      for (const record of Object.values(document.records)) {
+      for (const record of records) {
         const titleAlias = collectionCreatorAlias(record.costuan.title);
         const candidateNames = [
           record.creatorName,
@@ -571,10 +623,10 @@ export class ArchiveCatalogService {
 
       this.recordImportRun({
         source: 'costuan',
-        format: document.format,
-        version: String(document.version),
-        sourcePath: resolvedPath,
-        checksum: sha256(sourceBuffer),
+        format: 'costuan-archive-metadata',
+        version: importMetadata.sourceVersion,
+        sourcePath: importMetadata.sourcePath,
+        checksum: importMetadata.checksum,
         importedAt: new Date().toISOString(),
         stats: result
       });
@@ -634,6 +686,9 @@ export class ArchiveCatalogService {
           scannedAt
         });
         const remoteWorks = creatorId === null ? [] : this.listRemoteWorks(creatorId);
+        const creatorNames = creatorId === null
+          ? []
+          : [creatorSnapshot.folderName, ...this.listCreatorNames(creatorId)];
         const byOrder = new Map<number, RemoteWorkRow[]>();
         const byTitle = new Map<string, RemoteWorkRow[]>();
         for (const remoteWork of remoteWorks) {
@@ -661,6 +716,16 @@ export class ArchiveCatalogService {
             const normalizedLocalTitle = normalizeWorkTitle(workSnapshot.folderName);
             matches = byTitle.get(normalizedLocalTitle) ?? [];
             if (matches.length > 0) matchMethod = 'normalized-title';
+          }
+          if (creatorId !== null && matches.length === 0) {
+            const prefixedTitleMatches = new Map<number, RemoteWorkRow>();
+            for (const candidate of creatorPrefixedWorkTitleCandidates(workSnapshot.folderName, creatorNames)) {
+              for (const remoteWork of byTitle.get(candidate) ?? []) {
+                prefixedTitleMatches.set(remoteWork.work_id, remoteWork);
+              }
+            }
+            matches = [...prefixedTitleMatches.values()];
+            if (matches.length > 0) matchMethod = 'normalized-title-with-creator-prefix';
           }
 
           let status: MatchStatus;
@@ -851,6 +916,19 @@ export class ArchiveCatalogService {
       for (const row of findName.all(normalized) as Array<{ id: number }>) ids.add(row.id);
     }
     return [...ids];
+  }
+
+  private listCreatorNames(creatorId: number): string[] {
+    const rows = this.database.prepare(
+      `SELECT canonical_name AS name
+       FROM archive_catalog_creators
+       WHERE id = ?
+       UNION
+       SELECT alias AS name
+       FROM archive_catalog_creator_aliases
+       WHERE creator_id = ?`
+    ).all(creatorId, creatorId) as Array<{ name: string }>;
+    return [...new Set(rows.map((row) => row.name.trim()).filter(Boolean))];
   }
 
   private upsertAlias(creatorId: number, alias: string, source: string): void {

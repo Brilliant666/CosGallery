@@ -6,6 +6,11 @@ import {
   ArchiveDownloadTaskService,
   type ArchiveDownloadTaskStatus
 } from '../services/archive-download-task-service.js';
+import {
+  ArchiveMetadataTaskService,
+  type ArchiveMetadataTaskStatus
+} from '../services/archive-metadata-task-service.js';
+import { ArchiveCatalogPipelineService } from '../services/archive-catalog-pipeline-service.js';
 
 const router = express.Router();
 const TOKEN_HEADER = 'x-cosgallery-bridge-token';
@@ -36,6 +41,26 @@ const updateBodySchema = z.object({
   error: z.union([z.string().trim().max(1000), z.null()]).optional()
 });
 const idSchema = z.object({ id: z.coerce.number().int().positive() });
+const metadataListQuerySchema = z.object({
+  status: z.enum(['pending', 'claimed', 'completed', 'not_found', 'failed', 'cancelled']).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100)
+});
+const metadataClaimBodySchema = z.object({
+  workerId: z.string().trim().min(1).max(120),
+  limit: z.coerce.number().int().min(1).max(500).default(100)
+});
+const metadataResultBodySchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('completed'),
+    workerId: z.string().trim().min(1).max(120),
+    record: z.record(z.unknown())
+  }),
+  z.object({
+    status: z.enum(['not_found', 'failed', 'pending']),
+    workerId: z.string().trim().min(1).max(120),
+    error: z.union([z.string().trim().max(1000), z.null()]).optional()
+  })
+]);
 
 router.use((request, response, next) => {
   response.setHeader('Access-Control-Allow-Origin', '*');
@@ -63,7 +88,49 @@ router.use((request, response, next) => {
 });
 
 router.get('/ping', (_request, response) => {
-  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 1 });
+  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 2 });
+});
+
+router.get('/metadata-tasks', (request, response) => {
+  const query = metadataListQuerySchema.parse(request.query);
+  const service = new ArchiveMetadataTaskService();
+  response.json(service.list({
+    source: 'costuan',
+    status: query.status as ArchiveMetadataTaskStatus | undefined,
+    limit: query.limit
+  }));
+});
+
+router.post('/metadata-tasks/claim', (request, response) => {
+  const body = metadataClaimBodySchema.parse(request.body);
+  const service = new ArchiveMetadataTaskService();
+  response.json({ items: service.claim({ ...body, source: 'costuan' }) });
+});
+
+router.patch('/metadata-tasks/:id', (request, response) => {
+  const params = idSchema.parse(request.params);
+  const body = metadataResultBodySchema.parse(request.body);
+  const service = new ArchiveMetadataTaskService();
+  if (body.status === 'completed') {
+    response.json({ ok: true, ...service.complete({
+      id: params.id,
+      workerId: body.workerId,
+      record: body.record
+    }) });
+    return;
+  }
+  response.json({ ok: true, task: service.report({
+    id: params.id,
+    workerId: body.workerId,
+    status: body.status,
+    error: body.error
+  }) });
+});
+
+router.post('/metadata-tasks/finalize', async (_request, response) => {
+  const catalog = await new ArchiveCatalogPipelineService().refreshAfterGalleryScan();
+  const metadata = new ArchiveMetadataTaskService().planLocalOnly({ source: 'costuan' });
+  response.json({ ok: true, catalog, metadata });
 });
 
 router.get('/download-tasks', (request, response) => {

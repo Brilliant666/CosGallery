@@ -671,6 +671,58 @@ export interface ArchiveDownloadPlanResult {
   targetRoot: string;
 }
 
+export type ArchiveMetadataTaskStatus =
+  | 'pending'
+  | 'claimed'
+  | 'completed'
+  | 'not_found'
+  | 'failed'
+  | 'cancelled';
+
+export interface ArchiveMetadataTaskSummary {
+  total: number;
+  actionable: number;
+  pending: number;
+  claimed: number;
+  completed: number;
+  not_found: number;
+  failed: number;
+  cancelled: number;
+}
+
+export interface ArchiveMetadataTask {
+  id: number;
+  creatorId: number;
+  creatorName: string;
+  preference: ArchiveCatalogPreference | null;
+  rating: ContentRating | null;
+  source: string;
+  localWorks: number;
+  status: ArchiveMetadataTaskStatus;
+  claimedBy: string | null;
+  claimedAt: string | null;
+  completedAt: string | null;
+  attemptCount: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ArchiveMetadataTasksPayload {
+  summary: ArchiveMetadataTaskSummary;
+  items: ArchiveMetadataTask[];
+  total: number;
+}
+
+export interface ArchiveMetadataPlanResult {
+  source: string;
+  candidates: number;
+  created: number;
+  requeued: number;
+  reconciled: number;
+  summary: ArchiveMetadataTaskSummary;
+}
+
 export interface PostContentRatingMutationResult {
   ok: boolean;
   id: number;

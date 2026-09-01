@@ -7,7 +7,9 @@ import {
   fetchArchiveCatalog,
   fetchArchiveCatalogCreator,
   fetchArchiveDownloadTasks,
+  fetchArchiveMetadataTasks,
   planArchiveDownloadTasks,
+  planArchiveMetadataTasks,
   rotateArchiveBridgeToken
 } from '../api/gallery';
 
@@ -15,7 +17,9 @@ vi.mock('../api/gallery', () => ({
   fetchArchiveCatalog: vi.fn(),
   fetchArchiveCatalogCreator: vi.fn(),
   fetchArchiveDownloadTasks: vi.fn(),
+  fetchArchiveMetadataTasks: vi.fn(),
   planArchiveDownloadTasks: vi.fn(),
+  planArchiveMetadataTasks: vi.fn(),
   fetchArchiveBridgeStatus: vi.fn(),
   rotateArchiveBridgeToken: vi.fn()
 }));
@@ -56,7 +60,9 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(fetchArchiveCatalog).mockReset();
     vi.mocked(fetchArchiveCatalogCreator).mockReset();
     vi.mocked(fetchArchiveDownloadTasks).mockReset();
+    vi.mocked(fetchArchiveMetadataTasks).mockReset();
     vi.mocked(planArchiveDownloadTasks).mockReset();
+    vi.mocked(planArchiveMetadataTasks).mockReset();
     vi.mocked(fetchArchiveBridgeStatus).mockReset();
     vi.mocked(rotateArchiveBridgeToken).mockReset();
     vi.mocked(fetchArchiveCatalog).mockResolvedValue({
@@ -144,6 +150,53 @@ describe('ArchiveCatalogView', () => {
       total: 1
     });
     vi.mocked(fetchArchiveBridgeStatus).mockResolvedValue({ configured: false });
+    vi.mocked(fetchArchiveMetadataTasks).mockResolvedValue({
+      summary: {
+        total: 1,
+        actionable: 1,
+        pending: 1,
+        claimed: 0,
+        completed: 0,
+        not_found: 0,
+        failed: 0,
+        cancelled: 0
+      },
+      items: [{
+        id: 7,
+        creatorId: 115,
+        creatorName: 'rua阮阮',
+        preference: 'liked',
+        rating: 'R18',
+        source: 'costuan',
+        localWorks: 13,
+        status: 'pending',
+        claimedBy: null,
+        claimedAt: null,
+        completedAt: null,
+        attemptCount: 0,
+        lastError: null,
+        createdAt: '2026-08-31T00:00:00.000Z',
+        updatedAt: '2026-08-31T00:00:00.000Z'
+      }],
+      total: 1
+    });
+    vi.mocked(planArchiveMetadataTasks).mockResolvedValue({
+      source: 'costuan',
+      candidates: 17,
+      created: 17,
+      requeued: 0,
+      reconciled: 0,
+      summary: {
+        total: 17,
+        actionable: 17,
+        pending: 17,
+        claimed: 0,
+        completed: 0,
+        not_found: 0,
+        failed: 0,
+        cancelled: 0
+      }
+    });
     vi.mocked(planArchiveDownloadTasks).mockResolvedValue({
       created: 1,
       existing: 0,
@@ -201,5 +254,17 @@ describe('ArchiveCatalogView', () => {
     expect(planArchiveDownloadTasks).toHaveBeenCalledWith('G:\\cos待入库', undefined);
     expect(wrapper.get('[data-test="download-notice"]').text()).toContain('已新增 1 条任务');
     expect(wrapper.text()).toContain('rua阮阮\\014.7z');
+  });
+
+  it('generates Costuan metadata tasks for creators that only exist locally', async () => {
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('本地博主来源关联');
+    await wrapper.get('[data-test="plan-metadata"]').trigger('click');
+    await flushPromises();
+
+    expect(planArchiveMetadataTasks).toHaveBeenCalledWith(false);
+    expect(wrapper.get('[data-test="metadata-notice"]').text()).toContain('检测到 17 位本地待关联博主');
   });
 });

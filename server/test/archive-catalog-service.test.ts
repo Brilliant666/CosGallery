@@ -17,6 +17,7 @@ import {
   sanitizeArchiveDirectoryName
 } from '../src/services/archive-download-task-service.js';
 import { ArchiveBridgeService } from '../src/services/archive-bridge-service.js';
+import { ArchiveMetadataTaskService } from '../src/services/archive-metadata-task-service.js';
 
 describe('archive catalog first-stage pipeline', () => {
   let tempRoot: string;
@@ -254,6 +255,75 @@ describe('archive catalog first-stage pipeline', () => {
     expect(sanitizeArchiveDirectoryName('A/B:*?')).toBe('A_B___');
   });
 
+  it('matches a zero-order extra after removing the creator prefix and reconciles a claimed task', async () => {
+    const hcfPath = path.join(tempRoot, 'sakuramomo-hcf.json');
+    const costuanPath = path.join(tempRoot, 'sakuramomo-costuan.json');
+    const galleryRoot = path.join(tempRoot, 'gallery');
+    await fs.writeFile(hcfPath, JSON.stringify({
+      format: 'hcf-tag-preferences',
+      version: 1,
+      state: { liked: ['桜桃喵'], kept: [] },
+      contentRatings: { entries: [{ name: '桜桃喵', rating: 'r18' }] }
+    }));
+    await fs.writeFile(costuanPath, JSON.stringify({
+      format: 'costuan-archive-metadata',
+      version: 1,
+      records: {
+        'costuan:768': {
+          creatorName: '桜桃喵',
+          aliases: ['桜桃喵'],
+          costuan: {
+            postId: '768',
+            title: '桜桃喵COSPLAY写真图片包合集[226套+微博散图][持续更新]',
+            works: [{ order: 0, sourceOrder: 'NO.000', label: '微博配图' }]
+          },
+          baidu: {
+            sourceFolderName: '768',
+            destinationPath: '我的网盘/cos图集',
+            status: 'saved'
+          }
+        }
+      }
+    }));
+
+    await service.importHentaiclubSeed(hcfPath);
+    await service.importCostuanArchive(costuanPath);
+    await fs.mkdir(path.join(galleryRoot, '桜桃喵'), { recursive: true });
+    await service.reconcileLocalRoot(galleryRoot);
+
+    const downloadService = new ArchiveDownloadTaskService(database);
+    expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({ created: 1 });
+    const [claimedTask] = downloadService.claim({ workerId: 'test-extension', limit: 1 });
+    expect(claimedTask).toMatchObject({ targetFilename: '000.7z', status: 'claimed' });
+
+    const localWork = path.join(galleryRoot, '桜桃喵', '桜桃喵 微博配图 [981P-740MB]');
+    await fs.mkdir(localWork, { recursive: true });
+    await fs.writeFile(path.join(localWork, '01.jpg'), 'image');
+    const localResult = await service.reconcileLocalRoot(galleryRoot);
+    expect(localResult).toMatchObject({ matchedWorks: 1, unmatchedWorks: 0, ambiguousWorks: 0 });
+    expect(database.prepare(
+      `SELECT parsed_source_order, match_status, match_method
+       FROM archive_catalog_local_works
+       WHERE folder_name = ?`
+    ).get('桜桃喵 微博配图 [981P-740MB]')).toEqual({
+      parsed_source_order: null,
+      match_status: 'matched',
+      match_method: 'normalized-title-with-creator-prefix'
+    });
+
+    expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
+      created: 0,
+      existing: 0,
+      reconciledLocal: 1
+    });
+    expect(downloadService.get(claimedTask.id)).toMatchObject({
+      status: 'ingested',
+      claimedBy: null,
+      claimedAt: null,
+      lastError: null
+    });
+  });
+
   it('reconciles the local archive and plans missing tasks idempotently after a gallery scan', async () => {
     const hcfPath = path.join(tempRoot, 'pipeline-hcf.json');
     const costuanPath = path.join(tempRoot, 'pipeline-costuan.json');
@@ -318,5 +388,73 @@ describe('archive catalog first-stage pipeline', () => {
     const completed = await pipeline.refreshAfterGalleryScan({ galleryRoot, reportPath });
     expect(completed.plan).toMatchObject({ created: 0, existing: 0, reconciledLocal: 1 });
     expect(completed.tasks).toMatchObject({ total: 1, pending: 0, ingested: 1 });
+  });
+
+  it('collects metadata for a local-only creator before reconciling and planning missing works', async () => {
+    const hcfPath = path.join(tempRoot, 'metadata-hcf.json');
+    const galleryRoot = path.join(tempRoot, 'gallery');
+    const reportPath = path.join(tempRoot, 'metadata-report.json');
+    await fs.writeFile(hcfPath, JSON.stringify({
+      format: 'hcf-tag-preferences',
+      version: 1,
+      state: { liked: ['本地博主'], kept: [] },
+      contentRatings: { entries: [{ name: '本地博主', rating: 'r18' }] }
+    }));
+    await service.importHentaiclubSeed(hcfPath);
+    const localWork = path.join(galleryRoot, '本地博主', '本地博主 NO.001 已有作品');
+    await fs.mkdir(localWork, { recursive: true });
+    await fs.writeFile(path.join(localWork, '01.jpg'), 'image');
+    await service.reconcileLocalRoot(galleryRoot);
+
+    const metadataService = new ArchiveMetadataTaskService(database);
+    expect(metadataService.planLocalOnly()).toMatchObject({
+      candidates: 1,
+      created: 1,
+      summary: { pending: 1, actionable: 1 }
+    });
+    const [task] = metadataService.claim({ workerId: 'costuan-extension', limit: 100 });
+    expect(task).toMatchObject({
+      creatorName: '本地博主',
+      localWorks: 1,
+      status: 'claimed',
+      claimedBy: 'costuan-extension'
+    });
+    const completed = metadataService.complete({
+      id: task.id,
+      workerId: 'costuan-extension',
+      record: {
+        creatorId: '本地博主',
+        creatorName: '本地博主',
+        aliases: ['本地博主'],
+        costuan: {
+          postId: '9527',
+          title: '本地博主COSPLAY写真图片包合集[2套][持续更新]',
+          url: 'https://www.costuan.com/9527.html',
+          collectionCount: 2,
+          works: [
+            { order: 1, sourceOrder: 'NO.001', label: '已有作品' },
+            { order: 2, sourceOrder: 'NO.002', label: '新增作品' }
+          ]
+        },
+        baidu: {
+          sourceFolderName: '9527',
+          destinationPath: '我的网盘/cos图集',
+          status: 'saved'
+        }
+      }
+    });
+    expect(completed.task).toMatchObject({ status: 'completed', claimedBy: null });
+    expect(completed.importResult).toMatchObject({ matchedCreators: 1, importedWorks: 2, deliveries: 1 });
+
+    const pipeline = new ArchiveCatalogPipelineService(database);
+    const finalized = await pipeline.refreshAfterGalleryScan({
+      galleryRoot,
+      reportPath,
+      defaultInboxRoot: 'G:\\cos待入库'
+    });
+    expect(finalized.local).toMatchObject({ matchedWorks: 1, unmatchedWorks: 0 });
+    expect(finalized.report).toMatchObject({ remoteWorks: 2, localWorks: 1, missingWorks: 1 });
+    expect(finalized.plan).toMatchObject({ created: 1, skippedWithoutDelivery: 0 });
+    expect(finalized.metadata.summary).toMatchObject({ completed: 1, actionable: 0 });
   });
 });

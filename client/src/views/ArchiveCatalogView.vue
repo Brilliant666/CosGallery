@@ -21,6 +21,49 @@
       </article>
     </div>
 
+    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="博主元数据采集队列">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 1</p>
+          <h2 class="mt-1 mb-0 text-lg font-semibold">本地博主来源关联</h2>
+          <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
+            找出 G:\cos图集 中已经有作品、但尚无 Costuan 合集元数据的博主。CostuanArchiveManager 领取后复用现有搜索与百度转存流程，整批完成时会把元数据直接写回账本，再统一核对本地作品并生成真正缺失的作品任务。
+          </p>
+        </div>
+        <div v-if="metadataTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
+          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.total }}</strong>全部</span>
+          <span class="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800"><strong class="block text-base">{{ metadataTasks.summary.actionable }}</strong>待采集</span>
+          <span class="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700"><strong class="block text-base">{{ metadataTasks.summary.claimed }}</strong>采集中</span>
+          <span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700"><strong class="block text-base">{{ metadataTasks.summary.completed }}</strong>已接入</span>
+          <span class="rounded-xl bg-surface-alt px-3 py-2 text-xs text-muted"><strong class="block text-base">{{ metadataTasks.summary.not_found }}</strong>未收录</span>
+        </div>
+      </div>
+
+      <div class="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" data-test="plan-metadata" class="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-white disabled:opacity-50" :disabled="planningMetadata" @click="planMetadata">
+          {{ planningMetadata ? '正在生成…' : '生成/刷新待关联博主任务' }}
+        </button>
+        <p class="m-0 text-sm text-muted">运行一次“图库扫描”也会自动刷新这组任务。</p>
+      </div>
+      <p v-if="metadataNotice" data-test="metadata-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ metadataNotice }}</p>
+
+      <div v-if="metadataTasks?.items.length" class="mt-4 overflow-x-auto rounded-xl border border-border">
+        <table class="w-full min-w-[42rem] border-collapse text-left text-sm">
+          <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主</th><th class="p-3">偏好</th><th class="p-3">本地作品</th><th class="p-3">来源</th><th class="p-3">采集状态</th></tr></thead>
+          <tbody>
+            <tr v-for="task in metadataTasks.items.slice(0, 20)" :key="task.id" class="border-t border-border">
+              <td class="p-3 font-semibold">{{ task.creatorName }}</td>
+              <td class="p-3">{{ task.preference === 'liked' ? '喜欢' : task.preference === 'kept' ? '保留' : '未分类' }}</td>
+              <td class="p-3">{{ task.localWorks }} 套</td>
+              <td class="p-3 uppercase">{{ task.source }}</td>
+              <td class="p-3">{{ metadataStatusLabel(task.status) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="metadataTasks.total > 20" class="m-0 border-t border-border p-3 text-center text-xs text-muted">管理页预览前 20 位；插件领取完整队列。</p>
+      </div>
+    </section>
+
     <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="缺失作品下载队列">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -247,7 +290,9 @@ import {
   fetchArchiveCatalog,
   fetchArchiveCatalogCreator,
   fetchArchiveDownloadTasks,
+  fetchArchiveMetadataTasks,
   planArchiveDownloadTasks,
+  planArchiveMetadataTasks,
   rotateArchiveBridgeToken
 } from '../api/gallery';
 import type {
@@ -258,6 +303,8 @@ import type {
   ArchiveCatalogSummary,
   ArchiveDownloadTaskStatus,
   ArchiveDownloadTasksPayload,
+  ArchiveMetadataTaskStatus,
+  ArchiveMetadataTasksPayload,
   ContentRating
 } from '../types/api';
 
@@ -298,6 +345,9 @@ const downloadNotice = ref('');
 const bridgeConfigured = ref(false);
 const bridgeToken = ref('');
 const rotatingBridgeToken = ref(false);
+const metadataTasks = ref<ArchiveMetadataTasksPayload | null>(null);
+const planningMetadata = ref(false);
+const metadataNotice = ref('');
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)));
 const summaryCards = computed(() => summary.value ? [
@@ -349,6 +399,35 @@ function downloadStatusLabel(status: ArchiveDownloadTaskStatus) {
     failed: '失败',
     cancelled: '已取消'
   } as const)[status];
+}
+
+function metadataStatusLabel(status: ArchiveMetadataTaskStatus) {
+  return ({
+    pending: '待采集',
+    claimed: '插件已领取',
+    completed: '已接入',
+    not_found: 'Costuan 未收录',
+    failed: '失败待重试',
+    cancelled: '已取消'
+  } as const)[status];
+}
+
+async function loadMetadataTasks() {
+  metadataTasks.value = await fetchArchiveMetadataTasks({ limit: 100 });
+}
+
+async function planMetadata() {
+  planningMetadata.value = true;
+  metadataNotice.value = '';
+  try {
+    const result = await planArchiveMetadataTasks(false);
+    metadataNotice.value = `检测到 ${result.candidates} 位本地待关联博主；新增 ${result.created} 条、重新排队 ${result.requeued} 条、自动确认 ${result.reconciled} 条。请在 CostuanArchiveManager 中点击“采集待关联博主”。`;
+    await loadMetadataTasks();
+  } catch (reason) {
+    metadataNotice.value = reason instanceof Error ? reason.message : '无法生成博主元数据采集任务';
+  } finally {
+    planningMetadata.value = false;
+  }
 }
 
 async function loadDownloadTasks() {
@@ -461,6 +540,7 @@ onMounted(async () => {
   await Promise.all([
     loadCatalog(),
     loadDownloadTasks().catch(() => undefined),
+    loadMetadataTasks().catch(() => undefined),
     fetchArchiveBridgeStatus().then((result) => { bridgeConfigured.value = result.configured; }).catch(() => undefined)
   ]);
 });
