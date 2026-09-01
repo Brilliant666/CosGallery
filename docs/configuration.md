@@ -28,6 +28,9 @@ yourself.
 | `DB_DIR` | `./data/db` | SQLite directory. Database file is `gallery.sqlite`, and startup Dbmate migrations run against it automatically when the directory is available. |
 | `THUMBNAILS_DIR` | `./data/thumbnails` | Generated thumbnail output root. |
 | `PREVIEWS_DIR` | `./data/previews` | Generated preview output root. |
+| `FFMPEG_PATH` | `ffmpeg` | FFmpeg executable name or absolute path for video thumbnails and previews. |
+| `FFPROBE_PATH` | `ffprobe` | FFprobe executable name or absolute path for video metadata. |
+| `FFMPEG_VIDEO_ENCODER` | `libx264` | H.264 encoder for generated video previews. `h264_nvenc` uses NVIDIA NVENC with matching preset and quality arguments. |
 | `IMAGE_DETAIL_SOURCE` | `preview` | For image detail pages, use generated previews or stream originals. Videos ignore this flag. |
 | `DERIVATIVE_MODE` | `eager` | Generate derivatives during scans or lazily on the first protected derivative request. |
 | `LOG_VERBOSE` | `0` | Truthy values are `1`, `true`, `yes`, and `on`. |

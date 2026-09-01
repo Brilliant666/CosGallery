@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -117,7 +118,7 @@ async function runBinary(command: string, args: string[]): Promise<void> {
 
 async function readMediaProbe(sourcePath: string): Promise<FfprobePayload> {
   const { stdout } = await execFileAsync(
-    'ffprobe',
+    appConfig.ffprobePath,
     [
       '-v',
       'error',
@@ -465,7 +466,7 @@ async function writeAnimatedAvifThumbnail(
 ): Promise<void> {
   await ensureParentDirectory(thumbnailAbsolutePath);
 
-  await runBinary('ffmpeg', [
+  await runBinary(appConfig.ffmpegPath, [
     '-y',
     '-v',
     'error',
@@ -494,7 +495,7 @@ async function writeAnimatedAvifPreview(
 ): Promise<void> {
   await ensureParentDirectory(previewAbsolutePath);
 
-  await runBinary('ffmpeg', [
+  await runBinary(appConfig.ffmpegPath, [
     '-y',
     '-v',
     'error',
@@ -518,7 +519,7 @@ async function writeAnimatedAvifPreview(
 
 async function writeVideoThumbnail(sourcePath: string, thumbnailAbsolutePath: string): Promise<void> {
   await ensureParentDirectory(thumbnailAbsolutePath);
-  await runBinary('ffmpeg', [
+  const commonArgs = [
     '-y',
     '-v',
     'error',
@@ -527,15 +528,50 @@ async function writeVideoThumbnail(sourcePath: string, thumbnailAbsolutePath: st
     '-vf',
     `thumbnail,scale='min(${THUMBNAIL_SIZE},iw)':-2:flags=lanczos`,
     '-frames:v',
-    '1',
-    '-c:v',
-    'libwebp',
-    '-quality',
-    '82',
-    '-compression_level',
-    '4',
-    thumbnailAbsolutePath
-  ]);
+    '1'
+  ];
+
+  try {
+    await runBinary(appConfig.ffmpegPath, [
+      ...commonArgs,
+      '-c:v',
+      'libwebp',
+      '-quality',
+      '82',
+      '-compression_level',
+      '4',
+      thumbnailAbsolutePath
+    ]);
+  } catch (error) {
+    if (!isMissingLibwebpEncoderError(error)) {
+      throw error;
+    }
+
+    const framePath = path.join(
+      path.dirname(thumbnailAbsolutePath),
+      `.${path.basename(thumbnailAbsolutePath)}-${randomUUID()}.png`
+    );
+
+    try {
+      await runBinary(appConfig.ffmpegPath, [...commonArgs, '-c:v', 'png', framePath]);
+      await sharp(framePath).webp({ quality: 82, effort: 4 }).toFile(thumbnailAbsolutePath);
+    } finally {
+      await fs.rm(framePath, { force: true }).catch(() => undefined);
+    }
+  }
+}
+
+function isMissingLibwebpEncoderError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:unknown encoder|encoder not found).*libwebp|libwebp.*(?:unknown encoder|encoder not found)/is.test(message);
+}
+
+function getVideoPreviewEncoderArgs(): string[] {
+  if (appConfig.ffmpegVideoEncoder === 'h264_nvenc') {
+    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '24'];
+  }
+
+  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '24'];
 }
 
 export async function writeVideoPreview(sourcePath: string, previewAbsolutePath: string): Promise<void> {
@@ -547,7 +583,7 @@ export async function writeVideoPreview(sourcePath: string, previewAbsolutePath:
     `scale=` +
     `'trunc(if(gt(iw,ih),min(${VIDEO_PREVIEW_MAX_LONG_EDGE},iw),min(${VIDEO_PREVIEW_MAX_SHORT_EDGE},iw))/2)*2':` +
     `'trunc(if(gt(iw,ih),min(${VIDEO_PREVIEW_MAX_LONG_EDGE},iw)*ih/iw,min(${VIDEO_PREVIEW_MAX_SHORT_EDGE},iw)*ih/iw)/2)*2':flags=lanczos`;
-  await runBinary('ffmpeg', [
+  await runBinary(appConfig.ffmpegPath, [
     '-y',
     '-v',
     'error',
@@ -559,12 +595,7 @@ export async function writeVideoPreview(sourcePath: string, previewAbsolutePath:
     '0:a?',
     '-vf',
     scaleFilter,
-    '-c:v',
-    'libx264',
-    '-preset',
-    'veryfast',
-    '-crf',
-    '24',
+    ...getVideoPreviewEncoderArgs(),
     '-pix_fmt',
     'yuv420p',
     '-movflags',

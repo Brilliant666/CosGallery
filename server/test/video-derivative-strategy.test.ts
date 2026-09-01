@@ -2,6 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 
+import sharp from 'sharp';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const PROMISIFY_CUSTOM = Symbol.for('nodejs.util.promisify.custom');
@@ -33,6 +34,8 @@ describe.sequential('video derivative strategy', () => {
     vi.stubEnv('DB_DIR', path.join(tempRoot, 'db'));
     vi.stubEnv('THUMBNAILS_DIR', path.join(tempRoot, 'thumbnails'));
     vi.stubEnv('PREVIEWS_DIR', path.join(tempRoot, 'previews'));
+    vi.stubEnv('FFMPEG_PATH', 'ffmpeg');
+    vi.stubEnv('FFPROBE_PATH', 'ffprobe');
 
     vi.resetModules();
 
@@ -114,6 +117,65 @@ describe.sequential('video derivative strategy', () => {
     expect(ffmpegCalls[0]?.[1]).toContain('libwebp');
     expect(ffmpegCalls[1]?.[1]).toContain('libx264');
     expect(ffmpegCalls[1]?.[1]).toContain(expectedVideoScaleFilter());
+  });
+
+  it('falls back to a PNG frame plus Sharp when FFmpeg lacks the libwebp encoder', async () => {
+    const payload = {
+      format: {
+        duration: '4.0',
+        format_name: 'mov,mp4,m4a,3gp,3g2,mj2'
+      },
+      streams: [
+        { codec_type: 'video', codec_name: 'h264', width: 1080, height: 1920, pix_fmt: 'yuv420p' },
+        { codec_type: 'audio', codec_name: 'aac' }
+      ]
+    };
+
+    execFileAsyncMock.mockImplementation(async (command: string, args: string[]) => {
+      if (command === 'ffprobe') {
+        return { stdout: JSON.stringify(payload), stderr: '' };
+      }
+
+      if (args.includes('libwebp')) {
+        throw new Error("Unknown encoder 'libwebp'");
+      }
+
+      if (args.includes('png')) {
+        const outputPath = args.at(-1);
+        if (!outputPath) {
+          throw new Error('Missing PNG output path');
+        }
+
+        await sharp({
+          create: {
+            width: 2,
+            height: 2,
+            channels: 3,
+            background: '#ffffff'
+          }
+        })
+          .png()
+          .toFile(outputPath);
+      }
+
+      return { stdout: '', stderr: '' };
+    });
+
+    const sourcePath = path.join(appConfig.galleryRoot, 'clips', 'webp-fallback.mp4');
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.alloc(1024));
+
+    const result = await generateDerivatives(sourcePath, 'clips/webp-fallback.mp4', true);
+    const thumbnailPath = path.join(appConfig.thumbnailsDir, result.thumbnailPath);
+
+    expect(result.generatedThumbnail).toBe(true);
+    expect((await sharp(thumbnailPath).metadata()).format).toBe('webp');
+
+    const ffmpegCalls = execFileAsyncMock.mock.calls.filter(([command]) => command === 'ffmpeg');
+    expect(ffmpegCalls).toHaveLength(3);
+    expect(ffmpegCalls[0]?.[1]).toContain('libwebp');
+    expect(ffmpegCalls[1]?.[1]).toContain('png');
+    expect(ffmpegCalls[2]?.[1]).toContain('libx264');
   });
 
   it('normalizes rotated source dimensions to display dimensions before returning metadata', async () => {

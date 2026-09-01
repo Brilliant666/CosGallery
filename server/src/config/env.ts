@@ -10,7 +10,9 @@ import { getRelativePathWithinRoot, isSameOrWithinPath, normalizePath } from '..
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const repositoryRoot = path.resolve(moduleDirectory, '../../..');
 
-dotenv.config({ path: path.join(repositoryRoot, '.env') });
+if (process.env.NODE_ENV !== 'test') {
+  dotenv.config({ path: path.join(repositoryRoot, '.env') });
+}
 
 const envSchema = z.object({
   SERVER_HOST: z.string().default('127.0.0.1'),
@@ -23,6 +25,9 @@ const envSchema = z.object({
   DB_DIR: z.string().optional(),
   THUMBNAILS_DIR: z.string().optional(),
   PREVIEWS_DIR: z.string().optional(),
+  FFMPEG_PATH: z.string().trim().min(1).optional(),
+  FFPROBE_PATH: z.string().trim().min(1).optional(),
+  FFMPEG_VIDEO_ENCODER: z.enum(['libx264', 'h264_nvenc']).default('libx264'),
   LOG_VERBOSE: z.string().optional(),
   SCAN_MEDIA_ERROR_MODE: z.enum(['skip', 'fail']).default('skip'),
   SCAN_DISCOVERY_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
@@ -152,6 +157,9 @@ export const appConfig = {
   geodataDir,
   thumbnailsDir,
   previewsDir,
+  ffmpegPath: parsed.FFMPEG_PATH ?? 'ffmpeg',
+  ffprobePath: parsed.FFPROBE_PATH ?? 'ffprobe',
+  ffmpegVideoEncoder: parsed.FFMPEG_VIDEO_ENCODER,
   scanErrorReportDir,
   managedGalleryRelativeIgnores,
   galleryExcludedFolders,

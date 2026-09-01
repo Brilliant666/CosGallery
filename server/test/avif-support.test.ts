@@ -37,6 +37,8 @@ describe.sequential('AVIF derivative strategy', () => {
     vi.stubEnv('DB_DIR', path.join(tempRoot, 'db'));
     vi.stubEnv('THUMBNAILS_DIR', path.join(tempRoot, 'thumbnails'));
     vi.stubEnv('PREVIEWS_DIR', path.join(tempRoot, 'previews'));
+    vi.stubEnv('FFMPEG_PATH', 'ffmpeg');
+    vi.stubEnv('FFPROBE_PATH', 'ffprobe');
 
     vi.resetModules();
 

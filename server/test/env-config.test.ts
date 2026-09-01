@@ -25,6 +25,13 @@ describe.sequential('derivative mode env config', () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     vi.resetModules();
+    delete process.env.IMAGE_DETAIL_SOURCE;
+    delete process.env.DERIVATIVE_MODE;
+    delete process.env.FFMPEG_PATH;
+    delete process.env.FFPROBE_PATH;
+    delete process.env.FFMPEG_VIDEO_ENCODER;
+    delete process.env.SCAN_MEDIA_ERROR_MODE;
+    delete process.env.GALLERY_EXCLUDED_FOLDERS;
   });
 
   afterAll(async () => {
@@ -48,6 +55,29 @@ describe.sequential('derivative mode env config', () => {
     expect(appConfig.scanMediaErrorMode).toBe('skip');
     expect(appConfig.scanErrorReportDir).toBe(path.join(tempRoot, 'data', 'scan-errors'));
     expect(appConfig.galleryExcludedFolders).toEqual([]);
+    expect(appConfig.ffmpegPath).toBe('ffmpeg');
+    expect(appConfig.ffprobePath).toBe('ffprobe');
+    expect(appConfig.ffmpegVideoEncoder).toBe('libx264');
+  });
+
+  it('uses explicitly configured media tool executables', async () => {
+    await stubBaseEnv();
+    const ffmpegPath = path.join(tempRoot, 'tools', 'ffmpeg.exe');
+    const ffprobePath = path.join(tempRoot, 'tools', 'ffprobe.exe');
+    vi.stubEnv('FFMPEG_PATH', ffmpegPath);
+    vi.stubEnv('FFPROBE_PATH', ffprobePath);
+    vi.stubEnv('FFMPEG_VIDEO_ENCODER', 'h264_nvenc');
+    vi.doMock('dotenv', () => ({
+      default: {
+        config: vi.fn()
+      }
+    }));
+
+    const { appConfig } = await import('../src/config/env.js') as EnvModule;
+
+    expect(appConfig.ffmpegPath).toBe(ffmpegPath);
+    expect(appConfig.ffprobePath).toBe(ffprobePath);
+    expect(appConfig.ffmpegVideoEncoder).toBe('h264_nvenc');
   });
 
   it('allows strict scan failure on media errors when requested', async () => {

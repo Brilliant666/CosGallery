@@ -320,6 +320,9 @@ demand and must be writable when skip mode produces scan reports.
 | `DB_DIR`                      | `./data/db`         | SQLite database directory. Startup migrations target `<DB_DIR>/gallery.sqlite`. |
 | `THUMBNAILS_DIR`              | `./data/thumbnails` | Generated thumbnail output directory.                                     |
 | `PREVIEWS_DIR`                | `./data/previews`   | Generated preview output directory.                                       |
+| `FFMPEG_PATH`                 | `ffmpeg`            | FFmpeg executable name or absolute path.                                  |
+| `FFPROBE_PATH`                | `ffprobe`           | FFprobe executable name or absolute path.                                 |
+| `FFMPEG_VIDEO_ENCODER`        | `libx264`           | Video preview encoder. Use `h264_nvenc` for an NVENC-capable FFmpeg build. |
 | `IMAGE_DETAIL_SOURCE`         | `preview`           | For image detail pages, use generated previews or stream originals.       |
 | `DERIVATIVE_MODE`             | `eager`             | Generate derivatives during scans or lazily on first request.             |
 | `LOG_VERBOSE`                 | `0`                 | Truthy values are `1`, `true`, `yes`, and `on`.                           |
