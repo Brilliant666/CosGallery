@@ -734,6 +734,32 @@ export interface ScanProgress {
 export interface ManualScanResult {
   ok: boolean;
   lastScan: ScanRunSummary | null;
+  archiveCatalog: {
+    refreshedAt: string;
+    local: {
+      rootPath: string;
+      creatorFolders: number;
+      matchedCreatorFolders: number;
+      unmatchedCreatorFolders: string[];
+      ambiguousCreatorFolders: string[];
+      localWorks: number;
+      matchedWorks: number;
+      unmatchedWorks: number;
+      ambiguousWorks: number;
+    };
+    report: {
+      creators: number;
+      remoteWorks: number;
+      localWorks: number;
+      matchedWorks: number;
+      missingWorks: number;
+      unresolvedCreatorFolders: number;
+      unresolvedLocalWorks: number;
+    };
+    reportPath: string;
+    plan: ArchiveDownloadPlanResult;
+    tasks: ArchiveDownloadTaskSummary;
+  };
 }
 
 export interface RebuildLibraryResult {

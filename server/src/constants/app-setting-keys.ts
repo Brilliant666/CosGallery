@@ -25,3 +25,5 @@ export const SHARE_SESSION_SECRET_SETTING_KEY = 'share.session_secret';
 export const TREAT_CAROUSELS_AS_FOLDERS_SETTING_KEY = 'library.treat_carousels_as_folders';
 export const CAROUSELS_MIGRATION_DECISION_SETTING_KEY = 'library.carousels_migration_decision';
 export const CAROUSELS_APPLIED_MODE_SETTING_KEY = 'library.carousels_applied_mode';
+export const ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY = 'archive_catalog.inbox_root';
+export const ARCHIVE_CATALOG_LAST_REFRESH_AT_SETTING_KEY = 'archive_catalog.last_refresh_at';

@@ -353,7 +353,7 @@
       },
       "scanCard": {
         "title": "Scan Library",
-        "description": "Run a scan after adding folders or when you want to refresh indexed media."
+        "description": "After scanning media, Foldergram reconciles the archive catalog, plans missing works, and notifies the Costuan extension to refresh its tasks."
       },
       "statusLabel": {
         "storageUnavailable": "Storage unavailable",
@@ -372,7 +372,7 @@
         "progress": "Live progress appears in the sticky status bar.",
         "legacyMigration": "Run Scan Library to move legacy mirrored thumbnails and previews into the asset-key storage layout.",
         "carouselReconciliation": "Run Scan Library to apply the saved Carousel folder mode to indexed folders and posts.",
-        "idle": "Scans check for added, updated, or missing media."
+        "idle": "Scans media, reconciles the local catalog read-only, and refreshes missing tasks idempotently. It does not start cloud staging automatically."
       },
       "thumbnailCard": {
         "title": "Regenerate Thumbnails",

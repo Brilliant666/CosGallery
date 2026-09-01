@@ -1204,6 +1204,7 @@
               </button>
             </div>
 
+            <p v-if="scanPipelineNotice" class="m-0 px-4 py-[0.85rem] border border-[rgba(30,150,90,0.24)] rounded-[0.9rem] text-[#19734a] bg-[rgba(30,150,90,0.08)]">{{ scanPipelineNotice }}</p>
             <p v-if="scanError" class="m-0 px-4 py-[0.85rem] border border-[rgba(214,48,49,0.24)] rounded-[0.9rem] text-[#c0392b] bg-[rgba(214,48,49,0.08)]">{{ scanError }}</p>
           </section>
 
@@ -1349,7 +1350,7 @@
   </section>
 </template>
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 
@@ -1391,6 +1392,7 @@ const viewerStore = useViewerStore();
 const route = useRoute();
 const currentCategory = ref<'library' | 'general' | 'places' | 'access' | 'status'>('library');
 const scanError = ref<string | null>(null);
+const scanPipelineNotice = ref<string | null>(null);
 const rebuildError = ref<string | null>(null);
 const thumbnailRebuildError = ref<string | null>(null);
 const requestingScan = ref(false);
@@ -2958,11 +2960,19 @@ async function runManualScan() {
 
   requestingScan.value = true;
   scanError.value = null;
+  scanPipelineNotice.value = null;
 
   try {
     const request = triggerManualScan();
     void warmScanStatus();
-    await request;
+    const result = await request;
+    const catalog = result.archiveCatalog;
+    scanPipelineNotice.value = `全链路刷新完成：核对 ${catalog.local.creatorFolders} 位本地博主、${catalog.local.localWorks} 套作品；新增 ${catalog.plan.created} 条缺失任务，当前可领取 ${catalog.tasks.pending + catalog.tasks.failed} 条。已向 Costuan 插件发出任务刷新通知。`;
+    window.postMessage({
+      source: 'cosgallery',
+      type: 'cosgallery:archive-tasks-updated',
+      refreshedAt: catalog.refreshedAt
+    }, window.location.origin);
     await appStore.fetchStats({ background: true });
     await loadAdminStats().catch(() => {});
     await Promise.all([foldersStore.fetchFolders(true), feedStore.loadInitial(true)]);
@@ -2971,6 +2981,16 @@ async function runManualScan() {
   } finally {
     requestingScan.value = false;
   }
+}
+
+function handleArchiveTaskSyncResult(event: MessageEvent) {
+  if (event.source !== window || event.origin !== window.location.origin) return;
+  if (event.data?.source !== 'costuan-archive-manager' || event.data?.type !== 'cosgallery:archive-tasks-sync-result') return;
+  if (!scanPipelineNotice.value) return;
+  const prefix = scanPipelineNotice.value.replace(/已向 Costuan 插件发出任务刷新通知。.*$/u, '');
+  scanPipelineNotice.value = event.data.ok
+    ? `${prefix}Costuan 插件任务已刷新。`
+    : `${prefix}Costuan 插件未能自动刷新：${event.data.error || '未知原因'}；可在插件管理页手动点击“刷新任务”。`;
 }
 
 async function runLibraryRebuild() {
@@ -3040,6 +3060,7 @@ async function runThumbnailRebuild() {
 }
 
 onMounted(async () => {
+  window.addEventListener('message', handleArchiveTaskSyncResult);
   if (!appStore.stats && !appStore.loadingStats) {
     await appStore.fetchStats();
   }
@@ -3052,6 +3073,10 @@ onMounted(async () => {
   }
   await placesStore.fetchStatus();
   await loadAdminStats().catch(() => {});
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('message', handleArchiveTaskSyncResult);
 });
 
 watch(

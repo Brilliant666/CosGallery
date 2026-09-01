@@ -353,7 +353,7 @@
       },
       "scanCard": {
         "title": "扫描图库",
-        "description": "在添加文件夹后，或你想刷新已索引媒体时运行一次扫描。"
+        "description": "扫描媒体后会自动核对图库账本、生成现有博主缺失任务，并通知 Costuan 插件刷新任务。"
       },
       "statusLabel": {
         "storageUnavailable": "存储不可用",
@@ -372,7 +372,7 @@
         "progress": "实时进度会显示在置顶状态栏中。",
         "legacyMigration": "运行“扫描图库”可将旧的镜像缩略图和预览图迁移到资源键存储布局。",
         "carouselReconciliation": "运行“扫描图库”，将已保存的轮播文件夹模式应用到已索引的文件夹和帖子。",
-        "idle": "扫描会检查新增、更新或缺失的媒体。"
+        "idle": "依次扫描媒体、只读核对本地账本并幂等刷新缺失任务；不会自动开始网盘暂存。"
       },
       "thumbnailCard": {
         "title": "重新生成缩略图",

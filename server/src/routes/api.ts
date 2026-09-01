@@ -2,6 +2,12 @@ import express from 'express';
 import { z } from 'zod';
 
 import { AUTH_PASSWORD_MAX_LENGTH, AUTH_PASSWORD_MIN_LENGTH, authService } from '../services/auth-service.js';
+import { ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY } from '../constants/app-setting-keys.js';
+import { appSettingsRepository } from '../db/repositories.js';
+import {
+  ArchiveCatalogPipelineService,
+  type ArchiveCatalogPipelineResult
+} from '../services/archive-catalog-pipeline-service.js';
 import { ArchiveCatalogQueryService } from '../services/archive-catalog-query-service.js';
 import { ArchiveBridgeService } from '../services/archive-bridge-service.js';
 import { ArchiveDownloadTaskService } from '../services/archive-download-task-service.js';
@@ -1225,7 +1231,9 @@ router.post(
   (request, response) => {
     const body = archiveDownloadPlanBodySchema.parse(request.body);
     const service = new ArchiveDownloadTaskService();
-    response.json(service.planMissing(body));
+    const result = service.planMissing(body);
+    appSettingsRepository.set(ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY, result.targetRoot);
+    response.json(result);
   }
 );
 
@@ -1450,12 +1458,24 @@ router.post(
 
     const lastScan = await scannerService.scanAll('manual');
     await watcherService.start();
+    let archiveCatalog: ArchiveCatalogPipelineResult;
+    try {
+      archiveCatalog = await new ArchiveCatalogPipelineService().refreshAfterGalleryScan();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      response.status(500).json({
+        message: `图库媒体扫描已完成，但账本核对或缺失任务刷新失败：${detail}`,
+        lastScan
+      });
+      return;
+    }
     response.json({
       ok: true,
-      lastScan
+      lastScan,
+      archiveCatalog
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to run a manual scan.';
+    const message = error instanceof Error ? error.message : 'Unable to run a manual scan and refresh the archive catalog.';
     const status = /rebuild required/i.test(message) ? 409 : 500;
     response.status(status).json({ message });
   }

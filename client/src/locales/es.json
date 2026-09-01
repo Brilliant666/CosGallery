@@ -353,7 +353,7 @@
       },
       "scanCard": {
         "title": "Escanear biblioteca",
-        "description": "Ejecuta un escaneo después de añadir carpetas o cuando quieras refrescar los medios indexados."
+        "description": "Después de escanear los medios, Foldergram concilia el catálogo, planifica las obras faltantes y notifica a la extensión Costuan para actualizar sus tareas."
       },
       "statusLabel": {
         "storageUnavailable": "Almacenamiento no disponible",
@@ -372,7 +372,7 @@
         "progress": "El progreso en vivo aparece en la barra de estado fija.",
         "legacyMigration": "Ejecuta Escanear biblioteca para mover miniaturas y vistas previas reflejadas heredadas al diseño de almacenamiento con claves de recursos.",
         "carouselReconciliation": "Ejecuta Escanear biblioteca para aplicar el modo guardado de las carpetas de carrusel a las carpetas y publicaciones indexadas.",
-        "idle": "Los escaneos comprueban medios añadidos, actualizados o faltantes."
+        "idle": "Escanea los medios, concilia el catálogo local en modo de solo lectura y actualiza las tareas faltantes de forma idempotente. No inicia la copia en la nube automáticamente."
       },
       "thumbnailCard": {
         "title": "Regenerar miniaturas",

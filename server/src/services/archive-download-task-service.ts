@@ -186,6 +186,17 @@ function mapTask(row: TaskRow): ArchiveDownloadTask {
 export class ArchiveDownloadTaskService {
   constructor(private readonly database: DatabaseSync = databaseManager.connection) {}
 
+  getLatestTargetRoot(): string | null {
+    const row = this.database.prepare(
+      `SELECT target_root
+       FROM archive_catalog_download_tasks
+       WHERE TRIM(target_root) <> ''
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 1`
+    ).get() as { target_root: string } | undefined;
+    return row?.target_root ?? null;
+  }
+
   planMissing(options: { targetRoot: string; creatorIds?: number[]; provider?: string }): ArchiveDownloadPlanResult {
     const targetRoot = normalizeArchiveInboxRoot(options.targetRoot);
     const provider = options.provider ?? 'baidu';

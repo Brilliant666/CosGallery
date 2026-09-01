@@ -10,6 +10,7 @@ import {
   ArchiveCatalogService,
   parseArchiveSourceOrder
 } from '../src/services/archive-catalog-service.js';
+import { ArchiveCatalogPipelineService } from '../src/services/archive-catalog-pipeline-service.js';
 import { ArchiveCatalogQueryService } from '../src/services/archive-catalog-query-service.js';
 import {
   ArchiveDownloadTaskService,
@@ -251,5 +252,71 @@ describe('archive catalog first-stage pipeline', () => {
     expect(parseArchiveSourceOrder('2025.03.24更新')).toBeNull();
     expect(sanitizeArchiveDirectoryName('wendydydydy_酱油')).toBe('wendydydydy_酱油');
     expect(sanitizeArchiveDirectoryName('A/B:*?')).toBe('A_B___');
+  });
+
+  it('reconciles the local archive and plans missing tasks idempotently after a gallery scan', async () => {
+    const hcfPath = path.join(tempRoot, 'pipeline-hcf.json');
+    const costuanPath = path.join(tempRoot, 'pipeline-costuan.json');
+    const galleryRoot = path.join(tempRoot, 'gallery');
+    const reportPath = path.join(tempRoot, 'catalog-report.json');
+    await fs.writeFile(hcfPath, JSON.stringify({
+      format: 'hcf-tag-preferences',
+      version: 1,
+      state: { liked: ['测试博主'], kept: [] },
+      contentRatings: { entries: [{ name: '测试博主', rating: 'r15' }] }
+    }));
+    await fs.writeFile(costuanPath, JSON.stringify({
+      format: 'costuan-archive-metadata',
+      version: 1,
+      records: {
+        'costuan:1': {
+          creatorName: '测试博主',
+          aliases: [],
+          costuan: {
+            postId: '1',
+            title: '测试博主写真合集[2套][持续更新]',
+            works: [
+              { order: 1, sourceOrder: 'NO.001', label: '第一套' },
+              { order: 2, sourceOrder: 'NO.002', label: '第二套' }
+            ]
+          },
+          baidu: {
+            sourceFolderName: '001',
+            destinationPath: '我的网盘/cos图集',
+            status: 'saved'
+          }
+        }
+      }
+    }));
+    await service.importHentaiclubSeed(hcfPath);
+    await service.importCostuanArchive(costuanPath);
+    const firstWork = path.join(galleryRoot, '测试博主', '测试博主 NO.001 第一套');
+    await fs.mkdir(firstWork, { recursive: true });
+    await fs.writeFile(path.join(firstWork, '01.jpg'), 'image');
+
+    const pipeline = new ArchiveCatalogPipelineService(database);
+    const first = await pipeline.refreshAfterGalleryScan({
+      galleryRoot,
+      reportPath,
+      defaultInboxRoot: 'G:\\cos待入库'
+    });
+    expect(first.local).toMatchObject({ matchedCreatorFolders: 1, matchedWorks: 1 });
+    expect(first.plan).toMatchObject({ created: 1, existing: 0, targetRoot: 'G:\\cos待入库' });
+    expect(first.tasks).toMatchObject({ total: 1, pending: 1 });
+    expect(JSON.parse(await fs.readFile(reportPath, 'utf8')).summary).toMatchObject({ missingWorks: 1 });
+
+    const repeated = await pipeline.refreshAfterGalleryScan({
+      galleryRoot,
+      reportPath,
+      defaultInboxRoot: 'D:\\ignored'
+    });
+    expect(repeated.plan).toMatchObject({ created: 0, existing: 1, targetRoot: 'G:\\cos待入库' });
+
+    const secondWork = path.join(galleryRoot, '测试博主', '测试博主 NO.002 第二套');
+    await fs.mkdir(secondWork, { recursive: true });
+    await fs.writeFile(path.join(secondWork, '01.png'), 'image');
+    const completed = await pipeline.refreshAfterGalleryScan({ galleryRoot, reportPath });
+    expect(completed.plan).toMatchObject({ created: 0, existing: 0, reconciledLocal: 1 });
+    expect(completed.tasks).toMatchObject({ total: 1, pending: 0, ingested: 1 });
   });
 });
