@@ -730,7 +730,6 @@ export interface LocalIngestSettings {
   libraryRoot: string;
   inboxRoot: string;
   processingRoot: string;
-  quarantineRoot: string;
   sevenZipPath: string;
   fileStableSeconds: number;
   recycleAfterIngest: boolean;
@@ -743,7 +742,7 @@ export interface LocalIngestSettingsValidation {
   valid: boolean;
   passwordConfigured: boolean;
   sevenZip: { valid: boolean; version: string | null; error: string | null };
-  paths: Record<'libraryRoot' | 'inboxRoot' | 'processingRoot' | 'quarantineRoot', {
+  paths: Record<'libraryRoot' | 'inboxRoot' | 'processingRoot', {
     path: string;
     exists: boolean;
     readable: boolean;

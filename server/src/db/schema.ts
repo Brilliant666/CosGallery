@@ -434,6 +434,9 @@ CREATE TABLE IF NOT EXISTS local_ingest_jobs (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   completed_at TEXT NULL,
+  claim_token TEXT NULL,
+  claimed_at TEXT NULL,
+  claim_heartbeat_at TEXT NULL,
   FOREIGN KEY (archive_download_task_id) REFERENCES archive_catalog_download_tasks(id) ON DELETE SET NULL,
   FOREIGN KEY (source_work_id) REFERENCES archive_catalog_source_works(id) ON DELETE CASCADE,
   FOREIGN KEY (creator_id) REFERENCES archive_catalog_creators(id) ON DELETE CASCADE,
@@ -448,6 +451,18 @@ CREATE TABLE IF NOT EXISTS local_ingest_jobs (
   CHECK (cleanup_status IN ('not_ready', 'pending', 'recycling', 'recycled', 'failed')),
   CHECK (attempt_count >= 0),
   CHECK (source_archive_size >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS local_ingest_file_observations (
+  source_archive_path TEXT PRIMARY KEY COLLATE NOCASE,
+  creator_id INTEGER NOT NULL,
+  source_archive_name TEXT NOT NULL,
+  observed_size INTEGER NOT NULL,
+  observed_mtime REAL NOT NULL,
+  stable_since TEXT NOT NULL,
+  last_observed_at TEXT NOT NULL,
+  FOREIGN KEY (creator_id) REFERENCES archive_catalog_creators(id) ON DELETE CASCADE,
+  CHECK (observed_size >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_folders_slug ON folders(slug);
@@ -526,5 +541,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_local_ingest_jobs_source_hash
 CREATE UNIQUE INDEX IF NOT EXISTS idx_local_ingest_jobs_unmapped_path_hash
   ON local_ingest_jobs(creator_id, source_archive_path, source_archive_sha256)
   WHERE source_work_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_local_ingest_jobs_claim
+  ON local_ingest_jobs(claim_token, claim_heartbeat_at, id);
+CREATE INDEX IF NOT EXISTS idx_local_ingest_file_observations_creator
+  ON local_ingest_file_observations(creator_id, last_observed_at);
 
 `;

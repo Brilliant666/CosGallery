@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import type { DatabaseSync } from 'node:sqlite';
 
 import sharp from 'sharp';
@@ -11,9 +10,19 @@ import { appConfig } from '../config/env.js';
 import { databaseManager } from '../db/database.js';
 import { normalizeCreatorIdentity } from './creator-rating-import-service.js';
 import { ArchiveCatalogPipelineService } from './archive-catalog-pipeline-service.js';
-import { localIngestSettingsService, type LocalIngestSettingsService } from './local-ingest-settings-service.js';
+import {
+  localIngestSettingsService,
+  type LocalIngestSettingsService,
+  type LocalIngestSettingsView
+} from './local-ingest-settings-service.js';
 import { recycleBinAdapter, type RecycleBinAdapter } from './recycle-bin-adapter.js';
-import { scannerService } from './scanner-service.js';
+import {
+  assertLocalIngestRootPolicy,
+  assertPathInsideLocalIngestRoot,
+  canonicalizeLocalIngestPath,
+  LocalIngestPathError
+} from '../utils/local-ingest-paths.js';
+import { ProcessTimeoutError, runProcessWithTimeout } from '../utils/run-process.js';
 
 const SOURCE_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip']);
 const NESTED_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip', '.rar', '.tar', '.gz', '.bz2', '.xz']);
@@ -55,6 +64,19 @@ type LocalIngestJobRow = {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  claim_token: string | null;
+  claimed_at: string | null;
+  claim_heartbeat_at: string | null;
+};
+
+type LocalIngestObservationRow = {
+  source_archive_path: string;
+  creator_id: number;
+  source_archive_name: string;
+  observed_size: number;
+  observed_mtime: number;
+  stable_since: string;
+  last_observed_at: string;
 };
 
 type MappingRow = {
@@ -76,6 +98,15 @@ type MappingRow = {
 type CreatorRow = { id: number; canonical_name: string };
 
 type SevenZipResult = { code: number | null; stdout: string; stderr: string };
+
+export type LocalIngestRuntimeDependencies = {
+  now?: () => Date;
+  hashFile?: (filePath: string) => Promise<string>;
+  runCommand?: (command: string, args: string[], timeoutMs: number) => Promise<SevenZipResult>;
+  extractionTimeoutMs?: number;
+  claimLeaseMs?: number;
+  expectedGalleryRoot?: string;
+};
 
 type LocalIngestRescanResult = {
   scanRunId: number;
@@ -282,25 +313,7 @@ export function assertSafeArchiveEntry(entryPath: string): void {
 }
 
 function runCommand(command: string, args: string[], timeoutMs: number): Promise<SevenZipResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new LocalIngestFailure('EXTRACTION_TIMEOUT', 'Archive operation timed out'));
-    }, timeoutMs);
-    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
-    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
-    });
-  });
+  return runProcessWithTimeout(command, args, timeoutMs);
 }
 
 function classifySevenZipFailure(output: string): LocalIngestFailure {
@@ -365,8 +378,17 @@ function mapJob(row: LocalIngestJobRow & { creator_name?: string }): LocalIngest
 }
 
 export class LocalIngestService {
+  private readonly databaseOverride: DatabaseSync | undefined;
+  private readonly now: () => Date;
+  private readonly hashFile: (filePath: string) => Promise<string>;
+  private readonly commandRunner: (command: string, args: string[], timeoutMs: number) => Promise<SevenZipResult>;
+  private readonly extractionTimeoutMs: number;
+  private readonly claimLeaseMs: number;
+  private readonly expectedGalleryRoot: string;
+  private readonly inFlightJobs = new Map<number, Promise<LocalIngestJob>>();
+
   constructor(
-    private readonly database: DatabaseSync = databaseManager.connection,
+    database: DatabaseSync | undefined = undefined,
     private readonly settingsService: LocalIngestSettingsService = localIngestSettingsService,
     private readonly recycleAdapter: RecycleBinAdapter = recycleBinAdapter,
     private readonly rescanAndReconcile: (
@@ -374,6 +396,10 @@ export class LocalIngestService {
       libraryRoot: string,
       creatorName: string
     ) => Promise<LocalIngestRescanResult | void> = async (database, libraryRoot, creatorName) => {
+      // ScannerService reads the database when its singleton is constructed.
+      // Load it only for a real reconciliation run so importing LocalIngest in
+      // tests or build tooling cannot open the configured production database.
+      const { scannerService } = await import('./scanner-service.js');
       const scan = await scannerService.scanCosCreators(
         [creatorName],
         'local-ingest',
@@ -386,8 +412,24 @@ export class LocalIngestService {
         scanStatus: scan.status,
         scanError: scan.error_text
       };
-    }
-  ) {}
+    },
+    dependencies: LocalIngestRuntimeDependencies = {}
+  ) {
+    this.databaseOverride = database;
+    this.now = dependencies.now ?? (() => new Date());
+    this.hashFile = dependencies.hashFile ?? sha256File;
+    this.commandRunner = dependencies.runCommand ?? runCommand;
+    this.extractionTimeoutMs = dependencies.extractionTimeoutMs ?? EXTRACTION_TIMEOUT_MS;
+    this.claimLeaseMs = dependencies.claimLeaseMs ?? 2 * 60 * 1000;
+    this.expectedGalleryRoot = dependencies.expectedGalleryRoot ?? appConfig.galleryRoot;
+  }
+
+  private get database(): DatabaseSync {
+    // Keep the application singleton import side-effect free. This matters in
+    // tests and build tooling: merely importing the service must never open or
+    // migrate the configured production database.
+    return this.databaseOverride ?? databaseManager.connection;
+  }
 
   private jobSelect(): string {
     return `SELECT jobs.*, creators.canonical_name AS creator_name
@@ -448,6 +490,255 @@ export class LocalIngestService {
     this.database.prepare(`UPDATE local_ingest_jobs SET ${columns.join(', ')} WHERE id = ?`).run(...parameters);
   }
 
+  private timestamp(): string {
+    return this.now().toISOString();
+  }
+
+  private async checkedSettings(): Promise<LocalIngestSettingsView> {
+    const settings = this.settingsService.get();
+    try {
+      await assertLocalIngestRootPolicy(settings, this.expectedGalleryRoot);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Local ingest root policy validation failed';
+      throw new LocalIngestFailure('ROOT_PATH_POLICY_VIOLATION', detail, true);
+    }
+    return settings;
+  }
+
+  private observationFor(sourcePath: string): LocalIngestObservationRow | undefined {
+    return this.database.prepare(
+      'SELECT * FROM local_ingest_file_observations WHERE source_archive_path = ?'
+    ).get(sourcePath) as LocalIngestObservationRow | undefined;
+  }
+
+  private observeFile(
+    creatorId: number,
+    sourcePath: string,
+    sourceName: string,
+    size: number,
+    mtime: number,
+    resetStableSince: boolean
+  ): void {
+    const timestamp = this.timestamp();
+    const previous = this.observationFor(sourcePath);
+    const stableSince = resetStableSince || !previous ? timestamp : previous.stable_since;
+    this.database.prepare(
+      `INSERT INTO local_ingest_file_observations (
+         source_archive_path, creator_id, source_archive_name, observed_size,
+         observed_mtime, stable_since, last_observed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source_archive_path) DO UPDATE SET
+         creator_id = excluded.creator_id,
+         source_archive_name = excluded.source_archive_name,
+         observed_size = excluded.observed_size,
+         observed_mtime = excluded.observed_mtime,
+         stable_since = excluded.stable_since,
+         last_observed_at = excluded.last_observed_at`
+    ).run(sourcePath, creatorId, sourceName, size, mtime, stableSince, timestamp);
+  }
+
+  private clearObservation(sourcePath: string): void {
+    this.database.prepare(
+      'DELETE FROM local_ingest_file_observations WHERE source_archive_path = ?'
+    ).run(sourcePath);
+  }
+
+  private clearMissingObservations(creatorId: number, creatorDirectory: string, presentPaths: Set<string>): void {
+    const rows = this.database.prepare(
+      'SELECT source_archive_path FROM local_ingest_file_observations WHERE creator_id = ?'
+    ).all(creatorId) as Array<{ source_archive_path: string }>;
+    const comparedDirectory = process.platform === 'win32'
+      ? path.resolve(creatorDirectory).toLocaleLowerCase()
+      : path.resolve(creatorDirectory);
+    for (const row of rows) {
+      const comparedParent = process.platform === 'win32'
+        ? path.dirname(path.resolve(row.source_archive_path)).toLocaleLowerCase()
+        : path.dirname(path.resolve(row.source_archive_path));
+      const comparedSource = process.platform === 'win32'
+        ? path.resolve(row.source_archive_path).toLocaleLowerCase()
+        : path.resolve(row.source_archive_path);
+      if (comparedParent === comparedDirectory && !presentPaths.has(comparedSource)) {
+        this.clearObservation(row.source_archive_path);
+      }
+    }
+  }
+
+  private async hasRelatedTemporaryFile(creatorDirectory: string, archiveName: string): Promise<boolean> {
+    const stem = archiveName.slice(0, -path.extname(archiveName).length).toLocaleLowerCase();
+    const entries = await fs.readdir(creatorDirectory, { withFileTypes: true });
+    return entries.some((entry) => entry.isFile() && isTemporaryName(entry.name) && entry.name.toLocaleLowerCase().startsWith(stem));
+  }
+
+  private tryClaim(id: number): string | null {
+    const token = randomUUID();
+    const timestamp = this.timestamp();
+    const cutoff = new Date(this.now().getTime() - this.claimLeaseMs).toISOString();
+    const claimed = this.database.prepare(
+      `UPDATE local_ingest_jobs
+       SET claim_token = ?, claimed_at = ?, claim_heartbeat_at = ?, updated_at = ?
+       WHERE id = ?
+         AND (
+           claim_token IS NULL
+           OR claim_heartbeat_at IS NULL
+           OR claim_heartbeat_at < ?
+         )`
+    ).run(token, timestamp, timestamp, timestamp, id, cutoff);
+    return claimed.changes === 1 ? token : null;
+  }
+
+  private heartbeatClaim(id: number, token: string): void {
+    const timestamp = this.timestamp();
+    this.database.prepare(
+      `UPDATE local_ingest_jobs
+       SET claim_heartbeat_at = ?, updated_at = ?
+       WHERE id = ? AND claim_token = ?`
+    ).run(timestamp, timestamp, id, token);
+  }
+
+  private releaseClaim(id: number, token: string): void {
+    this.database.prepare(
+      `UPDATE local_ingest_jobs
+       SET claim_token = NULL, claimed_at = NULL, claim_heartbeat_at = NULL, updated_at = ?
+       WHERE id = ? AND claim_token = ?`
+    ).run(this.timestamp(), id, token);
+  }
+
+  private runWithClaim(id: number, executor: () => Promise<LocalIngestJob>): Promise<LocalIngestJob> {
+    const existing = this.inFlightJobs.get(id);
+    if (existing) return existing;
+    const execution = (async () => {
+      const token = this.tryClaim(id);
+      if (!token) return this.getJob(id);
+      const heartbeatEvery = Math.max(250, Math.min(10_000, Math.floor(this.claimLeaseMs / 3)));
+      const heartbeat = setInterval(() => {
+        try {
+          this.heartbeatClaim(id, token);
+        } catch {
+          // The active operation remains the only in-process executor. A stale
+          // lease is recovered explicitly on the next process startup.
+        }
+      }, heartbeatEvery);
+      heartbeat.unref();
+      try {
+        return await executor();
+      } finally {
+        clearInterval(heartbeat);
+        this.releaseClaim(id, token);
+      }
+    })();
+    this.inFlightJobs.set(id, execution);
+    void execution.finally(() => {
+      if (this.inFlightJobs.get(id) === execution) this.inFlightJobs.delete(id);
+    }).catch(() => undefined);
+    return execution;
+  }
+
+  async recoverInterruptedJobs(): Promise<number> {
+    const cutoff = new Date(this.now().getTime() - this.claimLeaseMs).toISOString();
+    const timestamp = this.timestamp();
+    const running = this.database.prepare(
+      `UPDATE local_ingest_jobs
+       SET status = 'failed',
+           error_code = 'INTERRUPTED_PROCESS',
+           error_detail = 'The previous process stopped before this task completed; it can be continued safely',
+           claim_token = NULL,
+           claimed_at = NULL,
+           claim_heartbeat_at = NULL,
+           updated_at = ?
+       WHERE status = 'running'
+         AND (
+           claim_token IS NULL
+           OR claim_heartbeat_at IS NULL
+           OR claim_heartbeat_at < ?
+         )`
+    ).run(timestamp, cutoff);
+    const reconciling = this.database.prepare(
+      `UPDATE local_ingest_jobs
+       SET error_code = 'INTERRUPTED_PROCESS',
+           error_detail = 'The previous process stopped during reconciliation; reconciliation can be continued safely',
+           claim_token = NULL,
+           claimed_at = NULL,
+           claim_heartbeat_at = NULL,
+           updated_at = ?
+       WHERE status = 'reconciling'
+         AND (
+           claim_token IS NULL
+           OR claim_heartbeat_at IS NULL
+           OR claim_heartbeat_at < ?
+         )`
+    ).run(timestamp, cutoff);
+    const cleanup = this.database.prepare(
+      `UPDATE local_ingest_jobs
+       SET cleanup_status = 'failed',
+           error_code = 'INTERRUPTED_PROCESS',
+           error_detail = 'The previous process stopped during recycle-bin cleanup; cleanup can be retried safely',
+           claim_token = NULL,
+           claimed_at = NULL,
+           claim_heartbeat_at = NULL,
+           updated_at = ?
+       WHERE status = 'ingested'
+         AND cleanup_status = 'recycling'
+         AND (
+           claim_token IS NULL
+           OR claim_heartbeat_at IS NULL
+           OR claim_heartbeat_at < ?
+         )`
+    ).run(timestamp, cutoff);
+    return Number(running.changes) + Number(reconciling.changes) + Number(cleanup.changes);
+  }
+
+  private async assertInside(
+    root: string,
+    candidate: string,
+    code: string,
+    label: string,
+    options: { allowRoot?: boolean; directChild?: boolean } = {}
+  ): Promise<{ root: string; candidate: string; relative: string }> {
+    try {
+      return await assertPathInsideLocalIngestRoot(root, candidate, { ...options, code, label });
+    } catch (error) {
+      if (error instanceof LocalIngestPathError) throw new LocalIngestFailure(code, error.message, true);
+      throw error;
+    }
+  }
+
+  private async assertSourcePath(
+    job: LocalIngestJobRow,
+    mapping: MappingRow,
+    settings: LocalIngestSettingsView
+  ): Promise<void> {
+    const checked = await this.assertInside(
+      settings.inboxRoot,
+      job.source_archive_path,
+      'SOURCE_PATH_OUTSIDE_ALLOWED_ROOT',
+      'Source archive'
+    );
+    const segments = checked.relative.split(path.sep).filter(Boolean);
+    if (segments.length !== 2 || segments[1].toLocaleLowerCase() !== job.source_archive_name.toLocaleLowerCase()) {
+      throw new LocalIngestFailure('SOURCE_PATH_OUTSIDE_ALLOWED_ROOT', 'Source archive is not a direct file in an allowed creator directory', true);
+    }
+    const allowedNames = new Set(settings.allowlist.map(normalizeCreatorIdentity));
+    if (!allowedNames.has(normalizeCreatorIdentity(segments[0]))) {
+      throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The source creator directory is not in the local ingest allowlist', true);
+    }
+    const creatorMatches = this.findCreatorByFolder(segments[0]);
+    if (creatorMatches.length !== 1 || creatorMatches[0].id !== mapping.creator_id) {
+      throw new LocalIngestFailure('SOURCE_PATH_CREATOR_MISMATCH', 'The source directory no longer maps to this job creator', true);
+    }
+    const stats = await fs.lstat(job.source_archive_path);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new LocalIngestFailure('SOURCE_PATH_OUTSIDE_ALLOWED_ROOT', 'Source archive must be a regular non-symbolic file', true);
+    }
+  }
+
+  private safeCreatorDirectoryName(creatorName: string): string {
+    const sanitized = sanitizeWindowsDirectoryName(creatorName);
+    if (sanitized !== creatorName.trim()) {
+      throw new LocalIngestFailure('INVALID_TARGET_NAME', 'Creator name contains path or reserved filename characters', true);
+    }
+    return sanitized;
+  }
+
   private findCreatorByFolder(folderName: string): CreatorRow[] {
     const normalized = normalizeCreatorIdentity(folderName);
     return this.database.prepare(
@@ -500,7 +791,7 @@ export class LocalIngestService {
   }
 
   async scanInbox(allowlistInput?: string[]): Promise<LocalIngestDiscoveryResult> {
-    const settings = this.settingsService.get();
+    const settings = await this.checkedSettings();
     const allowlist = [...new Set((allowlistInput ?? settings.allowlist).map((entry) => entry.trim()).filter(Boolean))];
     if (allowlist.length === 0) throw new Error('Local ingest allowlist is empty');
     const result: LocalIngestDiscoveryResult = {
@@ -516,7 +807,18 @@ export class LocalIngestService {
 
     for (const allowedCreatorName of allowlist) {
       const creatorDirectory = path.join(settings.inboxRoot, allowedCreatorName);
-      if (!isPathWithin(settings.inboxRoot, creatorDirectory) || !(await pathExists(creatorDirectory))) continue;
+      await this.assertInside(
+        settings.inboxRoot,
+        creatorDirectory,
+        'SOURCE_PATH_OUTSIDE_ALLOWED_ROOT',
+        'Creator inbox directory',
+        { directChild: true }
+      );
+      if (!(await pathExists(creatorDirectory))) continue;
+      const creatorDirectoryStats = await fs.lstat(creatorDirectory);
+      if (!creatorDirectoryStats.isDirectory() || creatorDirectoryStats.isSymbolicLink()) {
+        throw new LocalIngestFailure('SOURCE_PATH_OUTSIDE_ALLOWED_ROOT', 'Creator inbox must be a regular directory, not a link', true);
+      }
       const creatorMatches = this.findCreatorByFolder(allowedCreatorName);
       if (creatorMatches.length !== 1) {
         result.ignoredFiles += (await fs.readdir(creatorDirectory)).length;
@@ -524,7 +826,15 @@ export class LocalIngestService {
       }
       const creator = creatorMatches[0];
       const entries = await fs.readdir(creatorDirectory, { withFileTypes: true });
-      const temporaryNames = new Set(entries.filter((entry) => entry.isFile() && isTemporaryName(entry.name)).map((entry) => entry.name.toLocaleLowerCase()));
+      const presentArchivePaths = new Set(
+        entries
+          .filter((entry) => entry.isFile() && SOURCE_ARCHIVE_EXTENSIONS.has(archiveExtension(entry.name)))
+          .map((entry) => {
+            const value = path.resolve(creatorDirectory, entry.name);
+            return process.platform === 'win32' ? value.toLocaleLowerCase() : value;
+          })
+      );
+      this.clearMissingObservations(creator.id, creatorDirectory, presentArchivePaths);
       for (const entry of entries) {
         if (!entry.isFile() || isTemporaryName(entry.name) || !SOURCE_ARCHIVE_EXTENSIONS.has(archiveExtension(entry.name))) {
           result.ignoredFiles += 1;
@@ -532,12 +842,79 @@ export class LocalIngestService {
         }
         result.discoveredArchives += 1;
         const sourcePath = path.join(creatorDirectory, entry.name);
-        const stats = await fs.stat(sourcePath);
-        const ageSeconds = (Date.now() - stats.mtimeMs) / 1000;
-        const stem = entry.name.slice(0, -path.extname(entry.name).length).toLocaleLowerCase();
-        const relatedTemporary = [...temporaryNames].some((candidate) => candidate.startsWith(stem));
-        const stable = stats.size > 0 && ageSeconds >= settings.fileStableSeconds && !relatedTemporary;
-        const hash = await sha256File(sourcePath);
+        await this.assertInside(
+          settings.inboxRoot,
+          sourcePath,
+          'SOURCE_PATH_OUTSIDE_ALLOWED_ROOT',
+          'Source archive'
+        );
+        const stats = await fs.lstat(sourcePath);
+        if (!stats.isFile() || stats.isSymbolicLink()) {
+          throw new LocalIngestFailure('SOURCE_PATH_OUTSIDE_ALLOWED_ROOT', 'Source archive must be a regular non-symbolic file', true);
+        }
+        const unchangedExisting = this.database.prepare(
+          `SELECT id FROM local_ingest_jobs
+           WHERE creator_id = ?
+             AND source_archive_path = ?
+             AND source_archive_size = ?
+             AND source_archive_mtime = ?
+           ORDER BY id DESC
+           LIMIT 1`
+        ).get(creator.id, sourcePath, stats.size, stats.mtimeMs) as { id: number } | undefined;
+        if (unchangedExisting) {
+          this.clearObservation(sourcePath);
+          result.existingJobs += 1;
+          result.jobs.push(this.getJob(unchangedExisting.id));
+          continue;
+        }
+        const relatedTemporary = await this.hasRelatedTemporaryFile(creatorDirectory, entry.name);
+        const observation = this.observationFor(sourcePath);
+        const unchanged = Boolean(
+          observation
+          && observation.creator_id === creator.id
+          && observation.observed_size === stats.size
+          && observation.observed_mtime === stats.mtimeMs
+        );
+        const stableSinceMs = observation ? Date.parse(observation.stable_since) : Number.NaN;
+        const stableForMs = Number.isFinite(stableSinceMs) ? this.now().getTime() - stableSinceMs : 0;
+        if (
+          stats.size <= 0
+          || relatedTemporary
+          || !unchanged
+          || stableForMs < settings.fileStableSeconds * 1000
+        ) {
+          this.observeFile(
+            creator.id,
+            sourcePath,
+            entry.name,
+            stats.size,
+            stats.mtimeMs,
+            !unchanged || relatedTemporary || stats.size <= 0
+          );
+          result.waitingStable += 1;
+          continue;
+        }
+
+        const beforeHash = await fs.lstat(sourcePath);
+        if (await this.hasRelatedTemporaryFile(creatorDirectory, entry.name)) {
+          this.observeFile(creator.id, sourcePath, entry.name, beforeHash.size, beforeHash.mtimeMs, true);
+          result.waitingStable += 1;
+          continue;
+        }
+        const hash = await this.hashFile(sourcePath);
+        const afterHash = await fs.lstat(sourcePath);
+        const temporaryAfterHash = await this.hasRelatedTemporaryFile(creatorDirectory, entry.name);
+        if (
+          temporaryAfterHash
+          || beforeHash.size !== afterHash.size
+          || beforeHash.mtimeMs !== afterHash.mtimeMs
+          || stats.size !== afterHash.size
+          || stats.mtimeMs !== afterHash.mtimeMs
+        ) {
+          this.observeFile(creator.id, sourcePath, entry.name, afterHash.size, afterHash.mtimeMs, true);
+          result.waitingStable += 1;
+          continue;
+        }
         const mappings = this.findMapping(creator.id, entry.name);
         const existing = mappings.length === 1
           ? this.database.prepare(
@@ -548,9 +925,10 @@ export class LocalIngestService {
              WHERE creator_id = ? AND source_archive_path = ? AND source_archive_sha256 = ? AND source_work_id IS NULL`
           ).get(creator.id, sourcePath, hash) as { id: number; phase: LocalIngestPhase } | undefined;
         if (existing) {
-          if (stable && existing.phase === 'waiting_stable') {
+          if (existing.phase === 'waiting_stable') {
             this.updateJob(existing.id, { phase: 'discovered', errorCode: null, errorDetail: null });
           }
+          this.clearObservation(sourcePath);
           result.existingJobs += 1;
           result.jobs.push(this.getJob(existing.id));
           continue;
@@ -563,12 +941,7 @@ export class LocalIngestService {
         let errorDetail: string | null = null;
         let mapping: MappingRow | null = mappings.length === 1 ? mappings[0] : null;
         let targetPath: string | null = null;
-        if (!stable) {
-          phase = 'waiting_stable';
-          errorCode = 'FILE_NOT_STABLE';
-          errorDetail = 'Archive is empty, too recent, or has a related temporary download file';
-          result.waitingStable += 1;
-        } else if (mappings.length !== 1) {
+        if (mappings.length !== 1) {
           status = 'awaiting_review';
           phase = 'mapping';
           validationStatus = 'failed';
@@ -580,7 +953,17 @@ export class LocalIngestService {
         } else {
           mapping = mappings[0];
           const title = mapping.raw_title?.trim() || mapping.source_title.trim();
-          targetPath = path.join(settings.libraryRoot, creator.canonical_name, sanitizeWindowsDirectoryName(title));
+          const creatorDirectoryName = this.safeCreatorDirectoryName(creator.canonical_name);
+          const targetCreatorDirectory = path.join(settings.libraryRoot, creatorDirectoryName);
+          await this.assertInside(
+            settings.libraryRoot,
+            targetCreatorDirectory,
+            'TARGET_PATH_OUTSIDE_LIBRARY',
+            'Target creator directory',
+            { directChild: true }
+          );
+          targetPath = path.join(targetCreatorDirectory, sanitizeWindowsDirectoryName(title));
+          await this.assertInside(settings.libraryRoot, targetPath, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target directory');
           if (this.localWorkExists(mapping.source_work_id)) {
             status = 'awaiting_review';
             phase = 'mapping';
@@ -600,7 +983,7 @@ export class LocalIngestService {
 
         const timestamp = nowIso();
         const insert = this.database.prepare(
-          `INSERT INTO local_ingest_jobs (
+          `INSERT OR IGNORE INTO local_ingest_jobs (
              archive_download_task_id, source_work_id, creator_id,
              source_archive_path, source_archive_name, source_archive_size,
              source_archive_mtime, source_archive_sha256, status, phase,
@@ -625,9 +1008,24 @@ export class LocalIngestService {
           timestamp,
           timestamp
         );
-        const id = Number(insert.lastInsertRowid);
-        result.createdJobs += 1;
-        result.jobs.push(this.getJob(id));
+        this.clearObservation(sourcePath);
+        if (insert.changes === 1) {
+          const id = Number(insert.lastInsertRowid);
+          result.createdJobs += 1;
+          result.jobs.push(this.getJob(id));
+        } else {
+          const raced = mapping
+            ? this.database.prepare(
+              'SELECT id FROM local_ingest_jobs WHERE source_work_id = ? AND source_archive_sha256 = ?'
+            ).get(mapping.source_work_id, hash) as { id: number } | undefined
+            : this.database.prepare(
+              `SELECT id FROM local_ingest_jobs
+               WHERE creator_id = ? AND source_archive_path = ? AND source_archive_sha256 = ? AND source_work_id IS NULL`
+            ).get(creator.id, sourcePath, hash) as { id: number } | undefined;
+          if (!raced) throw new Error('Local ingest job insert was ignored without an idempotent match');
+          result.existingJobs += 1;
+          result.jobs.push(this.getJob(raced.id));
+        }
       }
     }
     return result;
@@ -663,7 +1061,7 @@ export class LocalIngestService {
     return row;
   }
 
-  private async runSevenZip(operation: 'list' | 'test' | 'extract', archivePath: string, outputPath?: string): Promise<SevenZipResult> {
+  private async runSevenZip(jobId: number, operation: 'list' | 'test' | 'extract', archivePath: string, outputPath?: string): Promise<SevenZipResult> {
     const settings = this.settingsService.get();
     const secret = this.settingsService.getArchivePassword();
     const action = operation === 'list' ? 'l' : operation === 'test' ? 't' : 'x';
@@ -673,8 +1071,11 @@ export class LocalIngestService {
     args.push(archivePath);
     let result: SevenZipResult;
     try {
-      result = await runCommand(settings.sevenZipPath, args, EXTRACTION_TIMEOUT_MS);
+      result = await this.commandRunner(settings.sevenZipPath, args, this.extractionTimeoutMs);
     } catch (error) {
+      if (error instanceof ProcessTimeoutError) {
+        throw new LocalIngestFailure('EXTRACTION_TIMEOUT', `Archive operation for job ${jobId} timed out and was terminated`);
+      }
       if (error instanceof LocalIngestFailure) throw error;
       throw new LocalIngestFailure('EXTRACTION_TOOL_MISSING', '7-Zip could not be started');
     }
@@ -688,8 +1089,8 @@ export class LocalIngestService {
     };
   }
 
-  private async assertArchiveSafe(archivePath: string): Promise<void> {
-    const result = await this.runSevenZip('list', archivePath);
+  private async assertArchiveSafe(jobId: number, archivePath: string): Promise<void> {
+    const result = await this.runSevenZip(jobId, 'list', archivePath);
     for (const entryPath of parseSevenZipEntryPaths(result.stdout)) assertSafeArchiveEntry(entryPath);
   }
 
@@ -718,7 +1119,11 @@ export class LocalIngestService {
     innerWorkingName: string
   ): Promise<ValidationSummary> {
     this.updateJob(job.id, { phase: 'validating' });
+    const settings = await this.checkedSettings();
+    await this.assertInside(settings.processingRoot, processingPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Job processing directory', { directChild: true });
+    await this.assertInside(processingPath, levelTwoRoot, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Second-level extraction directory');
     const contentRoot = await discoverContentRoot(levelTwoRoot);
+    await this.assertInside(levelTwoRoot, contentRoot, 'UNSAFE_ARCHIVE_PATH', 'Extracted content root', { allowRoot: true });
     const tree = await listTree(contentRoot);
     const media: typeof tree = [];
     const ads: typeof tree = [];
@@ -759,12 +1164,17 @@ export class LocalIngestService {
     }
     if (media.length === 0) throw new LocalIngestFailure('NO_VALID_MEDIA', 'No valid image or video was found', true);
 
-    const settings = this.settingsService.get();
     const targetName = sanitizeWindowsDirectoryName(mapping.raw_title?.trim() || mapping.source_title.trim());
-    const targetPath = path.join(settings.libraryRoot, mapping.creator_name, targetName);
+    const creatorDirectoryName = this.safeCreatorDirectoryName(mapping.creator_name);
+    const targetCreatorDirectory = path.join(settings.libraryRoot, creatorDirectoryName);
+    await this.assertInside(settings.libraryRoot, targetCreatorDirectory, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target creator directory', { directChild: true });
+    const targetPath = path.join(targetCreatorDirectory, targetName);
+    await this.assertInside(settings.libraryRoot, targetPath, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target directory');
     if (await pathExists(targetPath)) throw new LocalIngestFailure('TARGET_EXISTS', 'The planned target directory already exists', true);
     const readyBuildPath = path.join(processingPath, `ready-building-${randomUUID()}`);
     const readyPath = path.join(processingPath, 'ready');
+    await this.assertInside(processingPath, readyBuildPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready build directory', { directChild: true });
+    await this.assertInside(processingPath, readyPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready directory', { directChild: true });
     if (!(await pathExists(readyPath))) {
       await fs.mkdir(readyBuildPath, { recursive: true });
       for (const entry of media) {
@@ -836,10 +1246,22 @@ export class LocalIngestService {
   private async reconcile(jobId: number): Promise<LocalIngestJob> {
     const job = this.getJobRow(jobId);
     const mapping = this.mappingForJob(job);
-    const settings = this.settingsService.get();
+    const settings = await this.checkedSettings();
     if (!job.target_path || !(await pathExists(job.target_path))) {
       throw new LocalIngestFailure('TARGET_MISSING_AFTER_COMMIT', 'The committed target directory cannot be found');
     }
+    const expectedCreatorDirectory = path.join(settings.libraryRoot, this.safeCreatorDirectoryName(mapping.creator_name));
+    const expectedTargetPath = path.join(
+      expectedCreatorDirectory,
+      sanitizeWindowsDirectoryName(mapping.raw_title?.trim() || mapping.source_title.trim())
+    );
+    await this.assertInside(settings.libraryRoot, expectedCreatorDirectory, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target creator directory', { directChild: true });
+    const checkedTarget = await this.assertInside(settings.libraryRoot, job.target_path, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Committed target directory');
+    const canonicalExpectedTarget = await canonicalizeLocalIngestPath(expectedTargetPath);
+    const sameTarget = process.platform === 'win32'
+      ? checkedTarget.candidate.toLocaleLowerCase() === canonicalExpectedTarget.toLocaleLowerCase()
+      : checkedTarget.candidate === canonicalExpectedTarget;
+    if (!sameTarget) throw new LocalIngestFailure('TARGET_PATH_OUTSIDE_LIBRARY', 'Committed target no longer matches the ledger mapping', true);
     this.updateJob(jobId, { status: 'reconciling', phase: 'rescanning' });
     const rescanResult = await this.rescanAndReconcile(this.database, settings.libraryRoot, mapping.creator_name);
     this.updateJob(jobId, { status: 'reconciling', phase: 'reconciling' });
@@ -947,14 +1369,21 @@ export class LocalIngestService {
       errorDetail: null,
       completedAt: nowIso()
     });
-    if (settings.recycleAfterIngest) return this.retryCleanup(jobId);
+    if (settings.recycleAfterIngest) return this.retryCleanupClaimed(jobId);
     return this.getJob(jobId);
   }
 
   async runJob(id: number): Promise<LocalIngestJob> {
+    const job = this.getJobRow(id);
+    if (job.status === 'awaiting_review' || job.phase === 'waiting_stable') return this.getJob(id);
+    if (job.status === 'ingested' && !['pending', 'failed', 'recycling'].includes(job.cleanup_status)) return this.getJob(id);
+    return this.runWithClaim(id, () => this.runClaimedJob(id));
+  }
+
+  private async runClaimedJob(id: number): Promise<LocalIngestJob> {
     let job = this.getJobRow(id);
     if (job.status === 'ingested') {
-      if (job.cleanup_status === 'pending' || job.cleanup_status === 'failed') return this.retryCleanup(id);
+      if (job.cleanup_status === 'pending' || job.cleanup_status === 'failed' || job.cleanup_status === 'recycling') return this.retryCleanupClaimed(id);
       return this.getJob(id);
     }
     if (job.status === 'awaiting_review' || job.phase === 'waiting_stable') return this.getJob(id);
@@ -963,18 +1392,38 @@ export class LocalIngestService {
     }
     if (job.source_work_id === null || job.archive_download_task_id === null) return this.getJob(id);
     const mapping = this.mappingForJob(job);
-    const settings = this.settingsService.get();
-    if (!settings.allowlist.includes(mapping.creator_name)) {
+    const settings = await this.checkedSettings();
+    const normalizedAllowlist = new Set(settings.allowlist.map(normalizeCreatorIdentity));
+    if (!normalizedAllowlist.has(normalizeCreatorIdentity(mapping.creator_name))) {
       throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The mapped creator is not in the local ingest allowlist', true);
     }
     try {
+      await this.assertSourcePath(job, mapping, settings);
       const currentStats = await fs.stat(job.source_archive_path);
       if (currentStats.size !== job.source_archive_size || currentStats.mtimeMs !== job.source_archive_mtime) {
         throw new LocalIngestFailure('SOURCE_ARCHIVE_CHANGED', 'The source archive changed after discovery', true);
       }
-      const currentHash = await sha256File(job.source_archive_path);
+      const currentHash = await this.hashFile(job.source_archive_path);
+      const afterHashStats = await fs.stat(job.source_archive_path);
+      if (afterHashStats.size !== currentStats.size || afterHashStats.mtimeMs !== currentStats.mtimeMs) {
+        throw new LocalIngestFailure('SOURCE_ARCHIVE_CHANGED', 'The source archive changed while its checksum was being verified', true);
+      }
       if (currentHash !== job.source_archive_sha256) throw new LocalIngestFailure('SOURCE_ARCHIVE_CHANGED', 'The source archive checksum changed after discovery', true);
-      const processingPath = job.processing_path ?? path.join(settings.processingRoot, String(job.id));
+      const expectedProcessingPath = path.join(settings.processingRoot, String(job.id));
+      const processingPath = job.processing_path ?? expectedProcessingPath;
+      const checkedProcessing = await this.assertInside(
+        settings.processingRoot,
+        processingPath,
+        'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT',
+        'Job processing directory',
+        { directChild: true }
+      );
+      const canonicalExpectedProcessing = await canonicalizeLocalIngestPath(expectedProcessingPath);
+      if (process.platform === 'win32'
+        ? checkedProcessing.candidate.toLocaleLowerCase() !== canonicalExpectedProcessing.toLocaleLowerCase()
+        : checkedProcessing.candidate !== canonicalExpectedProcessing) {
+        throw new LocalIngestFailure('PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Job processing directory does not match this job id', true);
+      }
       const levelOneRoot = path.join(processingPath, 'level-1');
       const levelTwoRoot = path.join(processingPath, 'level-2');
       const levelOneCompleteMarker = path.join(processingPath, '.level-1-complete');
@@ -991,11 +1440,11 @@ export class LocalIngestService {
         errorCode: null,
         errorDetail: null
       });
-      await this.assertArchiveSafe(job.source_archive_path);
-      await this.runSevenZip('test', job.source_archive_path);
+      await this.assertArchiveSafe(id, job.source_archive_path);
+      await this.runSevenZip(id, 'test', job.source_archive_path);
       this.updateJob(id, { phase: 'extracting_outer' });
       if (!(await pathExists(levelOneCompleteMarker))) {
-        await this.runSevenZip('extract', job.source_archive_path, levelOneRoot);
+        await this.runSevenZip(id, 'extract', job.source_archive_path, levelOneRoot);
         await fs.writeFile(levelOneCompleteMarker, nowIso(), { flag: 'w' });
       }
       await this.assertExtractedTreeSafe(levelOneRoot);
@@ -1035,16 +1484,32 @@ export class LocalIngestService {
         ? previousSummary.innerWorkingName
         : path.relative(levelOneRoot, innerWorkingPath);
       this.updateJob(id, { phase: 'testing_inner' });
-      await this.assertArchiveSafe(innerWorkingPath);
-      await this.runSevenZip('test', innerWorkingPath);
+      await this.assertArchiveSafe(id, innerWorkingPath);
+      await this.runSevenZip(id, 'test', innerWorkingPath);
       this.updateJob(id, { phase: 'extracting_inner' });
       if (!(await pathExists(levelTwoCompleteMarker))) {
-        await this.runSevenZip('extract', innerWorkingPath, levelTwoRoot);
+        await this.runSevenZip(id, 'extract', innerWorkingPath, levelTwoRoot);
         await fs.writeFile(levelTwoCompleteMarker, nowIso(), { flag: 'w' });
       }
       await this.assertExtractedTreeSafe(levelTwoRoot);
       job = this.getJobRow(id);
       const summary = await this.validateAndStage(job, mapping, levelTwoRoot, processingPath, levelOneOutput, innerOriginalName, innerWorkingName);
+      const commitSettings = await this.checkedSettings();
+      const commitMapping = this.mappingForJob(this.getJobRow(id));
+      const expectedCreatorDirectory = path.join(commitSettings.libraryRoot, this.safeCreatorDirectoryName(commitMapping.creator_name));
+      const expectedTargetPath = path.join(
+        expectedCreatorDirectory,
+        sanitizeWindowsDirectoryName(commitMapping.raw_title?.trim() || commitMapping.source_title.trim())
+      );
+      await this.assertInside(commitSettings.libraryRoot, expectedCreatorDirectory, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target creator directory', { directChild: true });
+      await this.assertInside(commitSettings.libraryRoot, expectedTargetPath, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target directory');
+      await this.assertInside(processingPath, summary.readyPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready directory', { directChild: true });
+      const plannedCanonical = await canonicalizeLocalIngestPath(summary.plannedTargetPath);
+      const expectedCanonical = await canonicalizeLocalIngestPath(expectedTargetPath);
+      const sameTarget = process.platform === 'win32'
+        ? plannedCanonical.toLocaleLowerCase() === expectedCanonical.toLocaleLowerCase()
+        : plannedCanonical === expectedCanonical;
+      if (!sameTarget) throw new LocalIngestFailure('TARGET_PATH_OUTSIDE_LIBRARY', 'The planned target no longer matches the ledger mapping', true);
       if (await pathExists(summary.plannedTargetPath)) throw new LocalIngestFailure('TARGET_EXISTS', 'The planned target directory already exists', true);
       await fs.mkdir(path.dirname(summary.plannedTargetPath), { recursive: true });
       this.updateJob(id, { phase: 'committing' });
@@ -1073,9 +1538,72 @@ export class LocalIngestService {
     const job = this.getJobRow(id);
     if (job.status !== 'ingested') throw new Error('Cleanup is only available after ingest has been confirmed');
     if (job.cleanup_status === 'recycled') return this.getJob(id);
+    return this.runWithClaim(id, () => this.retryCleanupClaimed(id));
+  }
+
+  private async retryCleanupClaimed(id: number): Promise<LocalIngestJob> {
+    const job = this.getJobRow(id);
+    if (job.status !== 'ingested') throw new Error('Cleanup is only available after ingest has been confirmed');
+    if (job.cleanup_status === 'recycled') return this.getJob(id);
     this.updateJob(id, { phase: 'cleanup', cleanupStatus: 'recycling', errorCode: null, errorDetail: null });
     const summary = safeJsonParse(job.summary_json) ?? {};
     try {
+      const settings = await this.checkedSettings();
+      const checkedSource = await this.assertInside(
+        settings.inboxRoot,
+        job.source_archive_path,
+        'RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT',
+        'Source archive'
+      );
+      const sourceSegments = checkedSource.relative.split(path.sep).filter(Boolean);
+      if (sourceSegments.length !== 2) {
+        throw new LocalIngestFailure('RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT', 'Source archive is not a file inside a creator inbox directory', true);
+      }
+      if (await pathExists(job.source_archive_path)) {
+        const sourceStats = await fs.lstat(job.source_archive_path);
+        if (!sourceStats.isFile() || sourceStats.isSymbolicLink()) {
+          throw new LocalIngestFailure('RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT', 'Source recycle target must be a regular non-symbolic file', true);
+        }
+      }
+      let checkedProcessing: Awaited<ReturnType<LocalIngestService['assertInside']>> | null = null;
+      if (job.processing_path) {
+        checkedProcessing = await this.assertInside(
+          settings.processingRoot,
+          job.processing_path,
+          'RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT',
+          'Processing directory',
+          { directChild: true }
+        );
+        const expectedProcessing = await canonicalizeLocalIngestPath(path.join(settings.processingRoot, String(job.id)));
+        const sameProcessing = process.platform === 'win32'
+          ? checkedProcessing.candidate.toLocaleLowerCase() === expectedProcessing.toLocaleLowerCase()
+          : checkedProcessing.candidate === expectedProcessing;
+        if (!sameProcessing) {
+          throw new LocalIngestFailure('RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT', 'Processing directory does not match this job id', true);
+        }
+        if (await pathExists(job.processing_path)) {
+          const processingStats = await fs.lstat(job.processing_path);
+          if (!processingStats.isDirectory() || processingStats.isSymbolicLink()) {
+            throw new LocalIngestFailure('RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT', 'Processing recycle target must be a regular non-symbolic directory', true);
+          }
+        }
+      }
+      if (job.target_path) {
+        const checkedTarget = await this.assertInside(
+          settings.libraryRoot,
+          job.target_path,
+          'RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT',
+          'Committed target directory'
+        );
+        const comparedTarget = process.platform === 'win32' ? checkedTarget.candidate.toLocaleLowerCase() : checkedTarget.candidate;
+        const comparedSource = process.platform === 'win32' ? checkedSource.candidate.toLocaleLowerCase() : checkedSource.candidate;
+        const comparedProcessing = checkedProcessing
+          ? process.platform === 'win32' ? checkedProcessing.candidate.toLocaleLowerCase() : checkedProcessing.candidate
+          : null;
+        if (comparedTarget === comparedSource || comparedTarget === comparedProcessing) {
+          throw new LocalIngestFailure('RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT', 'Cleanup may not recycle the committed gallery target', true);
+        }
+      }
       if (await pathExists(job.source_archive_path)) await this.recycleAdapter.recycle(job.source_archive_path);
       summary.sourceArchiveRecycled = !(await pathExists(job.source_archive_path));
       if (job.processing_path && await pathExists(job.processing_path)) await this.recycleAdapter.recycle(job.processing_path);
@@ -1089,12 +1617,14 @@ export class LocalIngestService {
         errorDetail: null
       });
     } catch (error) {
+      const boundaryFailure = error instanceof LocalIngestFailure
+        && ['RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT', 'ROOT_PATH_POLICY_VIOLATION'].includes(error.code);
       this.updateJob(id, {
         status: 'ingested',
         phase: 'cleanup',
         cleanupStatus: 'failed',
         summaryJson: JSON.stringify(summary),
-        errorCode: 'RECYCLE_FAILED',
+        errorCode: boundaryFailure ? 'RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT' : 'RECYCLE_FAILED',
         errorDetail: error instanceof Error ? error.message : 'Recycle operation failed'
       });
     }

@@ -88,11 +88,15 @@ async function bootstrap(): Promise<void> {
       );
     }
 
-    if (localIngestSettingsService.get().allowlist.length > 0) {
-      void localIngestService.scanInbox().catch((error: unknown) => {
-        log.info("Local ingest compensation scan could not complete", error instanceof Error ? error.message : String(error));
-      });
-    }
+    void (async () => {
+      const recovered = await localIngestService.recoverInterruptedJobs();
+      if (recovered > 0) {
+        log.info(`Marked ${recovered} interrupted local ingest job(s) as safely resumable`);
+      }
+      if (localIngestSettingsService.get().allowlist.length > 0) await localIngestService.scanInbox();
+    })().catch((error: unknown) => {
+      log.info("Local ingest startup recovery or compensation scan could not complete", error instanceof Error ? error.message : String(error));
+    });
   });
 
   async function shutdown(signal: string): Promise<void> {

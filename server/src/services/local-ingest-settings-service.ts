@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 
 import { z } from 'zod';
 
@@ -10,12 +9,17 @@ import {
 } from '../constants/app-setting-keys.js';
 import { appConfig } from '../config/env.js';
 import { appSettingsRepository } from '../db/repositories.js';
+import {
+  assertLocalIngestRootPolicy,
+  assertLocalIngestRootPolicySync,
+  normalizeAbsoluteLocalIngestPath
+} from '../utils/local-ingest-paths.js';
+import { runProcessWithTimeout } from '../utils/run-process.js';
 
 const localIngestSettingsSchema = z.object({
   libraryRoot: z.string().trim().min(1),
   inboxRoot: z.string().trim().min(1),
   processingRoot: z.string().trim().min(1),
-  quarantineRoot: z.string().trim().min(1),
   sevenZipPath: z.string().trim().min(1),
   fileStableSeconds: z.number().int().min(1).max(3600),
   recycleAfterIngest: z.boolean(),
@@ -49,57 +53,57 @@ export type LocalIngestSettingsValidation = {
     version: string | null;
     error: string | null;
   };
-  paths: Record<'libraryRoot' | 'inboxRoot' | 'processingRoot' | 'quarantineRoot', LocalIngestPathCheck>;
+  paths: Record<'libraryRoot' | 'inboxRoot' | 'processingRoot', LocalIngestPathCheck>;
   sameVolume: boolean;
   errors: string[];
 };
 
+export type LocalIngestSettingsRepository = Pick<typeof appSettingsRepository, 'get' | 'setMany'>;
+
 const DEFAULT_SEVEN_ZIP_PATH = 'C:\\Program Files\\NVIDIA Corporation\\NVIDIA app\\7z.exe';
 
-function deriveSiblingRoot(name: string): string {
-  const parsed = path.parse(appConfig.galleryRoot);
-  if (parsed.root && appConfig.galleryRoot !== parsed.root) {
-    return path.join(path.dirname(appConfig.galleryRoot), name);
+function deriveSiblingRoot(name: string, galleryRoot = appConfig.galleryRoot): string {
+  const parsed = path.parse(galleryRoot);
+  if (parsed.root && galleryRoot !== parsed.root) {
+    return path.join(path.dirname(galleryRoot), name);
   }
-  return path.join(parsed.root || appConfig.galleryRoot, name);
+  return path.join(parsed.root || galleryRoot, name);
 }
 
-export function defaultLocalIngestSettings(): LocalIngestSettings {
+export function defaultLocalIngestSettings(galleryRoot = appConfig.galleryRoot): LocalIngestSettings {
   return {
-    libraryRoot: appConfig.galleryRoot,
-    inboxRoot: deriveSiblingRoot('cos待入库'),
-    processingRoot: deriveSiblingRoot('cos处理中'),
-    quarantineRoot: deriveSiblingRoot('cos隔离区'),
+    libraryRoot: galleryRoot,
+    inboxRoot: deriveSiblingRoot('cos待入库', galleryRoot),
+    processingRoot: deriveSiblingRoot('cos处理中', galleryRoot),
     sevenZipPath: DEFAULT_SEVEN_ZIP_PATH,
     fileStableSeconds: 5,
     recycleAfterIngest: true,
-    maxExtractionDepth: 2
+    maxExtractionDepth: 2 as const
   };
 }
 
-function normalizeAbsolutePath(value: string): string {
-  const resolved = path.resolve(value.trim());
-  return path.normalize(resolved);
-}
-
-function normalizeSettings(settings: LocalIngestSettings): LocalIngestSettings {
-  return {
+function normalizeSettings(settings: LocalIngestSettings, expectedGalleryRoot = appConfig.galleryRoot): LocalIngestSettings {
+  const normalized = {
     ...settings,
-    libraryRoot: normalizeAbsolutePath(settings.libraryRoot),
-    inboxRoot: normalizeAbsolutePath(settings.inboxRoot),
-    processingRoot: normalizeAbsolutePath(settings.processingRoot),
-    quarantineRoot: normalizeAbsolutePath(settings.quarantineRoot),
+    libraryRoot: normalizeAbsoluteLocalIngestPath(settings.libraryRoot, 'libraryRoot'),
+    inboxRoot: normalizeAbsoluteLocalIngestPath(settings.inboxRoot, 'inboxRoot'),
+    processingRoot: normalizeAbsoluteLocalIngestPath(settings.processingRoot, 'processingRoot'),
     sevenZipPath: path.normalize(settings.sevenZipPath.trim()),
-    maxExtractionDepth: 2
+    maxExtractionDepth: 2 as const
   };
+  assertLocalIngestRootPolicySync(normalized, expectedGalleryRoot);
+  return normalized;
 }
 
-function parseStoredSettings(raw: string | null): LocalIngestSettings {
-  if (!raw) return defaultLocalIngestSettings();
+function parseStoredSettings(raw: string | null, expectedGalleryRoot = appConfig.galleryRoot): LocalIngestSettings {
+  if (!raw) return normalizeSettings(defaultLocalIngestSettings(expectedGalleryRoot), expectedGalleryRoot);
   try {
-    return normalizeSettings(localIngestSettingsSchema.parse(JSON.parse(raw)));
+    const stored = localIngestSettingsSchema.parse(JSON.parse(raw));
+    // libraryRoot became startup-owned in V1. Preserve the user's other legacy
+    // settings while projecting the effective scanner root into the view.
+    return normalizeSettings({ ...stored, libraryRoot: expectedGalleryRoot }, expectedGalleryRoot);
   } catch {
-    return defaultLocalIngestSettings();
+    return normalizeSettings(defaultLocalIngestSettings(expectedGalleryRoot), expectedGalleryRoot);
   }
 }
 
@@ -112,36 +116,24 @@ function parseStoredAllowlist(raw: string | null): string[] {
   }
 }
 
+function parseLegacyQuarantineRoot(raw: string | null): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = (JSON.parse(raw) as { quarantineRoot?: unknown }).quarantineRoot;
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function configuredArchivePassword(): string | null {
   const value = process.env.LOCAL_INGEST_ARCHIVE_PASSWORD;
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-function runCommand(command: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error('command timed out'));
-    }, timeoutMs);
-    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
-    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
 async function validateSevenZip(executablePath: string): Promise<LocalIngestSettingsValidation['sevenZip']> {
   try {
-    const result = await runCommand(executablePath, ['i'], 10_000);
+    const result = await runProcessWithTimeout(executablePath, ['i'], 10_000);
     if (result.code !== 0) {
       return { valid: false, version: null, error: '7-Zip returned a non-zero exit code' };
     }
@@ -188,10 +180,15 @@ async function inspectPath(directoryPath: string, createIfMissing: boolean): Pro
 }
 
 export class LocalIngestSettingsService {
+  constructor(
+    private readonly expectedGalleryRoot = appConfig.galleryRoot,
+    private readonly repository: LocalIngestSettingsRepository = appSettingsRepository
+  ) {}
+
   get(): LocalIngestSettingsView {
     return {
-      ...parseStoredSettings(appSettingsRepository.get(LOCAL_INGEST_SETTINGS_SETTING_KEY)),
-      allowlist: parseStoredAllowlist(appSettingsRepository.get(LOCAL_INGEST_ALLOWLIST_SETTING_KEY)),
+      ...parseStoredSettings(this.repository.get(LOCAL_INGEST_SETTINGS_SETTING_KEY), this.expectedGalleryRoot),
+      allowlist: parseStoredAllowlist(this.repository.get(LOCAL_INGEST_ALLOWLIST_SETTING_KEY)),
       archivePasswordConfigured: configuredArchivePassword() !== null
     };
   }
@@ -204,29 +201,41 @@ export class LocalIngestSettingsService {
     return password;
   }
 
-  save(input: LocalIngestSettings & { allowlist?: string[] }): LocalIngestSettingsView {
-    const settings = normalizeSettings(localIngestSettingsSchema.parse(input));
+  save(input: LocalIngestSettings & { allowlist?: string[]; quarantineRoot?: string }): LocalIngestSettingsView {
+    const settings = normalizeSettings(localIngestSettingsSchema.parse(input), this.expectedGalleryRoot);
     const allowlist = [...new Set(allowlistSchema.parse(input.allowlist ?? this.get().allowlist))];
-    appSettingsRepository.setMany([
-      { key: LOCAL_INGEST_SETTINGS_SETTING_KEY, value: JSON.stringify(settings) },
+    const legacyQuarantineRoot = input.quarantineRoot
+      ?? parseLegacyQuarantineRoot(this.repository.get(LOCAL_INGEST_SETTINGS_SETTING_KEY));
+    const persistedSettings = legacyQuarantineRoot
+      ? { ...settings, quarantineRoot: legacyQuarantineRoot }
+      : settings;
+    this.repository.setMany([
+      // V1 neither exposes nor validates quarantineRoot, but retaining a legacy
+      // value avoids silently rewriting the user's stored configuration.
+      { key: LOCAL_INGEST_SETTINGS_SETTING_KEY, value: JSON.stringify(persistedSettings) },
       { key: LOCAL_INGEST_ALLOWLIST_SETTING_KEY, value: JSON.stringify(allowlist) }
     ]);
     return { ...settings, allowlist, archivePasswordConfigured: configuredArchivePassword() !== null };
   }
 
   async validate(input?: LocalIngestSettings): Promise<LocalIngestSettingsValidation> {
-    const settings = normalizeSettings(localIngestSettingsSchema.parse(input ?? this.get()));
-    const [libraryRoot, inboxRoot, processingRoot, quarantineRoot, sevenZip] = await Promise.all([
+    const settings = normalizeSettings(localIngestSettingsSchema.parse(input ?? this.get()), this.expectedGalleryRoot);
+    const rootPolicyErrors: string[] = [];
+    try {
+      await assertLocalIngestRootPolicy(settings, this.expectedGalleryRoot);
+    } catch (error) {
+      rootPolicyErrors.push(error instanceof Error ? error.message : 'Configured roots violate the local ingest path policy');
+    }
+    const [libraryRoot, inboxRoot, processingRoot, sevenZip] = await Promise.all([
       inspectPath(settings.libraryRoot, false),
       inspectPath(settings.inboxRoot, false),
       inspectPath(settings.processingRoot, true),
-      inspectPath(settings.quarantineRoot, true),
       validateSevenZip(settings.sevenZipPath)
     ]);
-    const paths = { libraryRoot, inboxRoot, processingRoot, quarantineRoot };
+    const paths = { libraryRoot, inboxRoot, processingRoot };
     const volumes = new Set(Object.values(paths).map((entry) => entry.volume));
     const sameVolume = volumes.size === 1 && !volumes.has('');
-    const errors: string[] = [];
+    const errors: string[] = [...rootPolicyErrors];
     for (const [name, entry] of Object.entries(paths)) {
       if (!entry.exists || !entry.readable) errors.push(`${name} is not readable`);
       if (!entry.writable) errors.push(`${name} is not writable`);
@@ -234,8 +243,6 @@ export class LocalIngestSettingsService {
     if (!sameVolume) errors.push('Configured roots are not on the same volume');
     if (!sevenZip.valid) errors.push('7-Zip validation failed');
     if (!configuredArchivePassword()) errors.push('Archive password secret is not configured');
-    const normalizedRoots = Object.values(paths).map((entry) => path.normalize(entry.path).toLocaleLowerCase());
-    if (new Set(normalizedRoots).size !== normalizedRoots.length) errors.push('Configured roots must be distinct');
     return {
       valid: errors.length === 0,
       passwordConfigured: configuredArchivePassword() !== null,

@@ -98,7 +98,6 @@ CREATE TABLE local_ingest_jobs_v1 (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   completed_at TEXT NULL,
-  UNIQUE(creator_id, source_archive_sha256),
   FOREIGN KEY (archive_download_task_id) REFERENCES archive_catalog_download_tasks(id) ON DELETE SET NULL,
   FOREIGN KEY (source_work_id) REFERENCES archive_catalog_source_works(id) ON DELETE CASCADE,
   FOREIGN KEY (creator_id) REFERENCES archive_catalog_creators(id) ON DELETE CASCADE,
@@ -115,7 +114,26 @@ CREATE TABLE local_ingest_jobs_v1 (
   CHECK (source_archive_size >= 0)
 );
 
-INSERT INTO local_ingest_jobs_v1 SELECT * FROM local_ingest_jobs;
+-- The pre-000014 creator/hash uniqueness cannot represent two legitimate source
+-- works which happen to contain the same archive bytes.  A rollback therefore
+-- retains the source-aware uniqueness rules instead of deleting either row or
+-- failing after destructive DDL has started.
+INSERT INTO local_ingest_jobs_v1 (
+  id, archive_download_task_id, source_work_id, creator_id,
+  source_archive_path, source_archive_name, source_archive_size,
+  source_archive_mtime, source_archive_sha256, status, phase,
+  validation_status, cleanup_status, processing_path, target_path,
+  attempt_count, error_code, error_detail, summary_json,
+  created_at, updated_at, completed_at
+)
+SELECT
+  id, archive_download_task_id, source_work_id, creator_id,
+  source_archive_path, source_archive_name, source_archive_size,
+  source_archive_mtime, source_archive_sha256, status, phase,
+  validation_status, cleanup_status, processing_path, target_path,
+  attempt_count, error_code, error_detail, summary_json,
+  created_at, updated_at, completed_at
+FROM local_ingest_jobs;
 DROP TABLE local_ingest_jobs;
 ALTER TABLE local_ingest_jobs_v1 RENAME TO local_ingest_jobs;
 
@@ -125,3 +143,9 @@ CREATE INDEX idx_local_ingest_jobs_creator
   ON local_ingest_jobs(creator_id, status, id);
 CREATE INDEX idx_local_ingest_jobs_archive_hash
   ON local_ingest_jobs(source_archive_sha256, source_work_id);
+CREATE UNIQUE INDEX idx_local_ingest_jobs_source_hash
+  ON local_ingest_jobs(source_work_id, source_archive_sha256)
+  WHERE source_work_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_local_ingest_jobs_unmapped_path_hash
+  ON local_ingest_jobs(creator_id, source_archive_path, source_archive_sha256)
+  WHERE source_work_id IS NULL;

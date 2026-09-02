@@ -143,7 +143,6 @@ const localIngestSettingsBodySchema = z.object({
   libraryRoot: z.string().trim().min(1).max(500),
   inboxRoot: z.string().trim().min(1).max(500),
   processingRoot: z.string().trim().min(1).max(500),
-  quarantineRoot: z.string().trim().min(1).max(500),
   sevenZipPath: z.string().trim().min(1).max(500),
   fileStableSeconds: z.number().int().min(1).max(3600),
   recycleAfterIngest: z.boolean(),
@@ -1303,7 +1302,13 @@ router.put(
   '/admin/local-ingest/settings',
   requireCapability('canManageLibrary', 'Admin access is required.'),
   (request, response) => {
-    response.json(localIngestSettingsService.save(localIngestSettingsBodySchema.parse(request.body)));
+    try {
+      response.json(localIngestSettingsService.save(localIngestSettingsBodySchema.parse(request.body)));
+    } catch (error) {
+      response.status(400).json({
+        message: error instanceof Error ? error.message : 'Local ingest settings are invalid'
+      });
+    }
   }
 );
 

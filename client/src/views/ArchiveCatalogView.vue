@@ -138,16 +138,14 @@
 
       <div v-if="localIngestSettings" class="mt-4 grid gap-3 lg:grid-cols-2">
         <label class="grid gap-1.5 text-xs font-semibold text-muted">正式图库
-          <input v-model="localIngestSettings.libraryRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
+          <input v-model="localIngestSettings.libraryRoot" readonly aria-readonly="true" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-muted" />
+          <small class="font-normal leading-5 text-muted">V1 正式图库根目录由 GALLERY_ROOT 启动配置决定，修改后需要重启服务。</small>
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">本地待入库
           <input v-model="localIngestSettings.inboxRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">处理中目录
           <input v-model="localIngestSettings.processingRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
-        </label>
-        <label class="grid gap-1.5 text-xs font-semibold text-muted">隔离目录
-          <input v-model="localIngestSettings.quarantineRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">7-Zip 路径
           <input v-model="localIngestSettings.sevenZipPath" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
@@ -180,7 +178,7 @@
             <tr v-for="job in localIngestJobs" :key="job.id" class="border-t border-border align-top">
               <td class="p-3"><strong>{{ job.creatorName }}</strong><small class="mt-1 block font-mono text-muted">{{ job.sourceArchiveName }} · {{ formatBytes(job.sourceArchiveSize) }}</small></td>
               <td class="p-3"><span class="font-mono text-xs">source {{ job.sourceWorkId ?? '—' }}</span><small class="mt-1 block text-muted">task {{ job.archiveDownloadTaskId ?? '—' }}</small></td>
-              <td class="p-3"><strong>{{ localIngestStatusLabel(job.status) }}</strong><small class="mt-1 block text-muted">{{ job.phase }}</small><small v-if="job.errorCode" class="mt-1 block text-red-700">{{ job.errorCode }}：{{ job.errorDetail }}</small></td>
+              <td class="p-3"><strong>{{ localIngestStatusLabel(job.status) }}</strong><small class="mt-1 block text-muted">{{ job.phase }}</small><small v-if="job.errorCode" class="mt-1 block text-red-700">{{ localIngestErrorLabel(job) }}</small></td>
               <td class="p-3">{{ job.validationStatus }}<small class="mt-1 block text-muted">cleanup: {{ job.cleanupStatus }}</small></td>
               <td class="p-3 text-xs">
                 <template v-if="job.summary">
@@ -481,6 +479,11 @@ function localIngestStatusLabel(status: LocalIngestJob['status']) {
   return ({ queued: '待处理', running: '处理中', awaiting_review: '待人工核查', reconciling: '对账中', ingested: '已入库', failed: '失败' } as const)[status];
 }
 
+function localIngestErrorLabel(job: LocalIngestJob) {
+  if (job.errorCode === 'INTERRUPTED_PROCESS') return '上次进程中断，可继续';
+  return `${job.errorCode}：${job.errorDetail ?? '未提供详细信息'}`;
+}
+
 function jobSummaryValue(job: LocalIngestJob, key: string) {
   const value = job.summary?.[key];
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '—';
@@ -523,7 +526,7 @@ async function validateLocalIngestConfig() {
   try {
     const result = await validateLocalIngestSettings(currentLocalIngestSettings());
     localIngestNotice.value = result.valid
-      ? `环境验证通过：${result.sevenZip.version ?? '7-Zip 可用'}，四个目录位于同一卷。`
+              ? `环境验证通过：${result.sevenZip.version ?? '7-Zip 可用'}，三个目录位于同一卷。`
       : `环境验证未通过：${result.errors.join('；')}`;
   } catch (reason) {
     localIngestNotice.value = reason instanceof Error ? reason.message : '无法验证本地入库环境';
