@@ -14,6 +14,7 @@
     "import:hcf-tags": "tsx src/scripts/import-hcf-tags.ts",
     "import:costuan-archive": "tsx src/scripts/import-costuan-archive.ts",
     "catalog:bootstrap": "tsx src/scripts/archive-catalog-bootstrap.ts",
+    "reconcile:costuan-numbering": "tsx src/scripts/reconcile-costuan-numbering.ts",
     "local-ingest": "tsx src/scripts/local-ingest.ts",
     "test": "vitest run --config vitest.config.ts test/"
   },

@@ -5,22 +5,28 @@ import { z } from 'zod';
 
 import { folderRepository, postRepository } from '../db/repositories.js';
 import { normalizeCreatorIdentity } from './creator-rating-import-service.js';
+import {
+  mergeCostuanDirectoryWorks,
+  parseCostuanNumbering
+} from './costuan-numbering-service.js';
 
 const costuanWorkSchema = z.object({
   order: z.number().int().min(0).optional(),
   sourceOrder: z.string().trim().min(1),
+  sourceOrderKey: z.string().optional(),
   label: z.string().trim().min(1),
   rawTitle: z.string().optional(),
   mediaSummary: z.string().optional()
-});
+}).passthrough();
 
 const costuanRecordSchema = z.object({
   creatorName: z.string().trim().min(1),
   aliases: z.array(z.string()).default([]),
   costuan: z.object({
     postId: z.string(),
+    resourceDirectoryText: z.string().optional(),
     works: z.array(costuanWorkSchema).default([])
-  }),
+  }).passthrough(),
   local: z.object({ folderName: z.string().optional() }).nullable().optional()
 });
 
@@ -40,10 +46,12 @@ export type CostuanArchiveImportResult = {
 
 export function parseCostuanSourceOrder(value: string): number | null {
   const leaf = path.posix.basename(value.replace(/\\/g, '/'));
-  const match = leaf.match(/(?:^|[\s_\-–—])(?:NO\.?\s*)?(\d{1,4})(?=\s|[^\d]|$)/i);
-  if (!match) return null;
-  const order = Number(match[1]);
-  return Number.isInteger(order) && order >= 0 ? order : null;
+  return parseCostuanNumbering(leaf)?.order ?? null;
+}
+
+export function parseCostuanSourceKey(value: string): string | null {
+  const leaf = path.posix.basename(value.replace(/\\/g, '/'));
+  return parseCostuanNumbering(leaf)?.key ?? null;
 }
 
 export function buildCostuanWorkCaption(creatorName: string, label: string): string {
@@ -72,7 +80,11 @@ export async function importCostuanArchiveMetadata(filePath: string): Promise<Co
   };
 
   for (const record of Object.values(document.records)) {
-    if (record.costuan.works.length === 0) continue;
+    const mergedWorks = mergeCostuanDirectoryWorks(
+      record.costuan.works,
+      record.costuan.resourceDirectoryText
+    );
+    if (mergedWorks.length === 0) continue;
     const creator = findLocalCreator(
       [record.creatorName, ...record.aliases, record.local?.folderName ?? ''],
       localCreators
@@ -83,15 +95,15 @@ export async function importCostuanArchiveMetadata(filePath: string): Promise<Co
     }
 
     result.matchedCreators += 1;
-    const worksByOrder = new Map<number, z.infer<typeof costuanWorkSchema>>();
-    for (const work of record.costuan.works) {
-      const order = work.order ?? parseCostuanSourceOrder(work.sourceOrder);
-      if (order !== null) worksByOrder.set(order, work);
+    const worksByKey = new Map<string, z.infer<typeof costuanWorkSchema>>();
+    for (const work of mergedWorks) {
+      const key = work.sourceOrderKey ?? parseCostuanSourceKey(work.sourceOrder);
+      if (key) worksByKey.set(key, work);
     }
 
     for (const post of postRepository.listCarouselRecordsByFolder(creator.id)) {
-      const order = parseCostuanSourceOrder(post.source_path);
-      const work = order === null ? null : worksByOrder.get(order) ?? null;
+      const key = parseCostuanSourceKey(post.source_path);
+      const work = key === null ? null : worksByKey.get(key) ?? null;
       if (!work) {
         result.unmatchedWorks.push(post.source_path);
         continue;

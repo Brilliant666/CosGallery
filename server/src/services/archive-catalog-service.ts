@@ -7,6 +7,12 @@ import { z } from 'zod';
 
 import { databaseManager } from '../db/database.js';
 import { normalizeCreatorIdentity } from './creator-rating-import-service.js';
+import {
+  areCostuanTitlesCompatible,
+  mergeCostuanDirectoryWorks,
+  normalizeCostuanTitle,
+  parseCostuanNumbering
+} from './costuan-numbering-service.js';
 
 const hcfSeedSchema = z.object({
   format: z.literal('hcf-tag-preferences'),
@@ -28,9 +34,15 @@ const hcfSeedSchema = z.object({
 const costuanWorkSchema = z.object({
   order: z.number().int().min(0).optional(),
   sourceOrder: z.string().trim().min(1),
+  sourceOrderRaw: z.string().optional(),
+  sourceOrderScheme: z.enum(['NO', 'VOL', 'SPECIAL']).optional(),
+  sourceOrderKey: z.string().optional(),
   label: z.string().trim().min(1),
   rawTitle: z.string().optional(),
-  mediaSummary: z.string().optional()
+  mediaSummary: z.string().optional(),
+  declaredImageCount: z.number().int().min(0).nullable().optional(),
+  declaredVideoCount: z.number().int().min(0).nullable().optional(),
+  declaredSize: z.string().nullable().optional()
 }).passthrough();
 
 const costuanRecordSchema = z.object({
@@ -77,6 +89,7 @@ type LocalWorkSnapshot = {
   absolutePath: string;
   folderName: string;
   parsedSourceOrder: number | null;
+  numberingKey: string | null;
   imageCount: number;
   videoCount: number;
   advertisementFileCount: number;
@@ -93,9 +106,11 @@ type LocalCreatorSnapshot = {
 
 type RemoteWorkRow = {
   work_id: number;
+  source_work_id: string;
   source_order: number | null;
   source_order_label: string | null;
   source_title: string;
+  metadata_json: string | null;
 };
 
 export type HcfSeedImportResult = {
@@ -209,23 +224,11 @@ function sha256(buffer: Buffer): string {
 
 export function parseArchiveSourceOrder(value: string): number | null {
   const leaf = path.basename(value.replace(/\\/g, '/'));
-  const explicit = leaf.match(/\bNO\.?\s*(\d{1,4})\b/i);
-  const middle = leaf.match(/(?:^|[\s_\-–—])(\d{3,4})(?=\s|[《【\[(])/);
-  const leading = leaf.match(/^(\d{3,4})(?=[^\d.\/-])/);
-  const match = explicit || middle || leading;
-  if (!match) return null;
-  const order = Number(match[1]);
-  return Number.isInteger(order) && order >= 0 ? order : null;
+  return parseCostuanNumbering(leaf)?.order ?? null;
 }
 
 function normalizeWorkTitle(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .replace(/\s*[\[【][^\]】]+[\]】]\s*$/u, '')
-    .replace(/^.*?\bNO\.?\s*\d{1,4}\b/iu, '')
-    .replace(/^[\s_\-–—:：]+/u, '')
-    .replace(/[\s_\-–—:：·・.《》【】[\]()（）]+/gu, '');
+  return normalizeCostuanTitle(value);
 }
 
 function creatorPrefixedWorkTitleCandidates(value: string, creatorNames: string[]): string[] {
@@ -245,6 +248,20 @@ function creatorPrefixedWorkTitleCandidates(value: string, creatorNames: string[
     if (titleWithoutCreator) candidates.add(titleWithoutCreator);
   }
   return [...candidates];
+}
+
+function remoteWorkNumberingKey(work: RemoteWorkRow): string | null {
+  if (work.metadata_json) {
+    try {
+      const metadata = JSON.parse(work.metadata_json) as { sourceOrderKey?: unknown };
+      if (typeof metadata.sourceOrderKey === 'string' && metadata.sourceOrderKey.trim()) {
+        return metadata.sourceOrderKey.trim();
+      }
+    } catch {
+      // Legacy metadata remains usable through source_order_label/source_work_id.
+    }
+  }
+  return parseCostuanNumbering(work.source_order_label ?? work.source_work_id)?.key ?? null;
 }
 
 async function inspectWorkDirectory(rootPath: string, workPath: string): Promise<LocalWorkSnapshot> {
@@ -277,11 +294,13 @@ async function inspectWorkDirectory(rootPath: string, workPath: string): Promise
     }
   }
 
+  const numbering = parseCostuanNumbering(path.basename(workPath));
   return {
     relativePath: toPosixRelative(path.relative(rootPath, workPath)),
     absolutePath: workPath,
     folderName: path.basename(workPath),
-    parsedSourceOrder: parseArchiveSourceOrder(path.basename(workPath)),
+    parsedSourceOrder: numbering?.order ?? null,
+    numberingKey: numbering?.key ?? null,
     imageCount,
     videoCount,
     advertisementFileCount,
@@ -513,6 +532,10 @@ export class ArchiveCatalogService {
           metadata: { identityKind: 'collection-derived', creatorId: record.creatorId ?? null }
         });
 
+        const mergedCostuanWorks = mergeCostuanDirectoryWorks(
+          record.costuan.works,
+          record.costuan.resourceDirectoryText
+        );
         const collectionId = this.upsertCollection({
           creatorId,
           sourceCollectionId: record.costuan.postId,
@@ -521,7 +544,7 @@ export class ArchiveCatalogService {
           declaredWorkCount: record.costuan.collectionCount ?? null,
           rawDirectoryText: record.costuan.resourceDirectoryText ?? null,
           observedAt,
-          metadata: record.costuan
+          metadata: { ...record.costuan, works: mergedCostuanWorks }
         });
 
         this.database.prepare(
@@ -530,7 +553,7 @@ export class ArchiveCatalogService {
            WHERE collection_id = ? AND source = 'costuan'`
         ).run(collectionId);
 
-        for (const work of record.costuan.works) {
+        for (const work of mergedCostuanWorks) {
           const sourceOrder = work.order ?? parseArchiveSourceOrder(work.sourceOrder);
           const sourceWorkId = work.sourceOrder || (sourceOrder === null ? work.label : `NO.${String(sourceOrder).padStart(3, '0')}`);
           const existing = this.database.prepare(
@@ -689,13 +712,14 @@ export class ArchiveCatalogService {
         const creatorNames = creatorId === null
           ? []
           : [creatorSnapshot.folderName, ...this.listCreatorNames(creatorId)];
-        const byOrder = new Map<number, RemoteWorkRow[]>();
+        const byNumberingKey = new Map<string, RemoteWorkRow[]>();
         const byTitle = new Map<string, RemoteWorkRow[]>();
         for (const remoteWork of remoteWorks) {
-          if (remoteWork.source_order !== null) {
-            const values = byOrder.get(remoteWork.source_order) ?? [];
+          const numberingKey = remoteWorkNumberingKey(remoteWork);
+          if (numberingKey) {
+            const values = byNumberingKey.get(numberingKey) ?? [];
             values.push(remoteWork);
-            byOrder.set(remoteWork.source_order, values);
+            byNumberingKey.set(numberingKey, values);
           }
           const normalizedTitle = normalizeWorkTitle(remoteWork.source_title);
           const values = byTitle.get(normalizedTitle) ?? [];
@@ -708,16 +732,30 @@ export class ArchiveCatalogService {
           result.localWorks += 1;
           let matches: RemoteWorkRow[] = [];
           let matchMethod: string | null = null;
-          if (creatorId !== null && workSnapshot.parsedSourceOrder !== null) {
-            matches = byOrder.get(workSnapshot.parsedSourceOrder) ?? [];
-            if (matches.length > 0) matchMethod = 'costuan-source-order';
+          let numberingTitleConflict = false;
+          if (creatorId !== null && workSnapshot.numberingKey !== null) {
+            matches = byNumberingKey.get(workSnapshot.numberingKey) ?? [];
+            if (matches.length > 0) {
+              const compatible = matches.filter((remoteWork) => areCostuanTitlesCompatible(
+                workSnapshot.folderName,
+                remoteWork.source_title,
+                creatorNames
+              ));
+              if (compatible.length > 0) {
+                matches = compatible;
+                matchMethod = 'costuan-numbering-key';
+              } else {
+                numberingTitleConflict = true;
+                matchMethod = 'costuan-numbering-title-conflict';
+              }
+            }
           }
-          if (creatorId !== null && matches.length === 0) {
+          if (creatorId !== null && workSnapshot.numberingKey === null && matches.length === 0) {
             const normalizedLocalTitle = normalizeWorkTitle(workSnapshot.folderName);
             matches = byTitle.get(normalizedLocalTitle) ?? [];
             if (matches.length > 0) matchMethod = 'normalized-title';
           }
-          if (creatorId !== null && matches.length === 0) {
+          if (creatorId !== null && workSnapshot.numberingKey === null && matches.length === 0) {
             const prefixedTitleMatches = new Map<number, RemoteWorkRow>();
             for (const candidate of creatorPrefixedWorkTitleCandidates(workSnapshot.folderName, creatorNames)) {
               for (const remoteWork of byTitle.get(candidate) ?? []) {
@@ -730,7 +768,10 @@ export class ArchiveCatalogService {
 
           let status: MatchStatus;
           let workId: number | null = null;
-          if (matches.length === 1 && !claimedWorkIds.has(matches[0].work_id)) {
+          if (numberingTitleConflict) {
+            status = 'ambiguous';
+            result.ambiguousWorks += 1;
+          } else if (matches.length === 1 && !claimedWorkIds.has(matches[0].work_id)) {
             status = 'matched';
             workId = matches[0].work_id;
             claimedWorkIds.add(workId);
@@ -748,7 +789,7 @@ export class ArchiveCatalogService {
             workId,
             snapshot: workSnapshot,
             status,
-            method: status === 'matched' ? matchMethod : null,
+            method: status === 'unmatched' ? null : matchMethod,
             scannedAt
           });
         }
@@ -1019,11 +1060,13 @@ export class ArchiveCatalogService {
 
   private listRemoteWorks(creatorId: number): RemoteWorkRow[] {
     return this.database.prepare(
-      `SELECT
-         source_works.work_id,
-         source_works.source_order,
-         source_works.source_order_label,
-         source_works.source_title
+       `SELECT
+          source_works.work_id,
+          source_works.source_work_id,
+          source_works.source_order,
+          source_works.source_order_label,
+          source_works.source_title,
+          source_works.metadata_json
        FROM archive_catalog_source_works source_works
        JOIN archive_catalog_collections collections ON collections.id = source_works.collection_id
        WHERE collections.creator_id = ?
