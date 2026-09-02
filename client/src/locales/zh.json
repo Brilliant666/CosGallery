@@ -353,7 +353,7 @@
       },
       "scanCard": {
         "title": "扫描图库",
-        "description": "扫描媒体后会自动核对图库账本、生成现有博主缺失任务，并通知 Costuan 插件刷新任务。"
+        "description": "扫描媒体后会自动核对图库账本，根据平台作品与本地收录差集生成全部缺失任务，并通知 Costuan 插件刷新任务。"
       },
       "statusLabel": {
         "storageUnavailable": "存储不可用",

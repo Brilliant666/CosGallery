@@ -89,7 +89,7 @@
           <input v-model="inboxRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text outline-none focus:border-accent" autocomplete="off" />
         </label>
         <button type="button" data-test="plan-downloads" class="h-11 self-end rounded-xl bg-accent px-5 text-sm font-semibold text-white disabled:opacity-50" :disabled="planningDownloads" @click="planDownloads()">
-          {{ planningDownloads ? '正在生成…' : '生成现有博主缺失任务' }}
+          {{ planningDownloads ? '正在生成…' : '生成全部缺失任务' }}
         </button>
         <button type="button" class="h-11 self-end rounded-xl border border-border bg-bg px-5 text-sm font-semibold text-text disabled:opacity-50" :disabled="rotatingBridgeToken" @click="rotateBridgeToken">
           {{ bridgeConfigured ? '重新生成插件密钥' : '生成插件连接密钥' }}

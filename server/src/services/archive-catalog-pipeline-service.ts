@@ -87,7 +87,7 @@ export class ArchiveCatalogPipelineService {
       ?? options.defaultInboxRoot
       ?? path.join(path.dirname(galleryRoot), 'cos待入库');
 
-    options.onProgress?.('正在生成现有博主缺失任务……');
+    options.onProgress?.('正在根据平台作品与本地收录差集生成缺失任务……');
     const plan = downloadService.planMissing({ targetRoot, provider: 'baidu' });
     options.onProgress?.('正在生成本地博主元数据采集任务……');
     const metadata = metadataService.planLocalOnly({ source: 'costuan' });

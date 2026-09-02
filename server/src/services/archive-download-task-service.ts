@@ -228,12 +228,6 @@ export class ArchiveDownloadTaskService {
        WHERE source_works.source = 'costuan'
          AND source_works.is_active = 1
          AND collections.is_active = 1
-         AND EXISTS (
-           SELECT 1
-           FROM archive_catalog_local_creator_folders local_creator_folders
-           WHERE local_creator_folders.creator_id = works.creator_id
-             AND local_creator_folders.is_active = 1
-         )
          AND NOT EXISTS (
            SELECT 1
            FROM archive_catalog_local_works local_works
@@ -326,16 +320,21 @@ export class ArchiveDownloadTaskService {
       `DELETE FROM archive_catalog_download_tasks
        WHERE provider = ?
          AND status IN ('pending', 'failed', 'cancelled')
-         AND source_work_id IN (
-           SELECT source_works.id
+         AND NOT EXISTS (
+           SELECT 1
            FROM archive_catalog_source_works source_works
-           JOIN archive_catalog_works works ON works.id = source_works.work_id
-           WHERE NOT EXISTS (
-             SELECT 1
-             FROM archive_catalog_local_creator_folders local_creator_folders
-             WHERE local_creator_folders.creator_id = works.creator_id
-               AND local_creator_folders.is_active = 1
-           )
+           JOIN archive_catalog_collections collections
+             ON collections.id = source_works.collection_id
+           WHERE source_works.id = archive_catalog_download_tasks.source_work_id
+             AND source_works.is_active = 1
+             AND collections.is_active = 1
+             AND EXISTS (
+               SELECT 1
+               FROM archive_catalog_deliveries deliveries
+               WHERE deliveries.collection_id = collections.id
+                 AND deliveries.provider = archive_catalog_download_tasks.provider
+                 AND deliveries.status IN ('saved', 'already-saved')
+             )
          )`
     ).run(provider);
     return Number(result.changes ?? 0);
@@ -419,12 +418,6 @@ export class ArchiveDownloadTaskService {
            JOIN archive_catalog_works works ON works.id = source_works.work_id
            JOIN archive_catalog_creators creators ON creators.id = works.creator_id
            WHERE tasks.status IN ('pending', 'failed')
-             AND EXISTS (
-               SELECT 1
-               FROM archive_catalog_local_creator_folders local_creator_folders
-               WHERE local_creator_folders.creator_id = works.creator_id
-                 AND local_creator_folders.is_active = 1
-             )
            ORDER BY CASE creators.preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,
                     creators.id, source_works.source_order, tasks.id
            LIMIT 1`
@@ -459,12 +452,6 @@ export class ArchiveDownloadTaskService {
            AND (
              tasks.status IN ('pending', 'failed')
              OR (tasks.status = 'claimed' AND tasks.claimed_by = ?)
-           )
-           AND EXISTS (
-             SELECT 1
-             FROM archive_catalog_local_creator_folders local_creator_folders
-             WHERE local_creator_folders.creator_id = works.creator_id
-               AND local_creator_folders.is_active = 1
            )
          ORDER BY source_works.source_order, tasks.id
          LIMIT ?`

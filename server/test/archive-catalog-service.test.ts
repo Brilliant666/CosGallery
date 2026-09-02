@@ -197,9 +197,9 @@ describe('archive catalog first-stage pipeline', () => {
        WHERE creator_id = (SELECT id FROM archive_catalog_creators WHERE canonical_name = 'rua阮阮')`
     ).run();
     expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
-      created: 0,
-      existing: 0,
-      removedOutOfScope: 2
+      created: 1,
+      existing: 2,
+      removedOutOfScope: 0
     });
     database.prepare(
       `UPDATE archive_catalog_local_creator_folders
@@ -207,12 +207,13 @@ describe('archive catalog first-stage pipeline', () => {
        WHERE creator_id = (SELECT id FROM archive_catalog_creators WHERE canonical_name = 'rua阮阮')`
     ).run();
     expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
-      created: 2,
-      existing: 0,
-      removedOutOfScope: 0
+      created: 0,
+      existing: 2,
+      removedOutOfScope: 0,
+      reconciledLocal: 1
     });
     const pendingTasks = downloadService.list({ status: 'pending' });
-    expect(pendingTasks.summary).toMatchObject({ total: 2, pending: 2 });
+    expect(pendingTasks.summary).toMatchObject({ total: 3, pending: 2, ingested: 1 });
     expect(pendingTasks.items[0]).toMatchObject({
       creatorName: 'rua阮阮',
       sourceOrder: 2,
@@ -245,6 +246,63 @@ describe('archive catalog first-stage pipeline', () => {
     expect(bridge.isConfigured()).toBe(true);
     expect(bridge.verifyToken(token)).toBe(true);
     expect(bridge.verifyToken(`${token}x`)).toBe(false);
+  });
+
+  it('plans and claims every remote work when the creator has no local folder yet', async () => {
+    const hcfPath = path.join(tempRoot, 'remote-only-hcf.json');
+    const costuanPath = path.join(tempRoot, 'remote-only-costuan.json');
+    await fs.writeFile(hcfPath, JSON.stringify({
+      format: 'hcf-tag-preferences',
+      version: 1,
+      state: { liked: ['整位未下载博主'], kept: [] },
+      contentRatings: { entries: [{ name: '整位未下载博主', rating: 'r15' }] }
+    }));
+    await fs.writeFile(costuanPath, JSON.stringify({
+      format: 'costuan-archive-metadata',
+      version: 1,
+      records: {
+        'costuan:432': {
+          creatorName: '整位未下载博主',
+          aliases: [],
+          costuan: {
+            postId: '432',
+            title: '整位未下载博主写真合集[2套][持续更新]',
+            works: [
+              { order: 1, sourceOrder: 'NO.001', label: '第一套' },
+              { order: 2, sourceOrder: 'NO.002', label: '第二套' }
+            ]
+          },
+          baidu: {
+            sourceFolderName: '432',
+            destinationPath: '我的网盘/cos图集',
+            status: 'saved'
+          }
+        }
+      }
+    }));
+    await service.importHentaiclubSeed(hcfPath);
+    await service.importCostuanArchive(costuanPath);
+
+    const downloadService = new ArchiveDownloadTaskService(database);
+    expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
+      created: 2,
+      existing: 0,
+      removedOutOfScope: 0,
+      reconciledLocal: 0,
+      skippedWithoutDelivery: 0
+    });
+    const pending = downloadService.list({ status: 'pending' });
+    expect(pending.items).toHaveLength(2);
+    expect(pending.items.map((task) => task.targetFilename)).toEqual(['001.7z', '002.7z']);
+    expect(pending.items[0]).toMatchObject({
+      creatorName: '整位未下载博主',
+      sourceFolderName: '432',
+      targetRelativeDirectory: '整位未下载博主'
+    });
+
+    const claimed = downloadService.claim({ workerId: 'test-extension', limit: 500 });
+    expect(claimed).toHaveLength(2);
+    expect(claimed.every((task) => task.status === 'claimed')).toBe(true);
   });
 
   it('accepts Costuan zero-order extras while rejecting date-like folder prefixes', () => {
