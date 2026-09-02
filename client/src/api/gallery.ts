@@ -419,6 +419,62 @@ export function rotateArchiveBridgeToken() {
   });
 }
 
+export function fetchLocalIngestSettings() {
+  return requestJson<import('../types/api').LocalIngestSettings>('/api/admin/local-ingest/settings');
+}
+
+export function saveLocalIngestSettings(settings: import('../types/api').LocalIngestSettings) {
+  return requestJson<import('../types/api').LocalIngestSettings>('/api/admin/local-ingest/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(settings)
+  });
+}
+
+export function validateLocalIngestSettings(settings?: import('../types/api').LocalIngestSettings) {
+  return requestJson<import('../types/api').LocalIngestSettingsValidation>('/api/admin/local-ingest/settings/validate', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(settings ?? {})
+  });
+}
+
+export function smokeTestLocalIngestRecycleBin() {
+  return requestJson<{ targetPath: string; recycled: boolean }>('/api/admin/local-ingest/recycle-bin-smoke-test', {
+    method: 'POST'
+  });
+}
+
+export function fetchLocalIngestJobs(options: { status?: import('../types/api').LocalIngestStatus; limit?: number } = {}) {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 100) });
+  if (options.status) params.set('status', options.status);
+  return requestJson<import('../types/api').LocalIngestJob[]>(`/api/admin/local-ingest/jobs?${params.toString()}`);
+}
+
+export function scanLocalIngestInbox(allowlist?: string[]) {
+  return requestJson<import('../types/api').LocalIngestDiscoveryResult>('/api/admin/local-ingest/scan', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ allowlist })
+  });
+}
+
+export function runLocalIngestJob(id: number) {
+  return requestJson<import('../types/api').LocalIngestJob>(`/api/admin/local-ingest/jobs/${id}/run`, { method: 'POST' });
+}
+
+export function runLocalIngestBatch(allowlist?: string[], jobIds?: number[]) {
+  return requestJson<import('../types/api').LocalIngestJob[]>('/api/admin/local-ingest/run', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ allowlist, jobIds })
+  });
+}
+
+export function retryLocalIngestCleanup(id: number) {
+  return requestJson<import('../types/api').LocalIngestJob>(`/api/admin/local-ingest/jobs/${id}/retry-cleanup`, { method: 'POST' });
+}
+
 export async function updatePostContentRating(id: number, contentRating: 'R15' | 'R18') {
   return requestJson<import('../types/api').PostContentRatingMutationResult>(`/api/posts/${id}/content-rating`, {
     method: 'PATCH',

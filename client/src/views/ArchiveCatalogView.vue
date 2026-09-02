@@ -122,6 +122,94 @@
       </div>
     </section>
 
+    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="本地入库">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 3</p>
+          <h2 class="mt-1 mb-0 text-lg font-semibold">本地入库闭环</h2>
+          <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
+            从允许的博主目录发现已下载压缩包，完成双层解压、预览、原子入库、复扫对账和回收站清理。密码只从服务端本机环境读取，本页不会显示或保存密码。
+          </p>
+        </div>
+        <span v-if="localIngestSettings" class="rounded-full px-3 py-1.5 text-xs font-semibold" :class="localIngestSettings.archivePasswordConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
+          解压密码：{{ localIngestSettings.archivePasswordConfigured ? '已配置' : '未配置' }}
+        </span>
+      </div>
+
+      <div v-if="localIngestSettings" class="mt-4 grid gap-3 lg:grid-cols-2">
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">正式图库
+          <input v-model="localIngestSettings.libraryRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
+        </label>
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">本地待入库
+          <input v-model="localIngestSettings.inboxRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
+        </label>
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">处理中目录
+          <input v-model="localIngestSettings.processingRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
+        </label>
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">隔离目录
+          <input v-model="localIngestSettings.quarantineRoot" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
+        </label>
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">7-Zip 路径
+          <input v-model="localIngestSettings.sevenZipPath" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
+        </label>
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">允许处理的博主（每行一位）
+          <textarea v-model="localIngestAllowlistText" rows="3" class="rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text" />
+        </label>
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">文件稳定秒数
+          <input v-model.number="localIngestSettings.fileStableSeconds" type="number" min="1" max="3600" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
+        </label>
+        <div class="flex items-end gap-3 pb-2 text-sm">
+          <label class="flex items-center gap-2"><input v-model="localIngestSettings.recycleAfterIngest" type="checkbox" />确认入库后移入回收站</label>
+          <span class="text-muted">最大解压深度固定为 2</span>
+        </div>
+      </div>
+
+      <div class="mt-4 flex flex-wrap gap-2">
+        <button type="button" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="saveLocalIngestConfig">保存配置</button>
+        <button type="button" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="validateLocalIngestConfig">验证环境</button>
+        <button type="button" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="smokeTestRecycleBin">回收站测试</button>
+        <button type="button" data-test="scan-local-ingest" class="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="scanLocalInbox">扫描待入库</button>
+        <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="runLocalBatch">运行可处理任务</button>
+      </div>
+      <p v-if="localIngestNotice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ localIngestNotice }}</p>
+
+      <div v-if="localIngestJobs.length" class="mt-4 overflow-x-auto rounded-xl border border-border">
+        <table class="w-full min-w-[70rem] border-collapse text-left text-sm">
+          <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主 / 压缩包</th><th class="p-3">映射</th><th class="p-3">状态</th><th class="p-3">校验 / 清理</th><th class="p-3">预览</th><th class="p-3">操作</th></tr></thead>
+          <tbody>
+            <tr v-for="job in localIngestJobs" :key="job.id" class="border-t border-border align-top">
+              <td class="p-3"><strong>{{ job.creatorName }}</strong><small class="mt-1 block font-mono text-muted">{{ job.sourceArchiveName }} · {{ formatBytes(job.sourceArchiveSize) }}</small></td>
+              <td class="p-3"><span class="font-mono text-xs">source {{ job.sourceWorkId ?? '—' }}</span><small class="mt-1 block text-muted">task {{ job.archiveDownloadTaskId ?? '—' }}</small></td>
+              <td class="p-3"><strong>{{ localIngestStatusLabel(job.status) }}</strong><small class="mt-1 block text-muted">{{ job.phase }}</small><small v-if="job.errorCode" class="mt-1 block text-red-700">{{ job.errorCode }}：{{ job.errorDetail }}</small></td>
+              <td class="p-3">{{ job.validationStatus }}<small class="mt-1 block text-muted">cleanup: {{ job.cleanupStatus }}</small></td>
+              <td class="p-3 text-xs">
+                <template v-if="job.summary">
+                  图片 {{ jobSummaryValue(job, 'imageCount') }} · 视频 {{ jobSummaryValue(job, 'videoCount') }} · 广告 {{ jobSummaryValue(job, 'advertisementFileCount') }}
+                  <small class="mt-1 block break-all text-muted">{{ jobSummaryValue(job, 'plannedTargetPath') }}</small>
+                  <details class="mt-2 max-w-[30rem]">
+                    <summary class="cursor-pointer font-semibold text-accent">完整入库预览</summary>
+                    <dl class="mt-2 grid grid-cols-[6rem_minmax(12rem,1fr)] gap-x-2 gap-y-1 break-all leading-5 text-muted">
+                      <dt>原始标题</dt><dd>{{ jobSummaryValue(job, 'rawTitle') }}</dd>
+                      <dt>源压缩包</dt><dd>{{ job.sourceArchivePath }}</dd>
+                      <dt>SHA-256</dt><dd class="font-mono">{{ job.sourceArchiveSha256 }}</dd>
+                      <dt>外层格式</dt><dd>{{ jobSummaryValue(job, 'outerFormat') }}</dd>
+                      <dt>第一层输出</dt><dd>{{ jobSummaryList(job, 'levelOneOutput') }}</dd>
+                      <dt>内层原名</dt><dd>{{ jobSummaryValue(job, 'innerOriginalName') }}</dd>
+                      <dt>内层工作名</dt><dd>{{ jobSummaryValue(job, 'innerWorkingName') }}</dd>
+                      <dt>未知文件</dt><dd>{{ jobSummaryList(job, 'unknownFiles') }}</dd>
+                      <dt>警告</dt><dd>{{ jobSummaryList(job, 'warnings') }}</dd>
+                    </dl>
+                  </details>
+                </template>
+                <span v-else class="text-muted">尚无预览</span>
+              </td>
+              <td class="p-3"><button v-if="job.status !== 'ingested' && job.status !== 'awaiting_review'" type="button" class="rounded-lg border border-border bg-bg px-3 py-2 text-xs font-semibold disabled:opacity-50" :disabled="runningLocalIngestJobId === job.id" @click="runLocalJob(job.id)">继续任务</button><button v-else-if="job.status === 'ingested' && job.cleanupStatus === 'failed'" type="button" class="rounded-lg border border-border bg-bg px-3 py-2 text-xs font-semibold disabled:opacity-50" :disabled="runningLocalIngestJobId === job.id" @click="retryLocalCleanup(job.id)">重试回收</button><span v-else class="text-xs text-muted">—</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <form class="mb-5 grid gap-3 rounded-2xl border border-border bg-surface p-4 shadow-sm lg:grid-cols-[minmax(14rem,1fr)_repeat(3,minmax(9rem,0.22fr))_auto]" @submit.prevent="applyFilters">
       <label class="grid gap-1.5 text-xs font-semibold text-muted">
         搜索博主
@@ -293,7 +381,16 @@ import {
   fetchArchiveMetadataTasks,
   planArchiveDownloadTasks,
   planArchiveMetadataTasks,
-  rotateArchiveBridgeToken
+  rotateArchiveBridgeToken,
+  fetchLocalIngestJobs,
+  fetchLocalIngestSettings,
+  retryLocalIngestCleanup,
+  runLocalIngestBatch,
+  runLocalIngestJob,
+  saveLocalIngestSettings,
+  scanLocalIngestInbox,
+  smokeTestLocalIngestRecycleBin,
+  validateLocalIngestSettings
 } from '../api/gallery';
 import type {
   ArchiveCatalogCreator,
@@ -305,7 +402,9 @@ import type {
   ArchiveDownloadTasksPayload,
   ArchiveMetadataTaskStatus,
   ArchiveMetadataTasksPayload,
-  ContentRating
+  ContentRating,
+  LocalIngestJob,
+  LocalIngestSettings
 } from '../types/api';
 
 const CatalogMetric = defineComponent({
@@ -348,6 +447,12 @@ const rotatingBridgeToken = ref(false);
 const metadataTasks = ref<ArchiveMetadataTasksPayload | null>(null);
 const planningMetadata = ref(false);
 const metadataNotice = ref('');
+const localIngestSettings = ref<LocalIngestSettings | null>(null);
+const localIngestAllowlistText = ref('');
+const localIngestJobs = ref<LocalIngestJob[]>([]);
+const localIngestBusy = ref(false);
+const runningLocalIngestJobId = ref<number | null>(null);
+const localIngestNotice = ref('');
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)));
 const summaryCards = computed(() => summary.value ? [
@@ -361,6 +466,128 @@ const summaryCards = computed(() => summary.value ? [
 
 function formatCount(value: number) {
   return new Intl.NumberFormat('zh-CN').format(value);
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let next = value / 1024;
+  let index = 0;
+  while (next >= 1024 && index < units.length - 1) { next /= 1024; index += 1; }
+  return `${next.toFixed(next >= 100 ? 0 : 1)} ${units[index]}`;
+}
+
+function localIngestStatusLabel(status: LocalIngestJob['status']) {
+  return ({ queued: '待处理', running: '处理中', awaiting_review: '待人工核查', reconciling: '对账中', ingested: '已入库', failed: '失败' } as const)[status];
+}
+
+function jobSummaryValue(job: LocalIngestJob, key: string) {
+  const value = job.summary?.[key];
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '—';
+}
+
+function jobSummaryList(job: LocalIngestJob, key: string) {
+  const value = job.summary?.[key];
+  return Array.isArray(value) && value.length > 0 ? value.map(String).join('、') : '无';
+}
+
+async function loadLocalIngest() {
+  const [settings, jobs] = await Promise.all([fetchLocalIngestSettings(), fetchLocalIngestJobs({ limit: 100 })]);
+  localIngestSettings.value = settings;
+  localIngestAllowlistText.value = settings.allowlist.join('\n');
+  localIngestJobs.value = jobs;
+}
+
+function currentLocalIngestSettings(): LocalIngestSettings {
+  if (!localIngestSettings.value) throw new Error('本地入库配置尚未加载');
+  return {
+    ...localIngestSettings.value,
+    allowlist: [...new Set(localIngestAllowlistText.value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))],
+    maxExtractionDepth: 2
+  };
+}
+
+async function saveLocalIngestConfig() {
+  localIngestBusy.value = true;
+  try {
+    localIngestSettings.value = await saveLocalIngestSettings(currentLocalIngestSettings());
+    localIngestAllowlistText.value = localIngestSettings.value.allowlist.join('\n');
+    localIngestNotice.value = '本地入库配置已保存；密码仍只保存在服务端本机环境。';
+  } catch (reason) {
+    localIngestNotice.value = reason instanceof Error ? reason.message : '无法保存本地入库配置';
+  } finally { localIngestBusy.value = false; }
+}
+
+async function validateLocalIngestConfig() {
+  localIngestBusy.value = true;
+  try {
+    const result = await validateLocalIngestSettings(currentLocalIngestSettings());
+    localIngestNotice.value = result.valid
+      ? `环境验证通过：${result.sevenZip.version ?? '7-Zip 可用'}，四个目录位于同一卷。`
+      : `环境验证未通过：${result.errors.join('；')}`;
+  } catch (reason) {
+    localIngestNotice.value = reason instanceof Error ? reason.message : '无法验证本地入库环境';
+  } finally { localIngestBusy.value = false; }
+}
+
+async function smokeTestRecycleBin() {
+  localIngestBusy.value = true;
+  try {
+    const result = await smokeTestLocalIngestRecycleBin();
+    localIngestNotice.value = result.recycled ? 'G: 盘回收站测试通过，哨兵文件已移入 Windows 回收站。' : '回收站测试未通过。';
+  } catch (reason) {
+    localIngestNotice.value = reason instanceof Error ? reason.message : '回收站测试失败';
+  } finally { localIngestBusy.value = false; }
+}
+
+async function scanLocalInbox() {
+  localIngestBusy.value = true;
+  try {
+    const settings = currentLocalIngestSettings();
+    localIngestSettings.value = await saveLocalIngestSettings(settings);
+    const result = await scanLocalIngestInbox(settings.allowlist);
+    localIngestJobs.value = await fetchLocalIngestJobs({ limit: 100 });
+    localIngestNotice.value = `发现 ${result.discoveredArchives} 个压缩包；新增 ${result.createdJobs} 个任务，已有 ${result.existingJobs} 个，待核查 ${result.awaitingReview} 个。`;
+  } catch (reason) {
+    localIngestNotice.value = reason instanceof Error ? reason.message : '无法扫描待入库目录';
+  } finally { localIngestBusy.value = false; }
+}
+
+async function runLocalJob(id: number) {
+  runningLocalIngestJobId.value = id;
+  try {
+    const result = await runLocalIngestJob(id);
+    localIngestNotice.value = `${result.creatorName}/${result.sourceArchiveName}：${localIngestStatusLabel(result.status)}（${result.phase}）`;
+    localIngestJobs.value = await fetchLocalIngestJobs({ limit: 100 });
+  } catch (reason) {
+    localIngestNotice.value = reason instanceof Error ? reason.message : '本地入库任务失败';
+  } finally { runningLocalIngestJobId.value = null; }
+}
+
+async function runLocalBatch() {
+  localIngestBusy.value = true;
+  try {
+    const settings = currentLocalIngestSettings();
+    const results = await runLocalIngestBatch(settings.allowlist);
+    localIngestJobs.value = await fetchLocalIngestJobs({ limit: 100 });
+    const ingested = results.filter((job) => job.status === 'ingested').length;
+    const review = results.filter((job) => job.status === 'awaiting_review').length;
+    const failed = results.filter((job) => job.status === 'failed').length;
+    localIngestNotice.value = `本批运行 ${results.length} 个任务：已入库 ${ingested}，待核查 ${review}，失败 ${failed}。`;
+  } catch (reason) {
+    localIngestNotice.value = reason instanceof Error ? reason.message : '无法运行本地入库批处理';
+  } finally { localIngestBusy.value = false; }
+}
+
+async function retryLocalCleanup(id: number) {
+  runningLocalIngestJobId.value = id;
+  try {
+    await retryLocalIngestCleanup(id);
+    localIngestJobs.value = await fetchLocalIngestJobs({ limit: 100 });
+    localIngestNotice.value = '回收站清理已重试。';
+  } catch (reason) {
+    localIngestNotice.value = reason instanceof Error ? reason.message : '无法重试回收站清理';
+  } finally { runningLocalIngestJobId.value = null; }
 }
 
 function preferenceClass(value: ArchiveCatalogPreference | null) {
@@ -541,6 +768,7 @@ onMounted(async () => {
     loadCatalog(),
     loadDownloadTasks().catch(() => undefined),
     loadMetadataTasks().catch(() => undefined),
+    loadLocalIngest().catch(() => undefined),
     fetchArchiveBridgeStatus().then((result) => { bridgeConfigured.value = result.configured; }).catch(() => undefined)
   ]);
 });

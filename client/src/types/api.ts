@@ -723,6 +723,76 @@ export interface ArchiveMetadataPlanResult {
   summary: ArchiveMetadataTaskSummary;
 }
 
+export type LocalIngestStatus = 'queued' | 'running' | 'awaiting_review' | 'reconciling' | 'ingested' | 'failed';
+export type LocalIngestCleanupStatus = 'not_ready' | 'pending' | 'recycling' | 'recycled' | 'failed';
+
+export interface LocalIngestSettings {
+  libraryRoot: string;
+  inboxRoot: string;
+  processingRoot: string;
+  quarantineRoot: string;
+  sevenZipPath: string;
+  fileStableSeconds: number;
+  recycleAfterIngest: boolean;
+  maxExtractionDepth: 2;
+  allowlist: string[];
+  archivePasswordConfigured: boolean;
+}
+
+export interface LocalIngestSettingsValidation {
+  valid: boolean;
+  passwordConfigured: boolean;
+  sevenZip: { valid: boolean; version: string | null; error: string | null };
+  paths: Record<'libraryRoot' | 'inboxRoot' | 'processingRoot' | 'quarantineRoot', {
+    path: string;
+    exists: boolean;
+    readable: boolean;
+    writable: boolean;
+    freeBytes: number | null;
+    volume: string;
+    error: string | null;
+  }>;
+  sameVolume: boolean;
+  errors: string[];
+}
+
+export interface LocalIngestJob {
+  id: number;
+  archiveDownloadTaskId: number | null;
+  sourceWorkId: number | null;
+  creatorId: number;
+  creatorName: string;
+  sourceArchivePath: string;
+  sourceArchiveName: string;
+  sourceArchiveSize: number;
+  sourceArchiveMtime: number;
+  sourceArchiveSha256: string;
+  status: LocalIngestStatus;
+  phase: string;
+  validationStatus: 'unknown' | 'passed' | 'warning' | 'failed';
+  cleanupStatus: LocalIngestCleanupStatus;
+  processingPath: string | null;
+  targetPath: string | null;
+  attemptCount: number;
+  errorCode: string | null;
+  errorDetail: string | null;
+  summary: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface LocalIngestDiscoveryResult {
+  allowlist: string[];
+  discoveredArchives: number;
+  createdJobs: number;
+  existingJobs: number;
+  waitingStable: number;
+  awaitingReview: number;
+  ignoredFiles: number;
+  jobs: LocalIngestJob[];
+}
+
 export interface PostContentRatingMutationResult {
   ok: boolean;
   id: number;
