@@ -1,6 +1,7 @@
 # LocalIngest 真实 E2E 聚合证据
 
-记录时间：2026-09-02（Asia/Shanghai）  
+记录时间：2026-09-02（Asia/Shanghai）
+
 本次合并前硬化仅只读复核既有账本与正式目标，没有重新执行任何真实任务。
 
 | 博主 | 归档 | job | source work / task | local work | 图片 | 视频 | scan run | 最终状态 |

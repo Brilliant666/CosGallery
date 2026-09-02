@@ -6,7 +6,7 @@
 
 | status | 含义 | 可执行动作 |
 | --- | --- | --- |
-| `queued` | 已发现且可处理，或仍在等待稳定 | 稳定后运行；`waiting_stable` 不可领取 |
+| `queued` | 已通过连续稳定观察、完成哈希且可处理 | 运行；历史 `waiting_stable` 不可领取 |
 | `running` | 正在测试、解压、校验或提交 | 进程中断后按 phase/marker 恢复 |
 | `awaiting_review` | 映射、结构、安全或内容需要人工判断 | 保持源文件和工作目录，不自动重试 |
 | `reconciling` | 正式目录已提交，但索引或账本尚未全部确认 | 只复扫和对账，不再解压/移动 |
@@ -18,7 +18,7 @@
 | phase | checkpoint / 行为 |
 | --- | --- |
 | `discovered` | 文件稳定且映射完成 |
-| `waiting_stable` | 文件过新、为零或有关联下载临时文件 |
+| `waiting_stable` | 仅兼容旧任务；新文件等待稳定时只写 observation，不创建正式 job |
 | `mapping` | 无映射、多映射、目标冲突或来源已本地化 |
 | `testing_outer` | 外层列表安全检查与完整性测试 |
 | `extracting_outer` | 解压至 `level-1`，完成后写 `.level-1-complete` |
@@ -53,6 +53,8 @@
 
 ## 恢复规则
 
+服务启动时会按数据库 lease 检查遗留状态，但不会自动执行真实任务：过期的 `running` 转为 `failed + INTERRUPTED_PROCESS`，保留原 phase、processing path、marker 和 attemptCount；过期的 `reconciling` 保持对账路径；`ingested + recycling` 转为可重试的 cleanup failed。管理页统一显示“上次进程中断，可继续”。
+
 | 中断位置 | 重启后的行为 |
 | --- | --- |
 | 第一层解压后 | 识别 `.level-1-complete`，验证已有输出，跳过重复外层解压 |
@@ -61,6 +63,8 @@
 | 正式目录移动后、复扫前 | 发现目标存在，直接进入 `reconciling` |
 | 对账完成、回收前 | `ingested + pending/failed` 只调用 cleanup |
 | cleanup 部分完成 | 对每个路径先检查是否仍存在，只回收剩余对象 |
+
+失败现场在 V1 中始终留在 `processingRoot/<job-id>`。不自动移动到隔离目录，也不自动回收未确认入库的数据。
 
 明确禁止的迁移：
 
