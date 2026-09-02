@@ -1,6 +1,6 @@
 # 本地入库双博主真实基线
 
-记录时间：2026-09-02（Asia/Shanghai）  
+记录时间：2026-09-02（Asia/Shanghai）
 任务：`LOCAL_INGEST_CLOSED_LOOP_V1_TWO_CREATOR_E2E`
 
 ## 安全范围
