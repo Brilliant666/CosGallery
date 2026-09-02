@@ -52,6 +52,7 @@ type Fixture = {
   service: LocalIngestService;
   recycleCalls: string[];
   rescanCalls: number;
+  advanceTime: (milliseconds: number) => void;
 };
 
 function run(command: string, args: string[], cwd?: string): Promise<void> {
@@ -286,7 +287,11 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     ).run(path.relative(libraryRoot, target.target_path), target.target_path, path.basename(target.target_path), now, now, now);
     db.prepare("UPDATE archive_catalog_download_tasks SET status = 'ingested' WHERE id = 1").run();
   };
-  const service = new LocalIngestService(database, settings, recycle, rescan);
+  let clock = Date.now();
+  const service = new LocalIngestService(database, settings, recycle, rescan, {
+    now: () => new Date(clock),
+    expectedGalleryRoot: libraryRoot
+  });
   return {
     root,
     libraryRoot,
@@ -299,8 +304,15 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     database,
     service,
     recycleCalls,
+    advanceTime(milliseconds: number) { clock += milliseconds; },
     get rescanCalls() { return rescanCalls; }
   };
+}
+
+async function discoverStable(fixture: Fixture, allowlist = [fixture.creatorName]) {
+  await fixture.service.scanInbox(allowlist);
+  fixture.advanceTime(1_100);
+  return fixture.service.scanInbox(allowlist);
 }
 
 describe.sequential('LocalIngestService', () => {
@@ -322,7 +334,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('discovers, maps, extracts twice, commits, reconciles, recycles, and reruns idempotently', async () => {
     fixture = await createFixture();
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     expect(discovery.createdJobs).toBe(1);
     expect(discovery.jobs[0]).toMatchObject({ sourceWorkId: 1, archiveDownloadTaskId: 1, status: 'queued' });
     const duplicateDiscovery = await fixture.service.scanInbox([fixture.creatorName]);
@@ -356,7 +368,7 @@ describe.sequential('LocalIngestService', () => {
     expect(recycledArchiveName).toBeTruthy();
     await fs.mkdir(path.dirname(fixture.sourceArchivePath), { recursive: true });
     await fs.copyFile(path.join(fixture.recycleRoot, recycledArchiveName!), fixture.sourceArchivePath);
-    const rediscovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const rediscovery = await discoverStable(fixture);
     expect(rediscovery).toMatchObject({ createdJobs: 0, existingJobs: 1 });
     expect(rediscovery.jobs[0]).toMatchObject({ id: result.id, status: 'ingested', attemptCount: 1 });
   }, 60_000);
@@ -372,17 +384,16 @@ describe.sequential('LocalIngestService', () => {
   it.runIf(process.platform === 'win32')('does not claim a file that is still downloading, then resumes after it becomes stable', async () => {
     fixture = await createFixture({ recent: true, temporarySibling: true });
     const discovery = await fixture.service.scanInbox([fixture.creatorName]);
-    expect(discovery).toMatchObject({ createdJobs: 1, waitingStable: 1 });
-    expect(discovery.jobs[0]).toMatchObject({ status: 'queued', phase: 'waiting_stable', attemptCount: 0 });
-    expect(await fixture.service.runBatch({ jobIds: [discovery.jobs[0].id] })).toEqual([]);
-    expect(await fixture.service.runJob(discovery.jobs[0].id)).toMatchObject({ phase: 'waiting_stable', attemptCount: 0 });
+    expect(discovery).toMatchObject({ createdJobs: 0, waitingStable: 1 });
+    expect(discovery.jobs).toEqual([]);
 
     await fs.rm(`${fixture.sourceArchivePath}.crdownload`);
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    await fixture.service.scanInbox([fixture.creatorName]);
+    fixture.advanceTime(1_100);
     const stableDiscovery = await fixture.service.scanInbox([fixture.creatorName]);
-    expect(stableDiscovery).toMatchObject({ createdJobs: 0, existingJobs: 1 });
+    expect(stableDiscovery).toMatchObject({ createdJobs: 1, existingJobs: 0 });
     expect(stableDiscovery.jobs[0]).toMatchObject({ phase: 'discovered', attemptCount: 0 });
-    expect(await fixture.service.runJob(discovery.jobs[0].id)).toMatchObject({ status: 'ingested', attemptCount: 1 });
+    expect(await fixture.service.runJob(stableDiscovery.jobs[0].id)).toMatchObject({ status: 'ingested', attemptCount: 1 });
   }, 60_000);
 
   it.runIf(process.platform === 'win32')('reports a corrupt outer archive without changing the source file', async () => {
@@ -391,7 +402,7 @@ describe.sequential('LocalIngestService', () => {
     const old = new Date(Date.now() - 10_000);
     await fs.utimes(fixture.sourceArchivePath, old, old);
     const before = await fs.readFile(fixture.sourceArchivePath);
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'failed', errorCode: 'ARCHIVE_CORRUPT' });
     expect(await fs.readFile(fixture.sourceArchivePath)).toEqual(before);
@@ -399,7 +410,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('requests review when the outer layer has no inner archive', async () => {
     fixture = await createFixture({ noInner: true });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'INNER_ARCHIVE_MISSING' });
     expect(await fs.access(fixture.sourceArchivePath).then(() => true, () => false)).toBe(true);
@@ -407,7 +418,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('stops at the fixed extraction depth when another archive remains', async () => {
     fixture = await createFixture({ includeNestedArchive: true });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'NESTED_DEPTH_EXCEEDED' });
     expect(await fs.readdir(path.join(fixture.libraryRoot, fixture.creatorName)).catch(() => [])).toEqual([]);
@@ -415,28 +426,28 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('requires at least one valid media file', async () => {
     fixture = await createFixture({ includeImage: false });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'NO_VALID_MEDIA' });
   }, 60_000);
 
   it.runIf(process.platform === 'win32')('blocks unreadable and zero-byte media', async () => {
     fixture = await createFixture({ corruptImage: true });
-    let discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    let discovery = await discoverStable(fixture);
     let result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'MEDIA_UNREADABLE' });
     fixture.database.close();
     await fs.rm(fixture.root, { recursive: true, force: true });
 
     fixture = await createFixture({ zeroByteMedia: true });
-    discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    discovery = await discoverStable(fixture);
     result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'UNSAFE_OR_EMPTY_FILE' });
   }, 60_000);
 
   it.runIf(process.platform === 'win32' && existsSync(ffmpegPath) && existsSync(ffprobePath))('preserves image/video subdirectories while excluding advertisements from a mixed work', async () => {
     fixture = await createFixture({ includeVideo: true, useMediaSubdirectories: true, mediaSummary: '1P-1V-1MB' });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'ingested' });
     expect(result.summary).toMatchObject({ imageCount: 1, videoCount: 1, mediaType: 'mixed', advertisementFileCount: 1 });
@@ -448,7 +459,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32' && existsSync(ffmpegPath) && existsSync(ffprobePath))('ingests a video-only work', async () => {
     fixture = await createFixture({ includeImage: false, includeVideo: true, mediaSummary: '1V-1MB' });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'ingested', validationStatus: 'passed' });
     expect(result.summary).toMatchObject({ imageCount: 0, videoCount: 1, mediaType: 'video' });
@@ -457,7 +468,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('records declared-count differences as warnings without blocking ingest', async () => {
     fixture = await createFixture({ mediaSummary: '2P-10MB' });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'ingested', validationStatus: 'warning' });
     expect(result.summary?.warnings).toEqual(['Declared 2 images; extracted 1']);
@@ -469,7 +480,7 @@ describe.sequential('LocalIngestService', () => {
     const target = path.join(fixture.libraryRoot, fixture.creatorName, `${fixture.creatorName} NO.007 Sample [1P-1MB]`);
     await fs.mkdir(target, { recursive: true });
     await fs.writeFile(path.join(target, 'existing.jpg'), 'do not overwrite');
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     expect(discovery.jobs[0]).toMatchObject({ status: 'awaiting_review', errorCode: 'TARGET_EXISTS', attemptCount: 0 });
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'TARGET_EXISTS', attemptCount: 0 });
@@ -478,7 +489,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('recovers after the atomic move when reconciliation initially fails', async () => {
     fixture = await createFixture({ reconciliationFailures: 1 });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const first = await fixture.service.runJob(discovery.jobs[0].id);
     expect(first).toMatchObject({ status: 'reconciling', phase: 'reconciling', errorCode: 'RECONCILIATION_INCOMPLETE', attemptCount: 1 });
     expect(await fs.access(first.targetPath!).then(() => true, () => false)).toBe(true);
@@ -492,7 +503,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('retries only cleanup after an ingested work fails to enter the recycle bin', async () => {
     fixture = await createFixture({ recycleFailures: 1 });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const first = await fixture.service.runJob(discovery.jobs[0].id);
     expect(first).toMatchObject({ status: 'ingested', phase: 'cleanup', cleanupStatus: 'failed', errorCode: 'RECYCLE_FAILED', attemptCount: 1 });
     expect(await fs.access(first.targetPath!).then(() => true, () => false)).toBe(true);
@@ -511,7 +522,7 @@ describe.sequential('LocalIngestService', () => {
     await fs.copyFile(fixture.sourceArchivePath, secondArchive);
     const old = new Date(Date.now() - 10_000);
     await fs.utimes(secondArchive, old, old);
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     expect(discovery.createdJobs).toBe(2);
     expect(new Set(discovery.jobs.map((job) => job.sourceWorkId))).toEqual(new Set([1, 2]));
     expect(new Set(discovery.jobs.map((job) => job.sourceArchiveSha256)).size).toBe(1);
@@ -521,7 +532,7 @@ describe.sequential('LocalIngestService', () => {
     fixture = await createFixture();
     const unmappedArchive = path.join(fixture.inboxRoot, fixture.creatorName, '999.7z');
     await fs.rename(fixture.sourceArchivePath, unmappedArchive);
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     expect(discovery.jobs[0]).toMatchObject({
       sourceWorkId: null,
       archiveDownloadTaskId: null,
@@ -536,7 +547,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('resumes safely after the first extraction layer completed', async () => {
     fixture = await createFixture();
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const jobId = discovery.jobs[0].id;
     const processingPath = path.join(fixture.processingRoot, String(jobId));
     const levelOne = path.join(processingPath, 'level-1');
@@ -555,7 +566,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('resumes safely after both extraction layers completed', async () => {
     fixture = await createFixture();
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const jobId = discovery.jobs[0].id;
     const processingPath = path.join(fixture.processingRoot, String(jobId));
     const levelOne = path.join(processingPath, 'level-1');
@@ -590,7 +601,7 @@ describe.sequential('LocalIngestService', () => {
     await fs.copyFile(fixture.sourceArchivePath, secondArchive);
     const old = new Date(Date.now() - 10_000);
     await fs.utimes(secondArchive, old, old);
-    const discovery = await fixture.service.scanInbox([fixture.creatorName, secondCreator]);
+    const discovery = await discoverStable(fixture, [fixture.creatorName, secondCreator]);
     expect(discovery.createdJobs).toBe(2);
     expect(discovery.jobs.map((job) => [job.creatorName, job.sourceWorkId, job.archiveDownloadTaskId])).toEqual([
       [fixture.creatorName, 1, 1],
@@ -600,7 +611,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('stops for review when the first layer contains multiple inner archives', async () => {
     fixture = await createFixture({ innerCount: 2 });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'INNER_ARCHIVE_AMBIGUOUS' });
     expect(await fs.access(fixture.sourceArchivePath).then(() => true, () => false)).toBe(true);
@@ -608,7 +619,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('keeps unknown binaries out of the gallery and requests review', async () => {
     fixture = await createFixture({ includeUnknown: true });
-    const discovery = await fixture.service.scanInbox([fixture.creatorName]);
+    const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'UNKNOWN_FILE_TYPE' });
     expect(await fs.readdir(path.join(fixture.libraryRoot, fixture.creatorName)).catch(() => [])).toEqual([]);
@@ -621,7 +632,6 @@ describe.sequential('LocalIngestService', () => {
         libraryRoot: fixture!.libraryRoot,
         inboxRoot: fixture!.inboxRoot,
         processingRoot: fixture!.processingRoot,
-        quarantineRoot: fixture!.quarantineRoot,
         sevenZipPath,
         fileStableSeconds: 1,
         recycleAfterIngest: true,
@@ -631,7 +641,21 @@ describe.sequential('LocalIngestService', () => {
       }),
       getArchivePassword: () => 'definitely-wrong-password'
     } as unknown as LocalIngestSettingsService;
-    const service = new LocalIngestService(fixture.database, wrongSettings, {} as RecycleBinAdapter, async () => undefined);
+    const sourceStats = await fs.stat(fixture.sourceArchivePath);
+    const observedAt = new Date(Date.now() - 2_000).toISOString();
+    fixture.database.prepare(
+      `INSERT INTO local_ingest_file_observations (
+         source_archive_path, creator_id, source_archive_name, observed_size,
+         observed_mtime, stable_since, last_observed_at
+       ) VALUES (?, 1, '007.7z', ?, ?, ?, ?)`
+    ).run(fixture.sourceArchivePath, sourceStats.size, sourceStats.mtimeMs, observedAt, observedAt);
+    const service = new LocalIngestService(
+      fixture.database,
+      wrongSettings,
+      {} as RecycleBinAdapter,
+      async () => undefined,
+      { expectedGalleryRoot: fixture.libraryRoot }
+    );
     const discovery = await service.scanInbox([fixture.creatorName]);
     const result = await service.runJob(discovery.jobs[0].id);
     expect(result.status).toBe('failed');

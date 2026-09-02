@@ -77,7 +77,6 @@ const localIngestSettings = {
   libraryRoot: 'G:\\cos图集',
   inboxRoot: 'G:\\cos待入库',
   processingRoot: 'G:\\cos处理中',
-  quarantineRoot: 'G:\\cos隔离区',
   sevenZipPath: 'C:\\Program Files\\7-Zip\\7z.exe',
   fileStableSeconds: 5,
   recycleAfterIngest: true,
@@ -252,8 +251,7 @@ describe('ArchiveCatalogView', () => {
       paths: {
         libraryRoot: { path: localIngestSettings.libraryRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null },
         inboxRoot: { path: localIngestSettings.inboxRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null },
-        processingRoot: { path: localIngestSettings.processingRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null },
-        quarantineRoot: { path: localIngestSettings.quarantineRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null }
+        processingRoot: { path: localIngestSettings.processingRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null }
       },
       sameVolume: true,
       errors: []
@@ -382,6 +380,10 @@ describe('ArchiveCatalogView', () => {
 
     expect(wrapper.text()).toContain('本地入库闭环');
     expect(wrapper.text()).toContain('解压密码：已配置');
+    expect(wrapper.text()).toContain('V1 正式图库根目录由 GALLERY_ROOT 启动配置决定');
+    expect(wrapper.text()).not.toContain('隔离目录');
+    const libraryInput = wrapper.findAll('input').find((input) => input.element.value === localIngestSettings.libraryRoot);
+    expect(libraryInput?.attributes()).toHaveProperty('readonly');
     expect(wrapper.text()).toContain('007.7zz');
     expect(wrapper.text()).toContain(localIngestJob.sourceArchiveSha256);
     expect(wrapper.text()).not.toContain('fixture-password');
@@ -391,5 +393,20 @@ describe('ArchiveCatalogView', () => {
 
     expect(runLocalIngestBatch).toHaveBeenCalledWith(['火龙果羊', '女主K']);
     expect(wrapper.text()).toContain('本批运行 0 个任务');
+  });
+
+  it('labels a stale recovered job as resumable', async () => {
+    vi.mocked(fetchLocalIngestJobs).mockResolvedValue([{
+      ...localIngestJob,
+      status: 'failed',
+      phase: 'extracting_outer',
+      errorCode: 'INTERRUPTED_PROCESS',
+      errorDetail: 'internal English fallback'
+    }]);
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('上次进程中断，可继续');
+    expect(wrapper.text()).not.toContain('internal English fallback');
   });
 });
