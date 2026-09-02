@@ -48,7 +48,7 @@
 - 工作区：`git diff --check` 通过；标准构建没有向源码目录生成新的编译文件。
 - 测试隔离：最终 Vitest 配置默认使用系统临时 `DATA_ROOT`；导入安全测试证明 LocalIngest 模块加载不会连接生产数据库。
 
-GitHub `Verify` 的最终运行结果将在推送后由 PR check 提供；只有该 check 实际成功后，PR 才会从 Draft 转为 Ready。
+GitHub `Verify` 首次完整运行已成功：[`33620405038`](https://github.com/Brilliant666/CosGallery/actions/runs/33620405038)，耗时 2 分 39 秒。该运行在 Ubuntu / Node.js 22 上通过两端测试、迁移、两端构建、diff check 与构建后生成物检查。记录该结果的纯文档提交仍需再次通过相同门禁，PR 才会从 Draft 转为 Ready。
 
 ## 真实数据保护
 
