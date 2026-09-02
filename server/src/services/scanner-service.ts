@@ -227,6 +227,7 @@ interface DerivativeProcessingSummary {
 
 interface FullScanContextOptions {
   rebuildDerivativeReuseIndex?: RebuildDerivativeReuseIndex;
+  creatorNames?: string[];
 }
 
 type ScanPhase = 'idle' | 'migration' | 'discovery' | 'derivatives';
@@ -688,6 +689,33 @@ class ScannerService {
     });
 
     await this.enqueue(async () => this.performFullScan(reason, resolvedOptions), options);
+    return scanRunRepository.latest();
+  }
+
+  async scanCosCreators(
+    creatorNames: string[],
+    reason = 'local-ingest',
+    options: EnqueueScanOptions = {}
+  ): Promise<ScanRunRecord | undefined> {
+    if (!appConfig.cosGalleryMode) {
+      throw new Error('Creator-scoped scans are only available in CosGallery mode');
+    }
+    const normalizedCreatorNames = [...new Set(creatorNames.map((name) => normalizePath(name).trim()).filter(Boolean))];
+    if (
+      normalizedCreatorNames.length === 0
+      || normalizedCreatorNames.some((name) => name === '.' || name === '..' || name.includes('/'))
+    ) {
+      throw new Error('Creator-scoped scans require one or more direct gallery-root directory names');
+    }
+    const resolvedOptions = resolveFullScanOptions({
+      repairUnchangedDerivatives: false,
+      allowDerivativeMigration: false,
+      ...options
+    });
+    await this.enqueue(
+      async () => this.performFullScan(reason, resolvedOptions, { creatorNames: normalizedCreatorNames }),
+      options
+    );
     return scanRunRepository.latest();
   }
 
@@ -1584,7 +1612,8 @@ class ScannerService {
 
       if (indexedImages.length > 0) {
         const firstItem = indexedImages[0];
-        const existingPost = postRepository.findBySourcePath(workRelativePath);
+        const existingPost = postRepository.findByExactImageIds(indexedImages.map((image) => image.id))
+          ?? postRepository.findBySourcePath(workRelativePath);
         const newestItemTimestamp = Math.max(...indexedImages.map((image) => image.sort_timestamp));
 
         postRepository.upsertPostWithItems({
@@ -2213,6 +2242,9 @@ class ScannerService {
     const treatStoriesAsFolders = this.shouldTreatStoriesAsFolders();
     const treatCarouselsAsFolders = this.shouldTreatCarouselsAsFolders();
     const excludedFolderRules = this.getEffectiveExcludedFolderRules();
+    const scopedCreatorNames = contextOptions.creatorNames
+      ? new Set(contextOptions.creatorNames.map((name) => normalizePath(name).toLocaleLowerCase()))
+      : null;
 
     if (!storageService.refreshAvailability().libraryAvailable) {
       return this.finishUnavailableRun(runId, reason);
@@ -2386,6 +2418,7 @@ class ScannerService {
             if (!entry.isDirectory()) return false;
             const relativePath = normalizePath(entry.name);
             return (
+              (!scopedCreatorNames || scopedCreatorNames.has(relativePath.toLocaleLowerCase())) &&
               !isHiddenPath(relativePath) &&
               !this.isManagedGalleryPath(relativePath) &&
               !matchesExcludedFolder(relativePath, excludedFolderRules)
@@ -2496,16 +2529,20 @@ class ScannerService {
         }, null, treatStoriesAsFolders, treatCarouselsAsFolders, excludedFolderRules);
       }
 
-      for (const folder of existingFolders) {
-        if (!discoveredFolderIds.has(folder.id)) {
-          summary.removed_files += imageRepository.markAllDeletedByFolder(folder.id);
-          folderRepository.setAvatar(folder.id, null, 'auto');
+      if (!scopedCreatorNames) {
+        for (const folder of existingFolders) {
+          if (!discoveredFolderIds.has(folder.id)) {
+            summary.removed_files += imageRepository.markAllDeletedByFolder(folder.id);
+            folderRepository.setAvatar(folder.id, null, 'auto');
+          }
         }
       }
 
       postRepository.syncRepresentativePlaces();
 
-      metrics.removedFolderStateRows = folderScanStateRepository.deleteMissing([...activeFolderPaths]);
+      metrics.removedFolderStateRows = scopedCreatorNames
+        ? 0
+        : folderScanStateRepository.deleteMissing([...activeFolderPaths]);
 
       metrics.discoveryDurationMs = elapsedMilliseconds(discoveryStartedAt);
       metrics.derivativeJobsQueued = derivativeJobs.size;

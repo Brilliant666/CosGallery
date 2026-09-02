@@ -22,6 +22,8 @@ import { appConfig } from "./config/env.js";
 import { createApp } from "./app.js";
 import { collectionRepository } from "./db/repositories.js";
 import { log } from "./services/log-service.js";
+import { localIngestService } from "./services/local-ingest-service.js";
+import { localIngestSettingsService } from "./services/local-ingest-settings-service.js";
 import { permanentDeletionService } from "./services/permanent-deletion-service.js";
 import { scannerService } from "./services/scanner-service.js";
 import { watcherService } from "./services/watcher-service.js";
@@ -85,6 +87,16 @@ async function bootstrap(): Promise<void> {
         "Gallery watcher idle until a user-triggered scan or rebuild starts it",
       );
     }
+
+    void (async () => {
+      const recovered = await localIngestService.recoverInterruptedJobs();
+      if (recovered > 0) {
+        log.info(`Marked ${recovered} interrupted local ingest job(s) as safely resumable`);
+      }
+      if (localIngestSettingsService.get().allowlist.length > 0) await localIngestService.scanInbox();
+    })().catch((error: unknown) => {
+      log.info("Local ingest startup recovery or compensation scan could not complete", error instanceof Error ? error.message : String(error));
+    });
   });
 
   async function shutdown(signal: string): Promise<void> {

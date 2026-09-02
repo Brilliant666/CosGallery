@@ -11,6 +11,10 @@ import {
 import { ArchiveCatalogQueryService } from '../services/archive-catalog-query-service.js';
 import { ArchiveBridgeService } from '../services/archive-bridge-service.js';
 import { ArchiveDownloadTaskService } from '../services/archive-download-task-service.js';
+import { ArchiveMetadataTaskService } from '../services/archive-metadata-task-service.js';
+import { localIngestService, type LocalIngestStatus } from '../services/local-ingest-service.js';
+import { localIngestSettingsService } from '../services/local-ingest-settings-service.js';
+import { recycleBinAdapter } from '../services/recycle-bin-adapter.js';
 import {
   FOLDER_SHARE_PASSWORD_MAX_LENGTH,
   FOLDER_SHARE_PASSWORD_MIN_LENGTH,
@@ -115,6 +119,35 @@ const archiveDownloadPlanBodySchema = z.object({
   targetRoot: z.string().trim().min(1).max(500),
   creatorIds: z.array(z.number().int().positive()).max(1000).optional(),
   provider: z.literal('baidu').default('baidu')
+});
+const archiveMetadataTaskQuerySchema = z.object({
+  status: z.enum(['pending', 'claimed', 'completed', 'not_found', 'failed', 'cancelled']).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100)
+});
+const archiveMetadataPlanBodySchema = z.object({
+  retryNotFound: z.boolean().default(false)
+});
+const localIngestStatusSchema = z.enum(['queued', 'running', 'awaiting_review', 'reconciling', 'ingested', 'failed']);
+const localIngestJobQuerySchema = z.object({
+  status: localIngestStatusSchema.optional(),
+  creatorId: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100)
+});
+const localIngestAllowlistBodySchema = z.object({
+  allowlist: z.array(z.string().trim().min(1).max(255)).min(1).max(1000).optional()
+});
+const localIngestRunBodySchema = localIngestAllowlistBodySchema.extend({
+  jobIds: z.array(z.number().int().positive()).min(1).max(500).optional()
+});
+const localIngestSettingsBodySchema = z.object({
+  libraryRoot: z.string().trim().min(1).max(500),
+  inboxRoot: z.string().trim().min(1).max(500),
+  processingRoot: z.string().trim().min(1).max(500),
+  sevenZipPath: z.string().trim().min(1).max(500),
+  fileStableSeconds: z.number().int().min(1).max(3600),
+  recycleAfterIngest: z.boolean(),
+  maxExtractionDepth: z.literal(2),
+  allowlist: z.array(z.string().trim().min(1).max(255)).max(1000).optional()
 });
 const homeFeedDefaultBodySchema = z.object({
   defaultMode: z.enum(['recent', 'rediscover', 'random'])
@@ -1234,6 +1267,113 @@ router.post(
     const result = service.planMissing(body);
     appSettingsRepository.set(ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY, result.targetRoot);
     response.json(result);
+  }
+);
+
+router.get(
+  '/admin/archive-catalog/metadata-tasks',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (request, response) => {
+    const query = archiveMetadataTaskQuerySchema.parse(request.query);
+    const service = new ArchiveMetadataTaskService();
+    response.json(service.list({ source: 'costuan', ...query }));
+  }
+);
+
+router.post(
+  '/admin/archive-catalog/metadata-tasks/plan',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  (request, response) => {
+    const body = archiveMetadataPlanBodySchema.parse(request.body ?? {});
+    const service = new ArchiveMetadataTaskService();
+    response.json(service.planLocalOnly({ source: 'costuan', retryNotFound: body.retryNotFound }));
+  }
+);
+
+router.get(
+  '/admin/local-ingest/settings',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (_request, response) => {
+    response.json(localIngestSettingsService.get());
+  }
+);
+
+router.put(
+  '/admin/local-ingest/settings',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  (request, response) => {
+    try {
+      response.json(localIngestSettingsService.save(localIngestSettingsBodySchema.parse(request.body)));
+    } catch (error) {
+      response.status(400).json({
+        message: error instanceof Error ? error.message : 'Local ingest settings are invalid'
+      });
+    }
+  }
+);
+
+router.post(
+  '/admin/local-ingest/settings/validate',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  async (request, response) => {
+    const body = request.body && Object.keys(request.body).length > 0
+      ? localIngestSettingsBodySchema.parse(request.body)
+      : undefined;
+    response.json(await localIngestSettingsService.validate(body));
+  }
+);
+
+router.post(
+  '/admin/local-ingest/recycle-bin-smoke-test',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  async (_request, response) => {
+    const settings = localIngestSettingsService.get();
+    response.json(await recycleBinAdapter.smokeTest(settings.processingRoot));
+  }
+);
+
+router.get(
+  '/admin/local-ingest/jobs',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (request, response) => {
+    const query = localIngestJobQuerySchema.parse(request.query);
+    response.json(localIngestService.listJobs(query as { status?: LocalIngestStatus; creatorId?: number; limit?: number }));
+  }
+);
+
+router.post(
+  '/admin/local-ingest/scan',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  async (request, response) => {
+    const body = localIngestAllowlistBodySchema.parse(request.body ?? {});
+    response.json(await localIngestService.scanInbox(body.allowlist));
+  }
+);
+
+router.post(
+  '/admin/local-ingest/jobs/:id/run',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  async (request, response) => {
+    const params = imageIdSchema.parse(request.params);
+    response.json(await localIngestService.runJob(params.id));
+  }
+);
+
+router.post(
+  '/admin/local-ingest/jobs/:id/retry-cleanup',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  async (request, response) => {
+    const params = imageIdSchema.parse(request.params);
+    response.json(await localIngestService.retryCleanup(params.id));
+  }
+);
+
+router.post(
+  '/admin/local-ingest/run',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  async (request, response) => {
+    const body = localIngestRunBodySchema.parse(request.body ?? {});
+    response.json(await localIngestService.runBatch(body));
   }
 );
 

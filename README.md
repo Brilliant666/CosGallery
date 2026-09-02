@@ -79,6 +79,12 @@ The generated report is JSON so later download and ingestion stages can consume 
 
 Administrators can inspect the same ledger at `/archive-catalog`. The management page provides preference, rating and ingestion-state filters, source/local/missing totals, and on-demand creator details without writing to the configured gallery root.
 
+### Local-only creator metadata queue
+
+After a gallery scan, CosGallery now identifies creators that already have active folders under `GALLERY_ROOT` but still have no active Costuan works in the archive catalog. These creators are planned into a separate, durable metadata queue. `CostuanArchiveManager` claims the queue, reuses its existing Costuan search and Baidu-save workflow, and posts each completed Costuan record directly back to the loopback bridge. Normal “not found” results are recorded separately from automation failures.
+
+The extension finalizes the batch once, after every claimed creator has reached a terminal state. Finalization performs one read-only reconciliation of `G:\cos图集`, writes the updated report, and then refreshes the missing-work download queue. This prevents a full local reconciliation after every creator and removes the old manual export/import step.
+
 ### Missing-work download queue
 
 The second-stage bridge turns reconciled Costuan gaps into an idempotent download queue. In `/archive-catalog`:
