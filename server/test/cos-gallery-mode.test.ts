@@ -26,6 +26,7 @@ describe.sequential('COS gallery mode', () => {
   let postRepository: typeof import('../src/db/repositories.js')['postRepository'];
   let creatorRatingRepository: typeof import('../src/db/repositories.js')['creatorRatingRepository'];
   let maintenanceRepository: typeof import('../src/db/repositories.js')['maintenanceRepository'];
+  let databaseManager: typeof import('../src/db/database.js')['databaseManager'];
   let app: express.Application;
 
   beforeAll(async () => {
@@ -61,6 +62,7 @@ describe.sequential('COS gallery mode', () => {
     ({ scannerService } = await import('../src/services/scanner-service.js'));
     ({ galleryService } = await import('../src/services/gallery-service.js'));
     ({ postRepository, creatorRatingRepository, maintenanceRepository } = await import('../src/db/repositories.js'));
+    ({ databaseManager } = await import('../src/db/database.js'));
     app = (await import('../src/app.js')).createApp();
 
     await Promise.all([
@@ -181,6 +183,43 @@ describe.sequential('COS gallery mode', () => {
       { 'x-foldergram-intent': '1' }
     );
     expect(blockedResponse.status).toBe(403);
+  });
+
+  it('scans one creator without deleting another creator from the existing index', async () => {
+    for (const creator of ['Creator Scoped A', 'Creator Scoped B']) {
+      const workPath = path.join(appConfig.galleryRoot, creator, `${creator} NO.001`);
+      await fs.mkdir(workPath, { recursive: true });
+      await fs.writeFile(path.join(workPath, '01.jpg'), creator);
+    }
+    await scannerService.scanAll('initial-test');
+
+    const summary = await scannerService.scanCosCreators(['Creator Scoped A'], 'scoped-test');
+
+    expect(summary?.status).toBe('completed');
+    expect(summary?.scanned_files).toBe(1);
+    expect(galleryService.listFolders().map((folder) => folder.name).sort()).toEqual([
+      'Creator Scoped A',
+      'Creator Scoped B'
+    ]);
+  });
+
+  it('reuses a legacy post by exact media membership when its source path changed', async () => {
+    const creator = 'Creator Legacy';
+    const workRelativePath = `${creator}/${creator} NO.001`;
+    const workPath = path.join(appConfig.galleryRoot, creator, `${creator} NO.001`);
+    await fs.mkdir(workPath, { recursive: true });
+    await fs.writeFile(path.join(workPath, '01.jpg'), 'first');
+    await fs.writeFile(path.join(workPath, '02.jpg'), 'second');
+    await scannerService.scanAll('initial-test');
+    const original = postRepository.listCosGalleryWorks(1, 10)[0]!;
+
+    databaseManager.connection.prepare('UPDATE posts SET source_path = ? WHERE id = ?').run('legacy/source/path', original.id);
+    const summary = await scannerService.scanCosCreators([creator], 'legacy-recovery-test');
+
+    expect(summary?.status).toBe('completed');
+    const recovered = postRepository.listCosGalleryWorks(1, 10);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ id: original.id, sourcePath: workRelativePath, itemCount: 2 });
   });
 
   it('imports HentaiClub as one rating source and resolves aliases, conflicts, and manual overrides', async () => {

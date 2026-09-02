@@ -8,9 +8,18 @@ import {
   fetchArchiveCatalogCreator,
   fetchArchiveDownloadTasks,
   fetchArchiveMetadataTasks,
+  fetchLocalIngestJobs,
+  fetchLocalIngestSettings,
   planArchiveDownloadTasks,
   planArchiveMetadataTasks,
-  rotateArchiveBridgeToken
+  retryLocalIngestCleanup,
+  rotateArchiveBridgeToken,
+  runLocalIngestBatch,
+  runLocalIngestJob,
+  saveLocalIngestSettings,
+  scanLocalIngestInbox,
+  smokeTestLocalIngestRecycleBin,
+  validateLocalIngestSettings
 } from '../api/gallery';
 
 vi.mock('../api/gallery', () => ({
@@ -21,7 +30,16 @@ vi.mock('../api/gallery', () => ({
   planArchiveDownloadTasks: vi.fn(),
   planArchiveMetadataTasks: vi.fn(),
   fetchArchiveBridgeStatus: vi.fn(),
-  rotateArchiveBridgeToken: vi.fn()
+  rotateArchiveBridgeToken: vi.fn(),
+  fetchLocalIngestJobs: vi.fn(),
+  fetchLocalIngestSettings: vi.fn(),
+  retryLocalIngestCleanup: vi.fn(),
+  runLocalIngestBatch: vi.fn(),
+  runLocalIngestJob: vi.fn(),
+  saveLocalIngestSettings: vi.fn(),
+  scanLocalIngestInbox: vi.fn(),
+  smokeTestLocalIngestRecycleBin: vi.fn(),
+  validateLocalIngestSettings: vi.fn()
 }));
 
 const summary = {
@@ -55,6 +73,57 @@ const creator = {
   latestSourceObservation: '2026-08-31T00:00:00.000Z'
 };
 
+const localIngestSettings = {
+  libraryRoot: 'G:\\cos图集',
+  inboxRoot: 'G:\\cos待入库',
+  processingRoot: 'G:\\cos处理中',
+  quarantineRoot: 'G:\\cos隔离区',
+  sevenZipPath: 'C:\\Program Files\\7-Zip\\7z.exe',
+  fileStableSeconds: 5,
+  recycleAfterIngest: true,
+  maxExtractionDepth: 2 as const,
+  allowlist: ['火龙果羊', '女主K'],
+  archivePasswordConfigured: true
+};
+
+const localIngestJob = {
+  id: 1,
+  archiveDownloadTaskId: 1068,
+  sourceWorkId: 485,
+  creatorId: 192,
+  creatorName: '火龙果羊',
+  sourceArchivePath: 'G:\\cos待入库\\火龙果羊\\007.7z',
+  sourceArchiveName: '007.7z',
+  sourceArchiveSize: 79_924_226,
+  sourceArchiveMtime: Date.now(),
+  sourceArchiveSha256: '17A57441040E338D3380DEFC8B0EF4EAD37CA97E951B5F03E9AA09E513691E58',
+  status: 'ingested' as const,
+  phase: 'done',
+  validationStatus: 'passed' as const,
+  cleanupStatus: 'recycled' as const,
+  processingPath: 'G:\\cos处理中\\1',
+  targetPath: 'G:\\cos图集\\火龙果羊\\火龙果羊 NO.007 日系死库水[24P-76M]',
+  attemptCount: 1,
+  errorCode: null,
+  errorDetail: null,
+  summary: {
+    rawTitle: '火龙果羊 NO.007 日系死库水[24P-76M]',
+    outerFormat: '7z',
+    levelOneOutput: ['007.7z'],
+    innerOriginalName: '007.7zz',
+    innerWorkingName: '007.7z',
+    imageCount: 24,
+    videoCount: 0,
+    advertisementFileCount: 0,
+    unknownFiles: [],
+    warnings: [],
+    plannedTargetPath: 'G:\\cos图集\\火龙果羊\\火龙果羊 NO.007 日系死库水[24P-76M]'
+  },
+  createdAt: '2026-09-02T00:00:00.000Z',
+  updatedAt: '2026-09-02T00:05:00.000Z',
+  completedAt: '2026-09-02T00:05:00.000Z'
+};
+
 describe('ArchiveCatalogView', () => {
   beforeEach(() => {
     vi.mocked(fetchArchiveCatalog).mockReset();
@@ -65,6 +134,15 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(planArchiveMetadataTasks).mockReset();
     vi.mocked(fetchArchiveBridgeStatus).mockReset();
     vi.mocked(rotateArchiveBridgeToken).mockReset();
+    vi.mocked(fetchLocalIngestJobs).mockReset();
+    vi.mocked(fetchLocalIngestSettings).mockReset();
+    vi.mocked(retryLocalIngestCleanup).mockReset();
+    vi.mocked(runLocalIngestBatch).mockReset();
+    vi.mocked(runLocalIngestJob).mockReset();
+    vi.mocked(saveLocalIngestSettings).mockReset();
+    vi.mocked(scanLocalIngestInbox).mockReset();
+    vi.mocked(smokeTestLocalIngestRecycleBin).mockReset();
+    vi.mocked(validateLocalIngestSettings).mockReset();
     vi.mocked(fetchArchiveCatalog).mockResolvedValue({
       summary,
       items: [creator],
@@ -150,6 +228,36 @@ describe('ArchiveCatalogView', () => {
       total: 1
     });
     vi.mocked(fetchArchiveBridgeStatus).mockResolvedValue({ configured: false });
+    vi.mocked(fetchLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, allowlist: [...localIngestSettings.allowlist] });
+    vi.mocked(fetchLocalIngestJobs).mockResolvedValue([localIngestJob]);
+    vi.mocked(saveLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, allowlist: [...localIngestSettings.allowlist] });
+    vi.mocked(scanLocalIngestInbox).mockResolvedValue({
+      allowlist: [...localIngestSettings.allowlist],
+      discoveredArchives: 0,
+      createdJobs: 0,
+      existingJobs: 0,
+      waitingStable: 0,
+      awaitingReview: 0,
+      ignoredFiles: 0,
+      jobs: []
+    });
+    vi.mocked(runLocalIngestBatch).mockResolvedValue([]);
+    vi.mocked(runLocalIngestJob).mockResolvedValue(localIngestJob);
+    vi.mocked(retryLocalIngestCleanup).mockResolvedValue(localIngestJob);
+    vi.mocked(smokeTestLocalIngestRecycleBin).mockResolvedValue({ targetPath: 'G:\\cos处理中\\sentinel', recycled: true });
+    vi.mocked(validateLocalIngestSettings).mockResolvedValue({
+      valid: true,
+      passwordConfigured: true,
+      sevenZip: { valid: true, version: '7-Zip 22.01', error: null },
+      paths: {
+        libraryRoot: { path: localIngestSettings.libraryRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null },
+        inboxRoot: { path: localIngestSettings.inboxRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null },
+        processingRoot: { path: localIngestSettings.processingRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null },
+        quarantineRoot: { path: localIngestSettings.quarantineRoot, exists: true, readable: true, writable: true, freeBytes: 1, volume: 'g:\\', error: null }
+      },
+      sameVolume: true,
+      errors: []
+    });
     vi.mocked(fetchArchiveMetadataTasks).mockResolvedValue({
       summary: {
         total: 1,
@@ -266,5 +374,22 @@ describe('ArchiveCatalogView', () => {
 
     expect(planArchiveMetadataTasks).toHaveBeenCalledWith(false);
     expect(wrapper.get('[data-test="metadata-notice"]').text()).toContain('检测到 17 位本地待关联博主');
+  });
+
+  it('shows a redacted full ingest preview and can run the allowlisted batch', async () => {
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('本地入库闭环');
+    expect(wrapper.text()).toContain('解压密码：已配置');
+    expect(wrapper.text()).toContain('007.7zz');
+    expect(wrapper.text()).toContain(localIngestJob.sourceArchiveSha256);
+    expect(wrapper.text()).not.toContain('fixture-password');
+
+    await wrapper.get('[data-test="run-local-ingest-batch"]').trigger('click');
+    await flushPromises();
+
+    expect(runLocalIngestBatch).toHaveBeenCalledWith(['火龙果羊', '女主K']);
+    expect(wrapper.text()).toContain('本批运行 0 个任务');
   });
 });
