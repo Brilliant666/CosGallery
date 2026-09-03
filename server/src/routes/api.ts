@@ -1341,6 +1341,14 @@ router.get(
   }
 );
 
+router.get(
+  '/admin/local-ingest/inbox-creators',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  async (_request, response) => {
+    response.json(await localIngestService.discoverInboxCreators());
+  }
+);
+
 router.post(
   '/admin/local-ingest/scan',
   requireCapability('canManageLibrary', 'Admin access is required.'),

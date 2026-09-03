@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { addImageToCollection, fetchSharedImage, fetchSharedPost } from './gallery';
+import { addImageToCollection, fetchLocalIngestInboxCreators, fetchSharedImage, fetchSharedPost } from './gallery';
 
 describe('post and image API namespaces', () => {
   afterEach(() => {
@@ -34,6 +34,21 @@ describe('post and image API namespaces', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/collections/trip-picks/posts/42',
       expect.objectContaining({ method: 'POST' })
+    );
+  });
+
+  it('uses a read-only request for pending inbox creator discovery', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ detected: [], unmapped: [], summary: {} })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchLocalIngestInboxCreators();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/admin/local-ingest/inbox-creators',
+      expect.objectContaining({ cache: 'no-store', credentials: 'same-origin' })
     );
   });
 });

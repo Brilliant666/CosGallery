@@ -451,6 +451,10 @@ export function fetchLocalIngestJobs(options: { status?: import('../types/api').
   return requestJson<import('../types/api').LocalIngestJob[]>(`/api/admin/local-ingest/jobs?${params.toString()}`);
 }
 
+export function fetchLocalIngestInboxCreators() {
+  return requestJson<import('../types/api').LocalIngestInboxCreatorsResult>('/api/admin/local-ingest/inbox-creators');
+}
+
 export function scanLocalIngestInbox(allowlist?: string[]) {
   return requestJson<import('../types/api').LocalIngestDiscoveryResult>('/api/admin/local-ingest/scan', {
     method: 'POST',

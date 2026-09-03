@@ -97,6 +97,18 @@ type MappingRow = {
 
 type CreatorRow = { id: number; canonical_name: string };
 
+type InboxJobRow = {
+  creator_id: number;
+  source_archive_path: string;
+  status: 'queued' | 'failed' | 'awaiting_review';
+};
+
+type InboxJobCounts = {
+  queuedJobCount: number;
+  failedJobCount: number;
+  awaitingReviewJobCount: number;
+};
+
 type SevenZipResult = { code: number | null; stdout: string; stderr: string };
 
 export type LocalIngestRuntimeDependencies = {
@@ -177,6 +189,38 @@ export type LocalIngestDiscoveryResult = {
   awaitingReview: number;
   ignoredFiles: number;
   jobs: LocalIngestJob[];
+};
+
+export type LocalIngestInboxCreatorMappingStatus = 'matched' | 'unmatched' | 'ambiguous';
+
+export type LocalIngestInboxCreatorCandidate = {
+  folderName: string;
+  folderNames: string[];
+  creatorId: number | null;
+  canonicalName: string | null;
+  mappingStatus: LocalIngestInboxCreatorMappingStatus;
+  mappingReason: string;
+  archiveCount: number;
+  queuedJobCount: number;
+  failedJobCount: number;
+  awaitingReviewJobCount: number;
+};
+
+export type LocalIngestInboxCreatorsResult = {
+  inboxRoot: string;
+  detected: LocalIngestInboxCreatorCandidate[];
+  unmapped: LocalIngestInboxCreatorCandidate[];
+  summary: {
+    directoryCount: number;
+    matchedDirectoryCount: number;
+    matchedCreatorCount: number;
+    unmappedDirectoryCount: number;
+    ambiguousDirectoryCount: number;
+    archiveCount: number;
+    queuedJobCount: number;
+    failedJobCount: number;
+    awaitingReviewJobCount: number;
+  };
 };
 
 type ValidationSummary = {
@@ -271,6 +315,33 @@ function isTemporaryName(filename: string): boolean {
 
 function archiveExtension(filename: string): string {
   return path.extname(filename).toLocaleLowerCase();
+}
+
+export function isSupportedSourceArchiveName(filename: string): boolean {
+  return !isTemporaryName(filename) && SOURCE_ARCHIVE_EXTENSIONS.has(archiveExtension(filename));
+}
+
+function naturalNameCompare(left: string, right: string): number {
+  return left.localeCompare(right, 'zh-CN', { numeric: true, sensitivity: 'base' });
+}
+
+function filesystemPathKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLocaleLowerCase() : resolved;
+}
+
+function emptyInboxJobCounts(): InboxJobCounts {
+  return { queuedJobCount: 0, failedJobCount: 0, awaitingReviewJobCount: 0 };
+}
+
+function totalInboxJobCounts(counts: Iterable<InboxJobCounts>): InboxJobCounts {
+  const total = emptyInboxJobCounts();
+  for (const count of counts) {
+    total.queuedJobCount += count.queuedJobCount;
+    total.failedJobCount += count.failedJobCount;
+    total.awaitingReviewJobCount += count.awaitingReviewJobCount;
+  }
+  return total;
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -463,6 +534,140 @@ export class LocalIngestService {
     const row = this.database.prepare(`${this.jobSelect()} WHERE jobs.id = ?`).get(id) as (LocalIngestJobRow & { creator_name: string }) | undefined;
     if (!row) throw new Error(`Local ingest job ${id} was not found`);
     return mapJob(row);
+  }
+
+  async discoverInboxCreators(): Promise<LocalIngestInboxCreatorsResult> {
+    const settings = await this.checkedSettings();
+    const activeJobs = this.database.prepare(
+      `SELECT creator_id, source_archive_path, status
+       FROM local_ingest_jobs
+       WHERE status IN ('queued', 'failed', 'awaiting_review')`
+    ).all() as InboxJobRow[];
+    const jobCountsByDirectory = new Map<string, Map<number, InboxJobCounts>>();
+    const resolvedInboxRoot = path.resolve(settings.inboxRoot);
+    for (const job of activeJobs) {
+      const relative = path.relative(resolvedInboxRoot, path.resolve(job.source_archive_path));
+      const segments = relative.split(path.sep).filter(Boolean);
+      if (segments.length !== 2 || relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      const key = filesystemPathKey(path.join(resolvedInboxRoot, segments[0]));
+      const byCreator = jobCountsByDirectory.get(key) ?? new Map<number, InboxJobCounts>();
+      const counts = byCreator.get(job.creator_id) ?? emptyInboxJobCounts();
+      if (job.status === 'queued') counts.queuedJobCount += 1;
+      if (job.status === 'failed') counts.failedJobCount += 1;
+      if (job.status === 'awaiting_review') counts.awaitingReviewJobCount += 1;
+      byCreator.set(job.creator_id, counts);
+      jobCountsByDirectory.set(key, byCreator);
+    }
+
+    const directoryEntries = (await fs.readdir(settings.inboxRoot, { withFileTypes: true }))
+      .sort((left, right) => naturalNameCompare(left.name, right.name));
+    const matchedByCreator = new Map<number, LocalIngestInboxCreatorCandidate>();
+    const unmapped: LocalIngestInboxCreatorCandidate[] = [];
+    let candidateDirectoryCount = 0;
+    let matchedDirectoryCount = 0;
+    let archiveCount = 0;
+    let queuedJobCount = 0;
+    let failedJobCount = 0;
+    let awaitingReviewJobCount = 0;
+
+    for (const entry of directoryEntries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const directoryPath = path.join(settings.inboxRoot, entry.name);
+      try {
+        await this.assertInside(
+          settings.inboxRoot,
+          directoryPath,
+          'SOURCE_PATH_OUTSIDE_ALLOWED_ROOT',
+          'Creator inbox directory',
+          { directChild: true }
+        );
+      } catch {
+        continue;
+      }
+      const directoryStats = await fs.lstat(directoryPath);
+      if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) continue;
+
+      let directoryArchiveCount = 0;
+      for (const child of await fs.readdir(directoryPath, { withFileTypes: true })) {
+        if (!child.isFile() || child.isSymbolicLink() || !isSupportedSourceArchiveName(child.name)) continue;
+        const childStats = await fs.lstat(path.join(directoryPath, child.name));
+        if (childStats.isFile() && !childStats.isSymbolicLink()) directoryArchiveCount += 1;
+      }
+      const creatorMatches = this.findCreatorByFolder(entry.name);
+      const jobsForDirectory = jobCountsByDirectory.get(filesystemPathKey(directoryPath));
+      const jobCounts = creatorMatches.length === 1
+        ? jobsForDirectory?.get(creatorMatches[0].id) ?? emptyInboxJobCounts()
+        : totalInboxJobCounts(jobsForDirectory?.values() ?? []);
+      const unfinishedJobCount = jobCounts.queuedJobCount
+        + jobCounts.failedJobCount
+        + jobCounts.awaitingReviewJobCount;
+      if (directoryArchiveCount === 0 && unfinishedJobCount === 0) continue;
+
+      candidateDirectoryCount += 1;
+      archiveCount += directoryArchiveCount;
+      queuedJobCount += jobCounts.queuedJobCount;
+      failedJobCount += jobCounts.failedJobCount;
+      awaitingReviewJobCount += jobCounts.awaitingReviewJobCount;
+      if (creatorMatches.length !== 1) {
+        const mappingStatus: LocalIngestInboxCreatorMappingStatus = creatorMatches.length === 0
+          ? 'unmatched'
+          : 'ambiguous';
+        unmapped.push({
+          folderName: entry.name,
+          folderNames: [entry.name],
+          creatorId: null,
+          canonicalName: null,
+          mappingStatus,
+          mappingReason: mappingStatus === 'unmatched'
+            ? '未找到匹配的博主或别名'
+            : `匹配到 ${creatorMatches.length} 位博主，无法唯一确认`,
+          archiveCount: directoryArchiveCount,
+          ...jobCounts
+        });
+        continue;
+      }
+
+      matchedDirectoryCount += 1;
+      const creator = creatorMatches[0];
+      const existing = matchedByCreator.get(creator.id);
+      if (existing) {
+        existing.folderNames.push(entry.name);
+        existing.archiveCount += directoryArchiveCount;
+        existing.queuedJobCount += jobCounts.queuedJobCount;
+        existing.failedJobCount += jobCounts.failedJobCount;
+        existing.awaitingReviewJobCount += jobCounts.awaitingReviewJobCount;
+      } else {
+        matchedByCreator.set(creator.id, {
+          folderName: entry.name,
+          folderNames: [entry.name],
+          creatorId: creator.id,
+          canonicalName: creator.canonical_name,
+          mappingStatus: 'matched',
+          mappingReason: '已唯一映射到规范博主',
+          archiveCount: directoryArchiveCount,
+          ...jobCounts
+        });
+      }
+    }
+
+    const detected = [...matchedByCreator.values()]
+      .sort((left, right) => naturalNameCompare(left.folderName, right.folderName));
+    return {
+      inboxRoot: settings.inboxRoot,
+      detected,
+      unmapped: unmapped.sort((left, right) => naturalNameCompare(left.folderName, right.folderName)),
+      summary: {
+        directoryCount: candidateDirectoryCount,
+        matchedDirectoryCount,
+        matchedCreatorCount: detected.length,
+        unmappedDirectoryCount: unmapped.filter((entry) => entry.mappingStatus === 'unmatched').length,
+        ambiguousDirectoryCount: unmapped.filter((entry) => entry.mappingStatus === 'ambiguous').length,
+        archiveCount,
+        queuedJobCount,
+        failedJobCount,
+        awaitingReviewJobCount
+      }
+    };
   }
 
   private getJobRow(id: number): LocalIngestJobRow {
@@ -729,13 +934,12 @@ export class LocalIngestService {
     if (segments.length !== 2 || segments[1].toLocaleLowerCase() !== job.source_archive_name.toLocaleLowerCase()) {
       throw new LocalIngestFailure('SOURCE_PATH_OUTSIDE_ALLOWED_ROOT', 'Source archive is not a direct file in an allowed creator directory', true);
     }
-    const allowedNames = new Set(settings.allowlist.map(normalizeCreatorIdentity));
-    if (!allowedNames.has(normalizeCreatorIdentity(segments[0]))) {
-      throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The source creator directory is not in the local ingest allowlist', true);
-    }
     const creatorMatches = this.findCreatorByFolder(segments[0]);
     if (creatorMatches.length !== 1 || creatorMatches[0].id !== mapping.creator_id) {
       throw new LocalIngestFailure('SOURCE_PATH_CREATOR_MISMATCH', 'The source directory no longer maps to this job creator', true);
+    }
+    if (!this.resolveAllowedCreatorIds(settings.allowlist).has(mapping.creator_id)) {
+      throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The mapped creator is not in the local ingest allowlist', true);
     }
     const stats = await fs.lstat(job.source_archive_path);
     if (!stats.isFile() || stats.isSymbolicLink()) {
@@ -759,6 +963,15 @@ export class LocalIngestService {
        LEFT JOIN archive_catalog_creator_aliases aliases ON aliases.creator_id = creators.id
        WHERE creators.normalized_name = ? OR aliases.normalized_alias = ?`
     ).all(normalized, normalized) as CreatorRow[];
+  }
+
+  private resolveAllowedCreatorIds(allowlist: string[]): Set<number> {
+    const creatorIds = new Set<number>();
+    for (const name of allowlist) {
+      const matches = this.findCreatorByFolder(name);
+      if (matches.length === 1) creatorIds.add(matches[0].id);
+    }
+    return creatorIds;
   }
 
   private findMapping(creatorId: number, filename: string): MappingRow[] {
@@ -817,8 +1030,15 @@ export class LocalIngestService {
       jobs: []
     };
 
-    for (const allowedCreatorName of allowlist) {
-      const creatorDirectory = path.join(settings.inboxRoot, allowedCreatorName);
+    const allowedCreatorIds = this.resolveAllowedCreatorIds(allowlist);
+    const creatorDirectories: Array<{ creatorDirectory: string; creator: CreatorRow }> = [];
+    const inboxEntries = (await fs.readdir(settings.inboxRoot, { withFileTypes: true }))
+      .sort((left, right) => naturalNameCompare(left.name, right.name));
+    for (const inboxEntry of inboxEntries) {
+      if (!inboxEntry.isDirectory() || inboxEntry.isSymbolicLink()) continue;
+      const creatorMatches = this.findCreatorByFolder(inboxEntry.name);
+      if (creatorMatches.length !== 1 || !allowedCreatorIds.has(creatorMatches[0].id)) continue;
+      const creatorDirectory = path.join(settings.inboxRoot, inboxEntry.name);
       await this.assertInside(
         settings.inboxRoot,
         creatorDirectory,
@@ -831,16 +1051,14 @@ export class LocalIngestService {
       if (!creatorDirectoryStats.isDirectory() || creatorDirectoryStats.isSymbolicLink()) {
         throw new LocalIngestFailure('SOURCE_PATH_OUTSIDE_ALLOWED_ROOT', 'Creator inbox must be a regular directory, not a link', true);
       }
-      const creatorMatches = this.findCreatorByFolder(allowedCreatorName);
-      if (creatorMatches.length !== 1) {
-        result.ignoredFiles += (await fs.readdir(creatorDirectory)).length;
-        continue;
-      }
-      const creator = creatorMatches[0];
+      creatorDirectories.push({ creatorDirectory, creator: creatorMatches[0] });
+    }
+
+    for (const { creatorDirectory, creator } of creatorDirectories) {
       const entries = await fs.readdir(creatorDirectory, { withFileTypes: true });
       const presentArchivePaths = new Set(
         entries
-          .filter((entry) => entry.isFile() && SOURCE_ARCHIVE_EXTENSIONS.has(archiveExtension(entry.name)))
+          .filter((entry) => entry.isFile() && isSupportedSourceArchiveName(entry.name))
           .map((entry) => {
             const value = path.resolve(creatorDirectory, entry.name);
             return process.platform === 'win32' ? value.toLocaleLowerCase() : value;
@@ -848,7 +1066,7 @@ export class LocalIngestService {
       );
       this.clearMissingObservations(creator.id, creatorDirectory, presentArchivePaths);
       for (const entry of entries) {
-        if (!entry.isFile() || isTemporaryName(entry.name) || !SOURCE_ARCHIVE_EXTENSIONS.has(archiveExtension(entry.name))) {
+        if (!entry.isFile() || !isSupportedSourceArchiveName(entry.name)) {
           result.ignoredFiles += 1;
           continue;
         }
@@ -1411,8 +1629,7 @@ export class LocalIngestService {
     if (job.source_work_id === null || job.archive_download_task_id === null) return this.getJob(id);
     const mapping = this.mappingForJob(job);
     const settings = await this.checkedSettings();
-    const normalizedAllowlist = new Set(settings.allowlist.map(normalizeCreatorIdentity));
-    if (!normalizedAllowlist.has(normalizeCreatorIdentity(mapping.creator_name))) {
+    if (!this.resolveAllowedCreatorIds(settings.allowlist).has(mapping.creator_id)) {
       throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The mapped creator is not in the local ingest allowlist', true);
     }
     try {
@@ -1652,7 +1869,7 @@ export class LocalIngestService {
   async runBatch(options: { allowlist?: string[]; jobIds?: number[] } = {}): Promise<LocalIngestJob[]> {
     if (!options.jobIds) await this.scanInbox(options.allowlist);
     const allowlist = options.allowlist ?? this.settingsService.get().allowlist;
-    const normalized = new Set(allowlist.map(normalizeCreatorIdentity));
+    const allowedCreatorIds = this.resolveAllowedCreatorIds(allowlist);
     const rows = this.database.prepare(
       `${this.jobSelect()}
        WHERE jobs.status IN ('queued', 'failed', 'reconciling')
@@ -1660,7 +1877,7 @@ export class LocalIngestService {
        ORDER BY jobs.creator_id, jobs.id`
     ).all() as Array<LocalIngestJobRow & { creator_name: string }>;
     const selected = rows.filter((row) =>
-      (options.jobIds ? options.jobIds.includes(row.id) : normalized.has(normalizeCreatorIdentity(row.creator_name)))
+      (options.jobIds ? options.jobIds.includes(row.id) : allowedCreatorIds.has(row.creator_id))
     );
     const results: LocalIngestJob[] = [];
     for (const row of selected) results.push(await this.runJob(row.id));
