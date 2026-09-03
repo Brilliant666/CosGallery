@@ -260,11 +260,16 @@ describe.sequential('LocalIngest cross-platform hardening', () => {
     const discarded = await fixture.service.scanInbox();
     expect(discarded).toMatchObject({ waitingStable: 1, createdJobs: 0 });
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 0 });
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
+      .toEqual({ status: 'staged' });
 
     fixture.advance(1_100);
     const completed = await fixture.service.scanInbox();
     expect(completed.createdJobs).toBe(1);
+    expect(completed.reconciledDownloadedTasks).toBe(1);
     expect(hashCalls).toBe(2);
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
+      .toEqual({ status: 'downloaded' });
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 1 });
     expect((await fixture.service.scanInbox()).existingJobs).toBe(1);
     fixture.database.close();

@@ -113,6 +113,7 @@ type SevenZipResult = { code: number | null; stdout: string; stderr: string };
 
 export type LocalIngestRuntimeDependencies = {
   now?: () => Date;
+  wait?: (milliseconds: number) => Promise<void>;
   hashFile?: (filePath: string) => Promise<string>;
   runCommand?: (command: string, args: string[], timeoutMs: number) => Promise<SevenZipResult>;
   extractionTimeoutMs?: number;
@@ -182,13 +183,61 @@ export type LocalIngestJob = {
 
 export type LocalIngestDiscoveryResult = {
   allowlist: string[];
+  discoveredCreators: number;
   discoveredArchives: number;
   createdJobs: number;
   existingJobs: number;
   waitingStable: number;
   awaitingReview: number;
+  reconciledDownloadedTasks: number;
   ignoredFiles: number;
   jobs: LocalIngestJob[];
+};
+
+type LocalIngestScanPassResult = LocalIngestDiscoveryResult & {
+  waitingPaths: string[];
+};
+
+export type LocalIngestJobFilter = 'pending' | 'running' | 'awaiting_review' | 'failed' | 'completed';
+
+export type LocalIngestJobSummary = {
+  total: number;
+  pending: number;
+  running: number;
+  ingested: number;
+  awaitingReview: number;
+  failed: number;
+};
+
+export type LocalIngestCreatorJobSummary = LocalIngestJobSummary & {
+  creatorId: number;
+  creatorName: string;
+  progressPercent: number;
+  isCurrent: boolean;
+};
+
+export type LocalIngestJobsDashboard = {
+  summary: LocalIngestJobSummary;
+  creators: LocalIngestCreatorJobSummary[];
+  items: LocalIngestJob[];
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
+};
+
+export type LocalIngestBatchProgress = {
+  total: number;
+  processed: number;
+  ingested: number;
+  failed: number;
+  awaitingReview: number;
+  remaining: number;
+  currentJob: LocalIngestJob | null;
+};
+
+export type LocalIngestBatchCallbacks = {
+  onProgress?: (progress: LocalIngestBatchProgress) => void;
 };
 
 export type LocalIngestInboxCreatorMappingStatus = 'matched' | 'unmatched' | 'ambiguous';
@@ -479,6 +528,7 @@ function mapJob(row: LocalIngestJobRow & { creator_name?: string }): LocalIngest
 export class LocalIngestService {
   private readonly databaseOverride: DatabaseSync | undefined;
   private readonly now: () => Date;
+  private readonly wait: (milliseconds: number) => Promise<void>;
   private readonly hashFile: (filePath: string) => Promise<string>;
   private readonly commandRunner: (command: string, args: string[], timeoutMs: number) => Promise<SevenZipResult>;
   private readonly extractionTimeoutMs: number;
@@ -500,6 +550,7 @@ export class LocalIngestService {
   ) {
     this.databaseOverride = database;
     this.now = dependencies.now ?? (() => new Date());
+    this.wait = dependencies.wait ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.hashFile = dependencies.hashFile ?? sha256File;
     this.commandRunner = dependencies.runCommand ?? runCommand;
     this.extractionTimeoutMs = dependencies.extractionTimeoutMs ?? EXTRACTION_TIMEOUT_MS;
@@ -528,6 +579,98 @@ export class LocalIngestService {
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const limit = Math.max(1, Math.min(500, options.limit ?? 100));
     return (this.database.prepare(`${this.jobSelect()} ${where} ORDER BY jobs.id DESC LIMIT ?`).all(...parameters, limit) as Array<LocalIngestJobRow & { creator_name: string }>).map(mapJob);
+  }
+
+  listJobDashboard(options: {
+    creatorId?: number;
+    status?: LocalIngestJobFilter;
+    page?: number;
+    limit?: number;
+    currentCreatorId?: number | null;
+  } = {}): LocalIngestJobsDashboard {
+    type SummaryRow = {
+      creator_id: number;
+      creator_name: string;
+      total: number;
+      pending: number;
+      running: number;
+      ingested: number;
+      awaiting_review: number;
+      failed: number;
+    };
+    const rows = this.database.prepare(
+      `SELECT jobs.creator_id,
+              creators.canonical_name AS creator_name,
+              COUNT(*) AS total,
+              SUM(CASE WHEN jobs.status IN ('queued', 'reconciling') THEN 1 ELSE 0 END) AS pending,
+              SUM(CASE WHEN jobs.status = 'running' THEN 1 ELSE 0 END) AS running,
+              SUM(CASE WHEN jobs.status = 'ingested' THEN 1 ELSE 0 END) AS ingested,
+              SUM(CASE WHEN jobs.status = 'awaiting_review' THEN 1 ELSE 0 END) AS awaiting_review,
+              SUM(CASE WHEN jobs.status = 'failed' THEN 1 ELSE 0 END) AS failed
+       FROM local_ingest_jobs jobs
+       JOIN archive_catalog_creators creators ON creators.id = jobs.creator_id
+       GROUP BY jobs.creator_id, creators.canonical_name`
+    ).all() as SummaryRow[];
+    const creators: LocalIngestCreatorJobSummary[] = rows.map((row) => ({
+      creatorId: row.creator_id,
+      creatorName: row.creator_name,
+      total: row.total,
+      pending: row.pending,
+      running: row.running,
+      ingested: row.ingested,
+      awaitingReview: row.awaiting_review,
+      failed: row.failed,
+      progressPercent: row.total > 0 ? Math.round((row.ingested / row.total) * 100) : 0,
+      isCurrent: row.creator_id === options.currentCreatorId
+    })).sort((left, right) => {
+      if (left.isCurrent !== right.isCurrent) return left.isCurrent ? -1 : 1;
+      const leftProblem = left.failed + left.awaitingReview > 0;
+      const rightProblem = right.failed + right.awaitingReview > 0;
+      if (leftProblem !== rightProblem) return leftProblem ? -1 : 1;
+      const leftPending = left.pending + left.running > 0;
+      const rightPending = right.pending + right.running > 0;
+      if (leftPending !== rightPending) return leftPending ? -1 : 1;
+      return naturalNameCompare(left.creatorName, right.creatorName);
+    });
+    const summary = creators.reduce<LocalIngestJobSummary>((total, creator) => ({
+      total: total.total + creator.total,
+      pending: total.pending + creator.pending,
+      running: total.running + creator.running,
+      ingested: total.ingested + creator.ingested,
+      awaitingReview: total.awaitingReview + creator.awaitingReview,
+      failed: total.failed + creator.failed
+    }), { total: 0, pending: 0, running: 0, ingested: 0, awaitingReview: 0, failed: 0 });
+
+    const page = Math.max(1, options.page ?? 1);
+    const limit = Math.max(1, Math.min(100, options.limit ?? 50));
+    if (!options.creatorId) {
+      return { summary, creators, items: [], total: 0, page, limit, hasMore: false };
+    }
+    const clauses = ['jobs.creator_id = ?'];
+    const parameters: Array<number | string> = [options.creatorId];
+    if (options.status === 'pending') clauses.push("jobs.status IN ('queued', 'reconciling')");
+    else if (options.status === 'completed') clauses.push("jobs.status = 'ingested'");
+    else if (options.status) {
+      clauses.push('jobs.status = ?');
+      parameters.push(options.status);
+    }
+    const where = `WHERE ${clauses.join(' AND ')}`;
+    const count = this.database.prepare(
+      `SELECT COUNT(*) AS count FROM local_ingest_jobs jobs ${where}`
+    ).get(...parameters) as { count: number };
+    const total = count.count;
+    const items = (this.database.prepare(
+      `${this.jobSelect()} ${where} ORDER BY jobs.id DESC LIMIT ? OFFSET ?`
+    ).all(...parameters, limit, (page - 1) * limit) as Array<LocalIngestJobRow & { creator_name: string }>).map(mapJob);
+    return {
+      summary,
+      creators,
+      items,
+      total,
+      page,
+      limit,
+      hasMore: page * limit < total
+    };
   }
 
   getJob(id: number): LocalIngestJob {
@@ -1015,20 +1158,61 @@ export class LocalIngestService {
     return row?.present === 1;
   }
 
-  async scanInbox(allowlistInput?: string[]): Promise<LocalIngestDiscoveryResult> {
+  private inTransaction<T>(action: () => T): T {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const result = action();
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  private reconcileStagedDownloadForJob(jobId: number): number {
+    const job = this.getJob(jobId);
+    if (
+      job.status === 'awaiting_review'
+      || job.archiveDownloadTaskId === null
+      || job.sourceWorkId === null
+    ) return 0;
+    const mappings = this.findMapping(job.creatorId, job.sourceArchiveName);
+    if (
+      mappings.length !== 1
+      || mappings[0].archive_download_task_id !== job.archiveDownloadTaskId
+      || mappings[0].source_work_id !== job.sourceWorkId
+    ) return 0;
+    const timestamp = this.timestamp();
+    const updated = this.database.prepare(
+      `UPDATE archive_catalog_download_tasks
+       SET status = 'downloaded', completed_at = COALESCE(completed_at, ?),
+           claimed_by = NULL, claimed_at = NULL, last_error = NULL, updated_at = ?
+       WHERE id = ? AND status = 'staged'`
+    ).run(timestamp, timestamp, job.archiveDownloadTaskId);
+    return Number(updated.changes ?? 0);
+  }
+
+  private async scanInboxPass(
+    allowlistInput?: string[],
+    onlySourcePaths?: Set<string>
+  ): Promise<LocalIngestScanPassResult> {
     const settings = await this.checkedSettings();
     const allowlist = [...new Set((allowlistInput ?? settings.allowlist).map((entry) => entry.trim()).filter(Boolean))];
     if (allowlist.length === 0) throw new Error('Local ingest allowlist is empty');
     const result: LocalIngestDiscoveryResult = {
       allowlist,
+      discoveredCreators: 0,
       discoveredArchives: 0,
       createdJobs: 0,
       existingJobs: 0,
       waitingStable: 0,
       awaitingReview: 0,
+      reconciledDownloadedTasks: 0,
       ignoredFiles: 0,
       jobs: []
     };
+    const waitingPaths: string[] = [];
 
     const allowedCreatorIds = this.resolveAllowedCreatorIds(allowlist);
     const creatorDirectories: Array<{ creatorDirectory: string; creator: CreatorRow }> = [];
@@ -1053,6 +1237,7 @@ export class LocalIngestService {
       }
       creatorDirectories.push({ creatorDirectory, creator: creatorMatches[0] });
     }
+    result.discoveredCreators = new Set(creatorDirectories.map(({ creator }) => creator.id)).size;
 
     for (const { creatorDirectory, creator } of creatorDirectories) {
       const entries = await fs.readdir(creatorDirectory, { withFileTypes: true });
@@ -1064,14 +1249,16 @@ export class LocalIngestService {
             return process.platform === 'win32' ? value.toLocaleLowerCase() : value;
           })
       );
-      this.clearMissingObservations(creator.id, creatorDirectory, presentArchivePaths);
+      if (!onlySourcePaths) this.clearMissingObservations(creator.id, creatorDirectory, presentArchivePaths);
       for (const entry of entries) {
         if (!entry.isFile() || !isSupportedSourceArchiveName(entry.name)) {
           result.ignoredFiles += 1;
           continue;
         }
-        result.discoveredArchives += 1;
         const sourcePath = path.join(creatorDirectory, entry.name);
+        const sourcePathKey = filesystemPathKey(sourcePath);
+        if (onlySourcePaths && !onlySourcePaths.has(sourcePathKey)) continue;
+        result.discoveredArchives += 1;
         await this.assertInside(
           settings.inboxRoot,
           sourcePath,
@@ -1093,6 +1280,9 @@ export class LocalIngestService {
         ).get(creator.id, sourcePath, stats.size, stats.mtimeMs) as { id: number } | undefined;
         if (unchangedExisting) {
           this.clearObservation(sourcePath);
+          result.reconciledDownloadedTasks += this.inTransaction(
+            () => this.reconcileStagedDownloadForJob(unchangedExisting.id)
+          );
           result.existingJobs += 1;
           result.jobs.push(this.getJob(unchangedExisting.id));
           continue;
@@ -1122,6 +1312,7 @@ export class LocalIngestService {
             !unchanged || relatedTemporary || stats.size <= 0
           );
           result.waitingStable += 1;
+          waitingPaths.push(sourcePath);
           continue;
         }
 
@@ -1129,6 +1320,7 @@ export class LocalIngestService {
         if (await this.hasRelatedTemporaryFile(creatorDirectory, entry.name)) {
           this.observeFile(creator.id, sourcePath, entry.name, beforeHash.size, beforeHash.mtimeMs, true);
           result.waitingStable += 1;
+          waitingPaths.push(sourcePath);
           continue;
         }
         const hash = await this.hashFile(sourcePath);
@@ -1143,6 +1335,7 @@ export class LocalIngestService {
         ) {
           this.observeFile(creator.id, sourcePath, entry.name, afterHash.size, afterHash.mtimeMs, true);
           result.waitingStable += 1;
+          waitingPaths.push(sourcePath);
           continue;
         }
         const mappings = this.findMapping(creator.id, entry.name);
@@ -1155,9 +1348,14 @@ export class LocalIngestService {
              WHERE creator_id = ? AND source_archive_path = ? AND source_archive_sha256 = ? AND source_work_id IS NULL`
           ).get(creator.id, sourcePath, hash) as { id: number; phase: LocalIngestPhase } | undefined;
         if (existing) {
-          if (existing.phase === 'waiting_stable') {
-            this.updateJob(existing.id, { phase: 'discovered', errorCode: null, errorDetail: null });
-          }
+          result.reconciledDownloadedTasks += this.inTransaction(
+            () => {
+              if (existing.phase === 'waiting_stable') {
+                this.updateJob(existing.id, { phase: 'discovered', errorCode: null, errorDetail: null });
+              }
+              return this.reconcileStagedDownloadForJob(existing.id);
+            }
+          );
           this.clearObservation(sourcePath);
           result.existingJobs += 1;
           result.jobs.push(this.getJob(existing.id));
@@ -1212,53 +1410,95 @@ export class LocalIngestService {
         }
 
         const timestamp = nowIso();
-        const insert = this.database.prepare(
-          `INSERT OR IGNORE INTO local_ingest_jobs (
-             archive_download_task_id, source_work_id, creator_id,
-             source_archive_path, source_archive_name, source_archive_size,
-             source_archive_mtime, source_archive_sha256, status, phase,
-             validation_status, cleanup_status, target_path, error_code,
-             error_detail, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_ready', ?, ?, ?, ?, ?)`
-        ).run(
-          mapping?.archive_download_task_id ?? null,
-          mapping?.source_work_id ?? null,
-          creator.id,
-          sourcePath,
-          entry.name,
-          stats.size,
-          stats.mtimeMs,
-          hash,
-          status,
-          phase,
-          validationStatus,
-          targetPath,
-          errorCode,
-          errorDetail,
-          timestamp,
-          timestamp
-        );
+        const persisted = this.inTransaction(() => {
+          const insert = this.database.prepare(
+            `INSERT OR IGNORE INTO local_ingest_jobs (
+               archive_download_task_id, source_work_id, creator_id,
+               source_archive_path, source_archive_name, source_archive_size,
+               source_archive_mtime, source_archive_sha256, status, phase,
+               validation_status, cleanup_status, target_path, error_code,
+               error_detail, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_ready', ?, ?, ?, ?, ?)`
+          ).run(
+            mapping?.archive_download_task_id ?? null,
+            mapping?.source_work_id ?? null,
+            creator.id,
+            sourcePath,
+            entry.name,
+            stats.size,
+            stats.mtimeMs,
+            hash,
+            status,
+            phase,
+            validationStatus,
+            targetPath,
+            errorCode,
+            errorDetail,
+            timestamp,
+            timestamp
+          );
+          let id: number;
+          if (insert.changes === 1) {
+            id = Number(insert.lastInsertRowid);
+          } else {
+            const raced = mapping
+              ? this.database.prepare(
+                'SELECT id FROM local_ingest_jobs WHERE source_work_id = ? AND source_archive_sha256 = ?'
+              ).get(mapping.source_work_id, hash) as { id: number } | undefined
+              : this.database.prepare(
+                `SELECT id FROM local_ingest_jobs
+                 WHERE creator_id = ? AND source_archive_path = ? AND source_archive_sha256 = ? AND source_work_id IS NULL`
+              ).get(creator.id, sourcePath, hash) as { id: number } | undefined;
+            if (!raced) throw new Error('Local ingest job insert was ignored without an idempotent match');
+            id = raced.id;
+          }
+          const reconciledDownloadedTasks = mapping && status === 'queued'
+            ? this.reconcileStagedDownloadForJob(id)
+            : 0;
+          return { id, inserted: insert.changes === 1, reconciledDownloadedTasks };
+        });
         this.clearObservation(sourcePath);
-        if (insert.changes === 1) {
-          const id = Number(insert.lastInsertRowid);
+        result.reconciledDownloadedTasks += persisted.reconciledDownloadedTasks;
+        if (persisted.inserted) {
           result.createdJobs += 1;
-          result.jobs.push(this.getJob(id));
+          result.jobs.push(this.getJob(persisted.id));
         } else {
-          const raced = mapping
-            ? this.database.prepare(
-              'SELECT id FROM local_ingest_jobs WHERE source_work_id = ? AND source_archive_sha256 = ?'
-            ).get(mapping.source_work_id, hash) as { id: number } | undefined
-            : this.database.prepare(
-              `SELECT id FROM local_ingest_jobs
-               WHERE creator_id = ? AND source_archive_path = ? AND source_archive_sha256 = ? AND source_work_id IS NULL`
-            ).get(creator.id, sourcePath, hash) as { id: number } | undefined;
-          if (!raced) throw new Error('Local ingest job insert was ignored without an idempotent match');
           result.existingJobs += 1;
-          result.jobs.push(this.getJob(raced.id));
+          result.jobs.push(this.getJob(persisted.id));
         }
       }
     }
+    return { ...result, waitingPaths };
+  }
+
+  async scanInbox(allowlistInput?: string[]): Promise<LocalIngestDiscoveryResult> {
+    const { waitingPaths: _waitingPaths, ...result } = await this.scanInboxPass(allowlistInput);
     return result;
+  }
+
+  async scanInboxWithStableRecheck(): Promise<LocalIngestDiscoveryResult> {
+    const first = await this.scanInboxPass();
+    if (first.waitingPaths.length === 0) {
+      const { waitingPaths: _waitingPaths, ...result } = first;
+      return result;
+    }
+    const settings = this.settingsService.get();
+    await this.wait(settings.fileStableSeconds * 1000);
+    const second = await this.scanInboxPass(undefined, new Set(first.waitingPaths.map(filesystemPathKey)));
+    const jobs = [...first.jobs, ...second.jobs]
+      .filter((job, index, values) => values.findIndex((candidate) => candidate.id === job.id) === index);
+    return {
+      allowlist: first.allowlist,
+      discoveredCreators: first.discoveredCreators,
+      discoveredArchives: first.discoveredArchives,
+      createdJobs: first.createdJobs + second.createdJobs,
+      existingJobs: first.existingJobs + second.existingJobs,
+      waitingStable: second.waitingStable,
+      awaitingReview: first.awaitingReview + second.awaitingReview,
+      reconciledDownloadedTasks: first.reconciledDownloadedTasks + second.reconciledDownloadedTasks,
+      ignoredFiles: first.ignoredFiles,
+      jobs
+    };
   }
 
   private mappingForJob(job: LocalIngestJobRow): MappingRow {
@@ -1866,8 +2106,10 @@ export class LocalIngestService {
     return this.getJob(id);
   }
 
-  async runBatch(options: { allowlist?: string[]; jobIds?: number[] } = {}): Promise<LocalIngestJob[]> {
-    if (!options.jobIds) await this.scanInbox(options.allowlist);
+  async runBatch(
+    options: { allowlist?: string[]; jobIds?: number[] } = {},
+    callbacks: LocalIngestBatchCallbacks = {}
+  ): Promise<LocalIngestJob[]> {
     const allowlist = options.allowlist ?? this.settingsService.get().allowlist;
     const allowedCreatorIds = this.resolveAllowedCreatorIds(allowlist);
     const rows = this.database.prepare(
@@ -1877,10 +2119,32 @@ export class LocalIngestService {
        ORDER BY jobs.creator_id, jobs.id`
     ).all() as Array<LocalIngestJobRow & { creator_name: string }>;
     const selected = rows.filter((row) =>
-      (options.jobIds ? options.jobIds.includes(row.id) : allowedCreatorIds.has(row.creator_id))
+      allowedCreatorIds.has(row.creator_id)
+      && (!options.jobIds || options.jobIds.includes(row.id))
     );
     const results: LocalIngestJob[] = [];
-    for (const row of selected) results.push(await this.runJob(row.id));
+    let ingested = 0;
+    let failed = 0;
+    let awaitingReview = 0;
+    const notify = (currentJob: LocalIngestJob | null) => callbacks.onProgress?.({
+      total: selected.length,
+      processed: results.length,
+      ingested,
+      failed,
+      awaitingReview,
+      remaining: selected.length - results.length,
+      currentJob
+    });
+    notify(null);
+    for (const row of selected) {
+      notify(mapJob(row));
+      const result = await this.runJob(row.id);
+      results.push(result);
+      if (result.status === 'ingested') ingested += 1;
+      if (result.status === 'failed') failed += 1;
+      if (result.status === 'awaiting_review') awaitingReview += 1;
+      notify(null);
+    }
     return results;
   }
 }

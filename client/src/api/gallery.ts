@@ -445,21 +445,34 @@ export function smokeTestLocalIngestRecycleBin() {
   });
 }
 
-export function fetchLocalIngestJobs(options: { status?: import('../types/api').LocalIngestStatus; limit?: number } = {}) {
-  const params = new URLSearchParams({ limit: String(options.limit ?? 100) });
+export function fetchLocalIngestJobs(options: {
+  creatorId?: number;
+  status?: import('../types/api').LocalIngestJobFilter;
+  page?: number;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams({
+    page: String(options.page ?? 1),
+    limit: String(options.limit ?? 50)
+  });
+  if (options.creatorId) params.set('creatorId', String(options.creatorId));
   if (options.status) params.set('status', options.status);
-  return requestJson<import('../types/api').LocalIngestJob[]>(`/api/admin/local-ingest/jobs?${params.toString()}`);
+  return requestJson<import('../types/api').LocalIngestJobsDashboard>(`/api/admin/local-ingest/jobs?${params.toString()}`);
+}
+
+export function fetchLocalIngestOperation() {
+  return requestJson<import('../types/api').LocalIngestOperation>('/api/admin/local-ingest/operation');
 }
 
 export function fetchLocalIngestInboxCreators() {
   return requestJson<import('../types/api').LocalIngestInboxCreatorsResult>('/api/admin/local-ingest/inbox-creators');
 }
 
-export function scanLocalIngestInbox(allowlist?: string[]) {
+export function scanLocalIngestInbox() {
   return requestJson<import('../types/api').LocalIngestDiscoveryResult>('/api/admin/local-ingest/scan', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ allowlist })
+    body: JSON.stringify({})
   });
 }
 
@@ -467,11 +480,11 @@ export function runLocalIngestJob(id: number) {
   return requestJson<import('../types/api').LocalIngestJob>(`/api/admin/local-ingest/jobs/${id}/run`, { method: 'POST' });
 }
 
-export function runLocalIngestBatch(allowlist?: string[], jobIds?: number[]) {
-  return requestJson<import('../types/api').LocalIngestJob[]>('/api/admin/local-ingest/run', {
+export function runLocalIngestBatch(jobIds?: number[]) {
+  return requestJson<import('../types/api').LocalIngestBatchResult>('/api/admin/local-ingest/run', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ allowlist, jobIds })
+    body: JSON.stringify({ jobIds })
   });
 }
 
