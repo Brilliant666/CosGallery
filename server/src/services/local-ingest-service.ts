@@ -114,6 +114,34 @@ type LocalIngestRescanResult = {
   scanError: string | null;
 };
 
+export async function runCreatorScopedLocalIngestReconciliation(
+  database: DatabaseSync,
+  libraryRoot: string,
+  creatorId: number,
+  creatorFolderName: string
+): Promise<LocalIngestRescanResult> {
+  // ScannerService reads the database when its singleton is constructed.
+  // Load it only for a real reconciliation run so importing LocalIngest in
+  // tests or build tooling cannot open the configured production database.
+  const { scannerService } = await import('./scanner-service.js');
+  const scan = await scannerService.scanCosCreators(
+    [creatorFolderName],
+    'local-ingest',
+    { repairUnchangedDerivatives: false, allowDerivativeMigration: false }
+  );
+  if (!scan) throw new LocalIngestFailure('COSGALLERY_SCAN_FAILED', 'CosGallery did not return a scan result');
+  await new ArchiveCatalogPipelineService(database).refreshAfterCreatorGalleryScan({
+    galleryRoot: libraryRoot,
+    creatorId,
+    creatorFolderName
+  });
+  return {
+    scanRunId: scan.id,
+    scanStatus: scan.status,
+    scanError: scan.error_text
+  };
+}
+
 export type LocalIngestJob = {
   id: number;
   archiveDownloadTaskId: number | null;
@@ -394,25 +422,9 @@ export class LocalIngestService {
     private readonly rescanAndReconcile: (
       database: DatabaseSync,
       libraryRoot: string,
-      creatorName: string
-    ) => Promise<LocalIngestRescanResult | void> = async (database, libraryRoot, creatorName) => {
-      // ScannerService reads the database when its singleton is constructed.
-      // Load it only for a real reconciliation run so importing LocalIngest in
-      // tests or build tooling cannot open the configured production database.
-      const { scannerService } = await import('./scanner-service.js');
-      const scan = await scannerService.scanCosCreators(
-        [creatorName],
-        'local-ingest',
-        { repairUnchangedDerivatives: false, allowDerivativeMigration: false }
-      );
-      if (!scan) throw new LocalIngestFailure('COSGALLERY_SCAN_FAILED', 'CosGallery did not return a scan result');
-      await new ArchiveCatalogPipelineService(database).refreshAfterGalleryScan({ galleryRoot: libraryRoot });
-      return {
-        scanRunId: scan.id,
-        scanStatus: scan.status,
-        scanError: scan.error_text
-      };
-    },
+      creatorId: number,
+      creatorFolderName: string
+    ) => Promise<LocalIngestRescanResult | void> = runCreatorScopedLocalIngestReconciliation,
     dependencies: LocalIngestRuntimeDependencies = {}
   ) {
     this.databaseOverride = database;
@@ -1263,7 +1275,13 @@ export class LocalIngestService {
       : checkedTarget.candidate === canonicalExpectedTarget;
     if (!sameTarget) throw new LocalIngestFailure('TARGET_PATH_OUTSIDE_LIBRARY', 'Committed target no longer matches the ledger mapping', true);
     this.updateJob(jobId, { status: 'reconciling', phase: 'rescanning' });
-    const rescanResult = await this.rescanAndReconcile(this.database, settings.libraryRoot, mapping.creator_name);
+    const creatorFolderName = this.safeCreatorDirectoryName(mapping.creator_name);
+    const rescanResult = await this.rescanAndReconcile(
+      this.database,
+      settings.libraryRoot,
+      mapping.creator_id,
+      creatorFolderName
+    );
     this.updateJob(jobId, { status: 'reconciling', phase: 'reconciling' });
     const summary = safeJsonParse(job.summary_json) ?? {};
     if (rescanResult) {

@@ -52,6 +52,7 @@ type Fixture = {
   service: LocalIngestService;
   recycleCalls: string[];
   rescanCalls: number;
+  rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string }>;
   advanceTime: (milliseconds: number) => void;
 };
 
@@ -262,9 +263,16 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     smokeTest: async () => ({ targetPath: '', recycled: true })
   } as unknown as RecycleBinAdapter;
   let rescanCalls = 0;
+  const rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string }> = [];
   let remainingReconciliationFailures = options.reconciliationFailures ?? 0;
-  const rescan = async (db: DatabaseSync) => {
+  const rescan = async (
+    db: DatabaseSync,
+    scopedLibraryRoot: string,
+    creatorId: number,
+    creatorFolderName: string
+  ) => {
     rescanCalls += 1;
+    rescanScopes.push({ libraryRoot: scopedLibraryRoot, creatorId, creatorFolderName });
     if (remainingReconciliationFailures > 0) {
       remainingReconciliationFailures -= 1;
       return;
@@ -304,6 +312,7 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     database,
     service,
     recycleCalls,
+    rescanScopes,
     advanceTime(milliseconds: number) { clock += milliseconds; },
     get rescanCalls() { return rescanCalls; }
   };
@@ -342,6 +351,11 @@ describe.sequential('LocalIngestService', () => {
 
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'ingested', phase: 'done', cleanupStatus: 'recycled' });
+    expect(fixture.rescanScopes).toEqual([{
+      libraryRoot: fixture.libraryRoot,
+      creatorId: 1,
+      creatorFolderName: fixture.creatorName
+    }]);
     expect(result.summary).toMatchObject({
       imageCount: 1,
       videoCount: 0,

@@ -200,62 +200,82 @@ export class ArchiveDownloadTaskService {
   planMissing(options: { targetRoot: string; creatorIds?: number[]; provider?: string }): ArchiveDownloadPlanResult {
     const targetRoot = normalizeArchiveInboxRoot(options.targetRoot);
     const provider = options.provider ?? 'baidu';
-    const creatorIds = [...new Set(options.creatorIds ?? [])];
-    const reconciledLocal = this.reconcileAlreadyLocalTasks(provider);
-    const removedOutOfScope = this.removeOutOfScopeTasks(provider);
-    const creatorFilter = creatorIds.length
+    const hasExplicitCreatorScope = Object.prototype.hasOwnProperty.call(options, 'creatorIds');
+    const creatorIds = hasExplicitCreatorScope
+      ? [...new Set(options.creatorIds ?? [])]
+      : null;
+    if (creatorIds !== null) {
+      if (creatorIds.length === 0) {
+        throw new Error('博主定向缺失任务规划不允许空 creatorIds。');
+      }
+      if (creatorIds.some((creatorId) => !Number.isSafeInteger(creatorId) || creatorId <= 0)) {
+        throw new Error('博主定向缺失任务规划收到无效 creatorId。');
+      }
+      const placeholders = creatorIds.map(() => '?').join(', ');
+      const rows = this.database.prepare(
+        `SELECT id FROM archive_catalog_creators WHERE id IN (${placeholders})`
+      ).all(...creatorIds) as Array<{ id: number }>;
+      if (rows.length !== creatorIds.length) {
+        throw new Error('博主定向缺失任务规划包含不存在的 creatorId。');
+      }
+    }
+    const creatorParameters = creatorIds ?? [];
+    const creatorFilter = creatorIds !== null
       ? `AND works.creator_id IN (${creatorIds.map(() => '?').join(', ')})`
       : '';
-    const candidates = this.database.prepare(
-      `SELECT source_works.id AS source_work_id,
-              source_works.source_order,
-              creators.canonical_name AS creator_name,
-              deliveries.id AS delivery_id
-       FROM archive_catalog_source_works source_works
-       JOIN archive_catalog_works works ON works.id = source_works.work_id
-       JOIN archive_catalog_creators creators ON creators.id = works.creator_id
-       JOIN archive_catalog_collections collections ON collections.id = source_works.collection_id
-       LEFT JOIN archive_catalog_deliveries deliveries
-         ON deliveries.id = (
-           SELECT candidate.id
-           FROM archive_catalog_deliveries candidate
-           WHERE candidate.collection_id = collections.id
-             AND candidate.provider = ?
-             AND candidate.status IN ('saved', 'already-saved')
-           ORDER BY candidate.transferred_at DESC, candidate.id DESC
-           LIMIT 1
-         )
-       WHERE source_works.source = 'costuan'
-         AND source_works.is_active = 1
-         AND collections.is_active = 1
-         AND NOT EXISTS (
-           SELECT 1
-           FROM archive_catalog_local_works local_works
-           JOIN archive_catalog_local_creator_folders local_folders
-             ON local_folders.id = local_works.local_creator_folder_id
-           WHERE local_works.work_id = works.id
-             AND local_works.is_active = 1
-             AND local_folders.is_active = 1
-         )
-         ${creatorFilter}
-       ORDER BY creators.id, source_works.source_order, source_works.id`
-    ).all(provider, ...creatorIds) as PlanCandidateRow[];
-
-    const insert = this.database.prepare(
-      `INSERT INTO archive_catalog_download_tasks (
-         source_work_id, provider, target_root, target_relative_directory,
-         target_filename, status, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
-       ON CONFLICT(source_work_id, provider) DO NOTHING`
-    );
     let created = 0;
     let existing = 0;
+    let reconciledLocal = 0;
+    let removedOutOfScope = 0;
     let skippedWithoutOrder = 0;
     let skippedWithoutDelivery = 0;
     const timestamp = nowIso();
 
-    this.database.exec('BEGIN');
+    this.database.exec('BEGIN IMMEDIATE');
     try {
+      reconciledLocal = this.reconcileAlreadyLocalTasks(provider, creatorIds, timestamp);
+      removedOutOfScope = this.removeOutOfScopeTasks(provider, creatorIds);
+      const candidates = this.database.prepare(
+        `SELECT source_works.id AS source_work_id,
+                source_works.source_order,
+                creators.canonical_name AS creator_name,
+                deliveries.id AS delivery_id
+         FROM archive_catalog_source_works source_works
+         JOIN archive_catalog_works works ON works.id = source_works.work_id
+         JOIN archive_catalog_creators creators ON creators.id = works.creator_id
+         JOIN archive_catalog_collections collections ON collections.id = source_works.collection_id
+         LEFT JOIN archive_catalog_deliveries deliveries
+           ON deliveries.id = (
+             SELECT candidate.id
+             FROM archive_catalog_deliveries candidate
+             WHERE candidate.collection_id = collections.id
+               AND candidate.provider = ?
+               AND candidate.status IN ('saved', 'already-saved')
+             ORDER BY candidate.transferred_at DESC, candidate.id DESC
+             LIMIT 1
+           )
+         WHERE source_works.source = 'costuan'
+           AND source_works.is_active = 1
+           AND collections.is_active = 1
+           AND NOT EXISTS (
+             SELECT 1
+             FROM archive_catalog_local_works local_works
+             JOIN archive_catalog_local_creator_folders local_folders
+               ON local_folders.id = local_works.local_creator_folder_id
+             WHERE local_works.work_id = works.id
+               AND local_works.is_active = 1
+               AND local_folders.is_active = 1
+           )
+           ${creatorFilter}
+         ORDER BY creators.id, source_works.source_order, source_works.id`
+      ).all(provider, ...creatorParameters) as PlanCandidateRow[];
+      const insert = this.database.prepare(
+        `INSERT INTO archive_catalog_download_tasks (
+           source_work_id, provider, target_root, target_relative_directory,
+           target_filename, status, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+         ON CONFLICT(source_work_id, provider) DO NOTHING`
+      );
       for (const candidate of candidates) {
         if (candidate.source_order === null) {
           skippedWithoutOrder += 1;
@@ -294,8 +314,14 @@ export class ArchiveDownloadTaskService {
     };
   }
 
-  private reconcileAlreadyLocalTasks(provider: string): number {
-    const timestamp = nowIso();
+  private reconcileAlreadyLocalTasks(
+    provider: string,
+    creatorIds: number[] | null = null,
+    timestamp = nowIso()
+  ): number {
+    const creatorFilter = creatorIds === null
+      ? ''
+      : `AND works.creator_id IN (${creatorIds.map(() => '?').join(', ')})`;
     const result = this.database.prepare(
       `UPDATE archive_catalog_download_tasks
        SET status = 'ingested', completed_at = COALESCE(completed_at, ?), updated_at = ?,
@@ -304,23 +330,34 @@ export class ArchiveDownloadTaskService {
          AND status IN ('pending', 'claimed', 'failed', 'staged', 'downloaded')
          AND source_work_id IN (
            SELECT source_works.id
-           FROM archive_catalog_source_works source_works
-           JOIN archive_catalog_local_works local_works ON local_works.work_id = source_works.work_id
-           JOIN archive_catalog_local_creator_folders local_folders
-             ON local_folders.id = local_works.local_creator_folder_id
-           WHERE local_works.is_active = 1
-             AND local_folders.is_active = 1
-         )`
-    ).run(timestamp, timestamp, provider);
+            FROM archive_catalog_source_works source_works
+            JOIN archive_catalog_works works ON works.id = source_works.work_id
+            JOIN archive_catalog_local_works local_works ON local_works.work_id = source_works.work_id
+            JOIN archive_catalog_local_creator_folders local_folders
+              ON local_folders.id = local_works.local_creator_folder_id
+            WHERE local_works.is_active = 1
+              AND local_folders.is_active = 1
+              ${creatorFilter}
+          )`
+    ).run(timestamp, timestamp, provider, ...(creatorIds ?? []));
     return Number(result.changes ?? 0);
   }
 
-  private removeOutOfScopeTasks(provider: string): number {
+  private removeOutOfScopeTasks(provider: string, creatorIds: number[] | null = null): number {
+    const creatorFilter = creatorIds === null
+      ? ''
+      : `AND source_work_id IN (
+           SELECT scoped_source_works.id
+           FROM archive_catalog_source_works scoped_source_works
+           JOIN archive_catalog_works scoped_works ON scoped_works.id = scoped_source_works.work_id
+           WHERE scoped_works.creator_id IN (${creatorIds.map(() => '?').join(', ')})
+         )`;
     const result = this.database.prepare(
       `DELETE FROM archive_catalog_download_tasks
        WHERE provider = ?
-         AND status IN ('pending', 'failed', 'cancelled')
-         AND NOT EXISTS (
+          AND status IN ('pending', 'failed', 'cancelled')
+          ${creatorFilter}
+          AND NOT EXISTS (
            SELECT 1
            FROM archive_catalog_source_works source_works
            JOIN archive_catalog_collections collections
@@ -336,7 +373,7 @@ export class ArchiveDownloadTaskService {
                  AND deliveries.status IN ('saved', 'already-saved')
              )
          )`
-    ).run(provider);
+    ).run(provider, ...(creatorIds ?? []));
     return Number(result.changes ?? 0);
   }
 
