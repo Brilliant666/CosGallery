@@ -104,6 +104,21 @@ type LocalCreatorSnapshot = {
   works: LocalWorkSnapshot[];
 };
 
+export type LocalCreatorReconciliationScope = {
+  creatorId: number;
+  folderName: string;
+};
+
+type ExistingLocalWorkLink = {
+  relative_path: string;
+  work_id: number | null;
+  parsed_source_order: number | null;
+  match_status: MatchStatus;
+  match_method: string | null;
+  work_creator_id: number | null;
+  has_active_source: number;
+};
+
 type RemoteWorkRow = {
   work_id: number;
   source_work_id: string;
@@ -324,23 +339,67 @@ async function scanLocalRoot(
 
   for (const [index, creatorEntry] of creatorEntries.entries()) {
     onProgress?.(`[${index + 1}/${creatorEntries.length}] 只读扫描 ${creatorEntry.name}`);
-    const creatorPath = path.join(resolvedRoot, creatorEntry.name);
-    const workEntries = (await fs.readdir(creatorPath, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-      .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }));
-    const works: LocalWorkSnapshot[] = [];
-    for (const workEntry of workEntries) {
-      works.push(await inspectWorkDirectory(resolvedRoot, path.join(creatorPath, workEntry.name)));
-    }
-    snapshots.push({
-      relativePath: toPosixRelative(path.relative(resolvedRoot, creatorPath)),
-      absolutePath: creatorPath,
-      folderName: creatorEntry.name,
-      works
-    });
+    snapshots.push(await scanLocalCreatorDirectory(resolvedRoot, creatorEntry.name));
   }
 
   return snapshots;
+}
+
+function assertDirectCreatorFolderName(folderName: string): string {
+  const trimmed = folderName.trim();
+  if (
+    !trimmed
+    || trimmed === '.'
+    || trimmed === '..'
+    || /[\\/]/u.test(trimmed)
+    || path.basename(trimmed) !== trimmed
+  ) {
+    throw new Error('博主文件夹必须是图库根目录下的单个直接子目录。');
+  }
+  return trimmed;
+}
+
+async function resolveDirectCreatorFolder(rootPath: string, folderName: string): Promise<string> {
+  const checkedName = assertDirectCreatorFolderName(folderName);
+  const entries = await fs.readdir(rootPath, { withFileTypes: true });
+  const matches = entries.filter((entry) =>
+    entry.name.localeCompare(checkedName, undefined, { sensitivity: 'accent' }) === 0
+  );
+  if (matches.length !== 1 || !matches[0].isDirectory() || matches[0].isSymbolicLink()) {
+    throw new Error(`图库根目录下找不到唯一的直接博主目录：${checkedName}`);
+  }
+  return matches[0].name;
+}
+
+async function scanLocalCreatorDirectory(rootPath: string, folderName: string): Promise<LocalCreatorSnapshot> {
+  const resolvedRoot = path.resolve(rootPath);
+  const creatorPath = path.join(resolvedRoot, folderName);
+  const relativeCreatorPath = path.relative(resolvedRoot, creatorPath);
+  if (
+    !relativeCreatorPath
+    || relativeCreatorPath.startsWith(`..${path.sep}`)
+    || relativeCreatorPath === '..'
+    || path.isAbsolute(relativeCreatorPath)
+  ) {
+    throw new Error(`博主目录超出图库根目录：${folderName}`);
+  }
+  const creatorStat = await fs.lstat(creatorPath);
+  if (!creatorStat.isDirectory() || creatorStat.isSymbolicLink()) {
+    throw new Error(`博主路径不是可扫描的直接文件夹：${folderName}`);
+  }
+  const workEntries = (await fs.readdir(creatorPath, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }));
+  const works: LocalWorkSnapshot[] = [];
+  for (const workEntry of workEntries) {
+    works.push(await inspectWorkDirectory(resolvedRoot, path.join(creatorPath, workEntry.name)));
+  }
+  return {
+    relativePath: toPosixRelative(relativeCreatorPath),
+    absolutePath: creatorPath,
+    folderName,
+    works
+  };
 }
 
 export class ArchiveCatalogService {
@@ -664,10 +723,73 @@ export class ArchiveCatalogService {
   ): Promise<LocalReconciliationResult> {
     const resolvedRoot = path.resolve(rootPath);
     const snapshots = await scanLocalRoot(resolvedRoot, onProgress);
+    return this.reconcileLocalSnapshots({
+      resolvedRoot,
+      snapshots,
+      explicitCreatorIds: null,
+      deactivateMissingCreatorFolders: true
+    });
+  }
+
+  async reconcileLocalCreators(options: {
+    rootPath: string;
+    creators: LocalCreatorReconciliationScope[];
+    onProgress?: (message: string) => void;
+  }): Promise<LocalReconciliationResult> {
+    const resolvedRoot = path.resolve(options.rootPath);
+    const rootStat = await fs.stat(resolvedRoot);
+    if (!rootStat.isDirectory()) throw new Error(`图库根目录不是文件夹：${resolvedRoot}`);
+    if (options.creators.length === 0) {
+      throw new Error('博主定向对账至少需要一个明确的博主范围。');
+    }
+
+    const explicitCreatorIds = new Map<string, number>();
+    const seenCreatorIds = new Set<number>();
+    const snapshots: LocalCreatorSnapshot[] = [];
+    for (const [index, scope] of options.creators.entries()) {
+      if (!Number.isSafeInteger(scope.creatorId) || scope.creatorId <= 0) {
+        throw new Error(`无效的博主 ID：${String(scope.creatorId)}`);
+      }
+      if (seenCreatorIds.has(scope.creatorId)) {
+        throw new Error(`博主定向对账中出现重复 ID：${scope.creatorId}`);
+      }
+      const actualFolderName = await resolveDirectCreatorFolder(resolvedRoot, scope.folderName);
+      const creator = this.database.prepare(
+        'SELECT id FROM archive_catalog_creators WHERE id = ?'
+      ).get(scope.creatorId) as { id: number } | undefined;
+      if (!creator) throw new Error(`博主 ID 不存在：${scope.creatorId}`);
+      const creatorMatches = this.findCreatorIdsByAliases([actualFolderName]);
+      if (creatorMatches.length !== 1 || creatorMatches[0] !== scope.creatorId) {
+        throw new Error(`博主 ID ${scope.creatorId} 与文件夹“${actualFolderName}”无法唯一对应。`);
+      }
+      options.onProgress?.(`[${index + 1}/${options.creators.length}] 只读扫描 ${actualFolderName}`);
+      const snapshot = await scanLocalCreatorDirectory(resolvedRoot, actualFolderName);
+      if (explicitCreatorIds.has(snapshot.relativePath)) {
+        throw new Error(`博主定向对账中出现重复文件夹：${actualFolderName}`);
+      }
+      seenCreatorIds.add(scope.creatorId);
+      explicitCreatorIds.set(snapshot.relativePath, scope.creatorId);
+      snapshots.push(snapshot);
+    }
+
+    return this.reconcileLocalSnapshots({
+      resolvedRoot,
+      snapshots,
+      explicitCreatorIds,
+      deactivateMissingCreatorFolders: false
+    });
+  }
+
+  private reconcileLocalSnapshots(input: {
+    resolvedRoot: string;
+    snapshots: LocalCreatorSnapshot[];
+    explicitCreatorIds: Map<string, number> | null;
+    deactivateMissingCreatorFolders: boolean;
+  }): LocalReconciliationResult {
     const scannedAt = new Date().toISOString();
     const result: LocalReconciliationResult = {
-      rootPath: resolvedRoot,
-      creatorFolders: snapshots.length,
+      rootPath: input.resolvedRoot,
+      creatorFolders: input.snapshots.length,
       matchedCreatorFolders: 0,
       unmatchedCreatorFolders: [],
       ambiguousCreatorFolders: [],
@@ -678,20 +800,13 @@ export class ArchiveCatalogService {
     };
 
     withTransaction(this.database, () => {
-      const existingFolders = this.database.prepare(
-        `SELECT id FROM archive_catalog_local_creator_folders WHERE root_path = ?`
-      ).all(resolvedRoot) as Array<{ id: number }>;
-      for (const folder of existingFolders) {
-        this.database.prepare(
-          `UPDATE archive_catalog_local_works SET is_active = 0 WHERE local_creator_folder_id = ?`
-        ).run(folder.id);
-      }
-      this.database.prepare(
-        `UPDATE archive_catalog_local_creator_folders SET is_active = 0 WHERE root_path = ?`
-      ).run(resolvedRoot);
-
-      for (const creatorSnapshot of snapshots) {
-        const creatorMatches = this.findCreatorIdsByAliases([creatorSnapshot.folderName]);
+      const activeCreatorPaths = new Set<string>();
+      for (const creatorSnapshot of input.snapshots) {
+        activeCreatorPaths.add(creatorSnapshot.relativePath);
+        const explicitCreatorId = input.explicitCreatorIds?.get(creatorSnapshot.relativePath);
+        const creatorMatches = explicitCreatorId === undefined
+          ? this.findCreatorIdsByAliases([creatorSnapshot.folderName])
+          : [explicitCreatorId];
         const creatorId = creatorMatches.length === 1 ? creatorMatches[0] : null;
         const creatorStatus: MatchStatus = creatorMatches.length === 1
           ? 'matched'
@@ -700,9 +815,14 @@ export class ArchiveCatalogService {
         else if (creatorStatus === 'ambiguous') result.ambiguousCreatorFolders.push(creatorSnapshot.folderName);
         else result.unmatchedCreatorFolders.push(creatorSnapshot.folderName);
 
+        const existingLinks = this.listExistingLocalWorkLinks(
+          input.resolvedRoot,
+          creatorSnapshot.relativePath
+        );
+
         const localFolderId = this.upsertLocalCreatorFolder({
           creatorId,
-          rootPath: resolvedRoot,
+          rootPath: input.resolvedRoot,
           snapshot: creatorSnapshot,
           status: creatorStatus,
           method: creatorStatus === 'matched' ? 'normalized-alias' : null,
@@ -726,10 +846,49 @@ export class ArchiveCatalogService {
           values.push(remoteWork);
           byTitle.set(normalizedTitle, values);
         }
+        const existingByRelativePath = new Map(existingLinks.map((row) => [row.relative_path, row]));
+        const preservedByRelativePath = new Map<string, ExistingLocalWorkLink>();
         const claimedWorkIds = new Set<number>();
+        if (creatorId !== null) {
+          for (const workSnapshot of creatorSnapshot.works) {
+            const relativePath = this.localWorkRelativePath(workSnapshot);
+            const existing = existingByRelativePath.get(relativePath);
+            if (
+              existing
+              && existing.work_id !== null
+              && existing.match_status === 'matched'
+              && existing.work_creator_id === creatorId
+              && existing.has_active_source === 1
+              && !claimedWorkIds.has(existing.work_id)
+            ) {
+              preservedByRelativePath.set(relativePath, existing);
+              claimedWorkIds.add(existing.work_id);
+            }
+          }
+        }
+
+        const activeWorkPaths = new Set<string>();
 
         for (const workSnapshot of creatorSnapshot.works) {
           result.localWorks += 1;
+          const relativePath = this.localWorkRelativePath(workSnapshot);
+          activeWorkPaths.add(relativePath);
+          const preserved = preservedByRelativePath.get(relativePath);
+          if (preserved?.work_id !== null && preserved?.work_id !== undefined) {
+            result.matchedWorks += 1;
+            this.upsertLocalWork({
+              localFolderId,
+              workId: preserved.work_id,
+              snapshot: workSnapshot.parsedSourceOrder === null && preserved.parsed_source_order !== null
+                ? { ...workSnapshot, parsedSourceOrder: preserved.parsed_source_order }
+                : workSnapshot,
+              status: 'matched',
+              method: preserved.match_method,
+              scannedAt
+            });
+            continue;
+          }
+
           let matches: RemoteWorkRow[] = [];
           let matchMethod: string | null = null;
           let numberingTitleConflict = false;
@@ -793,6 +952,12 @@ export class ArchiveCatalogService {
             scannedAt
           });
         }
+
+        this.deactivateMissingLocalWorks(localFolderId, activeWorkPaths);
+      }
+
+      if (input.deactivateMissingCreatorFolders) {
+        this.deactivateMissingLocalCreatorFolders(input.resolvedRoot, activeCreatorPaths);
       }
     });
 
@@ -1077,6 +1242,86 @@ export class ArchiveCatalogService {
     ).all(creatorId) as RemoteWorkRow[];
   }
 
+  private listExistingLocalWorkLinks(rootPath: string, creatorRelativePath: string): ExistingLocalWorkLink[] {
+    return this.database.prepare(
+      `SELECT
+         local_works.relative_path,
+         local_works.work_id,
+         local_works.parsed_source_order,
+         local_works.match_status,
+         local_works.match_method,
+         works.creator_id AS work_creator_id,
+         CASE WHEN EXISTS (
+           SELECT 1
+           FROM archive_catalog_source_works source_works
+           JOIN archive_catalog_collections collections
+             ON collections.id = source_works.collection_id
+           WHERE source_works.work_id = local_works.work_id
+             AND source_works.is_active = 1
+             AND collections.is_active = 1
+             AND collections.creator_id = works.creator_id
+         ) THEN 1 ELSE 0 END AS has_active_source
+       FROM archive_catalog_local_creator_folders local_folders
+       JOIN archive_catalog_local_works local_works
+         ON local_works.local_creator_folder_id = local_folders.id
+       LEFT JOIN archive_catalog_works works ON works.id = local_works.work_id
+       WHERE local_folders.root_path = ?
+         AND local_folders.relative_path = ?
+       ORDER BY local_works.relative_path`
+    ).all(rootPath, creatorRelativePath) as ExistingLocalWorkLink[];
+  }
+
+  private localWorkRelativePath(snapshot: LocalWorkSnapshot): string {
+    return snapshot.relativePath.split('/').slice(1).join('/');
+  }
+
+  private deactivateMissingLocalWorks(localFolderId: number, activePaths: Set<string>): void {
+    if (activePaths.size === 0) {
+      this.database.prepare(
+        `UPDATE archive_catalog_local_works
+         SET is_active = 0
+         WHERE local_creator_folder_id = ? AND is_active = 1`
+      ).run(localFolderId);
+      return;
+    }
+    const placeholders = [...activePaths].map(() => '?').join(', ');
+    this.database.prepare(
+      `UPDATE archive_catalog_local_works
+       SET is_active = 0
+       WHERE local_creator_folder_id = ?
+         AND is_active = 1
+         AND relative_path NOT IN (${placeholders})`
+    ).run(localFolderId, ...activePaths);
+  }
+
+  private deactivateMissingLocalCreatorFolders(rootPath: string, activePaths: Set<string>): void {
+    const parameters: Array<string | number> = [rootPath];
+    const activeFilter = activePaths.size === 0
+      ? ''
+      : `AND relative_path NOT IN (${[...activePaths].map(() => '?').join(', ')})`;
+    parameters.push(...activePaths);
+    const staleFolders = this.database.prepare(
+      `SELECT id
+       FROM archive_catalog_local_creator_folders
+       WHERE root_path = ?
+         AND is_active = 1
+         ${activeFilter}`
+    ).all(...parameters) as Array<{ id: number }>;
+    const deactivateWorks = this.database.prepare(
+      `UPDATE archive_catalog_local_works
+       SET is_active = 0
+       WHERE local_creator_folder_id = ? AND is_active = 1`
+    );
+    for (const folder of staleFolders) deactivateWorks.run(folder.id);
+    if (staleFolders.length === 0) return;
+    const placeholders = staleFolders.map(() => '?').join(', ');
+    this.database.prepare(
+      `UPDATE archive_catalog_local_creator_folders
+       SET is_active = 0
+       WHERE id IN (${placeholders}) AND is_active = 1`
+    ).run(...staleFolders.map((folder) => folder.id));
+  }
+
   private upsertLocalCreatorFolder(input: {
     creatorId: number | null;
     rootPath: string;
@@ -1091,14 +1336,20 @@ export class ArchiveCatalogService {
          match_status, match_method, scanned_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(root_path, relative_path) DO UPDATE SET
-         creator_id = excluded.creator_id,
+          creator_id = excluded.creator_id,
          absolute_path = excluded.absolute_path,
          folder_name = excluded.folder_name,
          match_status = excluded.match_status,
          match_method = excluded.match_method,
-         is_active = 1,
-         scanned_at = excluded.scanned_at,
-         updated_at = CURRENT_TIMESTAMP`
+          is_active = 1,
+          scanned_at = excluded.scanned_at,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE archive_catalog_local_creator_folders.creator_id IS NOT excluded.creator_id
+           OR archive_catalog_local_creator_folders.absolute_path IS NOT excluded.absolute_path
+           OR archive_catalog_local_creator_folders.folder_name IS NOT excluded.folder_name
+           OR archive_catalog_local_creator_folders.match_status IS NOT excluded.match_status
+           OR archive_catalog_local_creator_folders.match_method IS NOT excluded.match_method
+           OR archive_catalog_local_creator_folders.is_active <> 1`
     ).run(
       input.creatorId,
       input.rootPath,
@@ -1124,7 +1375,7 @@ export class ArchiveCatalogService {
     method: string | null;
     scannedAt: string;
   }): void {
-    const workRelativePath = input.snapshot.relativePath.split('/').slice(1).join('/');
+    const workRelativePath = this.localWorkRelativePath(input.snapshot);
     this.database.prepare(
       `INSERT INTO archive_catalog_local_works (
          local_creator_folder_id, work_id, relative_path, absolute_path, folder_name,
@@ -1143,9 +1394,21 @@ export class ArchiveCatalogService {
          total_bytes = excluded.total_bytes,
          match_status = excluded.match_status,
          match_method = excluded.match_method,
-         is_active = 1,
-         scanned_at = excluded.scanned_at,
-         updated_at = CURRENT_TIMESTAMP`
+          is_active = 1,
+          scanned_at = excluded.scanned_at,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE archive_catalog_local_works.work_id IS NOT excluded.work_id
+           OR archive_catalog_local_works.absolute_path IS NOT excluded.absolute_path
+           OR archive_catalog_local_works.folder_name IS NOT excluded.folder_name
+           OR archive_catalog_local_works.parsed_source_order IS NOT excluded.parsed_source_order
+           OR archive_catalog_local_works.image_count IS NOT excluded.image_count
+           OR archive_catalog_local_works.video_count IS NOT excluded.video_count
+           OR archive_catalog_local_works.advertisement_file_count IS NOT excluded.advertisement_file_count
+           OR archive_catalog_local_works.other_file_count IS NOT excluded.other_file_count
+           OR archive_catalog_local_works.total_bytes IS NOT excluded.total_bytes
+           OR archive_catalog_local_works.match_status IS NOT excluded.match_status
+           OR archive_catalog_local_works.match_method IS NOT excluded.match_method
+           OR archive_catalog_local_works.is_active <> 1`
     ).run(
       input.localFolderId,
       input.workId,

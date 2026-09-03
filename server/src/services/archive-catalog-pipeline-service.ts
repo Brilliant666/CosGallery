@@ -33,9 +33,26 @@ export type ArchiveCatalogPipelineResult = {
   metadata: ArchiveMetadataPlanResult;
 };
 
+export type ArchiveCatalogCreatorPipelineResult = {
+  refreshedAt: string;
+  creatorId: number;
+  creatorFolderName: string;
+  local: LocalReconciliationResult;
+  plan: ArchiveDownloadPlanResult;
+  tasks: ArchiveDownloadTaskSummary;
+};
+
 type ArchiveCatalogPipelineOptions = {
   galleryRoot?: string;
   reportPath?: string;
+  defaultInboxRoot?: string;
+  onProgress?: (message: string) => void;
+};
+
+type ArchiveCatalogCreatorPipelineOptions = {
+  galleryRoot: string;
+  creatorId: number;
+  creatorFolderName: string;
   defaultInboxRoot?: string;
   onProgress?: (message: string) => void;
 };
@@ -105,6 +122,46 @@ export class ArchiveCatalogPipelineService {
       plan,
       tasks: downloadService.list({ limit: 1 }).summary,
       metadata
+    };
+  }
+
+  async refreshAfterCreatorGalleryScan(
+    options: ArchiveCatalogCreatorPipelineOptions
+  ): Promise<ArchiveCatalogCreatorPipelineResult> {
+    if (!Number.isSafeInteger(options.creatorId) || options.creatorId <= 0) {
+      throw new Error('博主定向刷新需要有效的 creatorId。');
+    }
+    const creatorFolderName = options.creatorFolderName.trim();
+    if (!creatorFolderName) throw new Error('博主定向刷新需要 creatorFolderName。');
+
+    const galleryRoot = path.resolve(options.galleryRoot);
+    const catalogService = new ArchiveCatalogService(this.database);
+    const downloadService = new ArchiveDownloadTaskService(this.database);
+    options.onProgress?.(`正在只读核对博主账本：${creatorFolderName}……`);
+    const local = await catalogService.reconcileLocalCreators({
+      rootPath: galleryRoot,
+      creators: [{ creatorId: options.creatorId, folderName: creatorFolderName }],
+      onProgress: options.onProgress
+    });
+    const configuredInboxRoot = this.getSetting(ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY);
+    const targetRoot = configuredInboxRoot
+      ?? downloadService.getLatestTargetRoot()
+      ?? options.defaultInboxRoot
+      ?? path.join(path.dirname(galleryRoot), 'cos待入库');
+    options.onProgress?.(`正在更新博主缺失任务：${creatorFolderName}……`);
+    const plan = downloadService.planMissing({
+      targetRoot,
+      provider: 'baidu',
+      creatorIds: [options.creatorId]
+    });
+
+    return {
+      refreshedAt: new Date().toISOString(),
+      creatorId: options.creatorId,
+      creatorFolderName,
+      local,
+      plan,
+      tasks: downloadService.list({ limit: 1 }).summary
     };
   }
 }
