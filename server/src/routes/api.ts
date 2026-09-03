@@ -12,7 +12,19 @@ import { ArchiveCatalogQueryService } from '../services/archive-catalog-query-se
 import { ArchiveBridgeService } from '../services/archive-bridge-service.js';
 import { ArchiveDownloadTaskService } from '../services/archive-download-task-service.js';
 import { ArchiveMetadataTaskService } from '../services/archive-metadata-task-service.js';
-import { localIngestService, type LocalIngestStatus } from '../services/local-ingest-service.js';
+import {
+  localIngestService,
+  type LocalIngestJob,
+  type LocalIngestJobFilter
+} from '../services/local-ingest-service.js';
+import {
+  LocalIngestOperationActiveError,
+  localIngestOperationCoordinator,
+  type LocalIngestOperationContext,
+  type LocalIngestOperationKind,
+  type LocalIngestOperationRun,
+  type LocalIngestOperationSnapshot
+} from '../services/local-ingest-operation-coordinator.js';
 import { localIngestSettingsService } from '../services/local-ingest-settings-service.js';
 import { recycleBinAdapter } from '../services/recycle-bin-adapter.js';
 import {
@@ -29,6 +41,57 @@ import { watcherService } from '../services/watcher-service.js';
 import { serveDerivativeForImage } from './lazy-derivatives.js';
 
 const router = express.Router();
+
+function operationCurrentJob(job: LocalIngestJob) {
+  return {
+    id: job.id,
+    creatorId: job.creatorId,
+    creatorName: job.creatorName,
+    archiveName: job.sourceArchiveName,
+    status: job.status,
+    phase: job.phase
+  };
+}
+
+function currentLocalIngestOperation(): LocalIngestOperationSnapshot {
+  const snapshot = localIngestOperationCoordinator.snapshot();
+  const currentId = snapshot.run?.currentJob?.id;
+  if (currentId && snapshot.run) {
+    try {
+      snapshot.run.currentJob = operationCurrentJob(localIngestService.getJob(currentId));
+    } catch {
+      // A lightweight status read must remain available even if a concurrently
+      // completed job was removed by an explicit future maintenance action.
+    }
+  }
+  return snapshot;
+}
+
+async function respondWithLocalIngestOperation<T>(
+  response: express.Response,
+  descriptor: {
+    state: 'scanning' | 'running';
+    kind: LocalIngestOperationKind;
+    message: string;
+    run?: LocalIngestOperationRun | null;
+  },
+  action: (context: LocalIngestOperationContext) => Promise<T> | T,
+  summarize: (result: T) => Record<string, unknown> = () => ({})
+): Promise<void> {
+  try {
+    response.json(await localIngestOperationCoordinator.run(descriptor, action, summarize));
+  } catch (error) {
+    if (error instanceof LocalIngestOperationActiveError) {
+      response.status(409).json({
+        code: error.code,
+        message: error.message,
+        operation: currentLocalIngestOperation()
+      });
+      return;
+    }
+    throw error;
+  }
+}
 
 const paginationQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -127,18 +190,17 @@ const archiveMetadataTaskQuerySchema = z.object({
 const archiveMetadataPlanBodySchema = z.object({
   retryNotFound: z.boolean().default(false)
 });
-const localIngestStatusSchema = z.enum(['queued', 'running', 'awaiting_review', 'reconciling', 'ingested', 'failed']);
+const localIngestStatusSchema = z.enum(['pending', 'running', 'awaiting_review', 'failed', 'completed']);
 const localIngestJobQuerySchema = z.object({
   status: localIngestStatusSchema.optional(),
   creatorId: z.coerce.number().int().positive().optional(),
-  limit: z.coerce.number().int().min(1).max(500).default(100)
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50)
 });
-const localIngestAllowlistBodySchema = z.object({
-  allowlist: z.array(z.string().trim().min(1).max(255)).min(1).max(1000).optional()
-});
-const localIngestRunBodySchema = localIngestAllowlistBodySchema.extend({
+const localIngestScanBodySchema = z.object({}).strict();
+const localIngestRunBodySchema = z.object({
   jobIds: z.array(z.number().int().positive()).min(1).max(500).optional()
-});
+}).strict();
 const localIngestSettingsBodySchema = z.object({
   libraryRoot: z.string().trim().min(1).max(500),
   inboxRoot: z.string().trim().min(1).max(500),
@@ -1298,17 +1360,26 @@ router.get(
   }
 );
 
+router.get(
+  '/admin/local-ingest/operation',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (_request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.json(currentLocalIngestOperation());
+  }
+);
+
 router.put(
   '/admin/local-ingest/settings',
   requireCapability('canManageLibrary', 'Admin access is required.'),
-  (request, response) => {
-    try {
-      response.json(localIngestSettingsService.save(localIngestSettingsBodySchema.parse(request.body)));
-    } catch (error) {
-      response.status(400).json({
-        message: error instanceof Error ? error.message : 'Local ingest settings are invalid'
-      });
-    }
+  async (request, response) => {
+    const body = localIngestSettingsBodySchema.parse(request.body);
+    await respondWithLocalIngestOperation(
+      response,
+      { state: 'running', kind: 'save-settings', message: '正在保存 Stage 3 配置' },
+      () => localIngestSettingsService.save(body),
+      (settings) => ({ saved: true, allowlistCount: settings.allowlist.length })
+    );
   }
 );
 
@@ -1319,7 +1390,12 @@ router.post(
     const body = request.body && Object.keys(request.body).length > 0
       ? localIngestSettingsBodySchema.parse(request.body)
       : undefined;
-    response.json(await localIngestSettingsService.validate(body));
+    await respondWithLocalIngestOperation(
+      response,
+      { state: 'running', kind: 'validation', message: '正在验证 Stage 3 环境' },
+      () => localIngestSettingsService.validate(body),
+      (result) => ({ valid: result.valid, errorCount: result.errors.length })
+    );
   }
 );
 
@@ -1327,8 +1403,15 @@ router.post(
   '/admin/local-ingest/recycle-bin-smoke-test',
   requireCapability('canManageLibrary', 'Admin access is required.'),
   async (_request, response) => {
-    const settings = localIngestSettingsService.get();
-    response.json(await recycleBinAdapter.smokeTest(settings.processingRoot));
+    await respondWithLocalIngestOperation(
+      response,
+      { state: 'running', kind: 'recycle-test', message: '正在测试 Windows 回收站' },
+      async () => {
+        const settings = localIngestSettingsService.get();
+        return recycleBinAdapter.smokeTest(settings.processingRoot);
+      },
+      (result) => ({ recycled: result.recycled })
+    );
   }
 );
 
@@ -1337,7 +1420,12 @@ router.get(
   requireCapability('canAccessSettings', 'Admin access is required.'),
   (request, response) => {
     const query = localIngestJobQuerySchema.parse(request.query);
-    response.json(localIngestService.listJobs(query as { status?: LocalIngestStatus; creatorId?: number; limit?: number }));
+    const operation = currentLocalIngestOperation();
+    response.json(localIngestService.listJobDashboard({
+      ...query,
+      status: query.status as LocalIngestJobFilter | undefined,
+      currentCreatorId: operation.run?.currentJob?.creatorId ?? null
+    }));
   }
 );
 
@@ -1345,7 +1433,17 @@ router.get(
   '/admin/local-ingest/inbox-creators',
   requireCapability('canAccessSettings', 'Admin access is required.'),
   async (_request, response) => {
-    response.json(await localIngestService.discoverInboxCreators());
+    await respondWithLocalIngestOperation(
+      response,
+      { state: 'running', kind: 'discover-creators', message: '正在读取待入库博主' },
+      () => localIngestService.discoverInboxCreators(),
+      (result) => ({
+        matchedCreatorCount: result.summary.matchedCreatorCount,
+        archiveCount: result.summary.archiveCount,
+        unmappedDirectoryCount: result.summary.unmappedDirectoryCount,
+        ambiguousDirectoryCount: result.summary.ambiguousDirectoryCount
+      })
+    );
   }
 );
 
@@ -1353,8 +1451,20 @@ router.post(
   '/admin/local-ingest/scan',
   requireCapability('canManageLibrary', 'Admin access is required.'),
   async (request, response) => {
-    const body = localIngestAllowlistBodySchema.parse(request.body ?? {});
-    response.json(await localIngestService.scanInbox(body.allowlist));
+    localIngestScanBodySchema.parse(request.body ?? {});
+    await respondWithLocalIngestOperation(
+      response,
+      { state: 'scanning', kind: 'scan', message: '正在扫描待入库目录' },
+      async () => {
+        const {
+          jobs: _jobs,
+          allowlist: _allowlist,
+          ...summary
+        } = await localIngestService.scanInboxWithStableRecheck();
+        return summary;
+      },
+      (summary) => summary
+    );
   }
 );
 
@@ -1363,7 +1473,43 @@ router.post(
   requireCapability('canManageLibrary', 'Admin access is required.'),
   async (request, response) => {
     const params = imageIdSchema.parse(request.params);
-    response.json(await localIngestService.runJob(params.id));
+    await respondWithLocalIngestOperation(
+      response,
+      {
+        state: 'running',
+        kind: 'single-job',
+        message: '正在启动单项 Stage 3 任务',
+        run: {
+          total: 1,
+          processed: 0,
+          ingested: 0,
+          failed: 0,
+          awaitingReview: 0,
+          remaining: 1,
+          currentJob: null
+        }
+      },
+      async (context) => {
+        const job = localIngestService.getJob(params.id);
+        context.update({
+          message: `正在运行 ${job.creatorName}/${job.sourceArchiveName}`,
+          run: { currentJob: operationCurrentJob(job) }
+        });
+        const result = await localIngestService.runJob(params.id);
+        context.update({
+          run: {
+            processed: 1,
+            ingested: result.status === 'ingested' ? 1 : 0,
+            failed: result.status === 'failed' ? 1 : 0,
+            awaitingReview: result.status === 'awaiting_review' ? 1 : 0,
+            remaining: 0,
+            currentJob: null
+          }
+        });
+        return result;
+      },
+      (result) => ({ jobId: result.id, status: result.status, phase: result.phase })
+    );
   }
 );
 
@@ -1372,7 +1518,42 @@ router.post(
   requireCapability('canManageLibrary', 'Admin access is required.'),
   async (request, response) => {
     const params = imageIdSchema.parse(request.params);
-    response.json(await localIngestService.retryCleanup(params.id));
+    await respondWithLocalIngestOperation(
+      response,
+      {
+        state: 'running',
+        kind: 'cleanup',
+        message: '正在启动 Stage 3 回收清理',
+        run: {
+          total: 1,
+          processed: 0,
+          ingested: 0,
+          failed: 0,
+          awaitingReview: 0,
+          remaining: 1,
+          currentJob: null
+        }
+      },
+      async (context) => {
+        const job = localIngestService.getJob(params.id);
+        context.update({
+          message: `正在重试 ${job.creatorName}/${job.sourceArchiveName} 的回收清理`,
+          run: { currentJob: operationCurrentJob(job) }
+        });
+        const result = await localIngestService.retryCleanup(params.id);
+        context.update({
+          run: {
+            processed: 1,
+            ingested: result.status === 'ingested' ? 1 : 0,
+            failed: result.cleanupStatus === 'failed' ? 1 : 0,
+            remaining: 0,
+            currentJob: null
+          }
+        });
+        return result;
+      },
+      (result) => ({ jobId: result.id, status: result.status, cleanupStatus: result.cleanupStatus })
+    );
   }
 );
 
@@ -1381,7 +1562,46 @@ router.post(
   requireCapability('canManageLibrary', 'Admin access is required.'),
   async (request, response) => {
     const body = localIngestRunBodySchema.parse(request.body ?? {});
-    response.json(await localIngestService.runBatch(body));
+    await respondWithLocalIngestOperation(
+      response,
+      {
+        state: 'running',
+        kind: 'batch',
+        message: '正在运行 Stage 3 批次',
+        run: {
+          total: 0,
+          processed: 0,
+          ingested: 0,
+          failed: 0,
+          awaitingReview: 0,
+          remaining: 0,
+          currentJob: null
+        }
+      },
+      async (context) => {
+        const results = await localIngestService.runBatch(
+          { jobIds: body.jobIds },
+          {
+            onProgress: (progress) => context.update({
+              message: progress.currentJob
+                ? `正在运行 ${progress.currentJob.creatorName}/${progress.currentJob.sourceArchiveName}`
+                : '正在运行 Stage 3 批次',
+              run: {
+                ...progress,
+                currentJob: progress.currentJob ? operationCurrentJob(progress.currentJob) : null
+              }
+            })
+          }
+        );
+        return {
+          total: results.length,
+          ingested: results.filter((job) => job.status === 'ingested').length,
+          failed: results.filter((job) => job.status === 'failed').length,
+          awaitingReview: results.filter((job) => job.status === 'awaiting_review').length
+        };
+      },
+      (summary) => summary
+    );
   }
 );
 

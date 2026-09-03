@@ -298,6 +298,7 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
   let clock = Date.now();
   const service = new LocalIngestService(database, settings, recycle, rescan, {
     now: () => new Date(clock),
+    wait: async (milliseconds) => { clock += milliseconds; },
     expectedGalleryRoot: libraryRoot
   });
   return {
@@ -385,6 +386,78 @@ describe.sequential('LocalIngestService', () => {
     const rediscovery = await discoverStable(fixture);
     expect(rediscovery).toMatchObject({ createdJobs: 0, existingJobs: 1 });
     expect(rediscovery.jobs[0]).toMatchObject({ id: result.id, status: 'ingested', attemptCount: 1 });
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('confirms a stable exact local handoff in one scan operation and advances only staged tasks', async () => {
+    fixture = await createFixture();
+    const discovery = await fixture.service.scanInboxWithStableRecheck();
+    expect(discovery).toMatchObject({
+      discoveredCreators: 1,
+      discoveredArchives: 1,
+      createdJobs: 1,
+      waitingStable: 0,
+      reconciledDownloadedTasks: 1
+    });
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
+      .toEqual({ status: 'downloaded' });
+
+    const repeated = await fixture.service.scanInboxWithStableRecheck();
+    expect(repeated).toMatchObject({ existingJobs: 1, reconciledDownloadedTasks: 0 });
+    fixture.database.prepare("UPDATE archive_catalog_download_tasks SET status = 'ingested' WHERE id = 1").run();
+    await fixture.service.scanInboxWithStableRecheck();
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
+      .toEqual({ status: 'ingested' });
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('keeps unstable, unmapped, ambiguous, and cancelled handoffs out of downloaded', async () => {
+    fixture = await createFixture({ temporarySibling: true });
+    const unstable = await fixture.service.scanInboxWithStableRecheck();
+    expect(unstable).toMatchObject({ waitingStable: 1, reconciledDownloadedTasks: 0 });
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
+      .toEqual({ status: 'staged' });
+    fixture.database.close();
+    await fs.rm(fixture.root, { recursive: true, force: true });
+
+    fixture = await createFixture();
+    await fs.rename(fixture.sourceArchivePath, path.join(path.dirname(fixture.sourceArchivePath), '008.7z'));
+    const unmapped = await fixture.service.scanInboxWithStableRecheck();
+    expect(unmapped).toMatchObject({ awaitingReview: 1, reconciledDownloadedTasks: 0 });
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
+      .toEqual({ status: 'staged' });
+    fixture.database.close();
+    await fs.rm(fixture.root, { recursive: true, force: true });
+
+    fixture = await createFixture();
+    seedAdditionalWork(fixture.database, fixture.creatorName, 8, '007.7z');
+    const ambiguous = await fixture.service.scanInboxWithStableRecheck();
+    expect(ambiguous).toMatchObject({ awaitingReview: 1, reconciledDownloadedTasks: 0 });
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks ORDER BY id').all())
+      .toEqual([{ status: 'staged' }, { status: 'staged' }]);
+    fixture.database.close();
+    await fs.rm(fixture.root, { recursive: true, force: true });
+
+    fixture = await createFixture();
+    fixture.database.prepare("UPDATE archive_catalog_download_tasks SET status = 'cancelled' WHERE id = 1").run();
+    const cancelled = await fixture.service.scanInboxWithStableRecheck();
+    expect(cancelled).toMatchObject({ createdJobs: 1, reconciledDownloadedTasks: 0 });
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
+      .toEqual({ status: 'cancelled' });
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('rolls back job creation when the staged handoff update fails', async () => {
+    fixture = await createFixture();
+    fixture.database.exec(
+      `CREATE TRIGGER fail_downloaded_handoff
+       BEFORE UPDATE OF status ON archive_catalog_download_tasks
+       WHEN NEW.status = 'downloaded'
+       BEGIN
+         SELECT RAISE(ABORT, 'synthetic handoff failure');
+       END`
+    );
+    await expect(fixture.service.scanInboxWithStableRecheck()).rejects.toThrow(/synthetic handoff failure/i);
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 0 });
+    expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
+      .toEqual({ status: 'staged' });
   }, 60_000);
 
   it('rejects traversal, absolute, and drive-qualified archive entry paths', () => {

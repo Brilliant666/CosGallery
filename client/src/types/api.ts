@@ -782,14 +782,105 @@ export interface LocalIngestJob {
 }
 
 export interface LocalIngestDiscoveryResult {
-  allowlist: string[];
+  discoveredCreators: number;
   discoveredArchives: number;
   createdJobs: number;
   existingJobs: number;
   waitingStable: number;
   awaitingReview: number;
+  reconciledDownloadedTasks: number;
   ignoredFiles: number;
-  jobs: LocalIngestJob[];
+}
+
+export interface LocalIngestBatchResult {
+  total: number;
+  ingested: number;
+  failed: number;
+  awaitingReview: number;
+}
+
+export type LocalIngestJobFilter = 'pending' | 'running' | 'awaiting_review' | 'failed' | 'completed';
+
+export interface LocalIngestJobSummary {
+  total: number;
+  pending: number;
+  running: number;
+  ingested: number;
+  awaitingReview: number;
+  failed: number;
+}
+
+export interface LocalIngestCreatorJobSummary extends LocalIngestJobSummary {
+  creatorId: number;
+  creatorName: string;
+  progressPercent: number;
+  isCurrent: boolean;
+}
+
+export interface LocalIngestJobsDashboard {
+  summary: LocalIngestJobSummary;
+  creators: LocalIngestCreatorJobSummary[];
+  items: LocalIngestJob[];
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+export type LocalIngestOperationState = 'idle' | 'scanning' | 'running';
+export type LocalIngestOperationKind =
+  | 'scan'
+  | 'batch'
+  | 'single-job'
+  | 'cleanup'
+  | 'discover-creators'
+  | 'save-settings'
+  | 'validation'
+  | 'recycle-test';
+
+export interface LocalIngestOperationCurrentJob {
+  id: number;
+  creatorId: number;
+  creatorName: string;
+  archiveName: string;
+  status: string;
+  phase: string;
+}
+
+export interface LocalIngestOperationRun {
+  total: number;
+  processed: number;
+  ingested: number;
+  failed: number;
+  awaitingReview: number;
+  remaining: number;
+  currentJob: LocalIngestOperationCurrentJob | null;
+}
+
+export interface LocalIngestCompletedOperation {
+  kind: LocalIngestOperationKind;
+  state: Exclude<LocalIngestOperationState, 'idle'>;
+  startedAt: string;
+  finishedAt: string;
+  succeeded: boolean;
+  summary: Record<string, unknown>;
+}
+
+export interface LocalIngestOperation {
+  state: LocalIngestOperationState;
+  kind: LocalIngestOperationKind | null;
+  startedAt: string | null;
+  updatedAt: string | null;
+  elapsedMs: number;
+  message: string | null;
+  run: LocalIngestOperationRun | null;
+  lastCompleted: LocalIngestCompletedOperation | null;
+}
+
+export interface LocalIngestOperationActivePayload {
+  code: 'LOCAL_INGEST_OPERATION_ACTIVE';
+  message: string;
+  operation: LocalIngestOperation;
 }
 
 export type LocalIngestInboxCreatorMappingStatus = 'matched' | 'unmatched' | 'ambiguous';

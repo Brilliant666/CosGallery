@@ -203,16 +203,7 @@ describe('LocalIngest pending creator discovery', () => {
     insertJob(fixture.database, 7, 3, path.join(fixture.inboxRoot, 'Creator Gamma', '022.7z'), 'queued');
 
     await expect(fixture.service.scanInbox([])).rejects.toThrow(/allowlist is empty/i);
-    const scan = vi.spyOn(fixture.service, 'scanInbox').mockResolvedValue({
-      allowlist: ['Creator Alpha', 'Creator Beta'],
-      discoveredArchives: 0,
-      createdJobs: 0,
-      existingJobs: 0,
-      waitingStable: 0,
-      awaitingReview: 0,
-      ignoredFiles: 0,
-      jobs: []
-    });
+    const scan = vi.spyOn(fixture.service, 'scanInbox');
     const runOrder: number[] = [];
     vi.spyOn(fixture.service, 'runJob').mockImplementation(async (id) => {
       runOrder.push(id);
@@ -221,9 +212,22 @@ describe('LocalIngest pending creator discovery', () => {
 
     await fixture.service.runBatch({ allowlist: ['Creator Alpha', 'Creator Beta'] });
 
-    expect(scan).toHaveBeenCalledWith(['Creator Alpha', 'Creator Beta']);
+    expect(scan).not.toHaveBeenCalled();
     expect(runOrder).toEqual([5, 6]);
     expect(runOrder).not.toContain(7);
+    expect(fixture.sideEffects).toEqual({ hash: 0, command: 0, recycle: 0, reconcile: 0 });
+    fixture.database.close();
+  });
+
+  it('returns an empty batch without discovering new inbox files implicitly', async () => {
+    const fixture = await createDiscoveryFixture();
+    fixture.database.prepare('DELETE FROM local_ingest_jobs').run();
+    const scan = vi.spyOn(fixture.service, 'scanInbox');
+    const results = await fixture.service.runBatch({ allowlist: ['Creator Alpha', 'Creator Beta'] });
+    expect(results).toEqual([]);
+    expect(scan).not.toHaveBeenCalled();
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 0 });
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_file_observations').get()).toEqual({ count: 0 });
     expect(fixture.sideEffects).toEqual({ hash: 0, command: 0, recycle: 0, reconcile: 0 });
     fixture.database.close();
   });
