@@ -693,6 +693,7 @@ function mapTrashImage(image: IndexedTrashImage, derivativeVersion = getDerivati
 }
 
 function buildFolderSummary(folder: FolderSummaryRecord) {
+  const workNavigationMode = appConfig.cosGalleryMode && folder.role === 'normal' ? 'work-gallery' : 'post';
   const derivativeVersion = getDerivativeAssetVersion();
   const hasPreloadedAvatarSummary =
     Object.hasOwn(folder, 'summary_avatar_image_id') || Object.hasOwn(folder, 'summary_avatar_thumbnail_path');
@@ -706,6 +707,7 @@ function buildFolderSummary(folder: FolderSummaryRecord) {
       parentFolderName: getParentFolderDisplayName(folder.folder_path),
       folderPath: folder.folder_path,
       breadcrumb: getPathBreadcrumb(folder.folder_path),
+      workNavigationMode,
       contentRating: folder.content_rating,
       imageCount: folder.image_count,
       postCount: folder.post_count,
@@ -735,6 +737,7 @@ function buildFolderSummary(folder: FolderSummaryRecord) {
     parentFolderName: getParentFolderDisplayName(folder.folder_path),
     folderPath: folder.folder_path,
     breadcrumb: getPathBreadcrumb(folder.folder_path),
+    workNavigationMode,
     contentRating: folder.content_rating,
     imageCount: folder.image_count,
     postCount: folder.post_count,

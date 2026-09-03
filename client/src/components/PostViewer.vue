@@ -124,7 +124,7 @@
           {
             'viewer__media--modal': isModal,
             'viewer__media--page': !isModal,
-            'viewer__media--swipe-enabled': isModal,
+            'viewer__media--swipe-enabled': isModal || isWorkContext,
           },
         ]"
         @pointercancel="handleMediaPointercancel"
@@ -136,7 +136,7 @@
           v-if="isCarousel"
           v-model="carouselIndex"
           class="viewer__media-shell"
-          :items="image.mediaItems!"
+          :items="orderedItems"
           prefer-preview
           :retry-while="appStore.isScanning"
           loading="eager"
@@ -359,8 +359,12 @@
             </button>
           </div>
           <p class="viewer__sidebar-path mt-3 text-muted">
+            <span class="viewer__sidebar-path-label">{{ t('workGallery.filename') }}</span>
+            <span class="viewer__sidebar-filename">{{ activeMediaFilename }}</span>
+          </p>
+          <p class="viewer__sidebar-path mt-3 text-muted">
             <span class="viewer__sidebar-path-label">{{ t('post.viewer.folderPath') }}</span>
-            <span class="viewer__sidebar-path-value">{{ image.relativePath }}</span>
+            <span class="viewer__sidebar-path-value">{{ activeMediaRelativePath }}</span>
           </p>
         </div>
 
@@ -598,6 +602,7 @@
 
   import { useHorizontalSwipe } from "../composables/useHorizontalSwipe"
   import { useImageCaptionEditor } from "../composables/useImageCaptionEditor"
+  import { usePostMediaSelection } from "../composables/usePostMediaSelection"
   import type { ImageDetail, FolderSummary } from "../types/api"
   import { useAppStore } from "../stores/app"
   import { useAuthStore } from "../stores/auth"
@@ -649,7 +654,7 @@
   const sidebarSheetDragOffset = ref(0)
   const settingCover = ref(false)
   const isEditingCaption = ref(false)
-  const carouselIndex = ref(0)
+  const { items: orderedItems, carouselIndex, activeMediaItem, isWorkContext } = usePostMediaSelection(computed(() => props.image))
   const {
     saving: captionSaving,
     error: captionError,
@@ -659,12 +664,13 @@
 
   const WHEEL_NAVIGATION_THRESHOLD = 72
   const NAVIGATION_COOLDOWN_MS = 320
-  const isCarousel = computed(() => props.image?.postType === 'carousel' && (props.image.mediaItems?.length ?? 0) > 1)
-  const activeMediaItem = computed(() => isCarousel.value ? props.image?.mediaItems?.[carouselIndex.value] ?? null : null)
+  const isCarousel = computed(() => props.image?.postType === 'carousel' && orderedItems.value.length > 1)
   const activeMediaImageId = computed(() => activeMediaItem.value?.imageId ?? props.image?.id ?? null)
+  const activeMediaFilename = computed(() => activeMediaItem.value?.filename ?? props.image?.filename ?? '')
+  const activeMediaRelativePath = computed(() => activeMediaItem.value?.relativePath ?? props.image?.relativePath ?? '')
   const activeMediaWidth = computed(() => activeMediaItem.value?.width ?? props.image?.width ?? 0)
   const activeMediaHeight = computed(() => activeMediaItem.value?.height ?? props.image?.height ?? 0)
-  const activeMediaDurationMs = computed(() => activeMediaItem.value?.durationMs ?? props.image?.durationMs ?? null)
+  const activeMediaDurationMs = computed(() => activeMediaItem.value ? activeMediaItem.value.durationMs : props.image?.durationMs ?? null)
   const captionFallbackFilename = computed(() => {
     if (props.image?.postType === 'carousel' && props.image.carouselTitle) {
       return props.image.carouselTitle
@@ -758,14 +764,10 @@
     }
   })
 
-  watch(() => props.image?.id, () => {
-    carouselIndex.value = 0
-  })
-
-  const locallySetCover = ref(false)
+  const locallySetCoverId = ref<number | null>(null)
 
   const isCurrentCover = computed(() => {
-    if (locallySetCover.value) return true;
+    if (locallySetCoverId.value !== null) return locallySetCoverId.value === activeMediaImageId.value;
     if (!props.image) return false;
 
     if ('folderAvatarImageId' in props.image && typeof props.image.folderAvatarImageId === 'number') {
@@ -813,7 +815,7 @@
     formatMediaDuration(activeMediaDurationMs.value),
   )
   const exifDetails = computed<MetadataDetail[]>(() => {
-    const exif = activeMediaItem.value?.exif ?? props.image?.exif
+    const exif = activeMediaItem.value ? activeMediaItem.value.exif : props.image?.exif
     if (!exif) {
       return []
     }
@@ -941,10 +943,10 @@
     }
   })
   const previousNavigationImageId = computed(
-    () => likesNavigationIds.value?.previousImageId ?? props.image?.previousImageId ?? null,
+    () => isWorkContext.value ? null : likesNavigationIds.value?.previousImageId ?? props.image?.previousImageId ?? null,
   )
   const nextNavigationImageId = computed(
-    () => likesNavigationIds.value?.nextImageId ?? props.image?.nextImageId ?? null,
+    () => isWorkContext.value ? null : likesNavigationIds.value?.nextImageId ?? props.image?.nextImageId ?? null,
   )
   const isModalSidebarOverlayVisible = computed(
     () => isModalSidebarCollapsible.value && isSidebarExpanded.value,
@@ -958,7 +960,7 @@
   )
   const swipeNavigation = useHorizontalSwipe({
     canStart: canStartSwipeNavigation,
-    isEnabled: () => props.isModal === true && props.image !== null,
+    isEnabled: () => (props.isModal === true || isWorkContext.value) && props.image !== null,
     onSwipeLeft: () => {
       wheelDeltaAccumulator.value = 0
       void navigateByDirection("next")
@@ -1651,6 +1653,13 @@
   )
 
   async function navigateByDirection(direction: "previous" | "next") {
+    if (isWorkContext.value) {
+      const nextIndex = carouselIndex.value + (direction === 'next' ? 1 : -1)
+      if (nextIndex < 0 || nextIndex >= orderedItems.value.length) return
+      navigationLockedUntil.value = Date.now() + NAVIGATION_COOLDOWN_MS
+      carouselIndex.value = nextIndex
+      return
+    }
     const targetId =
       direction === "next"
         ? nextNavigationImageId.value
@@ -1702,7 +1711,7 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
-    if (!props.isModal || !props.image || event.defaultPrevented) {
+    if ((!props.isModal && !isWorkContext.value) || !props.image || event.defaultPrevented) {
       return
     }
 
@@ -1780,7 +1789,7 @@
     try {
       settingCover.value = true;
       await foldersStore.setFolderCover(props.image.folderSlug, activeMediaImageId.value ?? props.image.id);
-      locallySetCover.value = true;
+      locallySetCoverId.value = activeMediaImageId.value;
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to set cover');
     } finally {

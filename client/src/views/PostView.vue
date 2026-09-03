@@ -1,5 +1,8 @@
 <template>
   <div :class="modal ? 'image-view image-view--modal' : 'image-view image-view--page'" @click.stop>
+    <RouterLink v-if="!modal && returnToWork" class="mb-4 inline-flex font-semibold text-text" :to="returnToWork">
+      {{ t('workGallery.backToGallery') }}
+    </RouterLink>
     <ErrorState v-if="viewerStore.error" title="Could not load post" :message="viewerStore.error" />
     <PostViewer
       v-else-if="activeImage"
@@ -54,7 +57,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 
 import ConfirmDialog from '../components/ConfirmDialog.vue';
 import ErrorState from '../components/ErrorState.vue';
@@ -65,6 +69,7 @@ import { useLikesStore } from '../stores/likes';
 import { useFoldersStore } from '../stores/folders';
 import { useMomentsStore } from '../stores/moments';
 import { useViewerStore } from '../stores/viewer';
+import { workGalleryRoute } from '../utils/work-gallery';
 
 const props = defineProps<{
   id: string;
@@ -83,6 +88,7 @@ const foldersStore = useFoldersStore();
 const momentsStore = useMomentsStore();
 const route = useRoute();
 const router = useRouter();
+const { t } = useI18n();
 const confirmDeleteOpen = ref(false);
 const deleteOriginalFromDisk = ref(false);
 const deleteError = ref<string | null>(null);
@@ -90,6 +96,9 @@ const deleteError = ref<string | null>(null);
 const imageId = computed(() => Number(props.id));
 const activeMediaType = computed(() => (route.query.tab === 'reels' ? 'video' : undefined));
 const activeImage = computed(() => (viewerStore.image?.id === imageId.value ? viewerStore.image : null));
+const returnToWork = computed(() => route.query.context === 'work' && activeImage.value
+  ? workGalleryRoute(activeImage.value.folderSlug, activeImage.value.id)
+  : null);
 const folder = computed(() =>
   activeImage.value ? foldersStore.items.find((entry) => entry.slug === activeImage.value?.folderSlug) ?? null : null
 );

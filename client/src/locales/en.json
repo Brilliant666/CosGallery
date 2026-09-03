@@ -1,4 +1,25 @@
 {
+  "workGallery": {
+    "backToCreator": "← Back to {name}",
+    "backToGallery": "← Back to work gallery",
+    "loading": "Loading work gallery…",
+    "loadFailed": "Could not load this work",
+    "notFound": "This work does not exist or does not belong to this creator.",
+    "storageUnavailable": "Library storage unavailable",
+    "empty": "This work has no media to display.",
+    "counts": "{images} images · {videos} videos · {total} items",
+    "mediaList": "Work media in original order",
+    "openWork": "Open work gallery: {title}",
+    "openMedia": "Open item {index}, {type}: {filename}",
+    "image": "image",
+    "video": "video",
+    "thumbnailUnavailable": "Thumbnail unavailable",
+    "videoPosterMissing": "Video preview unavailable",
+    "unknownDuration": "Duration unknown",
+    "retry": "Retry",
+    "retryThumbnail": "Retry thumbnail for item {index}",
+    "filename": "Filename"
+  },
   "common": {
     "cancel": "Cancel",
     "close": "Close",

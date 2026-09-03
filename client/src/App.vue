@@ -279,6 +279,12 @@ watch(
 
 async function closeImageModal() {
   const targetPath = appStore.imageModalBackgroundPath ?? '/';
+  // The work viewer adds one history entry; its media changes only replace that entry.
+  // Pop it on close instead of leaving a duplicate gallery entry behind.
+  if (route.query.context === 'work' && router.options.history.state.back === targetPath) {
+    router.back();
+    return;
+  }
   await router.replace(targetPath);
 }
 </script>

@@ -135,6 +135,7 @@ export interface FolderSummary {
   parentFolderName?: string | null;
   folderPath: string;
   breadcrumb: string | null;
+  workNavigationMode?: 'post' | 'work-gallery';
   contentRating: ContentRating;
   imageCount: number;
   videoCount: number;
