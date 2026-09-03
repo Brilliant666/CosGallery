@@ -93,7 +93,7 @@ watch(() => [props.item.imageId, props.item.thumbnailUrl] as const, retryThumbna
 .work-media-card { position: relative; min-width: 0; }
 .work-media-card__link {
   position: relative; display: block; aspect-ratio: 3 / 4; overflow: hidden;
-  border: 1px solid var(--border); border-radius: 0.65rem; background: var(--surface-alt);
+  background: var(--surface-alt);
   color: var(--text); text-decoration: none;
 }
 .work-media-card__link:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }

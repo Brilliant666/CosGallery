@@ -108,7 +108,7 @@ onBeforeUnmount(() => { loadToken += 1; });
 .work-gallery__creator, .work-gallery__counts { margin: 0; color: var(--muted); font-size: 0.9rem; }
 .work-gallery__state { padding: 2rem; text-align: center; overflow-wrap: anywhere; }
 .work-gallery__state h1 { font-size: 1.2rem; }
-.work-gallery__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
+.work-gallery__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; }
 @media (min-width: 640px) { .work-gallery__grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (min-width: 1024px) { .work-gallery__grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (min-width: 1280px) { .work-gallery__grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }

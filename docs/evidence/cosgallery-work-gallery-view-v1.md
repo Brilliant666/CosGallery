@@ -194,3 +194,30 @@ Only browsing components, tests, the read-only folder navigation hint and this e
 Unchanged: R15/R18 bridging, Stage 1/2/3, LocalIngest, creator-scoped reconciliation, recycling semantics, database schema/migrations, Script/CostuanArchiveManager, cross-platform logic and deployment architecture.
 
 No known blocker remains within work-gallery browsing. Existing viewer/admin appearance, creator classification and unrelated runtime warnings are outside this task.
+
+## 9. Borderless media follow-up (2026-09-04)
+
+The existing PR received a presentation-only follow-up: the shared image/video media link no longer has a persistent border or card radius, and the work-gallery grid now uses the same compact `1px` rhythm as the creator cover grid. `object-fit: contain`, lazy thumbnail loading, media ordinals, video poster/play/duration overlays, retry behavior and the keyboard-only `focus-visible` outline remain unchanged.
+
+Computed-style comparison on the same 31-image real-data sample, using an isolated hot SQLite backup and temporary derivative cache:
+
+| Style | Before | After |
+| --- | --- | --- |
+| Persistent border | `1px solid` | `0px` |
+| Card radius | `10.4px` | `0px` |
+| Box shadow | `none` | `none` |
+| Grid gap | `10.4px` | `1px` |
+| Media fit | `contain` | `contain` |
+
+Real-data browser checks covered a 31-image work, a one-video work and a mixed 16-image/2-video work. Image and video entries shared the same borderless container; the video grid contained posters and overlays but zero players. At 1294 px the mixed work used five columns; at a 390 px viewport it used two columns with no horizontal overflow. All media remained position ordered.
+
+Regression results:
+
+- focused WorkGalleryView, WorkMediaCard, work viewer and navigation suites: 34 passed;
+- full client suite: 51 files, 264 passed, including the 500-item work gallery;
+- full server suite: 77 files, 425 passed and 2 environment-gated video E2E skips;
+- client type-check/build and server TypeScript build: passed;
+- migration bootstrap/up/down/repeat coverage: 17 passed inside the full server suite;
+- `git diff --check`: passed.
+
+The production 4141 service was already running when this follow-up began and was neither started, stopped nor restarted. The browser harness used port 4243, an ignored temporary database snapshot and an ignored temporary cache. The production database, `G:\cos图集`, `G:\cos待入库` and `G:\cos处理中` were not opened through mutating application endpoints or modified by the follow-up.

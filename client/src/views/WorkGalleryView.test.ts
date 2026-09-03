@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +10,7 @@ import WorkGalleryView from './WorkGalleryView.vue';
 
 vi.mock('../api/gallery', () => ({ fetchImage: vi.fn() }));
 const fetchMock = vi.mocked(fetchImage);
+const source = readFileSync(path.resolve(process.cwd(), 'src/views/WorkGalleryView.vue'), 'utf8');
 
 describe('WorkGalleryView', () => {
   enableAutoUnmount(afterEach);
@@ -36,10 +39,16 @@ describe('WorkGalleryView', () => {
     expect(wrapper.findAll('img').every((img) => img.attributes('loading') === 'lazy')).toBe(true);
     expect(wrapper.findAll('a[aria-label]').every((link) => /Open item \d+, (image|video):/.test(link.attributes('aria-label')))).toBe(true);
     expect(wrapper.findAll('.work-media-card__video')).toHaveLength(2);
+    expect(wrapper.findAll('.work-media-card__link')).toHaveLength(5);
     expect(wrapper.findAll('.work-media-card__duration').map((label) => label.text())).toEqual(['1:02', '1:02']);
     expect(wrapper.find('video, media-player, video-media-player').exists()).toBe(false);
     expect(wrapper.find('img.object-cover').exists()).toBe(false);
     expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/f/creator');
+  });
+
+  it('uses the same compact 1px gap as the creator cover grid', () => {
+    const gridRule = source.match(/\.work-gallery__grid\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? '';
+    expect(gridRule).toMatch(/gap:\s*1px/);
   });
 
   it.each([1, 2, 3, 5])('opens media %i with its Image ID and keeps the Post ID and background', async (position) => {
