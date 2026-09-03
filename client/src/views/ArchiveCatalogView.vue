@@ -150,9 +150,45 @@
         <label class="grid gap-1.5 text-xs font-semibold text-muted">7-Zip 路径
           <input v-model="localIngestSettings.sevenZipPath" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
         </label>
-        <label class="grid gap-1.5 text-xs font-semibold text-muted">允许处理的博主（每行一位）
-          <textarea v-model="localIngestAllowlistText" rows="3" class="rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text" />
-        </label>
+        <div class="grid gap-2">
+          <label class="grid gap-1.5 text-xs font-semibold text-muted">允许处理的博主（每行一位）
+            <textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" rows="3" class="rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text" />
+          </label>
+          <div>
+            <button
+              type="button"
+              data-test="discover-inbox-creators"
+              class="h-9 rounded-xl border border-border bg-bg px-3.5 text-xs font-semibold disabled:opacity-50"
+              :disabled="localIngestBusy || !localIngestSettings"
+              @click="discoverLocalIngestInboxCreators"
+            >
+              读取待入库博主
+            </button>
+          </div>
+          <div v-if="localIngestInboxCreators" data-test="inbox-creators-result" class="rounded-xl border border-border bg-bg p-3 text-xs leading-5 text-text">
+            <p class="m-0 font-semibold">
+              待入库：{{ localIngestInboxCreators.summary.matchedCreatorCount }} 位博主 /
+              {{ localIngestInboxCreators.summary.archiveCount }} 个压缩包 /
+              {{ inboxExistingJobCount }} 个已有任务
+            </p>
+            <p v-if="localIngestInboxCreators.unmapped.length" class="mt-1 mb-0 text-amber-700">
+              {{ localIngestInboxCreators.unmapped.length }} 个目录无法唯一映射，未加入名单。
+            </p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <button type="button" data-test="append-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="localIngestInboxCreators.detected.length === 0" @click="applyDiscoveredInboxCreators('append')">追加到当前名单</button>
+              <button type="button" data-test="replace-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="localIngestInboxCreators.detected.length === 0" @click="applyDiscoveredInboxCreators('replace')">替换当前名单</button>
+              <button type="button" data-test="cancel-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold" @click="cancelInboxCreatorDiscovery">取消</button>
+            </div>
+            <details v-if="localIngestInboxCreators.unmapped.length" class="mt-2">
+              <summary class="cursor-pointer font-semibold">查看详情</summary>
+              <ul class="mt-1 mb-0 grid gap-1 pl-5">
+                <li v-for="entry in localIngestInboxCreators.unmapped" :key="entry.folderName">
+                  {{ entry.folderName }} · {{ entry.archiveCount }} 个压缩包 · {{ entry.mappingReason }}
+                </li>
+              </ul>
+            </details>
+          </div>
+        </div>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">文件稳定秒数
           <input v-model.number="localIngestSettings.fileStableSeconds" type="number" min="1" max="3600" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text" />
         </label>
@@ -166,8 +202,8 @@
         <button type="button" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="saveLocalIngestConfig">保存配置</button>
         <button type="button" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="validateLocalIngestConfig">验证环境</button>
         <button type="button" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="smokeTestRecycleBin">回收站测试</button>
-        <button type="button" data-test="scan-local-ingest" class="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="scanLocalInbox">扫描待入库</button>
-        <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings" @click="runLocalBatch">运行可处理任务</button>
+        <button type="button" data-test="scan-local-ingest" class="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings || localIngestAllowlistDirty" :title="localIngestAllowlistDirty ? '请先保存博主名单草稿' : undefined" @click="scanLocalInbox">扫描待入库</button>
+        <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-50" :disabled="localIngestBusy || !localIngestSettings || localIngestAllowlistDirty" :title="localIngestAllowlistDirty ? '请先保存博主名单草稿' : undefined" @click="runLocalBatch">运行可处理任务</button>
       </div>
       <p v-if="localIngestNotice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ localIngestNotice }}</p>
 
@@ -380,6 +416,7 @@ import {
   planArchiveDownloadTasks,
   planArchiveMetadataTasks,
   rotateArchiveBridgeToken,
+  fetchLocalIngestInboxCreators,
   fetchLocalIngestJobs,
   fetchLocalIngestSettings,
   retryLocalIngestCleanup,
@@ -401,6 +438,7 @@ import type {
   ArchiveMetadataTaskStatus,
   ArchiveMetadataTasksPayload,
   ContentRating,
+  LocalIngestInboxCreatorsResult,
   LocalIngestJob,
   LocalIngestSettings
 } from '../types/api';
@@ -447,10 +485,32 @@ const planningMetadata = ref(false);
 const metadataNotice = ref('');
 const localIngestSettings = ref<LocalIngestSettings | null>(null);
 const localIngestAllowlistText = ref('');
+const localIngestInboxCreators = ref<LocalIngestInboxCreatorsResult | null>(null);
 const localIngestJobs = ref<LocalIngestJob[]>([]);
 const localIngestBusy = ref(false);
 const runningLocalIngestJobId = ref<number | null>(null);
 const localIngestNotice = ref('');
+
+function parseLocalIngestAllowlist(value: string): string[] {
+  return [...new Set(value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))];
+}
+
+function normalizeCreatorDraftIdentity(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/[\s_\-@·・.]+/gu, '');
+}
+
+const localIngestAllowlistDirty = computed(() => {
+  if (!localIngestSettings.value) return false;
+  return JSON.stringify(parseLocalIngestAllowlist(localIngestAllowlistText.value))
+    !== JSON.stringify(localIngestSettings.value.allowlist);
+});
+
+const inboxExistingJobCount = computed(() => {
+  const summary = localIngestInboxCreators.value?.summary;
+  return summary
+    ? summary.queuedJobCount + summary.failedJobCount + summary.awaitingReviewJobCount
+    : 0;
+});
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)));
 const summaryCards = computed(() => summary.value ? [
@@ -505,9 +565,43 @@ function currentLocalIngestSettings(): LocalIngestSettings {
   if (!localIngestSettings.value) throw new Error('本地入库配置尚未加载');
   return {
     ...localIngestSettings.value,
-    allowlist: [...new Set(localIngestAllowlistText.value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))],
+    allowlist: parseLocalIngestAllowlist(localIngestAllowlistText.value),
     maxExtractionDepth: 2
   };
+}
+
+async function discoverLocalIngestInboxCreators() {
+  localIngestBusy.value = true;
+  try {
+    localIngestInboxCreators.value = await fetchLocalIngestInboxCreators();
+    localIngestNotice.value = '';
+  } catch (reason) {
+    localIngestInboxCreators.value = null;
+    localIngestNotice.value = reason instanceof Error ? reason.message : '无法读取待入库博主';
+  } finally { localIngestBusy.value = false; }
+}
+
+function applyDiscoveredInboxCreators(mode: 'append' | 'replace') {
+  if (!localIngestInboxCreators.value) return;
+  const discovered = localIngestInboxCreators.value.detected
+    .map((entry) => entry.canonicalName)
+    .filter((name): name is string => Boolean(name));
+  const next = mode === 'replace' ? [] : parseLocalIngestAllowlist(localIngestAllowlistText.value);
+  const identities = new Set(next.map(normalizeCreatorDraftIdentity));
+  for (const name of discovered) {
+    const identity = normalizeCreatorDraftIdentity(name);
+    if (!identity || identities.has(identity)) continue;
+    identities.add(identity);
+    next.push(name);
+  }
+  localIngestAllowlistText.value = next.join('\n');
+  localIngestNotice.value = mode === 'replace'
+    ? '已用待入库博主替换页面草稿；请确认后点击“保存配置”。'
+    : '已将待入库博主追加到页面草稿；请确认后点击“保存配置”。';
+}
+
+function cancelInboxCreatorDiscovery() {
+  localIngestInboxCreators.value = null;
 }
 
 async function saveLocalIngestConfig() {

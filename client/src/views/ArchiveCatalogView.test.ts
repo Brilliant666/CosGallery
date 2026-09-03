@@ -8,6 +8,7 @@ import {
   fetchArchiveCatalogCreator,
   fetchArchiveDownloadTasks,
   fetchArchiveMetadataTasks,
+  fetchLocalIngestInboxCreators,
   fetchLocalIngestJobs,
   fetchLocalIngestSettings,
   planArchiveDownloadTasks,
@@ -31,6 +32,7 @@ vi.mock('../api/gallery', () => ({
   planArchiveMetadataTasks: vi.fn(),
   fetchArchiveBridgeStatus: vi.fn(),
   rotateArchiveBridgeToken: vi.fn(),
+  fetchLocalIngestInboxCreators: vi.fn(),
   fetchLocalIngestJobs: vi.fn(),
   fetchLocalIngestSettings: vi.fn(),
   retryLocalIngestCleanup: vi.fn(),
@@ -123,6 +125,56 @@ const localIngestJob = {
   completedAt: '2026-09-02T00:05:00.000Z'
 };
 
+const inboxCreatorsResult = {
+  inboxRoot: 'G:\\cos待入库',
+  detected: [{
+    folderName: '女主K',
+    folderNames: ['女主K'],
+    creatorId: 2,
+    canonicalName: '女主K',
+    mappingStatus: 'matched' as const,
+    mappingReason: '已唯一映射到规范博主',
+    archiveCount: 2,
+    queuedJobCount: 1,
+    failedJobCount: 0,
+    awaitingReviewJobCount: 0
+  }, {
+    folderName: '新博主别名',
+    folderNames: ['新博主别名'],
+    creatorId: 3,
+    canonicalName: '新博主',
+    mappingStatus: 'matched' as const,
+    mappingReason: '已唯一映射到规范博主',
+    archiveCount: 3,
+    queuedJobCount: 0,
+    failedJobCount: 1,
+    awaitingReviewJobCount: 0
+  }],
+  unmapped: [{
+    folderName: '未知目录',
+    folderNames: ['未知目录'],
+    creatorId: null,
+    canonicalName: null,
+    mappingStatus: 'unmatched' as const,
+    mappingReason: '未找到匹配的博主或别名',
+    archiveCount: 4,
+    queuedJobCount: 0,
+    failedJobCount: 0,
+    awaitingReviewJobCount: 0
+  }],
+  summary: {
+    directoryCount: 3,
+    matchedDirectoryCount: 2,
+    matchedCreatorCount: 2,
+    unmappedDirectoryCount: 1,
+    ambiguousDirectoryCount: 0,
+    archiveCount: 9,
+    queuedJobCount: 1,
+    failedJobCount: 1,
+    awaitingReviewJobCount: 0
+  }
+};
+
 describe('ArchiveCatalogView', () => {
   beforeEach(() => {
     vi.mocked(fetchArchiveCatalog).mockReset();
@@ -133,6 +185,7 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(planArchiveMetadataTasks).mockReset();
     vi.mocked(fetchArchiveBridgeStatus).mockReset();
     vi.mocked(rotateArchiveBridgeToken).mockReset();
+    vi.mocked(fetchLocalIngestInboxCreators).mockReset();
     vi.mocked(fetchLocalIngestJobs).mockReset();
     vi.mocked(fetchLocalIngestSettings).mockReset();
     vi.mocked(retryLocalIngestCleanup).mockReset();
@@ -227,6 +280,7 @@ describe('ArchiveCatalogView', () => {
       total: 1
     });
     vi.mocked(fetchArchiveBridgeStatus).mockResolvedValue({ configured: false });
+    vi.mocked(fetchLocalIngestInboxCreators).mockResolvedValue(inboxCreatorsResult);
     vi.mocked(fetchLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, allowlist: [...localIngestSettings.allowlist] });
     vi.mocked(fetchLocalIngestJobs).mockResolvedValue([localIngestJob]);
     vi.mocked(saveLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, allowlist: [...localIngestSettings.allowlist] });
@@ -393,6 +447,45 @@ describe('ArchiveCatalogView', () => {
 
     expect(runLocalIngestBatch).toHaveBeenCalledWith(['火龙果羊', '女主K']);
     expect(wrapper.text()).toContain('本批运行 0 个任务');
+  });
+
+  it('reads inbox creators without saving and appends unique canonical names to the draft', async () => {
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+    const allowlist = wrapper.get('[data-test="local-ingest-allowlist"]');
+    const original = (allowlist.element as HTMLTextAreaElement).value;
+
+    await wrapper.get('[data-test="discover-inbox-creators"]').trigger('click');
+    await flushPromises();
+
+    expect(fetchLocalIngestInboxCreators).toHaveBeenCalledTimes(1);
+    expect((allowlist.element as HTMLTextAreaElement).value).toBe(original);
+    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="inbox-creators-result"]').text()).toContain('2 位博主 / 9 个压缩包 / 2 个已有任务');
+    expect(wrapper.get('[data-test="inbox-creators-result"]').text()).toContain('未知目录');
+
+    await wrapper.get('[data-test="append-inbox-creators"]').trigger('click');
+
+    expect((allowlist.element as HTMLTextAreaElement).value).toBe('火龙果羊\n女主K\n新博主');
+    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="scan-local-ingest"]').attributes()).toHaveProperty('disabled');
+    expect(wrapper.text()).toContain('请确认后点击“保存配置”');
+  });
+
+  it('replaces only the unsaved allowlist draft after explicit confirmation', async () => {
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+
+    await wrapper.get('[data-test="discover-inbox-creators"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="replace-inbox-creators"]').trigger('click');
+
+    expect((wrapper.get('[data-test="local-ingest-allowlist"]').element as HTMLTextAreaElement).value)
+      .toBe('女主K\n新博主');
+    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
+
+    await wrapper.get('[data-test="cancel-inbox-creators"]').trigger('click');
+    expect(wrapper.find('[data-test="inbox-creators-result"]').exists()).toBe(false);
   });
 
   it('labels a stale recovered job as resumable', async () => {

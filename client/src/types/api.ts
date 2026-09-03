@@ -792,6 +792,38 @@ export interface LocalIngestDiscoveryResult {
   jobs: LocalIngestJob[];
 }
 
+export type LocalIngestInboxCreatorMappingStatus = 'matched' | 'unmatched' | 'ambiguous';
+
+export interface LocalIngestInboxCreatorCandidate {
+  folderName: string;
+  folderNames: string[];
+  creatorId: number | null;
+  canonicalName: string | null;
+  mappingStatus: LocalIngestInboxCreatorMappingStatus;
+  mappingReason: string;
+  archiveCount: number;
+  queuedJobCount: number;
+  failedJobCount: number;
+  awaitingReviewJobCount: number;
+}
+
+export interface LocalIngestInboxCreatorsResult {
+  inboxRoot: string;
+  detected: LocalIngestInboxCreatorCandidate[];
+  unmapped: LocalIngestInboxCreatorCandidate[];
+  summary: {
+    directoryCount: number;
+    matchedDirectoryCount: number;
+    matchedCreatorCount: number;
+    unmappedDirectoryCount: number;
+    ambiguousDirectoryCount: number;
+    archiveCount: number;
+    queuedJobCount: number;
+    failedJobCount: number;
+    awaitingReviewJobCount: number;
+  };
+}
+
 export interface PostContentRatingMutationResult {
   ok: boolean;
   id: number;
