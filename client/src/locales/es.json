@@ -1,4 +1,25 @@
 {
+  "workGallery": {
+    "backToCreator": "← Volver a {name}",
+    "backToGallery": "← Volver a la galería",
+    "loading": "Cargando la galería…",
+    "loadFailed": "No se pudo cargar esta obra",
+    "notFound": "Esta obra no existe o no pertenece a este creador.",
+    "storageUnavailable": "Almacenamiento de la biblioteca no disponible",
+    "empty": "Esta obra no tiene archivos multimedia para mostrar.",
+    "counts": "{images} imágenes · {videos} vídeos · {total} elementos",
+    "mediaList": "Archivos de la obra en orden original",
+    "openWork": "Abrir galería de la obra: {title}",
+    "openMedia": "Abrir elemento {index}, {type}: {filename}",
+    "image": "imagen",
+    "video": "vídeo",
+    "thumbnailUnavailable": "Miniatura no disponible",
+    "videoPosterMissing": "Vista previa del vídeo no disponible",
+    "unknownDuration": "Duración desconocida",
+    "retry": "Reintentar",
+    "retryThumbnail": "Reintentar miniatura del elemento {index}",
+    "filename": "Nombre de archivo"
+  },
   "common": {
     "cancel": "Cancelar",
     "close": "Cerrar",

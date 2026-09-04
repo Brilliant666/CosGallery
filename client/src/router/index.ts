@@ -8,6 +8,7 @@ import CollectionsView from '../views/CollectionsView.vue';
 import CollectionView from '../views/CollectionView.vue';
 import ExploreView from '../views/ExploreView.vue';
 import FolderView from '../views/FolderView.vue';
+import WorkGalleryView from '../views/WorkGalleryView.vue';
 import MomentView from '../views/MomentView.vue';
 import PlaceView from '../views/PlaceView.vue';
 import PlacesView from '../views/PlacesView.vue';
@@ -142,6 +143,12 @@ export const router = createRouter({
       props: true
     },
     {
+      path: '/f/:slug/works/:postId',
+      name: 'work-gallery',
+      component: WorkGalleryView,
+      props: true
+    },
+    {
       path: '/f/:slug',
       alias: '/folders/:slug',
       name: 'folder',
@@ -177,6 +184,12 @@ export const router = createRouter({
     }
   ],
   scrollBehavior(to, from, savedPosition) {
+    // Work modals keep the gallery mounted. Its exact locked position wins over
+    // an older history position (e.g. after Back, re-opening and closing again).
+    if ((to.query.context === 'work' || from.query.context === 'work') && shouldPreserveModalScroll(to, from)) {
+      return false;
+    }
+
     if (savedPosition) {
       return savedPosition;
     }

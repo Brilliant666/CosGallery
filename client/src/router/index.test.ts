@@ -193,10 +193,29 @@ vi.mock('../views/ArchiveCatalogView.vue', async () => {
 });
 
 import { router } from './index';
-import { canAccessRoute } from './index';
+import { canAccessRoute, routeAllowsPublicShareAccess } from './index';
 import { useAuthStore } from '../stores/auth';
+import { useAppStore } from '../stores/app';
 
 describe('router', () => {
+  it('lets work modal scroll restoration win over stale saved history positions', () => {
+    const appStore = useAppStore(pinia);
+    appStore.setImageModalBackground('/f/creator/works/123');
+    const background = router.resolve('/f/creator/works/123');
+    const media = router.resolve('/post/123?media=703&context=work');
+    expect(router.options.scrollBehavior!(background, media, { left: 0, top: 887 })).toBe(false);
+    expect(router.options.scrollBehavior!(media, background, { left: 0, top: 0 })).toBe(false);
+    appStore.clearImageModalBackground();
+    expect(router.options.scrollBehavior!(background, media, { left: 0, top: 887 })).toEqual({ left: 0, top: 887 });
+  });
+  it('resolves work gallery routes with distinct Post ID and creator slug', () => {
+    const resolved = router.resolve({ name: 'work-gallery', params: { slug: 'creator', postId: '123' } });
+    expect(resolved.fullPath).toBe('/f/creator/works/123');
+    expect(resolved.matched.at(-1)?.props.default).toBe(true);
+    expect(resolved.name).not.toBe('folder');
+    expect(routeAllowsPublicShareAccess(resolved)).toBe(false);
+    expect(canAccessRoute(resolved)).toBe(true);
+  });
   it('uses /post/:id as the canonical post route while keeping /image/:id as a legacy alias', async () => {
     const resolved = router.resolve({
       name: 'image',

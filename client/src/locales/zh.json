@@ -1,4 +1,25 @@
 {
+  "workGallery": {
+    "backToCreator": "← 返回 {name}",
+    "backToGallery": "← 返回图集",
+    "loading": "正在加载图集…",
+    "loadFailed": "无法加载这套作品",
+    "notFound": "作品不存在，或不属于当前博主。",
+    "storageUnavailable": "图库存储暂时不可用",
+    "empty": "这套作品暂无可显示的媒体。",
+    "counts": "{images} 张图片 · {videos} 个视频 · 共 {total} 项",
+    "mediaList": "按原始顺序排列的图集媒体",
+    "openWork": "打开图集：{title}",
+    "openMedia": "打开第 {index} 项，{type}：{filename}",
+    "image": "图片",
+    "video": "视频",
+    "thumbnailUnavailable": "缩略图暂不可用",
+    "videoPosterMissing": "视频封面暂不可用",
+    "unknownDuration": "时长未知",
+    "retry": "重试",
+    "retryThumbnail": "重试第 {index} 项缩略图",
+    "filename": "文件名"
+  },
   "common": {
     "cancel": "取消",
     "close": "关闭",

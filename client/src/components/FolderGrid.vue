@@ -1,12 +1,12 @@
 <template>
   <section class="grid gap-[1px]" :class="columns === 'three' ? 'grid-cols-3' : 'grid-cols-3 md:grid-cols-4'">
-    <RouterLink v-for="item in items" :key="item.id" custom :to="buildImageRoute(item.id)" v-slot="{ href, navigate }">
+    <RouterLink v-for="item in items" :key="item.id" custom :to="buildItemRoute(item)" v-slot="{ href, navigate }">
       <a
         :href="href"
         class="group relative overflow-hidden bg-surface-alt"
         :class="variant === 'reels' ? 'aspect-[9/14]' : variant === 'posts' ? 'aspect-[3/4]' : 'aspect-square'"
         @click="handleImageNavigation($event, navigate)"
-        :aria-label="item.postType === 'carousel' ? t('post.carousel.open', { count: item.itemCount ?? item.mediaItems?.length ?? 0 }) : undefined"
+        :aria-label="navigationMode === 'work-gallery' && !sharedSlug ? t('workGallery.openWork', { title: item.caption || item.carouselTitle || item.filename }) : item.postType === 'carousel' ? t('post.carousel.open', { count: item.itemCount ?? item.mediaItems?.length ?? 0 }) : undefined"
       >
         <ResilientImage
           :src="item.thumbnailUrl"
@@ -51,6 +51,7 @@ import { useAppStore } from '../stores/app';
 import type { FeedItem, SharedFeedItem } from '../types/api';
 import { formatCosGalleryWorkLabel } from '../utils/cos-gallery-titles';
 import { formatMediaDuration } from '../utils/media';
+import { workGalleryRoute } from '../utils/work-gallery';
 import ResilientImage from './ResilientImage.vue';
 
 const props = withDefaults(
@@ -60,12 +61,14 @@ const props = withDefaults(
     columns?: 'adaptive' | 'three';
     sharedSlug?: string | null;
     showWorkLabels?: boolean;
+    navigationMode?: 'post' | 'work-gallery';
   }>(),
   {
     variant: 'square',
     columns: 'adaptive',
     sharedSlug: null,
-    showWorkLabels: false
+    showWorkLabels: false,
+    navigationMode: 'post'
   }
 );
 
@@ -73,21 +76,25 @@ const appStore = useAppStore();
 const route = useRoute();
 const { t } = useI18n();
 
-function buildImageRoute(id: number) {
+function buildItemRoute(item: FeedItem | SharedFeedItem) {
   if (props.sharedSlug) {
     return {
       name: 'shared-post',
       params: {
         slug: props.sharedSlug,
-        id: String(id)
+        id: String(item.id)
       },
       query: route.query
     };
   }
 
+  if (props.navigationMode === 'work-gallery') {
+    return workGalleryRoute(item.folderSlug, item.id);
+  }
+
   return {
     name: 'image',
-    params: { id: String(id) },
+    params: { id: String(item.id) },
     query: route.query
   };
 }
@@ -98,7 +105,7 @@ function handleImageNavigation(event: MouseEvent, navigate: () => void) {
   }
 
   event.preventDefault();
-  if (props.sharedSlug) {
+  if (props.sharedSlug || props.navigationMode === 'work-gallery') {
     navigate();
     return;
   }

@@ -151,6 +151,7 @@
             <FolderGrid
               :items="foldersStore.currentImages"
               :variant="activeTab"
+              :navigation-mode="foldersStore.currentFolder.workNavigationMode ?? 'post'"
               show-work-labels
             />
             <div class="pt-6">
