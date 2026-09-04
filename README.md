@@ -58,6 +58,8 @@ CosGallery keeps the canonical `archive_catalog_creators` alongside Foldergram's
 
 Create or edit creators in **博主库** first. Use Stage 1 to acquire Costuan metadata and explicitly initiate a gallery scan when local files have changed. Existing source IDs and manual Folder links remain authoritative after a rename. Unknown or ambiguous Costuan names remain unassociated instead of creating or merging creators.
 
+For controlled runtime activation, set `LOCAL_INGEST_STARTUP_SCAN=false` in the process environment to skip automatic Stage 3 inbox discovery at startup. The default is `true` (also accepts `1`/`0`); invalid values fail configuration validation. This switch does not change the saved allowlist, manual discovery/run actions, interrupted-job recovery, or the separate gallery startup-scan policy. It does not run or resume ingestion jobs.
+
 Future metadata/download planning excludes inactive creators without deleting, cancelling, requeuing or reconciling their existing tasks. Restoring a creator does not itself plan tasks. Source identities and source-derived aliases are read-only in the roster; renamed canonical names become historical aliases.
 
 See [managed roster and rating bridge evidence](docs/evidence/cosgallery-managed-creator-roster-and-rating-bridge-v1.md) for migration checks, API behavior and isolated validation.

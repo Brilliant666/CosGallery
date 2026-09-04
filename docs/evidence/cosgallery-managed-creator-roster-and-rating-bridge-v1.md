@@ -134,3 +134,11 @@ Ignored audit helpers, SQLite copies, synthetic files and detailed snapshots are
 The feature is submitted on `feat/managed-creator-roster-rating-bridge-v1`. GitHub Verify must pass on the PR's final head, and the PR remains Open, Ready and unmerged. The Verify link and final head are recorded in the PR/checks and task handoff.
 
 Production activation, applying 000016 to production, new source platforms, creator merge/split, work-level ratings, real ingestion and deployment architecture are outside this PR. Existing TypeScript/build warnings are not treated as new activation work.
+
+## Authorized activation prerequisite: startup discovery switch
+
+The subsequent activation audit identified automatic inbox discovery in `index.ts` whenever the persisted allowlist is nonempty. The user authorized a small pre-merge amendment rather than clearing the production allowlist or silently allowing a Stage 3 scan.
+
+`LOCAL_INGEST_STARTUP_SCAN=false` now skips only startup compensation discovery, before reading path-backed inbox settings, and emits an explicit skipped log. The default remains enabled; `true`/`false`/`1`/`0` are accepted, invalid values fail startup validation. Interrupted-job recovery and user-triggered manual discovery/ingestion retain their prior behavior. No business setting is rewritten by the switch.
+
+Amendment validation: 11 dedicated regression tests (including actual entry-point wiring), 7 environment tests, full server suite **457 passed / 2 existing conditional skips / 0 failed** (82 files), full client suite **301 passed / 0 failed** (53 files), server TypeScript and client type check/build passed. Production activation will supply the switch in the new process environment, with the existing allowlist preserved. A new PR Head Verify is required before merge.
