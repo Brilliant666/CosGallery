@@ -97,7 +97,7 @@ watch(() => [props.item.imageId, props.item.thumbnailUrl] as const, retryThumbna
   color: var(--text); text-decoration: none;
 }
 .work-media-card__link:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
-.work-media-card__image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--surface-alt); }
+.work-media-card__image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center center; background: var(--surface-alt); }
 .work-media-card__placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.7rem; padding: 1rem; text-align: center; color: var(--muted); font-size: 0.75rem; }
 .work-media-card__number { position: absolute; top: 0.5rem; left: 0.5rem; padding: 0.15rem 0.45rem; border-radius: 0.35rem; background: rgb(0 0 0 / 62%); color: white; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
 .work-media-card__video { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: white; filter: drop-shadow(0 1px 3px rgb(0 0 0 / 70%)); }

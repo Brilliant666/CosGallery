@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchImage } from '../api/gallery';
 import { useAppStore } from '../stores/app';
-import { galleryTestRouter, mediaItem, workDetail } from '../../test/work-gallery-fixtures';
+import { galleryTestRouter, mediaItem, mixedOrientationItems, workDetail } from '../../test/work-gallery-fixtures';
 import WorkGalleryView from './WorkGalleryView.vue';
 
 vi.mock('../api/gallery', () => ({ fetchImage: vi.fn() }));
@@ -22,7 +22,7 @@ describe('WorkGalleryView', () => {
   async function render(postId = '123', slug = 'creator') {
     const router = galleryTestRouter();
     await router.push(`/f/${slug}/works/${postId}`);
-    const wrapper = mount(WorkGalleryView, { props: { postId, slug }, global: { plugins: [router] } });
+    const wrapper = mount(WorkGalleryView, { attachTo: document.body, props: { postId, slug }, global: { plugins: [router] } });
     await flushPromises();
     return { wrapper, router };
   }
@@ -37,18 +37,41 @@ describe('WorkGalleryView', () => {
     expect(wrapper.get('.work-gallery__counts').text()).toBe('3 images · 2 videos · 5 items');
     expect(wrapper.findAll('article').map((card) => card.attributes('data-position'))).toEqual(['1', '2', '3', '4', '5']);
     expect(wrapper.findAll('img').every((img) => img.attributes('loading') === 'lazy')).toBe(true);
-    expect(wrapper.findAll('a[aria-label]').every((link) => /Open item \d+, (image|video):/.test(link.attributes('aria-label')))).toBe(true);
+    expect(wrapper.findAll('a[aria-label]').every((link) => /Open item \d+, (image|video):/.test(link.attributes('aria-label') ?? ''))).toBe(true);
     expect(wrapper.findAll('.work-media-card__video')).toHaveLength(2);
     expect(wrapper.findAll('.work-media-card__link')).toHaveLength(5);
     expect(wrapper.findAll('.work-media-card__duration').map((label) => label.text())).toEqual(['1:02', '1:02']);
     expect(wrapper.find('video, media-player, video-media-player').exists()).toBe(false);
-    expect(wrapper.find('img.object-cover').exists()).toBe(false);
+    expect(wrapper.findAll('img').every(img => getComputedStyle(img.element).objectFit === 'cover')).toBe(true);
     expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/f/creator');
   });
 
   it('uses the same compact 1px gap as the creator cover grid', () => {
     const gridRule = source.match(/\.work-gallery__grid\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? '';
     expect(gridRule).toMatch(/gap:\s*1px/);
+  });
+
+  it('keeps portrait, landscape, square, video, portrait in five identical 3:4 slots', async () => {
+    fetchMock.mockResolvedValue(workDetail(mixedOrientationItems().reverse()));
+    const { wrapper } = await render();
+    expect(wrapper.findAll('article').map(card => card.attributes('data-position'))).toEqual(['1', '2', '3', '4', '5']);
+    expect(wrapper.findAll('img').map(img => [img.attributes('width'), img.attributes('height')])).toEqual([
+      ['4000', '6000'], ['6000', '4000'], ['4000', '4000'], ['1920', '1080'], ['4000', '6000']
+    ]);
+    expect(wrapper.findAll('.work-media-card__video')).toHaveLength(1);
+    expect(wrapper.find('[data-position="4"] .work-media-card__video').exists()).toBe(true);
+    for (const link of wrapper.findAll('.work-media-card__link')) {
+      const style = getComputedStyle(link.element);
+      expect(style.aspectRatio).toBe('3 / 4');
+      expect(['', '0px']).toContain(style.borderTopWidth);
+      expect(['', '0px']).toContain(style.borderRadius);
+      expect(['', 'none']).toContain(style.boxShadow);
+    }
+    for (const img of wrapper.findAll('img')) expect(getComputedStyle(img.element).objectFit).toBe('cover');
+    const grid = getComputedStyle(wrapper.get('.work-gallery__grid').element);
+    expect(grid.display).toBe('grid');
+    expect(grid.gap).toBe('1px');
+    expect(['', 'auto']).toContain(grid.columnCount);
   });
 
   it.each([1, 2, 3, 5])('opens media %i with its Image ID and keeps the Post ID and background', async (position) => {
@@ -132,18 +155,20 @@ describe('WorkGalleryView', () => {
       expect(wrapper.find(`[data-position="${position}"] img`).exists()).toBe(false);
       expect(wrapper.find(`[data-position="${position}"] button`).exists()).toBe(true);
     }
-    expect(wrapper.findAll('img').every((img) => img.attributes('src').startsWith('/thumbnails/'))).toBe(true);
+    expect(wrapper.findAll('img').every((img) => img.attributes('src')?.startsWith('/thumbnails/'))).toBe(true);
   });
 
-  it('keeps all 500 mixed portrait/landscape items accessible with thumbnails only', async () => {
-    fetchMock.mockResolvedValue(workDetail(Array.from({ length: 500 }, (_, i) => mediaItem(i + 1))));
+  it('keeps 500 portrait/landscape/square/ultrawide/tall/video items accessible with thumbnails only', async () => {
+    fetchMock.mockResolvedValue(workDetail(mixedOrientationItems(500)));
     const { wrapper } = await render();
     expect(wrapper.findAll('article')).toHaveLength(500);
     expect(wrapper.findAll('article').map((node) => Number(node.attributes('data-position')))).toEqual(Array.from({ length: 500 }, (_, i) => i + 1));
     expect(wrapper.findAll('img')).toHaveLength(500);
-    expect(wrapper.findAll('img').every((img) => img.attributes('src').startsWith('/thumbnails/') && img.attributes('loading') === 'lazy')).toBe(true);
+    expect(wrapper.findAll('img').every((img) => img.attributes('src')?.startsWith('/thumbnails/') && img.attributes('loading') === 'lazy')).toBe(true);
     expect(wrapper.findAll('video, media-player, audio')).toHaveLength(0);
     expect(wrapper.findAll('a[aria-label]')).toHaveLength(500);
+    expect(wrapper.findAll('.work-media-card__link').every(link => getComputedStyle(link.element).aspectRatio === '3 / 4')).toBe(true);
+    expect(wrapper.findAll('img').every(img => getComputedStyle(img.element).objectFit === 'cover')).toBe(true);
   });
 
   it('ignores stale detail responses after changing Post route', async () => {

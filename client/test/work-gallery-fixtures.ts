@@ -32,6 +32,19 @@ export function workDetail(items: PostMediaItem[] = Array.from({ length: 5 }, (_
   };
 }
 
+// Row-major preview fixtures; media type must not partition the position sequence.
+export function mixedOrientationItems(count = 5): PostMediaItem[] {
+  const dimensions = [
+    [4000, 6000, 'image'], [6000, 4000, 'image'], [4000, 4000, 'image'],
+    [1920, 1080, 'video'], [4000, 6000, 'image'], [8000, 1000, 'image'],
+    [1000, 8000, 'image'], [1080, 1920, 'video']
+  ] as const;
+  return Array.from({ length: count }, (_, index) => {
+    const [width, height, mediaType] = dimensions[index % dimensions.length]!;
+    return { ...mediaItem(index + 1, mediaType), width, height };
+  });
+}
+
 export function galleryTestRouter() {
   const blank = { template: '<div />' };
   return createRouter({

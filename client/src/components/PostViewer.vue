@@ -1,7 +1,7 @@
 <template>
   <section
     v-if="image"
-    :class="['viewer relative', { 'viewer--modal': isModal }]"
+    :class="['viewer relative', { 'viewer--modal': isModal, 'viewer--work': isWorkContext }]"
     @wheel="handleWheel"
   >
     <!-- Close button (modal only) -->
@@ -137,6 +137,8 @@
           v-model="carouselIndex"
           class="viewer__media-shell"
           :items="orderedItems"
+          :follow-active-aspect-ratio="isWorkContext"
+          :style="isWorkContext ? { '--work-media-ratio': Math.max(activeMediaWidth, 1) / Math.max(activeMediaHeight, 1) } : undefined"
           prefer-preview
           :retry-while="appStore.isScanning"
           loading="eager"
@@ -1825,3 +1827,14 @@
     },
   )
 </script>
+
+<style scoped>
+/* Only work viewers resize their carousel frame; inherited flex min-content sizing
+   must not let a landscape frame push the metadata sidebar outside the viewport. */
+.viewer--work { width: 100%; min-width: 0; }
+.viewer--work .viewer__media-shell[aria-roledescription="carousel"] { height: auto; min-width: 0; }
+.viewer--work .viewer__media--modal { container-type: size; }
+.viewer--work .viewer__media--modal .viewer__media-shell[aria-roledescription="carousel"] {
+  width: min(100cqw, calc(100cqh * var(--work-media-ratio)));
+}
+</style>

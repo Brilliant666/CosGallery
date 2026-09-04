@@ -100,6 +100,7 @@ const props = withDefaults(
     items: PostMediaItem[];
     modelValue?: number;
     preferPreview?: boolean;
+    followActiveAspectRatio?: boolean;
     retryWhile?: boolean;
     loading?: 'eager' | 'lazy';
     muted?: boolean;
@@ -108,6 +109,7 @@ const props = withDefaults(
   {
     modelValue: 0,
     preferPreview: false,
+    followActiveAspectRatio: false,
     retryWhile: false,
     loading: 'lazy',
     muted: true,
@@ -125,7 +127,10 @@ const pointerId = ref<number | null>(null);
 const pointerStartX = ref(0);
 
 const activeIndex = computed(() => Math.min(Math.max(props.modelValue, 0), Math.max(props.items.length - 1, 0)));
-const frameItem = computed(() => props.items[0]);
+// Work viewers follow the selected media; feed/share callers retain their stable first-item frame.
+const frameItem = computed(() => props.followActiveAspectRatio
+  ? props.items[activeIndex.value] ?? props.items[0]
+  : props.items[0]);
 const aspectRatio = computed(() =>
   frameItem.value
     ? `${Math.max(frameItem.value.width, 1)} / ${Math.max(frameItem.value.height, 1)}`
