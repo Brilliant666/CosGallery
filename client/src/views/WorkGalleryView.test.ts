@@ -51,7 +51,7 @@ describe('WorkGalleryView', () => {
     expect(gridRule).toMatch(/gap:\s*1px/);
   });
 
-  it('keeps portrait, landscape, square, video, portrait in five identical 3:4 slots', async () => {
+  it('keeps portrait, landscape, square, video, portrait in five identical 2:3 slots', async () => {
     fetchMock.mockResolvedValue(workDetail(mixedOrientationItems().reverse()));
     const { wrapper } = await render();
     expect(wrapper.findAll('article').map(card => card.attributes('data-position'))).toEqual(['1', '2', '3', '4', '5']);
@@ -62,7 +62,7 @@ describe('WorkGalleryView', () => {
     expect(wrapper.find('[data-position="4"] .work-media-card__video').exists()).toBe(true);
     for (const link of wrapper.findAll('.work-media-card__link')) {
       const style = getComputedStyle(link.element);
-      expect(style.aspectRatio).toBe('3 / 4');
+      expect(style.aspectRatio).toBe('2 / 3');
       expect(['', '0px']).toContain(style.borderTopWidth);
       expect(['', '0px']).toContain(style.borderRadius);
       expect(['', 'none']).toContain(style.boxShadow);
@@ -158,7 +158,7 @@ describe('WorkGalleryView', () => {
     expect(wrapper.findAll('img').every((img) => img.attributes('src')?.startsWith('/thumbnails/'))).toBe(true);
   });
 
-  it('keeps 500 portrait/landscape/square/ultrawide/tall/video items accessible with thumbnails only', async () => {
+  it('keeps 500 standard/near-2:3, 4:5, 9:16, landscape, square and video items accessible with thumbnails only', async () => {
     fetchMock.mockResolvedValue(workDetail(mixedOrientationItems(500)));
     const { wrapper } = await render();
     expect(wrapper.findAll('article')).toHaveLength(500);
@@ -167,8 +167,12 @@ describe('WorkGalleryView', () => {
     expect(wrapper.findAll('img').every((img) => img.attributes('src')?.startsWith('/thumbnails/') && img.attributes('loading') === 'lazy')).toBe(true);
     expect(wrapper.findAll('video, media-player, audio')).toHaveLength(0);
     expect(wrapper.findAll('a[aria-label]')).toHaveLength(500);
-    expect(wrapper.findAll('.work-media-card__link').every(link => getComputedStyle(link.element).aspectRatio === '3 / 4')).toBe(true);
+    expect(wrapper.findAll('.work-media-card__link').every(link => getComputedStyle(link.element).aspectRatio === '2 / 3')).toBe(true);
     expect(wrapper.findAll('img').every(img => getComputedStyle(img.element).objectFit === 'cover')).toBe(true);
+    const dimensions = wrapper.findAll('img').map(img => `${img.attributes('width')}/${img.attributes('height')}`);
+    for (const expected of ['4000/6000', '5600/8402', '4000/5000', '1080/1920', '6000/4000', '4000/4000', '1920/1080']) {
+      expect(dimensions).toContain(expected);
+    }
   });
 
   it('ignores stale detail responses after changing Post route', async () => {

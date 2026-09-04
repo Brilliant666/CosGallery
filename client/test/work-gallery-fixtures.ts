@@ -37,7 +37,8 @@ export function mixedOrientationItems(count = 5): PostMediaItem[] {
   const dimensions = [
     [4000, 6000, 'image'], [6000, 4000, 'image'], [4000, 4000, 'image'],
     [1920, 1080, 'video'], [4000, 6000, 'image'], [8000, 1000, 'image'],
-    [1000, 8000, 'image'], [1080, 1920, 'video']
+    [1000, 8000, 'image'], [1080, 1920, 'video'],
+    [5600, 8402, 'image'], [4000, 5000, 'image'], [1080, 1920, 'image']
   ] as const;
   return Array.from({ length: count }, (_, index) => {
     const [width, height, mediaType] = dimensions[index % dimensions.length]!;

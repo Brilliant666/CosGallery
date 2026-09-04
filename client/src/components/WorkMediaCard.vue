@@ -92,7 +92,7 @@ watch(() => [props.item.imageId, props.item.thumbnailUrl] as const, retryThumbna
 <style scoped>
 .work-media-card { position: relative; min-width: 0; }
 .work-media-card__link {
-  position: relative; display: block; aspect-ratio: 3 / 4; overflow: hidden;
+  position: relative; display: block; aspect-ratio: 2 / 3; overflow: hidden;
   background: var(--surface-alt);
   color: var(--text); text-decoration: none;
 }

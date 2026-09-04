@@ -22,7 +22,7 @@ describe('WorkMediaCard visual contract', () => {
   });
 
   it('uses CSS-only center cover for previews, lazy loading, and lightweight video posters', () => {
-    expect(linkRule).toMatch(/aspect-ratio:\s*3\s*\/\s*4/);
+    expect(linkRule).toMatch(/aspect-ratio:\s*2\s*\/\s*3/);
     expect(linkRule).toMatch(/overflow:\s*hidden/);
     expect(imageRule).toMatch(/object-fit:\s*cover/);
     expect(imageRule).toMatch(/object-position:\s*center center/);
@@ -37,7 +37,7 @@ describe('WorkMediaCard visual contract', () => {
     expect(source).toMatch(/\.work-media-card__link:focus-visible\s*\{[^}]*outline:/s);
   });
 
-  it.each(mixedOrientationItems(8))('center-crops $width × $height $mediaType and opens its Image ID', async (item) => {
+  it.each(mixedOrientationItems(11))('center-crops $width × $height $mediaType and opens its Image ID', async (item) => {
     const router = galleryTestRouter();
     await router.push('/f/creator/works/123');
     const wrapper = mount(WorkMediaCard, {
@@ -51,7 +51,7 @@ describe('WorkMediaCard visual contract', () => {
     const container = getComputedStyle(link.element);
     expect(style.objectFit).toBe('cover');
     expect(style.objectPosition).toBe('center center');
-    expect(container.aspectRatio).toBe('3 / 4');
+    expect(container.aspectRatio).toBe('2 / 3');
     expect(container.overflow).toBe('hidden');
     for (const value of [container.borderTopWidth, container.borderRadius, container.padding, container.margin]) {
       expect(['', '0px']).toContain(value);

@@ -3,7 +3,7 @@
 Date: 2026-09-04 (Asia/Shanghai).
 Base: `0a241b7566589e73e4b669cb941655e38c62f3bc`.
 Branch: `feat/cosgallery-work-gallery-view-v1`.
-Scope: browsing only; independent worktree and ordinary review PR. Do not merge or activate production as part of this task.
+Scope: browsing only; independent worktree and existing PR #6. Sections 1–10 preserve the original review-only development evidence. Section 11 records the final fixed-2:3 patch and the separately authorized Squash Merge / production activation gates.
 
 ## 1. Audit of the existing implementation
 
@@ -40,7 +40,7 @@ Both gallery and viewer derive the same ascending `post_items.position` sequence
 
 - Row-major CSS Grid, not CSS columns; 2/3/4/5/6 columns at mobile/640/1024/1280/1600 breakpoints.
 - Stable Image ID keys; each card has an accessible link and a lightweight ordinal.
-- All image thumbnails (including animated-image thumbnails) and video posters use the same fixed `3 / 4` slot, `overflow: hidden`, `object-fit: cover` and `object-position: center center`. This is CSS-only navigation-preview cropping, never rotation or a source-file conversion. The selected media in PostViewer remains complete with `object-fit: contain`.
+- All image thumbnails (including animated-image thumbnails) and video posters use the same fixed `2 / 3` slot, `overflow: hidden`, `object-fit: cover` and `object-position: center center`. This is CSS-only navigation-preview cropping, never rotation or a source-file conversion. The selected media in PostViewer remains complete with `object-fit: contain`. Earlier 3:4 evidence below is historical, not the current product rule.
 - Cards have no persistent border, radius, shadow or outer white frame. The grid gap is `1px`; the keyboard-only `focus-visible` outline and failure/retry states remain available.
 - On thumbnail failure only that image may fall back once to its non-original image preview. Video previews and originals are never used as thumbnail fallbacks.
 - Videos show only a poster, play icon and duration. No grid video players or autoplay.
@@ -91,12 +91,12 @@ Local runtime: bundled Node 24.19.0; frozen-lockfile dependencies. CI retains th
 
 | Check | Result |
 | --- | --- |
-| `pnpm --filter client test` | 51 files, **291 passed**, 0 failed |
+| `pnpm --filter client test` | 51 files, **294 passed**, 0 failed |
 | `pnpm --filter server test` | 77 files, **425 passed, 2 conditionally skipped**, 0 failed |
 | Router | 9 passed; new route and work modal scroll priority included |
 | FolderView / FolderGrid | 3 / 6 passed; explicit opt-in, default and shared behavior |
 | WorkGalleryView | 24 passed; order, counts, missing/deleted/trashed errors, slug, empty, storage, retry isolation, mixed orientations and 500 items |
-| WorkMediaCard | 12 passed; computed center-cover, 3:4, borderless/focus, orientation, video and failure/retry checks |
+| WorkMediaCard | 15 passed; computed center-cover, fixed 2:3, standard/near-2:3, 4:5, 9:16, borderless/focus, orientation, video and failure/retry checks |
 | CarouselMediaStage | 12 passed; active/default frame, contain, bounds and empty/invalid input |
 | Media-selection composable | 15 passed; identity, query cleanup, reload and replace |
 | PostViewer | 9 existing + 13 work-context/default-context tests passed |
@@ -195,9 +195,11 @@ Filesystem metadata checks (no full-library scan):
 
 The complete structured before/after snapshot matched exactly. No production business writes, G-drive writes, real scans, ingestion, renames, deletions, cover edits or recycle operations were performed.
 
-## 8. Delivery boundary
+## 8. Original review-only delivery boundary (historical)
 
 Only browsing components, tests, the read-only folder navigation hint and this evidence belong in the PR. Main and production remain untouched; the PR is to be Ready, Verify-green and **open/unmerged** for human review. PR/check URLs and final head are recorded in the task handoff, avoiding a self-referential evidence commit.
+
+That was the original task boundary. The subsequent finalization request explicitly authorizes Squash Merge and main runtime activation after both PR and main Verify gates pass; see section 11. No protected data or ingestion changes are authorized.
 
 Unchanged: R15/R18 bridging, Stage 1/2/3, LocalIngest, creator-scoped reconciliation, recycling semantics, database schema/migrations, Script/CostuanArchiveManager, cross-platform logic and deployment architecture.
 
@@ -230,7 +232,9 @@ Regression results:
 
 The production 4141 service was already running when this follow-up began and was neither started, stopped nor restarted. The browser harness used port 4243, an ignored temporary database snapshot and an ignored temporary cache. The production database, `G:\cos图集`, `G:\cos待入库` and `G:\cos处理中` were not opened through mutating application endpoints or modified by the follow-up.
 
-## 10. Portrait-crop preview and active-media frame follow-up (2026-09-04, current)
+## 10. Portrait-crop preview and active-media frame follow-up (2026-09-04, historical 3:4 checkpoint)
+
+The screenshots, dimensions, test counts and measurements in this section describe the earlier 3:4 checkpoint. They are intentionally retained as historical facts. The final product rule is fixed 2:3, recorded in section 11.
 
 Starting remote PR #6 was Open, Ready, Mergeable and unmerged, with head `d1de06bc1e27b44f85c8c9a4e41e63fe2535bb36`, base `0a241b7566589e73e4b669cb941655e38c62f3bc`, and successful Verify run `33787607498`. Work was continued on the same branch; no new branch, PR, API, database field or migration was introduced.
 
@@ -304,7 +308,7 @@ Real session: 5 selected-media preview requests, zero original requests, zero re
 
 ### Final regression and safety
 
-Current local results are listed in section 5: 291 client tests, 425 server tests with 2 existing environment-gated skips, all focused orientation/media/navigation suites, builds/type-checks and temporary migration round trip passed. Migration remained 000015. GitHub Verify is rerun for this follow-up's new head; final run URL/SHA are recorded in the PR handoff rather than adding a self-referential commit.
+At this checkpoint, 291 client tests, 425 server tests with 2 existing environment-gated skips, all focused orientation/media/navigation suites, builds/type-checks and temporary migration round trip passed. Migration remained 000015. The follow-up head was `f30114009dd0339dbf8279d62ad7b47be06e98aa`, verified by successful run `33839007684`.
 
 The complete structured production before/after snapshot matched exactly. DB SHA-256 stayed `44d9746859a4cae22b46eb2f647031a8c365ef90bfc6f90eaabec22d6e2910b0`, bytes 132755456, mtime `2026-09-03T12:55:14.8974661Z`, migration 000015, quick_check ok and foreign_key_check empty. All three G-root metadata records match section 7; processing remained empty. Production 4141 had no listener before or after. Main and Script heads/worktrees remained unchanged.
 
@@ -329,3 +333,54 @@ This follow-up's full-row hash method is JSON serialization of every `SELECT *` 
 | Stage 3 settings and allowlist subset | 2 | `af4aa593e51710828f996efcda315b09e9b865c333884c42304bc4fd75511269` | identical |
 
 No source-media transformation, production cache write, business-data mutation, scan, ingestion, file deletion/move, or Recycle Bin operation occurred. Only existing-branch client presentation/tests and this evidence (with synthetic screenshots) are part of this follow-up. No remaining preview-crop or active-frame browsing defect was observed.
+
+## 11. Final fixed-2:3 previews and authorized merge/activation (2026-09-04)
+
+Evolution: **3:4 initial preview → common 2:3 portrait loses some top/bottom → final fixed 2:3**. No ratio switch, adaptive layout, per-work setting or smart crop was added.
+
+Starting state was re-read: PR #6 Open / Ready / Mergeable, no unresolved review threads; head `f30114009dd0339dbf8279d62ad7b47be06e98aa`, successful Verify `33839007684`, base and remote main `0a241b7566589e73e4b669cb941655e38c62f3bc`. Both worktrees were clean. Script was clean at `84a95ffef1c03d4cb1cfa7006a1c0e9eab5ec9c6`, CostuanArchiveManager 0.6.10.
+
+The only production-code change in this final patch is WorkMediaCard's `aspect-ratio: 3 / 4` → `2 / 3`. Image/animated thumbnails and video posters continue to share center-cover, hidden overflow, square borderless edges and 1px spacing. PostViewer, CarouselMediaStage, media selection, routing, stores, ordering, APIs and schema are unchanged by this final patch.
+
+### Focused 2:3 browser evidence
+
+Temporary port 4243 used synthetic root `%TEMP%/cos-work-gallery-synthetic-poh4fE` with a temporary DB/cache and G-drive write guards. Its listener was stopped after testing; production 4141 remained stopped throughout development.
+
+![Final fixed 2:3 preview grid; source chart edge markers are not UI borders](assets/work-gallery-crop/final-2-3-center-cover.png)
+
+| Sample | Preview | Selected viewer |
+| --- | --- | --- |
+| Standard 2:3 (480×720 chart; 4000×6000 unit fixture) | Exactly fills 2:3 without clipping or bands | Original ratio, contain |
+| Near 2:3, 5600×8402 | Fills slot; theoretical total vertical crop ≈0.024% instead of 11.13% with 3:4, visually negligible | 5600 / 8402, complete, contain |
+| Landscape, 720×480 (6000×4000 unit fixture) | Center-cropped portrait preview, no bands | Immediately 720 / 480; no intermediate first-portrait frame; complete edge markers |
+| Square, 600×600 (4000×4000 unit fixture) | Center-cover fills slot | 600 / 600, complete |
+| Video poster, 640×360 (1920×1080 unit fixture) | Cover, play icon/duration, zero grid players | 640 / 360, one selected player, contain |
+
+The 500-item fixture now includes standard/near-2:3, 4:5, 9:16, landscape, square, ultrawide/tall and video entries: **409 images / 91 videos** in unchanged position order. Computed card ratio was `2 / 3`, fit `cover`, position `50% 50%`, border/radius `0px`, shadow `none`, gap `1px`.
+
+- Initial requests: 30 grid thumbnails + 1 avatar; **0 previews, 0 originals, 0 grid players**. Native lazy loading remains enabled.
+- First grid: 255.6 ms; longest observed initial task 233 ms, total long tasks 695 ms. No multi-second blocking. These are local measurements, not an SLA.
+- Desktop 1200 / 1440 / 1920 px: 4 / 5 / 6 columns. Mobile 390 px: 2 columns, document width 375 px, no horizontal overflow.
+- All 500 reachable; position 500 opened Image ID 500 directly with contain and no next-work navigation. One Back restored the retained 500-card gallery at **scrollY 38309** exactly, with zero players.
+- Current-file metadata and original links followed selection. Portrait, near-portrait, landscape, square and video viewer ratios were checked.
+- Console errors/warnings: none. Whole interaction session: 191 thumbnail requests, 6 selected previews, 0 originals, 0 mutating requests and 0 attempted G writes.
+
+### Final patch tests
+
+Full client **294 passed / 51 files**, including WorkMediaCard 15, WorkGalleryView 24, CarouselMediaStage 12, PostViewer 9+13, media selection 15, Router 9, FolderGrid 6, FolderView 3 and the 500-item test. Full server **425 passed / 77 files**, with 2 unchanged environment-gated skips. Client production type-check/build, changed-test type-check and server TypeScript/build passed. The unrelated legacy test-inclusive typing limitations described in section 5 were not broadened into this patch.
+
+Explicit temporary DB migration CLI up/down/up/repeat: **000015 → 000014 → 000015 → 000015**, quick_check ok and foreign_key_check empty at every step, using `%TEMP%/cos-crop-migrations-28YgCb`. No new migration. Build did not emit tracked source artifacts; diff check passed.
+
+### Production baseline and activation gates
+
+Development baseline matches the DB file and business hashes in section 10: SHA-256 `44d9746859a4cae22b46eb2f647031a8c365ef90bfc6f90eaabec22d6e2910b0`, 132755456 bytes, mtime `2026-09-03T12:55:14.8974661Z`, migration 000015, quick_check ok, foreign_key_check empty. Active local works / matched / unmatched / ambiguous: **1836 / 1836 / 0 / 0**. All 101 LocalIngestJobs are ingested/done with attempt_count 1. Download Tasks: 604. Actual allowlist: 咬一口兔娘; its inbox directory is empty, and local_ingest_file_observations has zero rows.
+
+Catalog combination hash (JSON of section 10's ordered catalog table count/hash records): `b8d36589ebf98c1ea3d7eb823925e41c2b8c6fed6a099b066ee10f934cb6b1d4`. A read-only full-table snapshot additionally covers images, posts, post_items, scan_runs, likes, collections and all other tables. No secrets or row contents are committed.
+
+Before activation, production cache inventory: thumbnails 552 files / 26386662 bytes; previews 151 files / 1235676972 bytes. G-root metadata matches section 7; processing is empty. Production 4141 has no listener. These values must be read again immediately before runtime activation and compared after read-only browsing.
+
+Authorized sequence: push this small patch to the existing PR → successful new PR-head Verify → recheck main/review/worktree/data gates → **Squash Merge** → successful new **push-to-main Verify** for the squash SHA → fast-forward local main → production type-check/build and migration no-op → start the exact Node 24 executable on main at 127.0.0.1:4141 → read-only UI and business-data verification. No force push, rebase, branch recreation or safety-branch deletion.
+
+Production startup uses its existing `server/dist/index.js` and `.env`. The existing startup compensation step can only discover the already-empty allowlisted inbox; it must not create/run jobs or change tasks. Full gallery startup scanning must be skipped. Any business-hash change blocks success. Only small lazy-derived cache writes under production `data/thumbnails` / `data/previews` are permitted during the explicitly authorized read-only UI check.
+
+Final patch/squash SHAs, PR/main Verify URLs, runtime PID/health and the post-activation comparison are recorded in the task handoff after the gates actually complete, not claimed prospectively here. No further code or evidence commit is needed after merge.
