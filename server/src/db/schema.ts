@@ -211,6 +211,8 @@ CREATE TABLE IF NOT EXISTS archive_catalog_creators (
   normalized_name TEXT NOT NULL,
   preference TEXT NULL,
   effective_rating TEXT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+  deactivated_at TEXT NULL,
   seed_source TEXT NOT NULL,
   seed_source_creator_id TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -315,6 +317,7 @@ CREATE TABLE IF NOT EXISTS archive_catalog_source_works (
 
 CREATE TABLE IF NOT EXISTS archive_catalog_local_creator_folders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  gallery_folder_id INTEGER NULL REFERENCES folders(id) ON DELETE SET NULL,
   creator_id INTEGER NULL,
   root_path TEXT NOT NULL,
   relative_path TEXT NOT NULL,
@@ -516,6 +519,11 @@ CREATE INDEX IF NOT EXISTS idx_collection_items_created ON collection_items(coll
 CREATE INDEX IF NOT EXISTS idx_folder_share_links_folder_id ON folder_share_links(folder_id);
 CREATE INDEX IF NOT EXISTS idx_folder_share_links_expires_at ON folder_share_links(expires_at);
 
+CREATE INDEX IF NOT EXISTS idx_managed_creators_active ON archive_catalog_creators(is_active);
+CREATE INDEX IF NOT EXISTS idx_managed_creators_preference ON archive_catalog_creators(preference);
+CREATE INDEX IF NOT EXISTS idx_managed_creators_rating ON archive_catalog_creators(effective_rating);
+CREATE INDEX IF NOT EXISTS idx_catalog_folder_gallery ON archive_catalog_local_creator_folders(gallery_folder_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_folder_gallery_active ON archive_catalog_local_creator_folders(gallery_folder_id) WHERE is_active=1 AND gallery_folder_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_creators_normalized_name ON archive_catalog_creators(normalized_name);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_aliases_normalized ON archive_catalog_creator_aliases(normalized_alias, creator_id);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_sources_creator ON archive_catalog_creator_sources(creator_id, source);

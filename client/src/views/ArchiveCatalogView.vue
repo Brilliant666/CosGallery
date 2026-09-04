@@ -5,13 +5,15 @@
         <p class="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-muted">CosGallery Catalog</p>
         <h1 class="m-0 text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">图库账本</h1>
         <p class="mt-2 mb-0 max-w-2xl text-sm leading-6 text-muted">
-          汇总博主名单、资源平台收录和本地归档差异。这里只读取账本，不会修改图库文件。
+          汇总博主名单、资源平台收录和本地归档差异。在此管理博主元数据，不会修改图库文件。
         </p>
       </div>
       <span class="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-muted">
         {{ total }} 位符合条件
       </span>
     </header>
+
+    <ManagedCreatorRoster @changed="loadCatalog({ refreshExpanded: true })" />
 
     <div v-if="summary" class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6" aria-label="账本概览">
       <article v-for="card in summaryCards" :key="card.label" class="rounded-2xl border border-border bg-surface p-4 shadow-sm">
@@ -428,6 +430,7 @@
 </template>
 
 <script setup lang="ts">
+import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import {

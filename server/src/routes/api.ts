@@ -9,6 +9,7 @@ import {
   type ArchiveCatalogPipelineResult
 } from '../services/archive-catalog-pipeline-service.js';
 import { ArchiveCatalogQueryService } from '../services/archive-catalog-query-service.js';
+import { ManagedCreatorError, ManagedCreatorService, managedFolderRatingSchema } from '../services/managed-creator-service.js';
 import { ArchiveBridgeService } from '../services/archive-bridge-service.js';
 import { ArchiveDownloadTaskService } from '../services/archive-download-task-service.js';
 import { ArchiveMetadataTaskService } from '../services/archive-metadata-task-service.js';
@@ -41,6 +42,52 @@ import { watcherService } from '../services/watcher-service.js';
 import { serveDerivativeForImage } from './lazy-derivatives.js';
 
 const router = express.Router();
+
+function managedResponse(response: express.Response, action: () => unknown, status = 200) {
+  try { response.status(status).json(action()); } catch (error) {
+    if (error instanceof z.ZodError) {
+      response.status(400).json({ code: 'INVALID_CREATOR_INPUT', message: error.errors.map(issue => issue.message).join('; ') });
+      return;
+    }
+    if (!(error instanceof ManagedCreatorError)) throw error;
+    response.status(error.status).json({ code: error.code, message: error.message, candidates: error.candidates });
+  }
+}
+
+const managedAccess = requireCapability('canManageLibrary', 'Admin access is required.');
+router.post('/admin/archive-catalog/creators', managedAccess, (request, response) => {
+  managedResponse(response, () => new ManagedCreatorService().create(request.body), 201);
+});
+router.patch('/admin/archive-catalog/creators/:id', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().update(id, request.body));
+});
+router.post('/admin/archive-catalog/creators/:id/aliases', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().addAlias(id, request.body));
+});
+router.delete('/admin/archive-catalog/creators/:id/aliases/:aliasId', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  const aliasId = z.string().min(1).max(1500).parse(request.params.aliasId);
+  managedResponse(response, () => new ManagedCreatorService().deleteAlias(id, aliasId));
+});
+for (const [operation, active] of [['deactivate', false], ['restore', true]] as const) {
+  router.post(`/admin/archive-catalog/creators/:id/${operation}`, managedAccess, (request, response) => {
+    const id = imageIdSchema.parse(request.params).id;
+    managedResponse(response, () => new ManagedCreatorService().setActive(id, active, request.body));
+  });
+}
+router.get('/admin/archive-catalog/local-creator-folders', managedAccess, (_request, response) => {
+  response.json({ items: new ArchiveCatalogQueryService().listLocalFolders() });
+});
+router.post('/admin/archive-catalog/local-creator-folders/:id/link', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().linkFolder(id, request.body));
+});
+router.post('/admin/archive-catalog/local-creator-folders/:id/unlink', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().unlinkFolder(id, request.body));
+});
 
 function operationCurrentJob(job: LocalIngestJob) {
   return {
@@ -152,14 +199,17 @@ const cosGalleryWorksQuerySchema = paginationQuerySchema.extend({
   q: z.string().trim().max(160).optional()
 });
 const cosGalleryCreatorsQuerySchema = z.object({
-  contentRating: z.enum(['R15', 'R18', 'unclassified']).optional(),
+  contentRating: z.enum(['R15', 'R18', 'unclassified', 'unlinked', 'inactive']).optional(),
   q: z.string().trim().max(160).optional()
 });
 const archiveCatalogQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  preference: z.enum(['liked', 'kept']).optional(),
-  rating: z.enum(['R15', 'R18']).optional(),
+  preference: z.enum(['liked', 'kept', 'unset']).optional(),
+  rating: z.enum(['R15', 'R18', 'unclassified']).optional(),
+  active: z.enum(['active', 'inactive', 'all']).default('active'),
+  hasLocal: z.enum(['yes', 'no']).optional(),
+  hasSource: z.enum(['yes', 'no']).optional(),
   state: z.enum(['missing', 'complete', 'no-local', 'no-source', 'unresolved']).optional(),
   q: z.string().trim().max(160).optional()
 });
@@ -1284,13 +1334,8 @@ router.get('/cos-gallery/creators', (request, response) => {
 
 router.patch('/cos-gallery/creators/:id/content-rating', requireCapability('canManageLibrary', 'Admin access is required.'), (request, response) => {
   const params = imageIdSchema.parse(request.params);
-  const body = patchPostContentRatingBodySchema.parse(request.body);
-  const creator = galleryService.updateCreatorContentRating(params.id, body.contentRating);
-  if (!creator) {
-    response.status(404).json({ message: 'Creator not found' });
-    return;
-  }
-  response.json({ ok: true, creator });
+  const body = managedFolderRatingSchema.parse(request.body);
+  managedResponse(response, () => ({ ok: true, creator: galleryService.updateCreatorContentRating(params.id, body.contentRating) }));
 });
 
 router.get(
@@ -1304,6 +1349,9 @@ router.get(
       limit: query.limit,
       preference: query.preference,
       rating: query.rating,
+      active: query.active,
+      hasLocal: query.hasLocal,
+      hasSource: query.hasSource,
       state: query.state,
       query: query.q
     }));

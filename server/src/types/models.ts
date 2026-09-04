@@ -87,6 +87,10 @@ export interface CreatorRatingSourceRecord {
 }
 
 export interface CosGalleryCreatorRecord {
+  canonicalCreatorId: number | null;
+  canonicalName: string | null;
+  rosterStatus: 'active' | 'inactive' | 'unlinked';
+  linkStatus: 'linked' | 'unlinked';
   id: number;
   slug: string;
   name: string;

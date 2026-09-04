@@ -2168,63 +2168,12 @@ export const postRepository = {
 };
 
 export const creatorRatingRepository = {
-  upsertSource(input: {
-    folderId: number;
-    source: string;
-    sourceCreatorId: string;
-    sourceDisplayName: string;
-    rating: 'R15' | 'R18';
-    isManual?: boolean;
-    observedAt?: number | null;
-    metadata?: unknown;
-  }): CreatorRatingSourceRecord {
-    const timestamp = nowIso();
-    const metadataJson = input.metadata === undefined ? null : JSON.stringify(input.metadata);
-    database.prepare(
-      `
-      INSERT INTO creator_rating_sources (
-        folder_id, source, source_creator_id, source_display_name, rating,
-        is_manual, observed_at, metadata_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(folder_id, source, source_creator_id) DO UPDATE SET
-        source_display_name = excluded.source_display_name,
-        rating = excluded.rating,
-        is_manual = excluded.is_manual,
-        observed_at = excluded.observed_at,
-        metadata_json = excluded.metadata_json,
-        updated_at = excluded.updated_at
-      `
-    ).run(
-      input.folderId,
-      input.source,
-      input.sourceCreatorId,
-      input.sourceDisplayName,
-      input.rating,
-      input.isManual ? 1 : 0,
-      input.observedAt ?? null,
-      metadataJson,
-      timestamp,
-      timestamp
-    );
-    return database.prepare(
-      `SELECT * FROM creator_rating_sources
-       WHERE folder_id = ? AND source = ? AND source_creator_id = ?`
-    ).get(input.folderId, input.source, input.sourceCreatorId) as unknown as CreatorRatingSourceRecord;
-  },
-
   listByFolder(folderId: number): CreatorRatingSourceRecord[] {
     return database.prepare(
       `SELECT * FROM creator_rating_sources
        WHERE folder_id = ?
        ORDER BY is_manual DESC, source ASC, source_display_name ASC`
     ).all(folderId) as unknown as CreatorRatingSourceRecord[];
-  },
-
-  deleteBySource(source: string): number {
-    const result = database.prepare(
-      'DELETE FROM creator_rating_sources WHERE source = ? AND is_manual = 0'
-    ).run(source);
-    return Number(result.changes ?? 0);
   },
 
   listCreators(): CosGalleryCreatorRecord[] {
@@ -2266,38 +2215,21 @@ export const creatorRatingRepository = {
         folders.folder_path AS folderPath,
         creator_works.work_count AS workCount,
         creator_works.latest_work_at AS latestWorkAt,
-        COALESCE(
-          (
-            SELECT manual_rating.rating
-            FROM creator_rating_sources manual_rating
-            WHERE manual_rating.folder_id = folders.id
-              AND manual_rating.is_manual = 1
-            ORDER BY manual_rating.updated_at DESC
-            LIMIT 1
-          ),
-          CASE
-            WHEN EXISTS (
-              SELECT 1 FROM creator_rating_sources rating_r18
-              WHERE rating_r18.folder_id = folders.id AND rating_r18.rating = 'R18'
-            ) THEN 'R18'
-            WHEN EXISTS (
-              SELECT 1 FROM creator_rating_sources rating_r15
-              WHERE rating_r15.folder_id = folders.id AND rating_r15.rating = 'R15'
-            ) THEN 'R15'
-            ELSE NULL
-          END
-        ) AS contentRating,
-        (SELECT COUNT(*) FROM creator_rating_sources sources WHERE sources.folder_id = folders.id) AS ratingSourceCount,
-        CASE WHEN
-          EXISTS (SELECT 1 FROM creator_rating_sources r15 WHERE r15.folder_id = folders.id AND r15.rating = 'R15')
-          AND EXISTS (SELECT 1 FROM creator_rating_sources r18 WHERE r18.folder_id = folders.id AND r18.rating = 'R18')
-        THEN 1 ELSE 0 END AS ratingConflict,
+        creators.id AS canonicalCreatorId,
+        creators.canonical_name AS canonicalName,
+        CASE WHEN creators.id IS NULL THEN 'unlinked' WHEN creators.is_active=1 THEN 'active' ELSE 'inactive' END AS rosterStatus,
+        CASE WHEN creators.id IS NULL THEN 'unlinked' ELSE 'linked' END AS linkStatus,
+        creators.effective_rating AS contentRating,
+        (SELECT COUNT(*) FROM archive_catalog_creator_sources sources WHERE sources.creator_id=creators.id) AS ratingSourceCount,
+        0 AS ratingConflict,
         ranked_photos.cover_image_id AS coverImageId,
         ranked_photos.cover_thumbnail_path AS coverThumbnailPath,
         ranked_photos.cover_width AS coverWidth,
         ranked_photos.cover_height AS coverHeight
       FROM folders
       JOIN creator_works ON creator_works.folder_id = folders.id
+      LEFT JOIN archive_catalog_local_creator_folders local ON local.gallery_folder_id=folders.id AND local.is_active=1 AND local.match_status='matched'
+      LEFT JOIN archive_catalog_creators creators ON creators.id=local.creator_id
       LEFT JOIN ranked_photos
         ON ranked_photos.folder_id = folders.id AND ranked_photos.photo_rank = 1
       WHERE folders.role = 'normal'

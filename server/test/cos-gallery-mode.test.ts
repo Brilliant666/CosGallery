@@ -156,6 +156,9 @@ describe.sequential('COS gallery mode', () => {
     await scannerService.scanAll('test');
 
     const creator = creatorRatingRepository.listCreators()[0]!;
+    const { ManagedCreatorService } = await import('../src/services/managed-creator-service.js');
+    const managed = new ManagedCreatorService(databaseManager.connection, appConfig.galleryRoot);
+    managed.linkFolder(creator.id, { creatorId: managed.create({name:creator.name}).id });
     const ratingResponse = await requestTestApp(
       app,
       'PATCH',
@@ -222,7 +225,7 @@ describe.sequential('COS gallery mode', () => {
     expect(recovered[0]).toMatchObject({ id: original.id, sourcePath: workRelativePath, itemCount: 2 });
   });
 
-  it('imports HentaiClub as one rating source and resolves aliases, conflicts, and manual overrides', async () => {
+  it('reads canonical ratings through explicit folder links and permits null', async () => {
     for (const creator of ['lunananya', 'Machi馬吉']) {
       const workPath = path.join(appConfig.galleryRoot, creator, `${creator} NO.001`);
       await fs.mkdir(workPath, { recursive: true });
@@ -230,52 +233,20 @@ describe.sequential('COS gallery mode', () => {
     }
     await scannerService.scanAll('test');
 
-    const exportPath = path.join(tempRoot, 'hcf-tags.json');
-    await fs.writeFile(exportPath, JSON.stringify({
-      format: 'hcf-tag-preferences',
-      exportedAt: '2026-08-30T02:30:08.210Z',
-      state: { liked: ['lunana'], kept: ['MACHI'] },
-      contentRatings: {
-        entries: [
-          { name: 'lunana', rating: 'r15', checkedAt: 100 },
-          { name: 'MACHI', rating: 'r18', checkedAt: 200 }
-        ]
-      }
-    }));
+    const { ManagedCreatorService } = await import('../src/services/managed-creator-service.js');
+    const managed = new ManagedCreatorService(databaseManager.connection, appConfig.galleryRoot);
+    const lunana = managed.create({name:'lunana',rating:'R15'});
+    const machi = managed.create({name:'MACHI',rating:'R18'});
+    for (const folder of creatorRatingRepository.listCreators()) {
+      managed.linkFolder(folder.id,{creatorId:folder.name === 'lunananya' ? lunana.id : machi.id});
+    }
+    expect(creatorRatingRepository.listCreators().find(creator => creator.canonicalCreatorId === lunana.id)).toMatchObject({contentRating:'R15'});
+    expect(creatorRatingRepository.listCreators().find(creator => creator.canonicalCreatorId === machi.id)).toMatchObject({contentRating:'R18'});
+    managed.update(lunana.id,{rating:'R18'});
+    expect(creatorRatingRepository.listCreators().find(creator => creator.canonicalCreatorId === lunana.id)).toMatchObject({contentRating:'R18'});
+    managed.update(lunana.id,{rating:null});
+    expect(creatorRatingRepository.listCreators().find(creator => creator.canonicalCreatorId === lunana.id)).toMatchObject({contentRating:null});
+    expect(databaseManager.connection.prepare('SELECT count(*) AS count FROM creator_rating_sources').get()).toEqual({count:0});
 
-    const { importHentaiclubCreatorRatings } = await import('../src/services/creator-rating-import-service.js');
-    const imported = await importHentaiclubCreatorRatings(exportPath);
-    expect(imported.imported).toBe(2);
-    expect(imported.matches.every((match) => match.matchType === 'alias')).toBe(true);
-
-    const creators = creatorRatingRepository.listCreators();
-    expect(creators.find((creator) => creator.name === 'lunananya')).toMatchObject({ contentRating: 'R15' });
-    expect(creators.find((creator) => creator.name === 'Machi馬吉')).toMatchObject({ contentRating: 'R18' });
-
-    const lunana = creators.find((creator) => creator.name === 'lunananya')!;
-    creatorRatingRepository.upsertSource({
-      folderId: lunana.id,
-      source: 'future-platform',
-      sourceCreatorId: 'lunana',
-      sourceDisplayName: 'lunana',
-      rating: 'R18'
-    });
-    expect(creatorRatingRepository.listCreators().find((creator) => creator.id === lunana.id)).toMatchObject({
-      contentRating: 'R18',
-      ratingConflict: 1
-    });
-
-    creatorRatingRepository.upsertSource({
-      folderId: lunana.id,
-      source: 'manual',
-      sourceCreatorId: 'local',
-      sourceDisplayName: 'lunananya',
-      rating: 'R15',
-      isManual: true
-    });
-    expect(creatorRatingRepository.listCreators().find((creator) => creator.id === lunana.id)).toMatchObject({
-      contentRating: 'R15',
-      ratingConflict: 1
-    });
   });
 });

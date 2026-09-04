@@ -315,7 +315,7 @@ export function fetchCosGalleryWorks(
 }
 
 export function fetchCosGalleryCreators(
-  contentRating?: 'R15' | 'R18' | 'unclassified',
+  contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive',
   query?: string
 ) {
   const params = new URLSearchParams();
@@ -325,7 +325,7 @@ export function fetchCosGalleryCreators(
   return requestJson<import('../types/api').CosGalleryCreatorsPayload>(`/api/cos-gallery/creators${suffix}`);
 }
 
-export function updateCreatorContentRating(id: number, contentRating: 'R15' | 'R18') {
+export function updateCreatorContentRating(id: number, contentRating: 'R15' | 'R18' | null) {
   return requestJson<{ ok: true; creator: import('../types/api').CosGalleryCreator }>(
     `/api/cos-gallery/creators/${id}/content-rating`,
     {
@@ -339,8 +339,11 @@ export function updateCreatorContentRating(id: number, contentRating: 'R15' | 'R
 export function fetchArchiveCatalog(options: {
   page?: number;
   limit?: number;
-  preference?: import('../types/api').ArchiveCatalogPreference;
-  rating?: 'R15' | 'R18';
+  preference?: import('../types/api').ArchiveCatalogPreference | 'unset';
+  rating?: 'R15' | 'R18' | 'unclassified';
+  active?: 'active' | 'inactive' | 'all';
+  hasLocal?: 'yes' | 'no';
+  hasSource?: 'yes' | 'no';
   state?: import('../types/api').ArchiveCatalogState;
   query?: string;
 } = {}) {
@@ -350,6 +353,9 @@ export function fetchArchiveCatalog(options: {
   });
   if (options.preference) params.set('preference', options.preference);
   if (options.rating) params.set('rating', options.rating);
+  if (options.active) params.set('active', options.active);
+  if (options.hasLocal) params.set('hasLocal', options.hasLocal);
+  if (options.hasSource) params.set('hasSource', options.hasSource);
   if (options.state) params.set('state', options.state);
   if (options.query?.trim()) params.set('q', options.query.trim());
   return requestJson<import('../types/api').ArchiveCatalogCreatorsPayload>(

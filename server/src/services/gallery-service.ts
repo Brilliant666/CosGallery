@@ -1,3 +1,4 @@
+import { ManagedCreatorService } from './managed-creator-service.js';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
@@ -1300,7 +1301,7 @@ function listFallbackAvatarStoryItems(
 }
 
 export const galleryService = {
-  getCosGalleryCreators(contentRating?: 'R15' | 'R18' | 'unclassified', query?: string) {
+  getCosGalleryCreators(contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive', query?: string) {
     if (!storageService.getState().libraryAvailable) {
       return { items: [], total: 0 };
     }
@@ -1310,14 +1311,21 @@ export const galleryService = {
     const items = creatorRatingRepository
       .listCreators()
       .filter((creator) => {
-        if (contentRating === 'unclassified' && creator.contentRating !== null) return false;
-        if (contentRating && contentRating !== 'unclassified' && creator.contentRating !== contentRating) return false;
-        return !normalizedQuery || creator.name.toLocaleLowerCase().includes(normalizedQuery);
+        if (contentRating === 'inactive') return creator.rosterStatus === 'inactive' && (!normalizedQuery || (creator.canonicalName ?? creator.name).toLocaleLowerCase().includes(normalizedQuery));
+        if (creator.rosterStatus === 'inactive') return false;
+        if (contentRating === 'unlinked' && creator.linkStatus !== 'unlinked') return false;
+        if (contentRating === 'unclassified' && (creator.linkStatus !== 'linked' || creator.contentRating !== null)) return false;
+        if ((contentRating === 'R15' || contentRating === 'R18') && creator.contentRating !== contentRating) return false;
+        return !normalizedQuery || (creator.canonicalName ?? creator.name).toLocaleLowerCase().includes(normalizedQuery);
       })
       .map((creator) => ({
         id: creator.id,
         slug: creator.slug,
-        name: creator.name,
+        name: creator.canonicalName ?? creator.name,
+        canonicalCreatorId: creator.canonicalCreatorId,
+        canonicalName: creator.canonicalName,
+        rosterStatus: creator.rosterStatus,
+        linkStatus: creator.linkStatus,
         folderPath: creator.folderPath,
         workCount: Number(creator.workCount),
         latestWorkAt: creator.latestWorkAt === null ? null : Number(creator.latestWorkAt),
@@ -1335,19 +1343,9 @@ export const galleryService = {
     return { items, total: items.length };
   },
 
-  updateCreatorContentRating(id: number, contentRating: 'R15' | 'R18') {
-    const folder = folderRepository.getById(id);
-    if (!folder || folder.role !== 'normal') return null;
-    creatorRatingRepository.upsertSource({
-      folderId: folder.id,
-      source: 'manual',
-      sourceCreatorId: 'local',
-      sourceDisplayName: folder.name,
-      rating: contentRating,
-      isManual: true,
-      observedAt: Date.now()
-    });
-    return this.getCosGalleryCreators(undefined, folder.name).items.find((creator) => creator.id === id) ?? null;
+  updateCreatorContentRating(id: number, contentRating: 'R15' | 'R18' | null) {
+    const canonical = new ManagedCreatorService().updateFolderRating(id, { contentRating });
+    return this.getCosGalleryCreators(canonical.isActive ? undefined : 'inactive').items.find(creator => creator.id === id) ?? null;
   },
 
   getCosGalleryWorks(
