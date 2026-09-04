@@ -6,30 +6,14 @@ import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 
 import { databaseManager } from '../db/database.js';
-import { normalizeCreatorIdentity } from './creator-rating-import-service.js';
+import { LocalCreatorFolderBridgeService, normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
+import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import {
   areCostuanTitlesCompatible,
   mergeCostuanDirectoryWorks,
   normalizeCostuanTitle,
   parseCostuanNumbering
 } from './costuan-numbering-service.js';
-
-const hcfSeedSchema = z.object({
-  format: z.literal('hcf-tag-preferences'),
-  version: z.number().int().positive(),
-  exportedAt: z.string().optional(),
-  state: z.object({
-    liked: z.array(z.string().trim().min(1)).default([]),
-    kept: z.array(z.string().trim().min(1)).default([])
-  }),
-  contentRatings: z.object({
-    entries: z.array(z.object({
-      name: z.string().trim().min(1),
-      rating: z.enum(['r15', 'r18']),
-      checkedAt: z.number().finite().nullable().optional()
-    })).default([])
-  })
-});
 
 const costuanWorkSchema = z.object({
   order: z.number().int().min(0).optional(),
@@ -128,17 +112,6 @@ type RemoteWorkRow = {
   metadata_json: string | null;
 };
 
-export type HcfSeedImportResult = {
-  source: 'hentaiclub';
-  total: number;
-  created: number;
-  updated: number;
-  liked: number;
-  kept: number;
-  r15: number;
-  r18: number;
-};
-
 export type CostuanCatalogImportResult = {
   source: 'costuan';
   records: number;
@@ -151,6 +124,7 @@ export type CostuanCatalogImportResult = {
 };
 
 export type LocalReconciliationResult = {
+  bridgeReview: Array<{ catalogFolderId:number; status:string; candidates:number[] }>;
   rootPath: string;
   creatorFolders: number;
   matchedCreatorFolders: number;
@@ -405,116 +379,6 @@ async function scanLocalCreatorDirectory(rootPath: string, folderName: string): 
 export class ArchiveCatalogService {
   constructor(private readonly database: DatabaseSync = databaseManager.connection) {}
 
-  async importHentaiclubSeed(filePath: string): Promise<HcfSeedImportResult> {
-    const resolvedPath = path.resolve(filePath);
-    const sourceBuffer = await fs.readFile(resolvedPath);
-    const document = hcfSeedSchema.parse(JSON.parse(sourceBuffer.toString('utf8')));
-    const preferenceByName = new Map<string, 'liked' | 'kept'>();
-    for (const name of document.state.kept) preferenceByName.set(name, 'kept');
-    for (const name of document.state.liked) preferenceByName.set(name, 'liked');
-    const ratingByName = new Map(document.contentRatings.entries.map((entry) => [entry.name, entry]));
-    const names = [...document.state.liked, ...document.state.kept]
-      .filter((name, index, values) => values.indexOf(name) === index);
-    const importedAt = new Date().toISOString();
-    const result: HcfSeedImportResult = {
-      source: 'hentaiclub',
-      total: names.length,
-      created: 0,
-      updated: 0,
-      liked: document.state.liked.length,
-      kept: document.state.kept.length,
-      r15: 0,
-      r18: 0
-    };
-
-    withTransaction(this.database, () => {
-      const findSource = this.database.prepare(
-        `SELECT creator_id FROM archive_catalog_creator_sources
-         WHERE source = 'hentaiclub' AND source_creator_id = ?`
-      );
-      const insertCreator = this.database.prepare(
-        `INSERT INTO archive_catalog_creators (
-           canonical_name, normalized_name, preference, effective_rating,
-           seed_source, seed_source_creator_id
-         ) VALUES (?, ?, ?, ?, 'hentaiclub', ?)`
-      );
-      const updateCreator = this.database.prepare(
-        `UPDATE archive_catalog_creators SET
-           canonical_name = ?, normalized_name = ?, preference = ?, effective_rating = ?,
-           updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`
-      );
-      const upsertSource = this.database.prepare(
-        `INSERT INTO archive_catalog_creator_sources (
-           creator_id, source, source_creator_id, source_display_name, source_url,
-           metadata_json, first_seen_at, last_seen_at
-         ) VALUES (?, 'hentaiclub', ?, ?, NULL, ?, ?, ?)
-         ON CONFLICT(source, source_creator_id) DO UPDATE SET
-           creator_id = excluded.creator_id,
-           source_display_name = excluded.source_display_name,
-           metadata_json = excluded.metadata_json,
-           last_seen_at = excluded.last_seen_at`
-      );
-      const upsertAlias = this.database.prepare(
-        `INSERT INTO archive_catalog_creator_aliases (
-           creator_id, alias, normalized_alias, source
-         ) VALUES (?, ?, ?, 'hentaiclub')
-         ON CONFLICT(creator_id, source, normalized_alias) DO UPDATE SET
-           alias = excluded.alias, updated_at = CURRENT_TIMESTAMP`
-      );
-
-      for (const name of names) {
-        const preference = preferenceByName.get(name) ?? null;
-        const ratingEntry = ratingByName.get(name);
-        const rating = ratingEntry?.rating.toUpperCase() as 'R15' | 'R18' | undefined;
-        if (rating === 'R18') result.r18 += 1;
-        else if (rating === 'R15') result.r15 += 1;
-        const existing = findSource.get(name) as { creator_id: number } | undefined;
-        let creatorId: number;
-        if (existing) {
-          creatorId = existing.creator_id;
-          updateCreator.run(name, normalizeCreatorIdentity(name), preference, rating ?? null, creatorId);
-          result.updated += 1;
-        } else {
-          const inserted = insertCreator.run(
-            name,
-            normalizeCreatorIdentity(name),
-            preference,
-            rating ?? null,
-            name
-          );
-          creatorId = asNumber(inserted.lastInsertRowid);
-          result.created += 1;
-        }
-        upsertSource.run(
-          creatorId,
-          name,
-          name,
-          JSON.stringify({
-            exportedAt: document.exportedAt ?? null,
-            checkedAt: ratingEntry?.checkedAt ?? null,
-            preference
-          }),
-          importedAt,
-          importedAt
-        );
-        upsertAlias.run(creatorId, name, normalizeCreatorIdentity(name));
-      }
-
-      this.recordImportRun({
-        source: 'hentaiclub',
-        format: document.format,
-        version: String(document.version),
-        sourcePath: resolvedPath,
-        checksum: sha256(sourceBuffer),
-        importedAt,
-        stats: result
-      });
-    });
-
-    return result;
-  }
-
   async importCostuanArchive(filePath: string): Promise<CostuanCatalogImportResult> {
     const resolvedPath = path.resolve(filePath);
     const sourceBuffer = await fs.readFile(resolvedPath);
@@ -572,7 +436,13 @@ export class ArchiveCatalogService {
           record.local?.folderName ?? '',
           titleAlias ?? ''
         ].filter(Boolean);
-        const creatorMatches = this.findCreatorIdsByAliases(candidateNames);
+        // Persistent platform identity wins over later display-name changes.
+        // A disagreement between existing identities is quarantined as unmatched.
+        const owners = this.database.prepare(`SELECT creator_id FROM archive_catalog_creator_sources
+          WHERE source='costuan' AND source_creator_id=? UNION
+          SELECT creator_id FROM archive_catalog_collections WHERE source='costuan' AND source_collection_id=?`)
+          .all(`collection:${record.costuan.postId}`, record.costuan.postId) as Array<{creator_id:number}>;
+        const creatorMatches = owners.length ? owners.map(owner => owner.creator_id) : this.findCreatorIdsByAliases(candidateNames);
         if (creatorMatches.length !== 1) {
           result.unmatchedCreators.push(record.creatorName);
           continue;
@@ -744,21 +614,22 @@ export class ArchiveCatalogService {
     }
 
     const explicitCreatorIds = new Map<string, number>();
-    const seenCreatorIds = new Set<number>();
     const snapshots: LocalCreatorSnapshot[] = [];
     for (const [index, scope] of options.creators.entries()) {
       if (!Number.isSafeInteger(scope.creatorId) || scope.creatorId <= 0) {
         throw new Error(`无效的博主 ID：${String(scope.creatorId)}`);
-      }
-      if (seenCreatorIds.has(scope.creatorId)) {
-        throw new Error(`博主定向对账中出现重复 ID：${scope.creatorId}`);
       }
       const actualFolderName = await resolveDirectCreatorFolder(resolvedRoot, scope.folderName);
       const creator = this.database.prepare(
         'SELECT id FROM archive_catalog_creators WHERE id = ?'
       ).get(scope.creatorId) as { id: number } | undefined;
       if (!creator) throw new Error(`博主 ID 不存在：${scope.creatorId}`);
-      const creatorMatches = this.findCreatorIdsByAliases([actualFolderName]);
+      const persistent = this.findPersistentLocalFolder(path.join(resolvedRoot, actualFolderName), resolvedRoot);
+      if (persistent && normalizedAbsoluteCreatorPath(persistent.absolute_path) !== normalizedAbsoluteCreatorPath(path.join(resolvedRoot, actualFolderName))) {
+        throw new Error('LOCAL_FOLDER_LINK_CONFLICT: persistent path changed; review required before scoped reconciliation');
+      }
+      const creatorMatches = persistent?.match_method === 'manual-unlinked' ? []
+        : persistent?.creator_id != null ? [persistent.creator_id] : this.findCreatorIdsByAliases([actualFolderName]);
       if (creatorMatches.length !== 1 || creatorMatches[0] !== scope.creatorId) {
         throw new Error(`博主 ID ${scope.creatorId} 与文件夹“${actualFolderName}”无法唯一对应。`);
       }
@@ -767,7 +638,6 @@ export class ArchiveCatalogService {
       if (explicitCreatorIds.has(snapshot.relativePath)) {
         throw new Error(`博主定向对账中出现重复文件夹：${actualFolderName}`);
       }
-      seenCreatorIds.add(scope.creatorId);
       explicitCreatorIds.set(snapshot.relativePath, scope.creatorId);
       snapshots.push(snapshot);
     }
@@ -788,6 +658,7 @@ export class ArchiveCatalogService {
   }): LocalReconciliationResult {
     const scannedAt = new Date().toISOString();
     const result: LocalReconciliationResult = {
+      bridgeReview: [],
       rootPath: input.resolvedRoot,
       creatorFolders: input.snapshots.length,
       matchedCreatorFolders: 0,
@@ -804,7 +675,24 @@ export class ArchiveCatalogService {
       for (const creatorSnapshot of input.snapshots) {
         activeCreatorPaths.add(creatorSnapshot.relativePath);
         const explicitCreatorId = input.explicitCreatorIds?.get(creatorSnapshot.relativePath);
-        const creatorMatches = explicitCreatorId === undefined
+        const persistent = this.findPersistentLocalFolder(creatorSnapshot.absolutePath, input.resolvedRoot);
+        if (persistent) activeCreatorPaths.add(persistent.relative_path);
+        if (persistent && normalizedAbsoluteCreatorPath(persistent.absolute_path) !== normalizedAbsoluteCreatorPath(creatorSnapshot.absolutePath)) {
+          result.bridgeReview.push({catalogFolderId:persistent.id,status:'path-changed',candidates:persistent.gallery_folder_id === null ? [] : [persistent.gallery_folder_id]});
+          continue;
+        }
+        // Explicit manual unlink is sticky. Preserve child Work relationships for
+        // recovery; scanning may not silently relink or clear them.
+        if (persistent?.match_method === 'manual-unlinked') {
+          result.unmatchedCreatorFolders.push(creatorSnapshot.folderName);
+          const existing = this.listExistingLocalWorkLinks(input.resolvedRoot, creatorSnapshot.relativePath);
+          result.localWorks += existing.length;
+          result.matchedWorks += existing.filter(row => row.match_status === 'matched').length;
+          result.unmatchedWorks += existing.filter(row => row.match_status === 'unmatched').length;
+          result.ambiguousWorks += existing.filter(row => row.match_status === 'ambiguous').length;
+          continue;
+        }
+        const creatorMatches = persistent?.creator_id != null ? [persistent.creator_id] : explicitCreatorId === undefined
           ? this.findCreatorIdsByAliases([creatorSnapshot.folderName])
           : [explicitCreatorId];
         const creatorId = creatorMatches.length === 1 ? creatorMatches[0] : null;
@@ -825,9 +713,11 @@ export class ArchiveCatalogService {
           rootPath: input.resolvedRoot,
           snapshot: creatorSnapshot,
           status: creatorStatus,
-          method: creatorStatus === 'matched' ? 'normalized-alias' : null,
+          method: persistent?.match_method ?? (creatorStatus === 'matched' ? 'normalized-alias' : null),
           scannedAt
         });
+        result.bridgeReview.push(...new LocalCreatorFolderBridgeService(this.database).backfill(input.resolvedRoot, [localFolderId])
+          .filter(row => row.status !== 'exact'));
         const remoteWorks = creatorId === null ? [] : this.listRemoteWorks(creatorId);
         const creatorNames = creatorId === null
           ? []
@@ -1109,6 +999,17 @@ export class ArchiveCatalogService {
     };
   }
 
+  private findPersistentLocalFolder(absolutePath: string, galleryRoot: string) {
+    const normalized = normalizedAbsoluteCreatorPath(absolutePath);
+    const matches = (this.database.prepare(`SELECT local.id,local.creator_id,local.absolute_path,local.relative_path,local.match_method,local.gallery_folder_id,folders.folder_path
+      FROM archive_catalog_local_creator_folders local LEFT JOIN folders ON folders.id=local.gallery_folder_id WHERE local.is_active=1`).all() as Array<{
+        id:number;creator_id:number|null;absolute_path:string;relative_path:string;match_method:string|null;gallery_folder_id:number|null;folder_path:string|null
+      }>).filter(row => normalized !== null && (normalizedAbsoluteCreatorPath(row.absolute_path) === normalized
+        || (row.folder_path !== null && normalizedAbsoluteCreatorPath(row.folder_path, galleryRoot) === normalized)));
+    if (matches.length > 1) throw new Error('LOCAL_FOLDER_LINK_CONFLICT: multiple exact persistent paths');
+    return matches[0];
+  }
+
   private findCreatorIdsByAliases(names: string[]): number[] {
     const ids = new Set<number>();
     const findAlias = this.database.prepare(
@@ -1164,7 +1065,6 @@ export class ArchiveCatalogService {
          metadata_json, first_seen_at, last_seen_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(source, source_creator_id) DO UPDATE SET
-         creator_id = excluded.creator_id,
          source_display_name = excluded.source_display_name,
          source_url = excluded.source_url,
          metadata_json = excluded.metadata_json,
@@ -1197,7 +1097,6 @@ export class ArchiveCatalogService {
          declared_work_count, raw_directory_text, metadata_json, observed_at
        ) VALUES (?, 'costuan', ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(source, source_collection_id) DO UPDATE SET
-         creator_id = excluded.creator_id,
          title = excluded.title,
          source_url = excluded.source_url,
          declared_work_count = excluded.declared_work_count,

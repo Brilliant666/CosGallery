@@ -6,7 +6,8 @@ import { pathToFileURL } from 'node:url';
 
 import { resolveBinary } from 'dbmate';
 
-import { repositoryRoot } from '../config/env.js';
+import { appConfig, repositoryRoot } from '../config/env.js';
+import { completeManagedCreatorMigration } from './managed-creator-migration.js';
 import {
   applyBaselineCompatMigrations,
   assertNoLegacySchema,
@@ -704,6 +705,7 @@ export function runStartupMigrations(options: StartupMigrationOptions = {}): Sta
   const database = new DatabaseSync(databasePath);
   try {
     validatePostsMigrationCompleteness(database);
+    completeManagedCreatorMigration(database, appConfig.galleryRoot);
   } finally {
     database.close();
   }

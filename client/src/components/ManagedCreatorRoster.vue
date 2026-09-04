@@ -1,0 +1,183 @@
+<template>
+  <section class="roster" aria-label="博主库">
+    <header class="roster-heading">
+      <div><h2>博主库</h2><p>统一维护博主 ID、名称与分类。来源平台只补充作品信息。</p></div>
+      <button type="button" class="primary" @click="openNew">新增博主</button>
+    </header>
+    <div v-if="payload" class="roster-counts" aria-label="博主库统计">
+      <span>总数 <b>{{ payload.summary.creators }}</b></span>
+      <span>启用 {{ payload.summary.activeCreators }} / 停用 {{ payload.summary.inactiveCreators }}</span>
+      <span>喜欢 {{ payload.summary.liked }} / 保留 {{ payload.summary.kept }} / 未设置 {{ payload.summary.unsetPreference }}</span>
+      <span>R15 {{ payload.summary.r15 }} / R18 {{ payload.summary.r18 }} / 待分类 {{ payload.summary.unclassified }}</span>
+      <span>有本地作品 {{ payload.summary.creatorsWithLocalWorks }} / 无本地作品 {{ payload.summary.creatorsWithoutLocalWorks }} / 未关联本地目录 {{ payload.summary.unlinkedLocalFolders }}</span>
+    </div>
+    <form class="roster-filters" @submit.prevent="search">
+      <label class="search">搜索名称或别名<input v-model="filters.query" type="search" placeholder="名称或别名" /></label>
+      <label>偏好<select v-model="filters.preference"><option value="">全部偏好</option><option value="liked">喜欢</option><option value="kept">保留</option><option value="unset">未设置</option></select></label>
+      <label>分级<select v-model="filters.rating"><option value="">全部分级</option><option>R15</option><option>R18</option><option value="unclassified">待分类</option></select></label>
+      <label>状态<select v-model="filters.active"><option value="active">启用</option><option value="inactive">停用</option><option value="all">全部状态</option></select></label>
+      <label>本地作品<select v-model="filters.hasLocal"><option value="">全部</option><option value="yes">有本地作品</option><option value="no">无本地作品</option></select></label>
+      <label>来源记录<select v-model="filters.hasSource"><option value="">全部</option><option value="yes">有来源记录</option><option value="no">无来源记录</option></select></label>
+      <button type="submit" :disabled="loading">筛选</button>
+    </form>
+    <p v-if="error && !dialogOpen" role="alert" class="error">{{ error }}</p>
+    <p v-if="notice" role="status">{{ notice }}</p>
+    <div class="roster-table">
+      <table><thead><tr><th>ID / 博主</th><th>偏好</th><th>分级</th><th>状态</th><th>别名 / 来源</th><th>本地作品 / 目录</th><th>更新</th><th>管理</th></tr></thead>
+        <tbody><tr v-for="creator in payload?.items" :key="creator.id">
+          <td><small>#{{ creator.id }}</small><strong>{{ creator.name }}</strong></td>
+          <td>{{ preferenceLabel(creator.preference) }}</td><td>{{ creator.rating ?? '待分类' }}</td>
+          <td>{{ creator.isActive ? '启用' : '停用' }}</td><td>{{ creator.aliasCount }} / {{ creator.sourceCount }}</td>
+          <td>{{ creator.localWorks }} 套 / {{ creator.localFolderCount }}</td><td>{{ creator.updatedAt.slice(0, 10) }}</td>
+          <td><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理</button></td>
+        </tr></tbody>
+      </table>
+    </div>
+    <p v-if="payload && !payload.items.length">没有符合条件的博主。</p>
+    <footer class="roster-paging">
+      <button :disabled="page <= 1 || loading" @click="goPage(page - 1)">上一页</button>
+      <span>第 {{ page }} 页 · {{ payload?.total ?? 0 }} 位 · 每页 50 位</span>
+      <button :disabled="!payload?.hasMore || loading" @click="goPage(page + 1)">下一页</button>
+    </footer>
+
+    <dialog ref="dialog" class="roster-dialog" aria-labelledby="roster-dialog-title" @close="dialogOpen = false" @cancel="cancelDialog">
+      <div class="roster-heading"><h2 id="roster-dialog-title">{{ detail ? `管理 ${detail.name}` : '新增博主' }}</h2><button :disabled="busy" @click="closeDialog">关闭</button></div>
+      <p v-if="detail" class="hint">稳定 ID #{{ detail.id }} · {{ sourceLabel(detail.seedSource) }} · 改名不移动本地目录</p>
+      <p v-if="error" role="alert" class="error">{{ error }}</p>
+      <aside v-if="candidates.length" class="collision">
+        <p>可能是已有博主，请先核对：</p>
+        <button v-for="candidate in candidates" :key="candidate.id" :disabled="busy" @click="openCreator(candidate.id)">#{{ candidate.id }} {{ candidate.name }}</button>
+        <label><input v-model="draft.confirmDistinct" type="checkbox" />我已核对，这是不同的人，允许同名</label>
+      </aside>
+      <form class="roster-edit" @submit.prevent="save">
+        <label>主名称<input v-model="draft.name" required maxlength="255" :disabled="busy" /></label>
+        <label>偏好<select v-model="draft.preference" :disabled="busy"><option :value="null">未设置</option><option value="liked">喜欢</option><option value="kept">保留</option></select></label>
+        <label>博主分级<select v-model="draft.rating" :disabled="busy"><option :value="null">待分类</option><option>R15</option><option>R18</option></select></label>
+        <button class="primary" :disabled="busy">{{ busy ? '正在保存…' : detail ? '保存博主' : '创建博主' }}</button>
+      </form>
+      <template v-if="detail">
+        <section><h3>别名</h3>
+          <ul class="alias-list"><li v-for="alias in detail.aliases" :key="alias.id"><span>{{ alias.alias }} <small>{{ sourceLabel(alias.source) }}</small></span>
+            <button v-if="alias.editable" :disabled="busy" @click="removeAlias(alias.id)">删除别名</button><small v-else>只读</small></li></ul>
+          <form class="inline-form" @submit.prevent="addAlias"><label>新增手工别名<input v-model="aliasDraft" required maxlength="255" :disabled="busy" /></label><button :disabled="busy">添加别名</button></form>
+        </section>
+        <section><h3>来源记录（只读）</h3><p v-if="!detail.sources.length">暂无来源记录，可在后续显式规划时关联资源平台。</p>
+          <ul class="source-list"><li v-for="source in detail.sources" :key="`${source.source}:${source.sourceCreatorId}`">
+            <strong>{{ sourceLabel(source.source) }}</strong> · {{ source.displayName }}<small>{{ source.sourceCreatorId }}</small>
+            <a v-if="safeSourceUrl(source.url)" :href="source.url!" target="_blank" rel="noopener noreferrer">查看来源</a>
+          </li></ul>
+        </section>
+        <section><h3>本地目录关联</h3><p class="hint">仅保存 ID 关联，不重命名目录、不扫描、不生成任务。</p>
+          <ul class="alias-list"><li v-for="folder in detail.localFolders" :key="folder.id"><span>#{{ folder.id }} {{ folder.folderPath }} · {{ folder.workCount }} 套 <small>{{ folder.matchStatus }} / {{ folder.matchMethod ?? '未关联' }}</small></span><button :disabled="busy" @click="pendingAction = { kind: 'unlink', folderId: folder.id }">解除关联</button></li></ul>
+          <form class="inline-form" @submit.prevent="linkFolder"><label>未关联目录<select v-model="folderDraft" :disabled="busy"><option :value="null">选择本地目录</option><option v-for="folder in detail.unlinkedLocalFolders" :key="folder.id" :value="folder.id">#{{ folder.id }} {{ folder.folderPath }}</option></select></label><button :disabled="busy || folderDraft === null">关联目录</button></form>
+        </section>
+        <section class="state-controls"><h3>{{ detail.isActive ? '停用博主' : '恢复博主' }}</h3>
+          <p>来源 {{ detail.impact.sources }} · 合集 {{ detail.impact.collections }} · 平台作品 {{ detail.impact.remoteWorks }} · 本地作品 {{ detail.impact.localWorks }} · 未完成下载任务 {{ detail.impact.unfinishedDownloadTasks }}</p>
+          <p class="hint">停用仅影响未来任务规划及默认展示；既有作品、任务和关系保留。恢复也不会自动生成任务。</p>
+          <button :disabled="busy" @click="pendingAction = { kind: 'state' }">{{ detail.isActive ? '停用' : '恢复' }}</button>
+        </section>
+        <aside v-if="pendingAction" class="collision" role="group" aria-label="确认变更">
+          <p>{{ pendingAction.kind === 'unlink' ? '确认解除此目录与博主的关联？文件和已有作品关系不会删除。' : `确认${detail.isActive ? '停用' : '恢复'}博主？不会修改既有任务。` }}</p>
+          <button class="primary" :disabled="busy" @click="confirmAction">确认变更</button><button :disabled="busy" @click="pendingAction = null">取消</button>
+        </aside>
+      </template>
+    </dialog>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { onMounted, reactive, ref } from 'vue';
+import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
+import { RequestError } from '../api/http';
+import * as api from '../api/managed-creators';
+import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ContentRating } from '../types/api';
+
+const emit = defineEmits<{ changed: [] }>();
+const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
+const detail = ref<ArchiveCatalogCreatorDetail | null>(null);
+const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no' });
+const page = ref(1), loading = ref(false), busy = ref(false), error = ref(''), notice = ref('');
+const dialog = ref<HTMLDialogElement | null>(null), dialogOpen = ref(false);
+const draft = reactive<api.ManagedCreatorInput>({ name:'', preference:null, rating:null, confirmDistinct:false });
+const aliasDraft = ref(''), folderDraft = ref<number|null>(null);
+const candidates = ref<Array<{id:number;name:string}>>([]);
+const pendingAction = ref<{kind:'state'}|{kind:'unlink';folderId:number}|null>(null);
+let loadGeneration = 0;
+const preferenceLabel = (value:ArchiveCatalogPreference|null) => value === 'liked' ? '喜欢' : value === 'kept' ? '保留' : '未设置';
+const sourceLabel = (source:string) => ({hentaiclub:'历史种子（已退役）',costuan:'作品来源 · Costuan',manual:'手工', 'manual-history':'历史名称'}[source] ?? source);
+const safeSourceUrl = (value:string|null) => !!value && /^https?:\/\//iu.test(value);
+function showError(reason:unknown) {
+  error.value = reason instanceof Error ? reason.message : '操作失败';
+  const data = reason instanceof RequestError ? reason.payload as {candidates?:Array<{id:number;name:string}>}|undefined : undefined;
+  candidates.value = data?.candidates ?? [];
+}
+async function load() {
+  const generation = ++loadGeneration;
+  loading.value = true;
+  try {
+    const result = await fetchArchiveCatalog({page:page.value,limit:50,query:filters.query,active:filters.active,
+      preference:filters.preference||undefined,rating:filters.rating||undefined,hasLocal:filters.hasLocal||undefined,hasSource:filters.hasSource||undefined});
+    if (generation === loadGeneration) payload.value = result;
+  } catch (reason) { if (generation === loadGeneration) showError(reason); }
+  finally { if (generation === loadGeneration) loading.value = false; }
+}
+async function search() { page.value = 1; error.value = ''; await load(); }
+async function goPage(value:number) { page.value = value; await load(); }
+function showDialog() { if (!dialog.value?.open) dialog.value?.showModal(); dialogOpen.value = true; }
+function closeDialog() { if (!busy.value) { dialog.value?.close(); dialogOpen.value = false; } }
+function cancelDialog(event:Event) { if (busy.value) event.preventDefault(); }
+function setDetail(value:ArchiveCatalogCreatorDetail) {
+  detail.value = value;
+  Object.assign(draft,{name:value.name,preference:value.preference,rating:value.rating,confirmDistinct:false});
+  candidates.value = []; pendingAction.value = null;
+}
+function openNew() {
+  detail.value = null; error.value = ''; candidates.value = []; notice.value = '';
+  Object.assign(draft,{name:'',preference:null,rating:null,confirmDistinct:false});
+  showDialog();
+}
+async function openCreator(id:number) {
+  if (busy.value) return;
+  error.value = ''; candidates.value = []; pendingAction.value = null; aliasDraft.value = ''; folderDraft.value = null;
+  try { setDetail(await fetchArchiveCatalogCreator(id)); showDialog(); } catch (reason) { showError(reason); }
+}
+async function mutation(action:()=>Promise<ArchiveCatalogCreatorDetail|void>) {
+  if (busy.value) return;
+  busy.value = true; error.value = ''; notice.value = '';
+  try {
+    const result = await action();
+    if (result) setDetail(result);
+    await load(); emit('changed'); notice.value = '博主元数据已保存；未执行扫描或任务规划。';
+  } catch (reason) { showError(reason); }
+  finally { busy.value = false; }
+}
+async function save() { await mutation(() => detail.value ? api.updateManagedCreator(detail.value.id,{...draft}) : api.createManagedCreator({...draft})); }
+async function addAlias() { if (detail.value) await mutation(async () => { const result = await api.addManagedAlias(detail.value!.id,aliasDraft.value,draft.confirmDistinct); aliasDraft.value = ''; return result; }); }
+async function removeAlias(id:string) { if (detail.value) await mutation(() => api.deleteManagedAlias(detail.value!.id,id)); }
+async function linkFolder() { if (detail.value && folderDraft.value !== null) await mutation(async () => { const result = await api.linkManagedFolder(folderDraft.value!,detail.value!.id); folderDraft.value = null; return result; }); }
+async function confirmAction() {
+  const action = pendingAction.value;
+  if (!detail.value || !action) return;
+  await mutation(async () => {
+    if (action.kind === 'state') return api.setManagedCreatorActive(detail.value!.id,!detail.value!.isActive);
+    await api.unlinkManagedFolder(action.folderId);
+    return fetchArchiveCatalogCreator(detail.value!.id);
+  });
+}
+onMounted(load);
+</script>
+
+<style scoped>
+.roster{margin-bottom:1.5rem;padding:1.25rem;border:1px solid var(--border);border-radius:1rem;background:var(--surface)}
+h2,h3,p{margin:0} h2{font-size:1.2rem;font-weight:650} h3{font-size:1rem;font-weight:600;margin-bottom:.65rem} p{line-height:1.6}
+.roster-heading{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1rem}.roster-heading p,.hint,small{color:var(--muted);font-size:.8rem}
+.roster-counts{display:flex;flex-wrap:wrap;gap:.65rem 1.4rem;margin-bottom:1rem;font-size:.8rem}.roster-filters{display:flex;flex-wrap:wrap;align-items:end;gap:.6rem;margin-bottom:1rem}
+label{display:grid;gap:.3rem;font-size:.8rem}input,select,button{font:inherit}input:not([type=checkbox]),select{min-width:0;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:.5rem;padding:.6rem;width:100%}
+.search{flex:1 1 13rem}button{border:1px solid var(--border);border-radius:.5rem;background:var(--surface);color:var(--text);padding:.55rem .85rem;cursor:pointer;white-space:nowrap}button.primary{background:var(--accent);color:white;border-color:var(--accent)}button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.roster-table{overflow:auto}table{width:100%;border-collapse:collapse;min-width:55rem;font-size:.85rem}th,td{padding:.7rem .5rem;text-align:left;border-bottom:1px solid var(--border)}th{color:var(--muted);font-size:.75rem}td strong,td small{display:block}
+.roster-paging{display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:1rem;margin-top:1rem;font-size:.8rem}
+.roster-dialog{margin:auto;width:min(48rem,calc(100vw - 2rem));max-height:90vh;overflow:auto;padding:1.4rem;border:1px solid var(--border);border-radius:1rem;background:var(--surface);color:var(--text)}.roster-dialog::backdrop{background:#0007}.roster-dialog section{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)}
+.roster-edit{display:grid;grid-template-columns:2fr 1fr 1fr;gap:.8rem;margin-top:1rem;align-items:end}.roster-edit button{grid-column:1/-1}.alias-list,.source-list{list-style:none;padding:0;margin:0;display:grid;gap:.6rem}.alias-list li{display:flex;align-items:center;justify-content:space-between;gap:1rem;overflow-wrap:anywhere}.source-list small{display:block;overflow-wrap:anywhere}a{color:var(--accent)}
+.inline-form{display:flex;align-items:end;gap:.6rem;margin-top:1rem}.inline-form label{flex:1}.error{background:#fee2e2;color:#991b1b;padding:.7rem;border-radius:.5rem;margin:.7rem 0}.collision{background:var(--bg);border:1px solid var(--border);padding:1rem;margin:1rem 0;border-radius:.5rem}.collision button{margin:.4rem .4rem .4rem 0}.collision label{display:flex;align-items:center}.state-controls p{font-size:.85rem;margin-bottom:.65rem}
+@media(max-width:640px){.roster{padding:.8rem}.roster-edit{grid-template-columns:1fr}.roster-heading{align-items:start}.roster-dialog{padding:1rem}.roster-filters label{flex:1 1 8rem}.roster-filters .search{flex-basis:100%}}
+</style>

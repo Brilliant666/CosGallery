@@ -40,12 +40,11 @@ GALLERY_ROOT/
 - The original Foldergram home feed and navigation remain available.
 - **Library** shows one card per creator; selecting a creator opens all of that creator's albums.
 - A creator cover uses the first image from the newest album that contains photos, so a newer video-only album does not replace the photo cover.
-- R15/R18 is creator-level metadata. Sources are stored independently so later platform imports can coexist. A manual value takes precedence; otherwise any R18 source makes the creator R18, followed by R15 and then unclassified.
-- HentaiClub JSON is an initial metadata source, not the permanent or exclusive authority. Import it with:
-
-```bash
-pnpm --dir server import:hcf-tags -- "path/to/hcf-tags.json"
-```
+- CosGallery's database is the sole canonical creator roster and rating authority. R15/R18 and nullable preference are independent creator metadata, not inferred from albums.
+- The **博主库** section in `/archive-catalog` manages all creators (including creators without media): create, rename, manual aliases, nullable preference/rating, deactivate/restore, and explicit local-folder links. No hard delete, media changes or automatic task execution.
+- HentaiClub initialized the first roster historically and is now retired. Historical sources/aliases/import records are retained; there is no JSON import, sync or bootstrap command. Costuan may update source/collection/work metadata, never canonical names/preferences/ratings.
+- **我的图库** displays only local media folders and reads classification through `folders.id → archive_catalog_local_creator_folders.gallery_folder_id → creator_id → archive_catalog_creators`. Unlinked folders and linked-but-unclassified creators are distinct; inactive creators are hidden by default but remain accessible.
+- Migration 000016 adds activation and the persistent Folder bridge, snapshots the already-stored seed metadata and checks legacy manual ratings. The existing migrate/startup command performs exact full-path backfill with Windows normalization; conflicts are reported, not guessed. Its persisted completion marker prevents legacy values overriding subsequent edits. Back up before upgrading; do not run old code against the upgraded database.
 
 - Album cover labels come from `CostuanArchiveManager` metadata, not from album folder names. Export `costuan-archive-*.json` from the extension and import it with:
 
@@ -55,29 +54,13 @@ pnpm --dir server import:costuan-archive "path/to/costuan-archive.json"
 
 ### Archive catalog and read-only reconciliation
 
-CosGallery now keeps a source-neutral archive catalog alongside Foldergram's media index. The catalog exists before local media does, so a creator may have 17 Costuan works while only 13 local folders are present. HentaiClub is imported once as the initial curated creator seed; Costuan is represented as the first resource platform; Baidu is stored separately as one delivery provider.
+CosGallery keeps the canonical `archive_catalog_creators` alongside Foldergram's physical media index. The roster exists before local media does: 17 Costuan works and 13 local works means four missing works, not four missing creators.
 
-Run the complete first-stage import and read-only reconciliation with:
+Create or edit creators in **博主库** first. Use Stage 1 to acquire Costuan metadata and explicitly initiate a gallery scan when local files have changed. Existing source IDs and manual Folder links remain authoritative after a rename. Unknown or ambiguous Costuan names remain unassociated instead of creating or merging creators.
 
-```bash
-pnpm --dir server catalog:bootstrap -- \
-  --hcf "path/to/hcf-tags.json" \
-  --costuan "path/to/costuan-archive.json" \
-  --gallery-root "G:\\cos图集" \
-  --report "data/catalog/archive-catalog-report.json"
-```
+Future metadata/download planning excludes inactive creators without deleting, cancelling, requeuing or reconciling their existing tasks. Restoring a creator does not itself plan tasks. Source identities and source-derived aliases are read-only in the roster; renamed canonical names become historical aliases.
 
-The command:
-
-- creates or updates creators, aliases, source identities, collections, works and delivery records idempotently;
-- scans only each creator's direct child directories as works and recursively counts their media;
-- matches local works to Costuan primarily by stable `NO.xxx`/three-digit source order;
-- reports local matches, missing source works and unresolved local folders;
-- never renames, moves, deletes or writes inside the configured gallery root.
-
-The generated report is JSON so later download and ingestion stages can consume the exact missing-work queue. Re-running the command updates observations without duplicating creators or works.
-
-Administrators can inspect the same ledger at `/archive-catalog`. The management page provides preference, rating and ingestion-state filters, source/local/missing totals, and on-demand creator details without writing to the configured gallery root.
+See [managed roster and rating bridge evidence](docs/evidence/cosgallery-managed-creator-roster-and-rating-bridge-v1.md) for migration checks, API behavior and isolated validation.
 
 ### Local-only creator metadata queue
 
@@ -94,7 +77,7 @@ The second-stage bridge turns reconciled Costuan gaps into an idempotent downloa
 3. Generate a one-time plugin connection token and paste it into `CostuanArchiveManager`.
 4. Connect the extension to `http://127.0.0.1:4141`, then start automatic staging.
 
-Only creators already present in the read-only `G:\cos图集` reconciliation are eligible. For those creators, active Costuan works that are absent locally and have a successful Baidu delivery record are queued. Every task stores the stable Costuan source order, saved Baidu folder, and an isolated target such as `G:\cos待入库\rua阮阮\014.7z`. Re-generating the plan does not duplicate existing tasks, and stale pending tasks for creators outside the local gallery are removed.
+Only creators already present in the read-only `G:\cos图集` reconciliation are eligible. For those creators, active Costuan works that are absent locally and have a successful Baidu delivery record are queued. Every task stores the stable Costuan source order, saved Baidu folder, and an isolated target such as `G:\cos待入库\rua阮阮\014.7z`. Re-generating the plan does not duplicate existing tasks, and inactive creators' existing tasks remain untouched.
 
 The local bridge is bound to loopback access and authenticated with a generated token. The token is shown once; generating another token invalidates the previous one. The extension claims all missing works for one creator, creates or reuses `我的网盘/cos待入库/<creator ID>`, traverses Baidu's virtualized source list, selects the exact missing archives, and copies them as one batch. It verifies the target folder before reporting `staged`, then continues with the next creator. `staged` means the archives are present in the Baidu inbox; it does not mean they have been downloaded, extracted, or ingested into the local gallery.
 

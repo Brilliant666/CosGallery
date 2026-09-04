@@ -496,6 +496,10 @@ export interface ImageCaptionMutationResult {
 }
 
 export interface CosGalleryCreator {
+  canonicalCreatorId: number | null;
+  canonicalName: string | null;
+  rosterStatus: 'active' | 'inactive' | 'unlinked';
+  linkStatus: 'linked' | 'unlinked';
   id: number;
   slug: string;
   name: string;
@@ -520,6 +524,8 @@ export type ArchiveCatalogPreference = 'liked' | 'kept';
 export type ArchiveCatalogState = 'missing' | 'complete' | 'no-local' | 'no-source' | 'unresolved';
 
 export interface ArchiveCatalogSummary {
+  activeCreators:number; inactiveCreators:number; unsetPreference:number; unclassified:number;
+  creatorsWithoutLocalWorks:number; unlinkedLocalFolders:number;
   creators: number;
   liked: number;
   kept: number;
@@ -537,6 +543,8 @@ export interface ArchiveCatalogSummary {
 }
 
 export interface ArchiveCatalogCreator {
+  isActive:boolean; seedSource:string; seedSourceCreatorId:string; createdAt:string; updatedAt:string; deactivatedAt:string|null;
+  aliasCount:number; sourceCount:number; localFolderCount:number;
   id: number;
   name: string;
   preference: ArchiveCatalogPreference | null;
@@ -559,8 +567,16 @@ export interface ArchiveCatalogCreatorsPayload {
   hasMore: boolean;
 }
 
+export interface ManagedLocalFolder {
+  id:number; catalogFolderId:number|null; name:string; folderPath:string; creatorId:number|null;
+  matchStatus:string; matchMethod:string|null; workCount:number;
+}
+
 export interface ArchiveCatalogCreatorDetail extends ArchiveCatalogCreator {
-  aliases: Array<{ alias: string; source: string }>;
+  localFolders: ManagedLocalFolder[];
+  unlinkedLocalFolders: ManagedLocalFolder[];
+  impact: { sources:number; collections:number; remoteWorks:number; localWorks:number; unfinishedDownloadTasks:number; localFolders:number };
+  aliases: Array<{ id:string; alias: string; source: string; editable:boolean }>;
   sources: Array<{
     source: string;
     sourceCreatorId: string;

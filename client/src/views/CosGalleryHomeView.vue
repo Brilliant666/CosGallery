@@ -62,7 +62,7 @@
             class="absolute left-2 top-2 rounded-full px-2.5 py-1 text-xs font-bold text-white shadow-sm"
             :class="ratingBadgeClass(creator.contentRating)"
           >
-            {{ creator.contentRating ?? '待分类' }}
+            {{ creator.linkStatus === 'unlinked' ? '未关联' : creator.contentRating ?? '待分类' }}
           </span>
           <span class="absolute right-2 top-2 rounded-full bg-black/65 px-2.5 py-1 text-xs font-semibold text-white shadow-sm">
             {{ creator.workCount }} 套
@@ -70,7 +70,8 @@
         </div>
         <div class="p-3.5">
           <h2 class="m-0 truncate text-[0.95rem] font-semibold">{{ creator.name }}</h2>
-          <p v-if="creator.ratingConflict" class="mt-1 mb-0 text-xs font-medium text-amber-600">来源分类存在差异</p>
+          <p v-if="creator.rosterStatus === 'inactive'" class="mt-1 mb-0 text-xs font-medium text-amber-600">已停用 · 本地图册仍可浏览</p>
+          <p v-else-if="creator.linkStatus === 'unlinked'" class="mt-1 mb-0 text-xs text-muted">请在博主库关联目录</p>
           <p v-else class="mt-1 mb-0 text-xs text-muted">点击查看全部图册</p>
         </div>
       </RouterLink>
@@ -90,7 +91,7 @@ import { RouterLink } from 'vue-router';
 import { fetchCosGalleryCreators } from '../api/gallery';
 import type { ContentRating, CosGalleryCreator } from '../types/api';
 
-type RatingFilter = 'all' | ContentRating | 'unclassified';
+type RatingFilter = 'all' | ContentRating | 'unclassified' | 'unlinked' | 'inactive';
 
 const creators = ref<CosGalleryCreator[]>([]);
 const query = ref('');
@@ -103,7 +104,9 @@ const ratingOptions: Array<{ value: RatingFilter; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'R15', label: 'R15' },
   { value: 'R18', label: 'R18' },
-  { value: 'unclassified', label: '待分类' }
+  { value: 'unclassified', label: '待分类' },
+  { value: 'unlinked', label: '未关联' },
+  { value: 'inactive', label: '已停用' }
 ];
 
 function creatorInitial(name: string) {

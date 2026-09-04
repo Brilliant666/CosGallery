@@ -8,7 +8,7 @@ import sharp from 'sharp';
 
 import { appConfig } from '../config/env.js';
 import { databaseManager } from '../db/database.js';
-import { normalizeCreatorIdentity } from './creator-rating-import-service.js';
+import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogPipelineService } from './archive-catalog-pipeline-service.js';
 import {
   localIngestSettingsService,

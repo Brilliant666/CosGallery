@@ -255,6 +255,7 @@ export class ArchiveDownloadTaskService {
              LIMIT 1
            )
          WHERE source_works.source = 'costuan'
+           AND creators.is_active = 1
            AND source_works.is_active = 1
            AND collections.is_active = 1
            AND NOT EXISTS (
@@ -336,6 +337,7 @@ export class ArchiveDownloadTaskService {
             JOIN archive_catalog_local_creator_folders local_folders
               ON local_folders.id = local_works.local_creator_folder_id
             WHERE local_works.is_active = 1
+              AND EXISTS (SELECT 1 FROM archive_catalog_creators active_creator WHERE active_creator.id=works.creator_id AND active_creator.is_active=1)
               AND local_folders.is_active = 1
               ${creatorFilter}
           )`
@@ -356,6 +358,10 @@ export class ArchiveDownloadTaskService {
       `DELETE FROM archive_catalog_download_tasks
        WHERE provider = ?
           AND status IN ('pending', 'failed', 'cancelled')
+          AND EXISTS (SELECT 1 FROM archive_catalog_source_works active_source
+            JOIN archive_catalog_works active_work ON active_work.id=active_source.work_id
+            JOIN archive_catalog_creators active_creator ON active_creator.id=active_work.creator_id
+            WHERE active_source.id=archive_catalog_download_tasks.source_work_id AND active_creator.is_active=1)
           ${creatorFilter}
           AND NOT EXISTS (
            SELECT 1

@@ -1,3 +1,4 @@
+import { seedCreators } from './creator-fixtures.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,6 +19,7 @@ import {
 } from '../src/services/archive-download-task-service.js';
 import { ArchiveBridgeService } from '../src/services/archive-bridge-service.js';
 import { ArchiveMetadataTaskService } from '../src/services/archive-metadata-task-service.js';
+import { ManagedCreatorService } from '../src/services/managed-creator-service.js';
 
 describe('archive catalog first-stage pipeline', () => {
   let tempRoot: string;
@@ -36,22 +38,40 @@ describe('archive catalog first-stage pipeline', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it('preserves stable folder IDs on canonical rename and fails closed on physical path changes', async () => {
+    const galleryRoot = path.join(tempRoot, 'gallery');
+    const managed = new ManagedCreatorService(database, galleryRoot);
+    const creator = managed.create({name:'Original'});
+    service.importCostuanRecord({creatorName:'Original',costuan:{postId:'fixed',title:'Original collection',works:[{order:1,sourceOrder:'NO.001',label:'First'}]}});
+    const work = path.join(galleryRoot,'Original','Original NO.001 First');
+    await fs.mkdir(work,{recursive:true});
+    await fs.writeFile(path.join(work,'image.jpg'),'synthetic');
+    const folderId = Number(database.prepare("INSERT INTO folders(slug,name,folder_path) VALUES('fixed','Original','Original')").run().lastInsertRowid);
+    await service.reconcileLocalRoot(galleryRoot);
+    const snapshot = () => JSON.stringify(['archive_catalog_local_creator_folders','archive_catalog_local_works'].map(table=>database.prepare('SELECT * FROM '+table+' ORDER BY id').all()));
+    const before = snapshot();
+    managed.update(creator.id,{name:'Chosen'});
+    await service.reconcileLocalRoot(galleryRoot);
+    expect(snapshot()).toBe(before);
+    managed.unlinkFolder(folderId,{confirm:true});
+    const unlinked = snapshot();
+    await service.reconcileLocalRoot(galleryRoot);
+    expect(snapshot()).toBe(unlinked);
+    managed.linkFolder(folderId,{creatorId:creator.id});
+    const linked = snapshot();
+    await fs.rename(path.join(galleryRoot,'Original'),path.join(galleryRoot,'NewPath'));
+    database.prepare("UPDATE folders SET folder_path='NewPath' WHERE id=?").run(folderId);
+    const result=await service.reconcileLocalRoot(galleryRoot);
+    expect(result.bridgeReview).toEqual([expect.objectContaining({status:'path-changed',candidates:[folderId]})]);
+    expect(snapshot()).toBe(linked);
+    await expect(service.reconcileLocalCreators({rootPath:galleryRoot,creators:[{creatorId:creator.id,folderName:'NewPath'}]})).rejects.toThrow();
+    expect(snapshot()).toBe(linked);
+  });
+
   it('imports seed creators before media exists and reconciles a partial local archive read-only', async () => {
-    const hcfPath = path.join(tempRoot, 'hcf.json');
     const costuanPath = path.join(tempRoot, 'costuan.json');
     const galleryRoot = path.join(tempRoot, 'gallery');
-    await fs.writeFile(hcfPath, JSON.stringify({
-      format: 'hcf-tag-preferences',
-      version: 6,
-      exportedAt: '2026-08-30T00:00:00.000Z',
-      state: { liked: ['rua阮阮'], kept: ['lunana'] },
-      contentRatings: {
-        entries: [
-          { name: 'rua阮阮', rating: 'r18', checkedAt: 1 },
-          { name: 'lunana', rating: 'r15', checkedAt: 2 }
-        ]
-      }
-    }));
+    seedCreators(database, [{"name":"rua阮阮","preference":"liked","rating":"R18"},{"name":"lunana","preference":"kept","rating":"R15"}]);
     await fs.writeFile(costuanPath, JSON.stringify({
       format: 'costuan-archive-metadata',
       version: 1,
@@ -108,12 +128,9 @@ describe('archive catalog first-stage pipeline', () => {
     ]);
     const before = await fs.readdir(ruaFirst);
 
-    const hcfResult = await service.importHentaiclubSeed(hcfPath);
     const costuanResult = await service.importCostuanArchive(costuanPath);
     const localResult = await service.reconcileLocalRoot(galleryRoot);
     const report = service.buildReconciliationReport(galleryRoot);
-
-    expect(hcfResult).toMatchObject({ total: 2, created: 2, liked: 1, kept: 1 });
     expect(costuanResult).toMatchObject({ matchedCreators: 2, importedWorks: 4, addedWorks: 4, deliveries: 1 });
     expect(localResult).toMatchObject({
       creatorFolders: 2,
@@ -249,14 +266,8 @@ describe('archive catalog first-stage pipeline', () => {
   });
 
   it('plans and claims every remote work when the creator has no local folder yet', async () => {
-    const hcfPath = path.join(tempRoot, 'remote-only-hcf.json');
     const costuanPath = path.join(tempRoot, 'remote-only-costuan.json');
-    await fs.writeFile(hcfPath, JSON.stringify({
-      format: 'hcf-tag-preferences',
-      version: 1,
-      state: { liked: ['整位未下载博主'], kept: [] },
-      contentRatings: { entries: [{ name: '整位未下载博主', rating: 'r15' }] }
-    }));
+    seedCreators(database, [{"name":"整位未下载博主","preference":"liked","rating":"R15"}]);
     await fs.writeFile(costuanPath, JSON.stringify({
       format: 'costuan-archive-metadata',
       version: 1,
@@ -279,9 +290,7 @@ describe('archive catalog first-stage pipeline', () => {
           }
         }
       }
-    }));
-    await service.importHentaiclubSeed(hcfPath);
-    await service.importCostuanArchive(costuanPath);
+    }));    await service.importCostuanArchive(costuanPath);
 
     const downloadService = new ArchiveDownloadTaskService(database);
     expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
@@ -314,15 +323,9 @@ describe('archive catalog first-stage pipeline', () => {
   });
 
   it('matches a zero-order extra after removing the creator prefix and reconciles a claimed task', async () => {
-    const hcfPath = path.join(tempRoot, 'sakuramomo-hcf.json');
     const costuanPath = path.join(tempRoot, 'sakuramomo-costuan.json');
     const galleryRoot = path.join(tempRoot, 'gallery');
-    await fs.writeFile(hcfPath, JSON.stringify({
-      format: 'hcf-tag-preferences',
-      version: 1,
-      state: { liked: ['桜桃喵'], kept: [] },
-      contentRatings: { entries: [{ name: '桜桃喵', rating: 'r18' }] }
-    }));
+    seedCreators(database, [{"name":"桜桃喵","preference":"liked","rating":"R18"}]);
     await fs.writeFile(costuanPath, JSON.stringify({
       format: 'costuan-archive-metadata',
       version: 1,
@@ -342,10 +345,7 @@ describe('archive catalog first-stage pipeline', () => {
           }
         }
       }
-    }));
-
-    await service.importHentaiclubSeed(hcfPath);
-    await service.importCostuanArchive(costuanPath);
+    }));    await service.importCostuanArchive(costuanPath);
     await fs.mkdir(path.join(galleryRoot, '桜桃喵'), { recursive: true });
     await service.reconcileLocalRoot(galleryRoot);
 
@@ -383,16 +383,10 @@ describe('archive catalog first-stage pipeline', () => {
   });
 
   it('reconciles the local archive and plans missing tasks idempotently after a gallery scan', async () => {
-    const hcfPath = path.join(tempRoot, 'pipeline-hcf.json');
     const costuanPath = path.join(tempRoot, 'pipeline-costuan.json');
     const galleryRoot = path.join(tempRoot, 'gallery');
     const reportPath = path.join(tempRoot, 'catalog-report.json');
-    await fs.writeFile(hcfPath, JSON.stringify({
-      format: 'hcf-tag-preferences',
-      version: 1,
-      state: { liked: ['测试博主'], kept: [] },
-      contentRatings: { entries: [{ name: '测试博主', rating: 'r15' }] }
-    }));
+    seedCreators(database, [{"name":"测试博主","preference":"liked","rating":"R15"}]);
     await fs.writeFile(costuanPath, JSON.stringify({
       format: 'costuan-archive-metadata',
       version: 1,
@@ -415,9 +409,7 @@ describe('archive catalog first-stage pipeline', () => {
           }
         }
       }
-    }));
-    await service.importHentaiclubSeed(hcfPath);
-    await service.importCostuanArchive(costuanPath);
+    }));    await service.importCostuanArchive(costuanPath);
     const firstWork = path.join(galleryRoot, '测试博主', '测试博主 NO.001 第一套');
     await fs.mkdir(firstWork, { recursive: true });
     await fs.writeFile(path.join(firstWork, '01.jpg'), 'image');
@@ -449,17 +441,9 @@ describe('archive catalog first-stage pipeline', () => {
   });
 
   it('collects metadata for a local-only creator before reconciling and planning missing works', async () => {
-    const hcfPath = path.join(tempRoot, 'metadata-hcf.json');
     const galleryRoot = path.join(tempRoot, 'gallery');
     const reportPath = path.join(tempRoot, 'metadata-report.json');
-    await fs.writeFile(hcfPath, JSON.stringify({
-      format: 'hcf-tag-preferences',
-      version: 1,
-      state: { liked: ['本地博主'], kept: [] },
-      contentRatings: { entries: [{ name: '本地博主', rating: 'r18' }] }
-    }));
-    await service.importHentaiclubSeed(hcfPath);
-    const localWork = path.join(galleryRoot, '本地博主', '本地博主 NO.001 已有作品');
+    seedCreators(database, [{"name":"本地博主","preference":"liked","rating":"R18"}]);    const localWork = path.join(galleryRoot, '本地博主', '本地博主 NO.001 已有作品');
     await fs.mkdir(localWork, { recursive: true });
     await fs.writeFile(path.join(localWork, '01.jpg'), 'image');
     await service.reconcileLocalRoot(galleryRoot);

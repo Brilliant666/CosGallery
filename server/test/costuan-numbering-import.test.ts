@@ -1,3 +1,4 @@
+import { seedCreators } from './creator-fixtures.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,14 +25,8 @@ describe('Costuan mixed-numbering metadata import', () => {
   });
 
   it('rebuilds an empty lossy works array from raw VOL/NO text without duplicates', async () => {
-    const hcfPath = path.join(tempRoot, 'hcf.json');
     const costuanPath = path.join(tempRoot, 'costuan.json');
-    await fs.writeFile(hcfPath, JSON.stringify({
-      format: 'hcf-tag-preferences',
-      version: 1,
-      state: { liked: ['混合博主'], kept: [] },
-      contentRatings: { entries: [{ name: '混合博主', rating: 'r15' }] }
-    }));
+    seedCreators(database, [{"name":"混合博主","preference":"liked","rating":"R15"}]);
     await fs.writeFile(costuanPath, JSON.stringify({
       format: 'costuan-archive-metadata',
       version: 1,
@@ -53,9 +48,7 @@ describe('Costuan mixed-numbering metadata import', () => {
       }
     }));
 
-    const service = new ArchiveCatalogService(database);
-    await service.importHentaiclubSeed(hcfPath);
-    const first = await service.importCostuanArchive(costuanPath);
+    const service = new ArchiveCatalogService(database);    const first = await service.importCostuanArchive(costuanPath);
     const second = await service.importCostuanArchive(costuanPath);
 
     expect(first).toMatchObject({ importedWorks: 2, addedWorks: 2 });

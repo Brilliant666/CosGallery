@@ -9,8 +9,11 @@ export type ArchiveCatalogState = 'missing' | 'complete' | 'no-local' | 'no-sour
 export type ArchiveCatalogListOptions = {
   page: number;
   limit: number;
-  preference?: ArchiveCatalogPreference;
-  rating?: ArchiveCatalogRating;
+  preference?: ArchiveCatalogPreference | 'unset';
+  rating?: ArchiveCatalogRating | 'unclassified';
+  active?: 'active' | 'inactive' | 'all';
+  hasLocal?: 'yes' | 'no';
+  hasSource?: 'yes' | 'no';
   state?: ArchiveCatalogState;
   query?: string;
 };
@@ -18,6 +21,15 @@ export type ArchiveCatalogListOptions = {
 export type ArchiveCatalogCreatorListItem = {
   id: number;
   name: string;
+  isActive: boolean;
+  seedSource: string;
+  seedSourceCreatorId: string;
+  createdAt: string;
+  updatedAt: string;
+  deactivatedAt: string | null;
+  aliasCount: number;
+  sourceCount: number;
+  localFolderCount: number;
   preference: ArchiveCatalogPreference | null;
   rating: ArchiveCatalogRating | null;
   sourceCollections: number;
@@ -31,6 +43,12 @@ export type ArchiveCatalogCreatorListItem = {
 
 export type ArchiveCatalogSummary = {
   creators: number;
+  activeCreators: number;
+  inactiveCreators: number;
+  unsetPreference: number;
+  unclassified: number;
+  creatorsWithoutLocalWorks: number;
+  unlinkedLocalFolders: number;
   liked: number;
   kept: number;
   r15: number;
@@ -56,9 +74,14 @@ export type ArchiveCatalogCreatorsPayload = {
 };
 
 export type ArchiveCatalogCreatorDetail = ArchiveCatalogCreatorListItem & {
+  localFolders: ManagedLocalFolder[];
+  unlinkedLocalFolders: ManagedLocalFolder[];
+  impact: { sources:number; collections:number; remoteWorks:number; localWorks:number; unfinishedDownloadTasks:number; localFolders:number };
   aliases: Array<{
+    id: string;
     alias: string;
     source: string;
+    editable: boolean;
   }>;
   sources: Array<{
     source: string;
@@ -101,9 +124,22 @@ export type ArchiveCatalogCreatorDetail = ArchiveCatalogCreatorListItem & {
   }>;
 };
 
+export type ManagedLocalFolder = {
+  id:number; catalogFolderId:number|null; name:string; folderPath:string; creatorId:number|null;
+  matchStatus:string; matchMethod:string|null; workCount:number;
+};
 type CreatorRow = {
   id: number;
   canonical_name: string;
+  is_active: number;
+  seed_source: string;
+  seed_source_creator_id: string;
+  created_at: string;
+  updated_at: string;
+  deactivated_at: string|null;
+  alias_count:number;
+  source_count:number;
+  local_folder_count:number;
   preference: ArchiveCatalogPreference | null;
   effective_rating: ArchiveCatalogRating | null;
 };
@@ -155,8 +191,12 @@ export class ArchiveCatalogQueryService {
       }
     }
     const filtered = allItems.filter((item) => {
-      if (options.preference && item.preference !== options.preference) return false;
-      if (options.rating && item.rating !== options.rating) return false;
+      const active = options.active ?? 'active';
+      if (active !== 'all' && item.isActive !== (active === 'active')) return false;
+      if (options.preference && item.preference !== (options.preference === 'unset' ? null : options.preference)) return false;
+      if (options.rating && item.rating !== (options.rating === 'unclassified' ? null : options.rating)) return false;
+      if (options.hasLocal && (item.localWorks > 0) !== (options.hasLocal === 'yes')) return false;
+      if (options.hasSource && (item.sourceCount > 0) !== (options.hasSource === 'yes')) return false;
       if (
         normalizedQuery
         && !normalizeSearch(item.name).includes(normalizedQuery)
@@ -190,11 +230,11 @@ export class ArchiveCatalogQueryService {
     if (!item) return null;
 
     const aliases = this.database.prepare(
-      `SELECT alias, source
+      `SELECT alias, source, normalized_alias
        FROM archive_catalog_creator_aliases
        WHERE creator_id = ?
        ORDER BY source COLLATE NOCASE, alias COLLATE NOCASE`
-    ).all(creatorId) as Array<{ alias: string; source: string }>;
+    ).all(creatorId) as Array<{ alias: string; source: string; normalized_alias: string }>;
     const sources = this.database.prepare(
       `SELECT source, source_creator_id, source_display_name, source_url, first_seen_at, last_seen_at
        FROM archive_catalog_creator_sources
@@ -296,7 +336,18 @@ export class ArchiveCatalogQueryService {
 
     return {
       ...item,
-      aliases: aliases.map((alias) => ({ alias: alias.alias, source: alias.source })),
+      localFolders: this.listLocalFolders().filter(folder => folder.creatorId === creatorId),
+      unlinkedLocalFolders: this.listLocalFolders().filter(folder => folder.creatorId === null),
+      impact: {
+        sources:item.sourceCount,collections:item.sourceCollections,remoteWorks:item.remoteWorks,localWorks:item.localWorks,localFolders:item.localFolderCount,
+        unfinishedDownloadTasks: (this.database.prepare(`SELECT count(*) AS count FROM archive_catalog_download_tasks tasks
+          JOIN archive_catalog_source_works sw ON sw.id=tasks.source_work_id JOIN archive_catalog_works works ON works.id=sw.work_id
+          WHERE works.creator_id=? AND tasks.status NOT IN ('ingested','cancelled')`).get(creatorId) as {count:number}).count
+      },
+      aliases: aliases.map((alias) => ({
+        id:Buffer.from(JSON.stringify([alias.source,alias.normalized_alias])).toString('base64url'),
+        alias:alias.alias,source:alias.source,editable:alias.source==='manual'
+      })),
       sources: sources.map((source) => ({
         source: source.source,
         sourceCreatorId: source.source_creator_id,
@@ -339,10 +390,27 @@ export class ArchiveCatalogQueryService {
     };
   }
 
+  listLocalFolders(): ManagedLocalFolder[] {
+    const rows=this.database.prepare(`SELECT folders.id, folders.name, folders.folder_path, local.id AS catalog_id,
+      local.creator_id, local.match_status, local.match_method,
+      (SELECT count(*) FROM posts WHERE folder_id=folders.id AND is_deleted=0 AND is_trashed=0) AS work_count
+      FROM folders LEFT JOIN archive_catalog_local_creator_folders local
+      ON local.gallery_folder_id=folders.id AND local.is_active=1
+      WHERE folders.role='normal' ORDER BY folders.name COLLATE NOCASE, folders.id`).all() as Array<{
+        id:number;name:string;folder_path:string;catalog_id:number|null;creator_id:number|null;
+        match_status:string|null;match_method:string|null;work_count:number
+      }>;
+    return rows.map(row=>({id:row.id,catalogFolderId:row.catalog_id,name:row.name,folderPath:row.folder_path,
+      creatorId:row.creator_id,matchStatus:row.match_status??'unmatched',matchMethod:row.match_method,workCount:row.work_count}));
+  }
+
   private buildCreatorItems(): ArchiveCatalogCreatorListItem[] {
     const creators = this.database.prepare(
-      `SELECT id, canonical_name, preference, effective_rating
-       FROM archive_catalog_creators`
+       `SELECT creators.*,
+       (SELECT count(*) FROM archive_catalog_creator_aliases WHERE creator_id=creators.id) AS alias_count,
+       (SELECT count(*) FROM archive_catalog_creator_sources WHERE creator_id=creators.id) AS source_count,
+       (SELECT count(*) FROM archive_catalog_local_creator_folders WHERE creator_id=creators.id AND is_active=1 AND gallery_folder_id IS NOT NULL) AS local_folder_count
+       FROM archive_catalog_creators creators`
     ).all() as CreatorRow[];
     const collections = this.database.prepare(
       `SELECT id, creator_id, observed_at
@@ -397,6 +465,15 @@ export class ArchiveCatalogQueryService {
       return {
         id: creator.id,
         name: creator.canonical_name,
+        isActive: creator.is_active === 1,
+        seedSource:creator.seed_source,
+        seedSourceCreatorId:creator.seed_source_creator_id,
+        createdAt:creator.created_at,
+        updatedAt:creator.updated_at,
+        deactivatedAt:creator.deactivated_at,
+        aliasCount:creator.alias_count,
+        sourceCount:creator.source_count,
+        localFolderCount:creator.local_folder_count,
         preference: creator.preference,
         rating: creator.effective_rating,
         sourceCollections: collectionsByCreator.get(creator.id)?.size ?? 0,
@@ -424,6 +501,12 @@ export class ArchiveCatalogQueryService {
 
     return {
       creators: items.length,
+      activeCreators:items.filter(item=>item.isActive).length,
+      inactiveCreators:items.filter(item=>!item.isActive).length,
+      unsetPreference:items.filter(item=>item.preference===null).length,
+      unclassified:items.filter(item=>item.rating===null).length,
+      creatorsWithoutLocalWorks:items.filter(item=>item.localWorks===0).length,
+      unlinkedLocalFolders:this.listLocalFolders().filter(folder=>folder.workCount>0&&folder.creatorId===null).length,
       liked: items.filter((item) => item.preference === 'liked').length,
       kept: items.filter((item) => item.preference === 'kept').length,
       r15: items.filter((item) => item.rating === 'R15').length,

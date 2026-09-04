@@ -105,7 +105,7 @@ export class ArchiveMetadataTaskService {
     const candidates = this.database.prepare(
       `SELECT creators.id AS creator_id
        FROM archive_catalog_creators creators
-       WHERE EXISTS (
+       WHERE creators.is_active = 1 AND EXISTS (
          SELECT 1
          FROM archive_catalog_local_creator_folders local_folders
          JOIN archive_catalog_local_works local_works
@@ -170,6 +170,7 @@ export class ArchiveMetadataTaskService {
            completed_at = COALESCE(completed_at, ?), last_error = NULL, updated_at = ?
        WHERE source = ?
          AND status <> 'completed'
+         AND EXISTS (SELECT 1 FROM archive_catalog_creators active_creator WHERE active_creator.id=archive_catalog_metadata_tasks.creator_id AND active_creator.is_active=1)
          AND EXISTS (
            SELECT 1
            FROM archive_catalog_source_works source_works

@@ -1,3 +1,4 @@
+import { seedCreators } from './creator-fixtures.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -119,20 +120,8 @@ async function seedThreeCreators(
   database: DatabaseSync,
   galleryRoot: string
 ): Promise<CreatorIds> {
-  const hcfPath = path.join(tempRoot, 'hcf.json');
   const costuanPath = path.join(tempRoot, 'costuan.json');
-  await fs.writeFile(hcfPath, JSON.stringify({
-    format: 'hcf-tag-preferences',
-    version: 1,
-    state: { liked: ['Creator A', 'Creator B', 'Creator C'], kept: [] },
-    contentRatings: {
-      entries: [
-        { name: 'Creator A', rating: 'r15' },
-        { name: 'Creator B', rating: 'r15' },
-        { name: 'Creator C', rating: 'r18' }
-      ]
-    }
-  }));
+  seedCreators(database, [{"name":"Creator A","preference":"liked","rating":"R15"},{"name":"Creator B","preference":"liked","rating":"R15"},{"name":"Creator C","preference":"liked","rating":"R18"}]);
   await fs.writeFile(costuanPath, JSON.stringify({
     format: 'costuan-archive-metadata',
     version: 1,
@@ -174,9 +163,7 @@ async function seedThreeCreators(
       }
     }
   }));
-  const catalog = new ArchiveCatalogService(database);
-  await catalog.importHentaiclubSeed(hcfPath);
-  await catalog.importCostuanArchive(costuanPath);
+  const catalog = new ArchiveCatalogService(database);  await catalog.importCostuanArchive(costuanPath);
   const ids = {
     a: creatorId(database, 'Creator A'),
     b: creatorId(database, 'Creator B'),

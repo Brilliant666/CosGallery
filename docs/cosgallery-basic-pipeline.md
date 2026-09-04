@@ -1,3 +1,5 @@
+> Historical milestone record. Current roster authority is CosGallery DB; HentaiClub JSON import has been retired. Use the 博主库 section of `/archive-catalog` for new creators and manual classification. The historical sequence below is retained as evidence, not current import instructions.
+
 # CosGallery 基础全链路
 
 ## 当前阶段结论
