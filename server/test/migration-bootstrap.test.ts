@@ -72,6 +72,69 @@ function listForeignKeySignatures(database: DatabaseSync, tableName: string): st
     .sort();
 }
 
+function insertPostValidationFolder(
+  database: DatabaseSync,
+  id: number,
+  folderPath: string,
+  role: 'normal' | 'carousel_source' = 'normal',
+  ownerFolderId: number | null = null
+): void {
+  database.prepare(
+    `INSERT INTO folders (id, slug, name, folder_path, role, carousel_owner_folder_id)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, `validation-folder-${id}`, folderPath.split('/').at(-1)!, folderPath, role, ownerFolderId);
+}
+
+function insertPostValidationImage(database: DatabaseSync, id: number, folderId: number, relativePath: string): void {
+  const filename = relativePath.split('/').at(-1)!;
+  database.prepare(
+    `INSERT INTO images (
+       id, folder_id, filename, extension, relative_path, absolute_path, file_size, width, height,
+       media_type, mime_type, checksum_or_fingerprint, mtime_ms, first_seen_at, sort_timestamp,
+       thumbnail_path, preview_path
+     ) VALUES (?, ?, ?, '.jpg', ?, ?, ?, 100, 100, 'image', 'image/jpeg', ?, ?,
+       '2026-01-01T00:00:00.000Z', ?, ?, ?)`
+  ).run(
+    id,
+    folderId,
+    filename,
+    relativePath,
+    `temp/${relativePath}`,
+    id * 10,
+    `validation-fingerprint-${id}`,
+    id * 1000,
+    id * 1000,
+    `thumb-${id}.jpg`,
+    `preview-${id}.jpg`
+  );
+}
+
+function insertPostValidationPost(
+  database: DatabaseSync,
+  id: number,
+  folderId: number,
+  sourcePath: string,
+  options: {
+    postType?: 'single' | 'carousel';
+    isDeleted?: number;
+    isTrashed?: number;
+  } = {}
+): void {
+  database.prepare(
+    `INSERT INTO posts (
+       id, folder_id, source_path, post_type, sort_timestamp, is_deleted, is_trashed
+     ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    folderId,
+    sourcePath,
+    options.postType ?? 'single',
+    id * 1000,
+    options.isDeleted ?? 0,
+    options.isTrashed ?? 0
+  );
+}
+
 async function createTestMigrationsDirectory(rootDirectory: string, extraMigrations: Array<[filename: string, sql: string]> = []): Promise<string> {
   const targetDirectory = path.join(rootDirectory, 'migrations');
   await fs.mkdir(targetDirectory, { recursive: true });
@@ -942,6 +1005,210 @@ THIS IS NOT VALID SQL;
       expect(() => validatePostsMigrationCompleteness(database)).toThrow('lack a representative position 1 item');
     } finally {
       database.close();
+    }
+  });
+
+  it.each([
+    ['visible', 0],
+    ['trashed', 1]
+  ])('accepts an active %s Post with a representative position 1 item', async (_label, isTrashed) => {
+    const { runStartupMigrations, validatePostsMigrationCompleteness } = await importMigrationModule();
+    const databasePath = path.join(tempRoot, 'db', `active-valid-${isTrashed}.sqlite`);
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    runStartupMigrations({ databasePath });
+
+    const database = new DatabaseSync(databasePath);
+    try {
+      insertPostValidationFolder(database, 1, 'creator');
+      insertPostValidationImage(database, 101, 1, 'creator/one.jpg');
+      insertPostValidationPost(database, 201, 1, 'creator/work-one', { isTrashed });
+      database.prepare('INSERT INTO post_items (post_id, image_id, position) VALUES (201, 101, 1)').run();
+
+      expect(() => validatePostsMigrationCompleteness(database)).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    ['visible', 0],
+    ['trashed', 1]
+  ])('rejects an active %s Post without any item', async (_label, isTrashed) => {
+    const { runStartupMigrations, validatePostsMigrationCompleteness } = await importMigrationModule();
+    const databasePath = path.join(tempRoot, 'db', `active-empty-${isTrashed}.sqlite`);
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    runStartupMigrations({ databasePath });
+
+    const database = new DatabaseSync(databasePath);
+    try {
+      insertPostValidationFolder(database, 1, 'creator');
+      insertPostValidationPost(database, 201, 1, 'creator/empty', { isTrashed });
+
+      expect(() => validatePostsMigrationCompleteness(database)).toThrow('lack a representative position 1 item');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('rejects an active Post whose first item starts at position 2', async () => {
+    const { runStartupMigrations, validatePostsMigrationCompleteness } = await importMigrationModule();
+    const databasePath = path.join(tempRoot, 'db', 'active-position-two.sqlite');
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    runStartupMigrations({ databasePath });
+
+    const database = new DatabaseSync(databasePath);
+    try {
+      insertPostValidationFolder(database, 1, 'creator');
+      insertPostValidationImage(database, 101, 1, 'creator/one.jpg');
+      insertPostValidationPost(database, 201, 1, 'creator/position-two');
+      database.prepare('INSERT INTO post_items (post_id, image_id, position) VALUES (201, 101, 2)').run();
+
+      expect(() => validatePostsMigrationCompleteness(database)).toThrow('lack a representative position 1 item');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('allows an empty soft-deleted Post to remain as retired history', async () => {
+    const { runStartupMigrations, validatePostsMigrationCompleteness } = await importMigrationModule();
+    const databasePath = path.join(tempRoot, 'db', 'soft-deleted-empty.sqlite');
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    runStartupMigrations({ databasePath });
+
+    const database = new DatabaseSync(databasePath);
+    try {
+      insertPostValidationFolder(database, 1, 'creator');
+      insertPostValidationPost(database, 201, 1, 'creator/retired', { isDeleted: 1 });
+
+      expect(() => validatePostsMigrationCompleteness(database)).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it('continues to reject malformed item ordering on a soft-deleted Post that retains members', async () => {
+    const { runStartupMigrations, validatePostsMigrationCompleteness } = await importMigrationModule();
+    const databasePath = path.join(tempRoot, 'db', 'soft-deleted-malformed.sqlite');
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    runStartupMigrations({ databasePath });
+
+    const database = new DatabaseSync(databasePath);
+    try {
+      insertPostValidationFolder(database, 1, 'creator');
+      insertPostValidationImage(database, 101, 1, 'creator/one.jpg');
+      insertPostValidationPost(database, 201, 1, 'creator/retired-malformed', {
+        postType: 'carousel',
+        isDeleted: 1
+      });
+      database.prepare('INSERT INTO post_items (post_id, image_id, position) VALUES (201, 101, 2)').run();
+
+      expect(() => validatePostsMigrationCompleteness(database)).toThrow('non-contiguous item positions');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('continues to reject foreign-key corruption after allowing empty soft-deleted Posts', async () => {
+    const { runStartupMigrations, validatePostsMigrationCompleteness } = await importMigrationModule();
+    const databasePath = path.join(tempRoot, 'db', 'soft-deleted-foreign-key.sqlite');
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    runStartupMigrations({ databasePath });
+
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec('PRAGMA foreign_keys = OFF');
+      database.prepare('INSERT INTO post_items (post_id, image_id, position) VALUES (999, 999, 1)').run();
+      database.exec('PRAGMA foreign_keys = ON');
+
+      expect(() => validatePostsMigrationCompleteness(database)).toThrow('foreign_key_check found');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('reopens a migrated database after real topology reconciliation retires an empty legacy Post', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const { reconcileCreatorWorkPostTopology } = await import('../src/services/creator-work-post-topology-service.js');
+    const databasePath = path.join(tempRoot, 'db', 'topology-restart.sqlite');
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    runStartupMigrations({ databasePath });
+
+    const database = new DatabaseSync(databasePath);
+    try {
+      insertPostValidationFolder(database, 1, 'creator');
+      insertPostValidationFolder(database, 11, 'creator/work-a', 'carousel_source', 1);
+      insertPostValidationFolder(database, 12, 'creator/work-b', 'carousel_source', 1);
+      insertPostValidationImage(database, 101, 11, 'creator/work-a/a-1.jpg');
+      insertPostValidationImage(database, 102, 11, 'creator/work-a/a-2.jpg');
+      insertPostValidationImage(database, 103, 12, 'creator/work-b/b-1.jpg');
+      insertPostValidationImage(database, 104, 12, 'creator/work-b/b-2.jpg');
+      insertPostValidationImage(database, 105, 12, 'creator/work-b/b-3.jpg');
+      insertPostValidationPost(database, 900, 1, 'creator/merged-work', { postType: 'carousel' });
+      const insertItem = database.prepare('INSERT INTO post_items (post_id, image_id, position) VALUES (?, ?, ?)');
+      [101, 102, 103, 104, 105].forEach((imageId, index) => insertItem.run(900, imageId, index + 1));
+
+      const entries = [
+        {
+          ownerFolderId: 1,
+          workFolderId: 11,
+          sourcePath: 'creator/work-a',
+          postType: 'carousel' as const,
+          sortTimestamp: 102_000,
+          takenAt: null,
+          takenAtSource: null,
+          placeId: null,
+          items: [{ imageId: 101, position: 1 }, { imageId: 102, position: 2 }]
+        },
+        {
+          ownerFolderId: 1,
+          workFolderId: 12,
+          sourcePath: 'creator/work-b',
+          postType: 'carousel' as const,
+          sortTimestamp: 105_000,
+          takenAt: null,
+          takenAtSource: null,
+          placeId: null,
+          items: [
+            { imageId: 103, position: 1 },
+            { imageId: 104, position: 2 },
+            { imageId: 105, position: 3 }
+          ]
+        }
+      ];
+      const input = {
+        ownerFolderId: 1,
+        creatorPath: 'creator',
+        entries,
+        pathExists: (relativePath: string) => relativePath !== 'creator/merged-work'
+      };
+      const plan = reconcileCreatorWorkPostTopology(input, { dryRun: true }, database);
+      expect(plan).toMatchObject({ postsToCreate: 2, itemsToTransfer: 5, postsToRetire: 1, conflicts: [] });
+      reconcileCreatorWorkPostTopology(input, { dryRun: false, expectedRevision: plan.revision }, database);
+      expect(database.prepare('SELECT is_deleted FROM posts WHERE id = 900').get()).toEqual({ is_deleted: 1 });
+      expect(database.prepare('SELECT COUNT(*) AS count FROM post_items WHERE post_id = 900').get()).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+
+    const beforeRestart = new DatabaseSync(databasePath, { readOnly: true });
+    const stableRows = JSON.stringify({
+      posts: beforeRestart.prepare('SELECT * FROM posts ORDER BY id').all(),
+      items: beforeRestart.prepare('SELECT * FROM post_items ORDER BY post_id, position').all()
+    });
+    beforeRestart.close();
+
+    runStartupMigrations({ databasePath });
+    runStartupMigrations({ databasePath });
+
+    const afterRestart = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(JSON.stringify({
+        posts: afterRestart.prepare('SELECT * FROM posts ORDER BY id').all(),
+        items: afterRestart.prepare('SELECT * FROM post_items ORDER BY post_id, position').all()
+      })).toBe(stableRows);
+      expect(afterRestart.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally {
+      afterRestart.close();
     }
   });
 });

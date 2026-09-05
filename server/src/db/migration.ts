@@ -634,7 +634,7 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
 
   assertNoRows(
     database,
-    'SELECT COUNT(*) AS count FROM posts WHERE NOT EXISTS (SELECT 1 FROM post_items WHERE post_items.post_id = posts.id AND post_items.position = 1)',
+    'SELECT COUNT(*) AS count FROM posts WHERE posts.is_deleted = 0 AND NOT EXISTS (SELECT 1 FROM post_items WHERE post_items.post_id = posts.id AND post_items.position = 1)',
     'post(s) lack a representative position 1 item'
   );
   assertNoRows(
