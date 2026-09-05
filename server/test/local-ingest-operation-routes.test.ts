@@ -124,7 +124,18 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
       ignoredFiles: 2,
       jobs: Array.from({ length: 558 }, () => existingJob)
     });
-    const run = vi.spyOn(localIngestService, 'runBatch').mockResolvedValue([existingJob]);
+    const run = vi.spyOn(localIngestService, 'runBatch').mockResolvedValue({
+      total: 1,
+      examined: 1,
+      settled: 1,
+      ingested: 1,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 0,
+      claimUnavailable: 0,
+      unchanged: 0,
+      items: [{ job: existingJob, outcome: 'ingested' }]
+    });
     const headers = { 'x-foldergram-intent': '1' };
 
     const scanResponse = await requestApp(app, 'POST', '/api/admin/local-ingest/scan', headers, {});
@@ -135,8 +146,50 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
 
     const runResponse = await requestApp(app, 'POST', '/api/admin/local-ingest/run', headers, {});
     expect(runResponse.status).toBe(200);
-    expect(runResponse.body).toEqual({ total: 1, ingested: 1, failed: 0, awaitingReview: 0 });
+    expect(runResponse.body).toEqual({
+      total: 1,
+      examined: 1,
+      settled: 1,
+      ingested: 1,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 0,
+      claimUnavailable: 0,
+      unchanged: 0
+    });
+    const creatorRunResponse = await requestApp(
+      app,
+      'POST',
+      '/api/admin/local-ingest/run',
+      headers,
+      { creatorIds: [1, 1, 1] }
+    );
+    expect(creatorRunResponse.status).toBe(200);
+    expect(run).toHaveBeenLastCalledWith(
+      { jobIds: undefined, creatorIds: [1] },
+      expect.objectContaining({ onProgress: expect.any(Function) })
+    );
     scan.mockRestore();
+    run.mockRestore();
+  });
+
+  it('rejects empty, invalid, or mixed explicit scopes without falling back to a global batch', async () => {
+    const { localIngestService } = await import('../src/services/local-ingest-service.js');
+    const run = vi.spyOn(localIngestService, 'runBatch');
+    const headers = { 'x-foldergram-intent': '1' };
+    const invalidBodies = [
+      { jobIds: [] },
+      { creatorIds: [] },
+      { jobIds: [0] },
+      { creatorIds: [-1] },
+      { jobIds: [1], creatorIds: [1] }
+    ];
+
+    for (const body of invalidBodies) {
+      const response = await requestApp(app, 'POST', '/api/admin/local-ingest/run', headers, body);
+      expect(response.status).toBe(400);
+    }
+    expect(run).not.toHaveBeenCalled();
     run.mockRestore();
   });
 });

@@ -811,9 +811,14 @@ export interface LocalIngestDiscoveryResult {
 
 export interface LocalIngestBatchResult {
   total: number;
+  examined: number;
+  settled: number;
   ingested: number;
   failed: number;
   awaitingReview: number;
+  reconciling: number;
+  claimUnavailable: number;
+  unchanged: number;
 }
 
 export type LocalIngestJobFilter = 'pending' | 'running' | 'awaiting_review' | 'failed' | 'completed';
@@ -866,10 +871,14 @@ export interface LocalIngestOperationCurrentJob {
 
 export interface LocalIngestOperationRun {
   total: number;
-  processed: number;
+  examined: number;
+  settled: number;
   ingested: number;
   failed: number;
   awaitingReview: number;
+  reconciling: number;
+  claimUnavailable: number;
+  unchanged: number;
   remaining: number;
   currentJob: LocalIngestOperationCurrentJob | null;
 }

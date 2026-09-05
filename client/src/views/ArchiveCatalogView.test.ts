@@ -343,7 +343,17 @@ describe('ArchiveCatalogView', () => {
       reconciledDownloadedTasks: 0,
       ignoredFiles: 0
     });
-    vi.mocked(runLocalIngestBatch).mockResolvedValue({ total: 0, ingested: 0, failed: 0, awaitingReview: 0 });
+    vi.mocked(runLocalIngestBatch).mockResolvedValue({
+      total: 0,
+      examined: 0,
+      settled: 0,
+      ingested: 0,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 0,
+      claimUnavailable: 0,
+      unchanged: 0
+    });
     vi.mocked(runLocalIngestJob).mockResolvedValue(localIngestJob);
     vi.mocked(retryLocalIngestCleanup).mockResolvedValue(localIngestJob);
     vi.mocked(smokeTestLocalIngestRecycleBin).mockResolvedValue({ targetPath: 'G:\\cos处理中\\sentinel', recycled: true });
@@ -494,8 +504,70 @@ describe('ArchiveCatalogView', () => {
     await wrapper.get('[data-test="run-local-ingest-batch"]').trigger('click');
     await flushPromises();
 
-    expect(runLocalIngestBatch).toHaveBeenCalledWith();
+    expect(runLocalIngestBatch).toHaveBeenCalledWith({});
     expect(wrapper.text()).toContain('当前没有可运行任务');
+  });
+
+  it('continues the selected creator across the complete server-side task set and reports non-terminal outcomes', async () => {
+    const reconcilingJob: LocalIngestJob = {
+      ...localIngestJob,
+      status: 'reconciling',
+      phase: 'reconciling',
+      cleanupStatus: 'pending',
+      errorCode: 'RECONCILIATION_INCOMPLETE',
+      errorDetail: 'fixture reconciliation evidence'
+    };
+    vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard(reconcilingJob));
+    vi.mocked(runLocalIngestBatch).mockResolvedValue({
+      total: 1,
+      examined: 1,
+      settled: 0,
+      ingested: 0,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 1,
+      claimUnavailable: 0,
+      unchanged: 0
+    });
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+
+    await wrapper.get('[data-test="run-local-ingest-creator"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="run-local-ingest-creator"]').text()).toContain('（1）');
+    expect(runLocalIngestBatch).toHaveBeenCalledWith({ creatorIds: [reconcilingJob.creatorId] });
+    expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain(`${reconcilingJob.creatorName}：本批选中 1`);
+    expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('仍待对账 1');
+    expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('执行权被占用 0');
+  });
+
+  it('shows concrete evidence for an awaiting-review job without offering a bulk or single run action', async () => {
+    const reviewJob: LocalIngestJob = {
+      ...localIngestJob,
+      status: 'awaiting_review',
+      phase: 'validating',
+      validationStatus: 'failed',
+      cleanupStatus: 'not_ready',
+      targetPath: 'G:\\gallery\\lunana\\planned-work',
+      errorCode: 'UNKNOWN_FILE_TYPE',
+      errorDetail: 'Unknown files require review: portrait.jfif',
+      summary: {
+        ...localIngestJob.summary,
+        unknownFiles: ['portrait.jfif']
+      }
+    };
+    vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard(reviewJob));
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+
+    const evidence = wrapper.get('[data-test="local-ingest-review-evidence"]');
+    expect(evidence.text()).toContain('portrait.jfif');
+    expect(evidence.text()).toContain(reviewJob.processingPath!);
+    expect(evidence.text()).toContain('正式目录：尚未提交');
+    expect(evidence.text()).toContain(`计划路径：${reviewJob.targetPath}`);
+    expect(wrapper.find('[data-test="run-local-ingest-job"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="run-local-ingest-creator"]').exists()).toBe(false);
   });
 
   it('reads inbox creators without saving and appends unique canonical names to the draft', async () => {
@@ -565,10 +637,14 @@ describe('ArchiveCatalogView', () => {
       message: '正在运行批次',
       run: {
         total: 10,
-        processed: 3,
+        examined: 3,
+        settled: 3,
         ingested: 2,
         failed: 1,
         awaitingReview: 0,
+        reconciling: 0,
+        claimUnavailable: 0,
+        unchanged: 0,
         remaining: 7,
         currentJob: {
           id: 1,
@@ -779,17 +855,21 @@ describe('ArchiveCatalogView', () => {
       message: '正在运行批次',
       run: {
         total: 10,
-        processed: 3,
+        examined: 3,
+        settled: 3,
         ingested: 3,
         failed: 0,
         awaitingReview: 0,
+        reconciling: 0,
+        claimUnavailable: 0,
+        unchanged: 0,
         remaining: 7,
         currentJob: null
       }
     };
     vi.mocked(fetchLocalIngestOperation)
       .mockResolvedValueOnce(runningOperation)
-      .mockResolvedValueOnce({ ...runningOperation, run: { ...runningOperation.run, processed: 4, ingested: 4, remaining: 6 } })
+      .mockResolvedValueOnce({ ...runningOperation, run: { ...runningOperation.run, examined: 4, settled: 4, ingested: 4, remaining: 6 } })
       .mockResolvedValueOnce({
         ...idleLocalIngestOperation,
         lastCompleted: {

@@ -53,7 +53,7 @@
 
 ## 恢复规则
 
-服务启动时会按数据库 lease 检查遗留状态，但不会自动执行真实任务：过期的 `running` 转为 `failed + INTERRUPTED_PROCESS`，保留原 phase、processing path、marker 和 attemptCount；过期的 `reconciling` 保持对账路径；`ingested + recycling` 转为可重试的 cleanup failed。管理页统一显示“上次进程中断，可继续”。
+服务启动时会按数据库 lease 检查遗留状态，但不会自动执行真实任务：遗留的 `running` 转为可继续的 `failed`；只有仍持有过期 claim 的 `reconciling` 才标记为真正中断，无 claim 的稳定待对账任务保持原状态；`ingested + recycling` 转为可重试的 cleanup failed。恢复会保留已有业务 `error_code/error_detail`、原 phase、processing path、marker 和 attemptCount，只有原本没有错误证据时才补充 `INTERRUPTED_PROCESS`。管理页据此区分业务错误与“上次进程中断，可继续”。
 
 | 中断位置 | 重启后的行为 |
 | --- | --- |
@@ -65,6 +65,18 @@
 | cleanup 部分完成 | 对每个路径先检查是否仍存在，只回收剩余对象 |
 
 失败现场在 V1 中始终留在 `processingRoot/<job-id>`。不自动移动到隔离目录，也不自动回收未确认入库的数据。
+
+## 批量结果口径
+
+- `total`：服务器在操作开始时从数据库固定选中的任务数；不是前端当前页行数。
+- `examined`：本批已经逐项重新确认状态、allowlist 和执行权的任务数。
+- `remaining`：尚未检查的固定任务数，仅用于运行中进度。
+- `ingested`、`failed`、`awaitingReview`、`reconciling`、`claimUnavailable`、`unchanged` 是每个已检查任务唯一落入的互斥结果桶。
+- `settled` 是辅助指标，等于 `ingested + failed + awaitingReview`；它不应再与“遍历过”混用。
+- `claimUnavailable` 表示任务未取得数据库执行权，本次没有执行其解压、扫描或对账，不能计为成功。
+- `unchanged` 包括选中后在轮到执行前已经变为无需执行状态的任务；即使观察到它已由其他执行者入库，也不能归功于当前批次。
+
+显式 `jobIds` 或 `creatorIds` 范围在 API 入口校验并去重，两者不能同时出现。空数组和非法 ID 会被拒绝；服务层收到空集合时也保持空范围，绝不退化为全量批次。
 
 明确禁止的迁移：
 

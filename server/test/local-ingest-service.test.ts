@@ -325,6 +325,98 @@ async function discoverStable(fixture: Fixture, allowlist = [fixture.creatorName
   return fixture.service.scanInbox(allowlist);
 }
 
+async function seedCommittedReconciliationBatch(fixture: Fixture, count: number) {
+  const now = new Date().toISOString();
+  fixture.database.prepare(
+    `INSERT INTO archive_catalog_local_creator_folders (
+       id, creator_id, root_path, relative_path, absolute_path, folder_name,
+       match_status, match_method, is_active, scanned_at, created_at, updated_at
+     ) VALUES (1, 1, ?, ?, ?, ?, 'matched', 'test', 1, ?, ?, ?)`
+  ).run(
+    fixture.libraryRoot,
+    fixture.creatorName,
+    path.join(fixture.libraryRoot, fixture.creatorName),
+    fixture.creatorName,
+    now,
+    now,
+    now
+  );
+  const targets: string[] = [];
+  for (let id = 1; id <= count; id += 1) {
+    const order = id + 6;
+    const orderLabel = `NO.${String(order).padStart(3, '0')}`;
+    const title = `${fixture.creatorName} ${orderLabel} Sample`;
+    const rawTitle = `${title} [1P-1MB]`;
+    const archiveName = `${String(order).padStart(3, '0')}.7z`;
+    if (id > 1) {
+      fixture.database.prepare(
+        `INSERT INTO archive_catalog_works (id, creator_id, display_title, created_at, updated_at)
+         VALUES (?, 1, ?, ?, ?)`
+      ).run(id, title, now, now);
+      fixture.database.prepare(
+        `INSERT INTO archive_catalog_source_works (
+           id, work_id, collection_id, source, source_work_id, source_order,
+           source_order_label, source_title, raw_title, media_summary, is_active,
+           first_seen_at, last_seen_at
+         ) VALUES (?, ?, 1, 'costuan', ?, ?, ?, ?, ?, '1P-1MB', 1, ?, ?)`
+      ).run(id, id, `work-${String(order).padStart(3, '0')}`, order, orderLabel, title, rawTitle, now, now);
+      fixture.database.prepare(
+        `INSERT INTO archive_catalog_download_tasks (
+           id, source_work_id, provider, target_root, target_relative_directory,
+           target_filename, status, created_at, updated_at
+         ) VALUES (?, ?, 'baidu', 'inbox', ?, ?, 'ingested', ?, ?)`
+      ).run(id, id, fixture.creatorName, archiveName, now, now);
+    } else {
+      fixture.database.prepare("UPDATE archive_catalog_download_tasks SET status = 'ingested' WHERE id = 1").run();
+    }
+    const targetPath = path.join(fixture.libraryRoot, fixture.creatorName, rawTitle);
+    targets.push(targetPath);
+    await fs.mkdir(targetPath, { recursive: true });
+    await fs.writeFile(path.join(targetPath, 'cover.jpg'), `committed-${id}`);
+    fixture.database.prepare(
+      `INSERT INTO archive_catalog_local_works (
+         id, local_creator_folder_id, work_id, relative_path, absolute_path,
+         folder_name, parsed_source_order, image_count, video_count,
+         advertisement_file_count, other_file_count, total_bytes, match_status,
+         match_method, is_active, scanned_at, created_at, updated_at
+       ) VALUES (?, 1, ?, ?, ?, ?, ?, 1, 0, 0, 0, ?, 'matched', 'test', 1, ?, ?, ?)`
+    ).run(
+      id,
+      id,
+      path.relative(fixture.libraryRoot, targetPath),
+      targetPath,
+      path.basename(targetPath),
+      order,
+      Buffer.byteLength(`committed-${id}`),
+      now,
+      now,
+      now
+    );
+    fixture.database.prepare(
+      `INSERT INTO local_ingest_jobs (
+         id, archive_download_task_id, source_work_id, creator_id,
+         source_archive_path, source_archive_name, source_archive_size,
+         source_archive_mtime, source_archive_sha256, status, phase,
+         validation_status, cleanup_status, target_path, attempt_count,
+         summary_json, created_at, updated_at
+       ) VALUES (?, ?, ?, 1, ?, ?, 1, 1, ?, 'reconciling', 'reconciling',
+         'passed', 'not_ready', ?, 1, ?, ?, ?)`
+    ).run(
+      id,
+      id,
+      id,
+      path.join(fixture.inboxRoot, fixture.creatorName, archiveName),
+      archiveName,
+      String(id).padStart(64, '0'),
+      targetPath,
+      JSON.stringify({ imageCount: 1, videoCount: 0, warnings: [], plannedTargetPath: targetPath }),
+      now,
+      now
+    );
+  }
+  return targets;
+}
+
 describe.sequential('LocalIngestService', () => {
   let fixture: Fixture | null = null;
 
@@ -586,6 +678,184 @@ describe.sequential('LocalIngestService', () => {
     expect(recovered).toMatchObject({ status: 'ingested', phase: 'done', cleanupStatus: 'recycled', attemptCount: 1 });
     expect(fixture.rescanCalls).toBe(2);
     expect((await fs.readdir(path.join(fixture.libraryRoot, fixture.creatorName))).filter((name) => name.includes('NO.007'))).toHaveLength(1);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('reports an unfinished reconciliation and then settles it without extracting or committing twice', async () => {
+    fixture = await createFixture({ reconciliationFailures: 1, recycleAfterIngest: false });
+    const discovery = await discoverStable(fixture);
+
+    const first = await fixture.service.runBatch({ jobIds: [discovery.jobs[0].id] });
+    expect(first).toMatchObject({
+      total: 1,
+      examined: 1,
+      settled: 0,
+      ingested: 0,
+      reconciling: 1,
+      claimUnavailable: 0,
+      unchanged: 0
+    });
+    expect(first.items[0]).toMatchObject({
+      outcome: 'reconciling',
+      job: { status: 'reconciling', errorCode: 'RECONCILIATION_INCOMPLETE', attemptCount: 1 }
+    });
+    const targetPath = first.items[0].job.targetPath!;
+    const targetEntries = await fs.readdir(targetPath);
+
+    const second = await fixture.service.runBatch({ creatorIds: [1] });
+    expect(second).toMatchObject({ total: 1, examined: 1, settled: 1, ingested: 1, reconciling: 0 });
+    expect(second.items[0]).toMatchObject({ outcome: 'ingested', job: { attemptCount: 1, targetPath } });
+    expect(await fs.readdir(targetPath)).toEqual(targetEntries);
+    expect(fixture.rescanCalls).toBe(2);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('accounts for an exact 16-job reconciliation batch and later settles only the unfinished item', async () => {
+    fixture = await createFixture({ recycleAfterIngest: false });
+    const targets = await seedCommittedReconciliationBatch(fixture, 16);
+    const unresolvedTarget = targets[15];
+    const unresolvedSnapshot = await fs.readFile(path.join(unresolvedTarget, 'cover.jpg'), 'utf8');
+    fixture.database.prepare('DELETE FROM archive_catalog_local_works WHERE id = 16').run();
+    fixture.database.prepare("UPDATE archive_catalog_download_tasks SET status = 'downloaded' WHERE id = 16").run();
+
+    const first = await fixture.service.runBatch({
+      allowlist: [fixture.creatorName],
+      jobIds: Array.from({ length: 16 }, (_, index) => index + 1)
+    });
+
+    expect(first).toMatchObject({
+      total: 16,
+      examined: 16,
+      settled: 15,
+      ingested: 15,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 1,
+      claimUnavailable: 0,
+      unchanged: 0
+    });
+    expect(first.items.map((item) => item.outcome)).toEqual([
+      ...Array.from({ length: 15 }, () => 'ingested'),
+      'reconciling'
+    ]);
+    expect(fixture.service.getJob(16)).toMatchObject({
+      status: 'reconciling',
+      errorCode: 'RECONCILIATION_INCOMPLETE',
+      attemptCount: 1
+    });
+    expect(await fs.readFile(path.join(unresolvedTarget, 'cover.jpg'), 'utf8')).toBe(unresolvedSnapshot);
+
+    const now = new Date().toISOString();
+    fixture.database.prepare(
+      `INSERT INTO archive_catalog_local_works (
+         id, local_creator_folder_id, work_id, relative_path, absolute_path,
+         folder_name, parsed_source_order, image_count, video_count,
+         advertisement_file_count, other_file_count, total_bytes, match_status,
+         match_method, is_active, scanned_at, created_at, updated_at
+       ) VALUES (16, 1, 16, ?, ?, ?, 22, 1, 0, 0, 0, ?, 'matched', 'test', 1, ?, ?, ?)`
+    ).run(
+      path.relative(fixture.libraryRoot, unresolvedTarget),
+      unresolvedTarget,
+      path.basename(unresolvedTarget),
+      Buffer.byteLength('committed-16'),
+      now,
+      now,
+      now
+    );
+    fixture.database.prepare("UPDATE archive_catalog_download_tasks SET status = 'ingested' WHERE id = 16").run();
+
+    const second = await fixture.service.runBatch({ allowlist: [fixture.creatorName], creatorIds: [1] });
+    expect(second).toMatchObject({ total: 1, examined: 1, settled: 1, ingested: 1, reconciling: 0 });
+    expect(fixture.service.getJob(16)).toMatchObject({ status: 'ingested', attemptCount: 1 });
+    expect(fixture.database.prepare("SELECT COUNT(*) AS count FROM local_ingest_jobs WHERE status = 'ingested'").get())
+      .toEqual({ count: 16 });
+    expect(await fs.readFile(path.join(unresolvedTarget, 'cover.jpg'), 'utf8')).toBe(unresolvedSnapshot);
+    expect(fixture.recycleCalls).toEqual([]);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('rechecks the saved allowlist before committed reconciliation without downgrading media validation', async () => {
+    fixture = await createFixture({ recycleAfterIngest: false });
+    const [target] = await seedCommittedReconciliationBatch(fixture, 1);
+    const before = await fs.readFile(path.join(target, 'cover.jpg'), 'utf8');
+    let rescanCalls = 0;
+    const settings = {
+      get: () => ({
+        libraryRoot: fixture!.libraryRoot,
+        inboxRoot: fixture!.inboxRoot,
+        processingRoot: fixture!.processingRoot,
+        quarantineRoot: fixture!.quarantineRoot,
+        sevenZipPath,
+        fileStableSeconds: 1,
+        recycleAfterIngest: false,
+        maxExtractionDepth: 2 as const,
+        allowlist: ['Creator Beta'],
+        archivePasswordConfigured: true
+      }),
+      getArchivePassword: () => fixturePassword
+    } as unknown as LocalIngestSettingsService;
+    const service = new LocalIngestService(
+      fixture.database,
+      settings,
+      { recycle: async () => { throw new Error('must not recycle'); } } as unknown as RecycleBinAdapter,
+      async () => { rescanCalls += 1; },
+      { expectedGalleryRoot: fixture.libraryRoot }
+    );
+
+    const result = await service.runJob(1);
+
+    expect(result).toMatchObject({
+      status: 'reconciling',
+      phase: 'reconciling',
+      validationStatus: 'passed',
+      errorCode: 'CREATOR_NOT_ALLOWED',
+      attemptCount: 1
+    });
+    expect(rescanCalls).toBe(0);
+    expect(await fs.readFile(path.join(target, 'cover.jpg'), 'utf8')).toBe(before);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('never includes awaiting-review evidence in a bulk continuation', async () => {
+    fixture = await createFixture({ includeUnknown: true });
+    const discovery = await discoverStable(fixture);
+    const review = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(review).toMatchObject({ status: 'awaiting_review', errorCode: 'UNKNOWN_FILE_TYPE' });
+    const before = fixture.database.prepare('SELECT * FROM local_ingest_jobs WHERE id = ?').get(review.id);
+
+    const batch = await fixture.service.runBatch({ creatorIds: [review.creatorId] });
+
+    expect(batch).toMatchObject({ total: 0, examined: 0, settled: 0, awaitingReview: 0, items: [] });
+    expect(fixture.database.prepare('SELECT * FROM local_ingest_jobs WHERE id = ?').get(review.id)).toEqual(before);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('keeps every unrelated creator ledger row byte-for-byte unchanged during scoped reconciliation', async () => {
+    fixture = await createFixture({ recycleAfterIngest: false });
+    seedSecondCreator(fixture.database, 'Creator Beta');
+    const unrelatedBefore = {
+      creator: fixture.database.prepare('SELECT * FROM archive_catalog_creators WHERE id = 2').get(),
+      collection: fixture.database.prepare('SELECT * FROM archive_catalog_collections WHERE creator_id = 2').all(),
+      work: fixture.database.prepare('SELECT * FROM archive_catalog_works WHERE creator_id = 2').all(),
+      source: fixture.database.prepare(
+        'SELECT source_works.* FROM archive_catalog_source_works source_works JOIN archive_catalog_works works ON works.id = source_works.work_id WHERE works.creator_id = 2'
+      ).all(),
+      download: fixture.database.prepare(
+        'SELECT tasks.* FROM archive_catalog_download_tasks tasks JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id JOIN archive_catalog_works works ON works.id = source_works.work_id WHERE works.creator_id = 2'
+      ).all()
+    };
+    const discovery = await discoverStable(fixture);
+
+    const result = await fixture.service.runBatch({ creatorIds: [1] });
+
+    expect(result).toMatchObject({ total: 1, ingested: 1, reconciling: 0 });
+    expect({
+      creator: fixture.database.prepare('SELECT * FROM archive_catalog_creators WHERE id = 2').get(),
+      collection: fixture.database.prepare('SELECT * FROM archive_catalog_collections WHERE creator_id = 2').all(),
+      work: fixture.database.prepare('SELECT * FROM archive_catalog_works WHERE creator_id = 2').all(),
+      source: fixture.database.prepare(
+        'SELECT source_works.* FROM archive_catalog_source_works source_works JOIN archive_catalog_works works ON works.id = source_works.work_id WHERE works.creator_id = 2'
+      ).all(),
+      download: fixture.database.prepare(
+        'SELECT tasks.* FROM archive_catalog_download_tasks tasks JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id JOIN archive_catalog_works works ON works.id = source_works.work_id WHERE works.creator_id = 2'
+      ).all()
+    }).toEqual(unrelatedBefore);
+    expect(discovery.jobs[0].creatorId).toBe(1);
   }, 60_000);
 
   it.runIf(process.platform === 'win32')('retries only cleanup after an ingested work fails to enter the recycle bin', async () => {
