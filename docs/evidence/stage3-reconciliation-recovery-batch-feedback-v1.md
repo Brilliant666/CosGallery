@@ -67,9 +67,11 @@
 ## 修复
 
 - 批次结果拆分为 `examined`（已检查）和 `settled`（已有明确终态结果），不再把遍历数量称作完成数量。
+- `total` 明确表示服务器固定选中的任务数；六个业务结果桶彼此互斥，`settled=ingested+failed+awaitingReview` 只是辅助汇总，`remaining` 只表示尚未检查。
 - 独立统计 `reconciling`、`claimUnavailable` 和 `unchanged`；页面运行中和结束提示均显示这些去向。
 - 数据库 claim 失败会返回明确的 `claim_unavailable` 批次结果，不运行压缩、扫描或对账。
 - 支持 `creatorIds` 或 `jobIds` 的明确批次范围；两者不能同时提交。
+- 显式 ID 在 API 入口执行正整数、非空、上限和去重校验；空集合在服务层仍保持空范围，非法、空或混合范围都不会退化为全量运行。
 - 管理页在展开博主后提供“继续该博主待处理”，范围由服务端从完整数据库任务集生成，不受当前 50 条分页影响；仍由既有 operation coordinator 串行执行并互斥。
 - `awaiting_review` 不进入任何批量继续范围，管理页直接展示未知文件、processing 路径以及正式目录是否提交的人工核查证据。
 - 已有正式目标目录的 reconciling Job 仍只走 `reconcile()`：定向扫描、定向账本对账、Stage 2/缺失差集确认；不会重新解压、重复提交或覆盖目录。
@@ -81,6 +83,7 @@
 测试全部使用临时 SQLite 和临时目录，覆盖：
 
 - 首次对账仍未完成时，批次精确报告 `reconciling=1`；再次继续只做对账并成功，不重复解压或提交；
+- 精确 16 项已提交任务的批次先得到 15 项入库、1 项仍待对账的完整统计，补足测试关系后只继续该 1 项并最终 16 项全部收尾；
 - 跨服务实例执行权被占用时，报告 `claimUnavailable=1` 且 archive command 不启动；
 - 60 条同博主任务从完整数据库范围运行，证明不受 50 条页面分页限制；
 - 重复 Job 调用只执行一次，Stage 3 operation 重复请求继续返回 409；
@@ -89,7 +92,7 @@
 - 已提交目录的第二次恢复保持 `attemptCount=1`、目录内容不变；
 - creator-scoped 恢复前后，无关博主的 Creator、Collection、Work、Source Work 和 Download Task 完整行逐字段一致。
 
-聚焦验证结果：服务端 5 个测试文件共 59 passed、2 skipped；客户端管理页 20 passed。最终全量验证结果为服务端 82 个测试文件、463 passed、2 skipped，客户端 53 个测试文件、303 passed。服务端 TypeScript 构建和客户端类型检查/生产构建均通过，`git diff --check` 通过。
+聚焦验证结果：服务端 5 个测试文件共 62 passed、2 skipped；客户端管理页 20 passed。最终全量验证结果为服务端 82 个测试文件、466 passed、2 skipped，客户端 53 个测试文件、303 passed。服务端 TypeScript 构建和客户端类型检查/生产构建均通过，`git diff --check` 通过。
 
 ## 真实恢复前的明确写入范围（尚未执行）
 

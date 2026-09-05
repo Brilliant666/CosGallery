@@ -66,6 +66,17 @@
 
 失败现场在 V1 中始终留在 `processingRoot/<job-id>`。不自动移动到隔离目录，也不自动回收未确认入库的数据。
 
+## 批量结果口径
+
+- `total`：服务器在操作开始时从数据库固定选中的任务数；不是前端当前页行数。
+- `examined`：本批已经逐项重新确认状态、allowlist 和执行权的任务数。
+- `remaining`：尚未检查的固定任务数，仅用于运行中进度。
+- `ingested`、`failed`、`awaitingReview`、`reconciling`、`claimUnavailable`、`unchanged` 是每个已检查任务唯一落入的互斥结果桶。
+- `settled` 是辅助指标，等于 `ingested + failed + awaitingReview`；它不应再与“遍历过”混用。
+- `claimUnavailable` 表示任务未取得数据库执行权，本次没有执行其解压、扫描或对账，不能计为成功。
+
+显式 `jobIds` 或 `creatorIds` 范围在 API 入口校验并去重，两者不能同时出现。空数组和非法 ID 会被拒绝；服务层收到空集合时也保持空范围，绝不退化为全量批次。
+
 明确禁止的迁移：
 
 - `awaiting_review → running` 的自动越权；

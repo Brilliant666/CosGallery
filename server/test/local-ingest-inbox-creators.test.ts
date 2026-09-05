@@ -241,14 +241,20 @@ describe('LocalIngest pending creator discovery', () => {
 
   it('returns an empty batch without discovering new inbox files implicitly', async () => {
     const fixture = await createDiscoveryFixture();
-    fixture.database.prepare('DELETE FROM local_ingest_jobs').run();
     const scan = vi.spyOn(fixture.service, 'scanInbox');
-    const results = await fixture.service.runBatch({ allowlist: ['Creator Alpha', 'Creator Beta'] });
-    expect(results).toMatchObject({ total: 0, examined: 0, settled: 0, items: [] });
+    const jobScope = await fixture.service.runBatch({ allowlist: ['Creator Alpha', 'Creator Beta'], jobIds: [] });
+    const creatorScope = await fixture.service.runBatch({ allowlist: ['Creator Alpha', 'Creator Beta'], creatorIds: [] });
+    expect(jobScope).toMatchObject({ total: 0, examined: 0, settled: 0, items: [] });
+    expect(creatorScope).toMatchObject({ total: 0, examined: 0, settled: 0, items: [] });
     expect(scan).not.toHaveBeenCalled();
-    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 0 });
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 4 });
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_file_observations').get()).toEqual({ count: 0 });
     expect(fixture.sideEffects).toEqual({ hash: 0, command: 0, recycle: 0, reconcile: 0 });
+    await expect(fixture.service.runBatch({
+      allowlist: ['Creator Alpha', 'Creator Beta'],
+      jobIds: [1],
+      creatorIds: [2]
+    })).rejects.toThrow(/either jobIds or creatorIds/i);
     fixture.database.close();
   });
 

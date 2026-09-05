@@ -162,7 +162,7 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
       'POST',
       '/api/admin/local-ingest/run',
       headers,
-      { creatorIds: [1] }
+      { creatorIds: [1, 1, 1] }
     );
     expect(creatorRunResponse.status).toBe(200);
     expect(run).toHaveBeenLastCalledWith(
@@ -170,6 +170,26 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
       expect.objectContaining({ onProgress: expect.any(Function) })
     );
     scan.mockRestore();
+    run.mockRestore();
+  });
+
+  it('rejects empty, invalid, or mixed explicit scopes without falling back to a global batch', async () => {
+    const { localIngestService } = await import('../src/services/local-ingest-service.js');
+    const run = vi.spyOn(localIngestService, 'runBatch');
+    const headers = { 'x-foldergram-intent': '1' };
+    const invalidBodies = [
+      { jobIds: [] },
+      { creatorIds: [] },
+      { jobIds: [0] },
+      { creatorIds: [-1] },
+      { jobIds: [1], creatorIds: [1] }
+    ];
+
+    for (const body of invalidBodies) {
+      const response = await requestApp(app, 'POST', '/api/admin/local-ingest/run', headers, body);
+      expect(response.status).toBe(400);
+    }
+    expect(run).not.toHaveBeenCalled();
     run.mockRestore();
   });
 });

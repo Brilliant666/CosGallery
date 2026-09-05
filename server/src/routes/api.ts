@@ -248,9 +248,11 @@ const localIngestJobQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50)
 });
 const localIngestScanBodySchema = z.object({}).strict();
+const localIngestRunIdListSchema = z.array(z.number().int().positive()).min(1).max(500)
+  .transform((values) => [...new Set(values)]);
 const localIngestRunBodySchema = z.object({
-  jobIds: z.array(z.number().int().positive()).min(1).max(500).optional(),
-  creatorIds: z.array(z.number().int().positive()).min(1).max(500).optional()
+  jobIds: localIngestRunIdListSchema.optional(),
+  creatorIds: localIngestRunIdListSchema.optional()
 }).strict().refine((value) => !(value.jobIds && value.creatorIds), {
   message: 'Choose either jobIds or creatorIds for one explicit batch scope, not both'
 });

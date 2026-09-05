@@ -159,8 +159,9 @@
             </button>
           </div>
         </div>
-        <div v-if="localIngestOperation?.run" class="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 lg:grid-cols-10">
-          <span><strong class="block text-base">{{ localIngestOperation.run.examined }} / {{ localIngestOperation.run.total }}</strong>已检查 / 总数</span>
+        <div v-if="localIngestOperation?.run" class="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 lg:grid-cols-11">
+          <span><strong class="block text-base">{{ localIngestOperation.run.total }}</strong>本批选中</span>
+          <span><strong class="block text-base">{{ localIngestOperation.run.examined }}</strong>实际检查</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.settled }}</strong>已有明确结果</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.ingested }}</strong>已入库</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.failed }}</strong>失败</span>
@@ -247,7 +248,7 @@
                     <option value="">全部</option><option value="pending">待处理</option><option value="running">处理中</option><option value="awaiting_review">待核查</option><option value="failed">失败</option><option value="completed">已完成</option>
                   </select>
                 </label>
-                <button v-if="creator.pending + creator.failed > 0" type="button" data-test="run-local-ingest-creator" class="h-9 rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch(creator.creatorId)">继续该博主待处理</button>
+                <button v-if="creator.pending + creator.failed > 0" type="button" data-test="run-local-ingest-creator" class="h-9 rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch(creator)">继续该博主待处理（{{ creator.pending + creator.failed }}）</button>
               </div>
               <span class="text-xs text-muted">共 {{ localIngestDashboard.total }} 条 · 第 {{ localIngestDashboard.page }} / {{ localIngestJobTotalPages }} 页</span>
             </div>
@@ -473,6 +474,7 @@ import type {
   ArchiveMetadataTasksPayload,
   ContentRating,
   LocalIngestInboxCreatorsResult,
+  LocalIngestCreatorJobSummary,
   LocalIngestJob,
   LocalIngestJobFilter,
   LocalIngestJobsDashboard,
@@ -990,19 +992,22 @@ async function runLocalJob(id: number) {
   }
 }
 
-async function runLocalBatch(creatorId?: number) {
+async function runLocalBatch(creator?: LocalIngestCreatorJobSummary) {
+  const creatorId = creator?.creatorId;
+  const expectedCount = creator ? creator.pending + creator.failed : 0;
   localIngestRequestBusy.value = true;
   localIngestOperation.value = optimisticLocalIngestOperation(
     'running',
     'batch',
-    creatorId ? '正在启动当前博主的 Stage 3 继续任务' : '正在启动 Stage 3 批次'
+    creator ? `正在启动 ${creator.creatorName} 的 ${expectedCount} 项 Stage 3 继续任务` : '正在启动 Stage 3 批次'
   );
   scheduleStage3Poll();
   try {
     const result = await runLocalIngestBatch(creatorId ? { creatorIds: [creatorId] } : {});
+    const scope = creator ? `${creator.creatorName}：` : '';
     localIngestNotice.value = result.total > 0
-      ? `本批检查 ${result.examined}/${result.total} 个任务：已入库 ${result.ingested}，待核查 ${result.awaitingReview}，失败 ${result.failed}，仍待对账 ${result.reconciling}，执行权被占用 ${result.claimUnavailable}，状态未变化 ${result.unchanged}。`
-      : '当前没有可运行任务；批次没有扫描待入库目录。';
+      ? `${scope}本批选中 ${result.total} 个任务，实际检查 ${result.examined} 个：已入库 ${result.ingested}，待核查 ${result.awaitingReview}，失败 ${result.failed}，仍待对账 ${result.reconciling}，执行权被占用 ${result.claimUnavailable}，状态未变化 ${result.unchanged}。`
+      : `${scope}当前没有可运行任务；批次没有扫描待入库目录。`;
     await settleStage3Request('batch', true);
   } catch (reason) {
     if (!adoptOperationConflict(reason)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法运行本地入库批处理';

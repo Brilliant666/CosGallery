@@ -1899,15 +1899,24 @@ export class LocalIngestService {
     }
     if (job.status === 'awaiting_review' || job.phase === 'waiting_stable') return this.getJob(id);
     try {
-      if (job.status === 'reconciling' || (job.target_path && await pathExists(job.target_path))) {
-        return await this.reconcile(id);
+      const committedOrReconciling = job.status === 'reconciling'
+        || Boolean(job.target_path && await pathExists(job.target_path));
+      if (job.source_work_id === null || job.archive_download_task_id === null) {
+        if (committedOrReconciling) {
+          throw new LocalIngestFailure(
+            'RECONCILIATION_MAPPING_MISSING',
+            'The committed or reconciling task no longer has a unique source work and download task mapping',
+            true
+          );
+        }
+        return this.getJob(id);
       }
-      if (job.source_work_id === null || job.archive_download_task_id === null) return this.getJob(id);
       const mapping = this.mappingForJob(job);
       const settings = await this.checkedSettings();
       if (!this.resolveAllowedCreatorIds(settings.allowlist).has(mapping.creator_id)) {
         throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The mapped creator is not in the local ingest allowlist', true);
       }
+      if (committedOrReconciling) return await this.reconcile(id);
       await this.assertSourcePath(job, mapping, settings);
       const currentStats = await fs.stat(job.source_archive_path);
       if (currentStats.size !== job.source_archive_size || currentStats.mtimeMs !== job.source_archive_mtime) {
@@ -2036,7 +2045,9 @@ export class LocalIngestService {
       this.updateJob(id, {
         status: committedTargetExists ? 'reconciling' : failure.review ? 'awaiting_review' : 'failed',
         phase: committedTargetExists ? 'reconciling' : latestJob.phase,
-        validationStatus: failure.review ? 'failed' : latestJob.validation_status,
+        validationStatus: !committedTargetExists && failure.review
+          ? 'failed'
+          : latestJob.validation_status,
         errorCode: failure.code,
         errorDetail: sanitizeSecret(failure.message, secret)
       });
@@ -2145,6 +2156,9 @@ export class LocalIngestService {
     options: { allowlist?: string[]; jobIds?: number[]; creatorIds?: number[] } = {},
     callbacks: LocalIngestBatchCallbacks = {}
   ): Promise<LocalIngestBatchResult> {
+    if (options.jobIds && options.creatorIds) {
+      throw new Error('Choose either jobIds or creatorIds for one explicit batch scope, not both');
+    }
     const allowlist = options.allowlist ?? this.settingsService.get().allowlist;
     const allowedCreatorIds = this.resolveAllowedCreatorIds(allowlist);
     const requestedJobIds = options.jobIds ? new Set(options.jobIds) : null;

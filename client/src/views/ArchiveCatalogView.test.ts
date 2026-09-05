@@ -535,7 +535,9 @@ describe('ArchiveCatalogView', () => {
     await wrapper.get('[data-test="run-local-ingest-creator"]').trigger('click');
     await flushPromises();
 
+    expect(wrapper.get('[data-test="run-local-ingest-creator"]').text()).toContain('（1）');
     expect(runLocalIngestBatch).toHaveBeenCalledWith({ creatorIds: [reconcilingJob.creatorId] });
+    expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain(`${reconcilingJob.creatorName}：本批选中 1`);
     expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('仍待对账 1');
     expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('执行权被占用 0');
   });
