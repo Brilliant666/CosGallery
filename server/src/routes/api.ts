@@ -249,8 +249,11 @@ const localIngestJobQuerySchema = z.object({
 });
 const localIngestScanBodySchema = z.object({}).strict();
 const localIngestRunBodySchema = z.object({
-  jobIds: z.array(z.number().int().positive()).min(1).max(500).optional()
-}).strict();
+  jobIds: z.array(z.number().int().positive()).min(1).max(500).optional(),
+  creatorIds: z.array(z.number().int().positive()).min(1).max(500).optional()
+}).strict().refine((value) => !(value.jobIds && value.creatorIds), {
+  message: 'Choose either jobIds or creatorIds for one explicit batch scope, not both'
+});
 const localIngestSettingsBodySchema = z.object({
   libraryRoot: z.string().trim().min(1).max(500),
   inboxRoot: z.string().trim().min(1).max(500),
@@ -1529,10 +1532,14 @@ router.post(
         message: '正在启动单项 Stage 3 任务',
         run: {
           total: 1,
-          processed: 0,
+          examined: 0,
+          settled: 0,
           ingested: 0,
           failed: 0,
           awaitingReview: 0,
+          reconciling: 0,
+          claimUnavailable: 0,
+          unchanged: 0,
           remaining: 1,
           currentJob: null
         }
@@ -1546,10 +1553,13 @@ router.post(
         const result = await localIngestService.runJob(params.id);
         context.update({
           run: {
-            processed: 1,
+            examined: 1,
+            settled: ['ingested', 'failed', 'awaiting_review'].includes(result.status) ? 1 : 0,
             ingested: result.status === 'ingested' ? 1 : 0,
             failed: result.status === 'failed' ? 1 : 0,
             awaitingReview: result.status === 'awaiting_review' ? 1 : 0,
+            reconciling: result.status === 'reconciling' ? 1 : 0,
+            unchanged: ['queued', 'running'].includes(result.status) ? 1 : 0,
             remaining: 0,
             currentJob: null
           }
@@ -1574,10 +1584,14 @@ router.post(
         message: '正在启动 Stage 3 回收清理',
         run: {
           total: 1,
-          processed: 0,
+          examined: 0,
+          settled: 0,
           ingested: 0,
           failed: 0,
           awaitingReview: 0,
+          reconciling: 0,
+          claimUnavailable: 0,
+          unchanged: 0,
           remaining: 1,
           currentJob: null
         }
@@ -1591,7 +1605,8 @@ router.post(
         const result = await localIngestService.retryCleanup(params.id);
         context.update({
           run: {
-            processed: 1,
+            examined: 1,
+            settled: 1,
             ingested: result.status === 'ingested' ? 1 : 0,
             failed: result.cleanupStatus === 'failed' ? 1 : 0,
             remaining: 0,
@@ -1618,17 +1633,21 @@ router.post(
         message: '正在运行 Stage 3 批次',
         run: {
           total: 0,
-          processed: 0,
+          examined: 0,
+          settled: 0,
           ingested: 0,
           failed: 0,
           awaitingReview: 0,
+          reconciling: 0,
+          claimUnavailable: 0,
+          unchanged: 0,
           remaining: 0,
           currentJob: null
         }
       },
       async (context) => {
         const results = await localIngestService.runBatch(
-          { jobIds: body.jobIds },
+          { jobIds: body.jobIds, creatorIds: body.creatorIds },
           {
             onProgress: (progress) => context.update({
               message: progress.currentJob
@@ -1641,12 +1660,8 @@ router.post(
             })
           }
         );
-        return {
-          total: results.length,
-          ingested: results.filter((job) => job.status === 'ingested').length,
-          failed: results.filter((job) => job.status === 'failed').length,
-          awaitingReview: results.filter((job) => job.status === 'awaiting_review').length
-        };
+        const { items: _items, ...summary } = results;
+        return summary;
       },
       (summary) => summary
     );

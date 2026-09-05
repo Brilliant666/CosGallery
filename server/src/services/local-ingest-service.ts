@@ -228,16 +228,37 @@ export type LocalIngestJobsDashboard = {
 
 export type LocalIngestBatchProgress = {
   total: number;
-  processed: number;
+  examined: number;
+  settled: number;
   ingested: number;
   failed: number;
   awaitingReview: number;
+  reconciling: number;
+  claimUnavailable: number;
+  unchanged: number;
   remaining: number;
   currentJob: LocalIngestJob | null;
 };
 
 export type LocalIngestBatchCallbacks = {
   onProgress?: (progress: LocalIngestBatchProgress) => void;
+};
+
+export type LocalIngestBatchItemOutcome =
+  | 'ingested'
+  | 'failed'
+  | 'awaiting_review'
+  | 'reconciling'
+  | 'claim_unavailable'
+  | 'unchanged';
+
+export type LocalIngestBatchItemResult = {
+  job: LocalIngestJob;
+  outcome: LocalIngestBatchItemOutcome;
+};
+
+export type LocalIngestBatchResult = Omit<LocalIngestBatchProgress, 'currentJob' | 'remaining'> & {
+  items: LocalIngestBatchItemResult[];
 };
 
 export type LocalIngestInboxCreatorMappingStatus = 'matched' | 'unmatched' | 'ambiguous';
@@ -963,12 +984,15 @@ export class LocalIngestService {
     ).run(this.timestamp(), id, token);
   }
 
-  private runWithClaim(id: number, executor: () => Promise<LocalIngestJob>): Promise<LocalIngestJob> {
+  private async runWithClaimOutcome(
+    id: number,
+    executor: () => Promise<LocalIngestJob>
+  ): Promise<{ job: LocalIngestJob; ownership: 'acquired' | 'joined' | 'unavailable' }> {
     const existing = this.inFlightJobs.get(id);
-    if (existing) return existing;
+    if (existing) return { job: await existing, ownership: 'joined' };
+    const token = this.tryClaim(id);
+    if (!token) return { job: this.getJob(id), ownership: 'unavailable' };
     const execution = (async () => {
-      const token = this.tryClaim(id);
-      if (!token) return this.getJob(id);
       const heartbeatEvery = Math.max(250, Math.min(10_000, Math.floor(this.claimLeaseMs / 3)));
       const heartbeat = setInterval(() => {
         try {
@@ -990,7 +1014,11 @@ export class LocalIngestService {
     void execution.finally(() => {
       if (this.inFlightJobs.get(id) === execution) this.inFlightJobs.delete(id);
     }).catch(() => undefined);
-    return execution;
+    return { job: await execution, ownership: 'acquired' };
+  }
+
+  private async runWithClaim(id: number, executor: () => Promise<LocalIngestJob>): Promise<LocalIngestJob> {
+    return (await this.runWithClaimOutcome(id, executor)).job;
   }
 
   async recoverInterruptedJobs(): Promise<number> {
@@ -999,8 +1027,8 @@ export class LocalIngestService {
     const running = this.database.prepare(
       `UPDATE local_ingest_jobs
        SET status = 'failed',
-           error_code = 'INTERRUPTED_PROCESS',
-           error_detail = 'The previous process stopped before this task completed; it can be continued safely',
+           error_code = COALESCE(error_code, 'INTERRUPTED_PROCESS'),
+           error_detail = COALESCE(error_detail, 'The previous process stopped before this task completed; it can be continued safely'),
            claim_token = NULL,
            claimed_at = NULL,
            claim_heartbeat_at = NULL,
@@ -1014,24 +1042,21 @@ export class LocalIngestService {
     ).run(timestamp, cutoff);
     const reconciling = this.database.prepare(
       `UPDATE local_ingest_jobs
-       SET error_code = 'INTERRUPTED_PROCESS',
-           error_detail = 'The previous process stopped during reconciliation; reconciliation can be continued safely',
+       SET error_code = COALESCE(error_code, 'INTERRUPTED_PROCESS'),
+           error_detail = COALESCE(error_detail, 'The previous process stopped during reconciliation; reconciliation can be continued safely'),
            claim_token = NULL,
            claimed_at = NULL,
            claim_heartbeat_at = NULL,
            updated_at = ?
        WHERE status = 'reconciling'
-         AND (
-           claim_token IS NULL
-           OR claim_heartbeat_at IS NULL
-           OR claim_heartbeat_at < ?
-         )`
+         AND claim_token IS NOT NULL
+         AND (claim_heartbeat_at IS NULL OR claim_heartbeat_at < ?)`
     ).run(timestamp, cutoff);
     const cleanup = this.database.prepare(
       `UPDATE local_ingest_jobs
        SET cleanup_status = 'failed',
-           error_code = 'INTERRUPTED_PROCESS',
-           error_detail = 'The previous process stopped during recycle-bin cleanup; cleanup can be retried safely',
+           error_code = COALESCE(error_code, 'INTERRUPTED_PROCESS'),
+           error_detail = COALESCE(error_detail, 'The previous process stopped during recycle-bin cleanup; cleanup can be retried safely'),
            claim_token = NULL,
            claimed_at = NULL,
            claim_heartbeat_at = NULL,
@@ -1850,10 +1875,20 @@ export class LocalIngestService {
   }
 
   async runJob(id: number): Promise<LocalIngestJob> {
+    return (await this.runJobWithOutcome(id)).job;
+  }
+
+  private async runJobWithOutcome(
+    id: number
+  ): Promise<{ job: LocalIngestJob; ownership: 'acquired' | 'joined' | 'unavailable' | 'not_required' }> {
     const job = this.getJobRow(id);
-    if (job.status === 'awaiting_review' || job.phase === 'waiting_stable') return this.getJob(id);
-    if (job.status === 'ingested' && !['pending', 'failed', 'recycling'].includes(job.cleanup_status)) return this.getJob(id);
-    return this.runWithClaim(id, () => this.runClaimedJob(id));
+    if (job.status === 'awaiting_review' || job.phase === 'waiting_stable') {
+      return { job: this.getJob(id), ownership: 'not_required' };
+    }
+    if (job.status === 'ingested' && !['pending', 'failed', 'recycling'].includes(job.cleanup_status)) {
+      return { job: this.getJob(id), ownership: 'not_required' };
+    }
+    return this.runWithClaimOutcome(id, () => this.runClaimedJob(id));
   }
 
   private async runClaimedJob(id: number): Promise<LocalIngestJob> {
@@ -1863,16 +1898,16 @@ export class LocalIngestService {
       return this.getJob(id);
     }
     if (job.status === 'awaiting_review' || job.phase === 'waiting_stable') return this.getJob(id);
-    if (job.status === 'reconciling' || (job.target_path && await pathExists(job.target_path))) {
-      return this.reconcile(id);
-    }
-    if (job.source_work_id === null || job.archive_download_task_id === null) return this.getJob(id);
-    const mapping = this.mappingForJob(job);
-    const settings = await this.checkedSettings();
-    if (!this.resolveAllowedCreatorIds(settings.allowlist).has(mapping.creator_id)) {
-      throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The mapped creator is not in the local ingest allowlist', true);
-    }
     try {
+      if (job.status === 'reconciling' || (job.target_path && await pathExists(job.target_path))) {
+        return await this.reconcile(id);
+      }
+      if (job.source_work_id === null || job.archive_download_task_id === null) return this.getJob(id);
+      const mapping = this.mappingForJob(job);
+      const settings = await this.checkedSettings();
+      if (!this.resolveAllowedCreatorIds(settings.allowlist).has(mapping.creator_id)) {
+        throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The mapped creator is not in the local ingest allowlist', true);
+      }
       await this.assertSourcePath(job, mapping, settings);
       const currentStats = await fs.stat(job.source_archive_path);
       if (currentStats.size !== job.source_archive_size || currentStats.mtimeMs !== job.source_archive_mtime) {
@@ -2107,11 +2142,13 @@ export class LocalIngestService {
   }
 
   async runBatch(
-    options: { allowlist?: string[]; jobIds?: number[] } = {},
+    options: { allowlist?: string[]; jobIds?: number[]; creatorIds?: number[] } = {},
     callbacks: LocalIngestBatchCallbacks = {}
-  ): Promise<LocalIngestJob[]> {
+  ): Promise<LocalIngestBatchResult> {
     const allowlist = options.allowlist ?? this.settingsService.get().allowlist;
     const allowedCreatorIds = this.resolveAllowedCreatorIds(allowlist);
+    const requestedJobIds = options.jobIds ? new Set(options.jobIds) : null;
+    const requestedCreatorIds = options.creatorIds ? new Set(options.creatorIds) : null;
     const rows = this.database.prepare(
       `${this.jobSelect()}
        WHERE jobs.status IN ('queued', 'failed', 'reconciling')
@@ -2120,32 +2157,75 @@ export class LocalIngestService {
     ).all() as Array<LocalIngestJobRow & { creator_name: string }>;
     const selected = rows.filter((row) =>
       allowedCreatorIds.has(row.creator_id)
-      && (!options.jobIds || options.jobIds.includes(row.id))
+      && (!requestedJobIds || requestedJobIds.has(row.id))
+      && (!requestedCreatorIds || requestedCreatorIds.has(row.creator_id))
     );
-    const results: LocalIngestJob[] = [];
+    const items: LocalIngestBatchItemResult[] = [];
+    let examined = 0;
+    let settled = 0;
     let ingested = 0;
     let failed = 0;
     let awaitingReview = 0;
+    let reconciling = 0;
+    let claimUnavailable = 0;
+    let unchanged = 0;
     const notify = (currentJob: LocalIngestJob | null) => callbacks.onProgress?.({
       total: selected.length,
-      processed: results.length,
+      examined,
+      settled,
       ingested,
       failed,
       awaitingReview,
-      remaining: selected.length - results.length,
+      reconciling,
+      claimUnavailable,
+      unchanged,
+      remaining: selected.length - examined,
       currentJob
     });
     notify(null);
     for (const row of selected) {
       notify(mapJob(row));
-      const result = await this.runJob(row.id);
-      results.push(result);
-      if (result.status === 'ingested') ingested += 1;
-      if (result.status === 'failed') failed += 1;
-      if (result.status === 'awaiting_review') awaitingReview += 1;
+      const execution = await this.runJobWithOutcome(row.id);
+      const result = execution.job;
+      let outcome: LocalIngestBatchItemOutcome;
+      if (execution.ownership === 'unavailable') {
+        outcome = 'claim_unavailable';
+        claimUnavailable += 1;
+      } else if (result.status === 'ingested') {
+        outcome = 'ingested';
+        ingested += 1;
+        settled += 1;
+      } else if (result.status === 'failed') {
+        outcome = 'failed';
+        failed += 1;
+        settled += 1;
+      } else if (result.status === 'awaiting_review') {
+        outcome = 'awaiting_review';
+        awaitingReview += 1;
+        settled += 1;
+      } else if (result.status === 'reconciling') {
+        outcome = 'reconciling';
+        reconciling += 1;
+      } else {
+        outcome = 'unchanged';
+        unchanged += 1;
+      }
+      items.push({ job: result, outcome });
+      examined += 1;
       notify(null);
     }
-    return results;
+    return {
+      total: selected.length,
+      examined,
+      settled,
+      ingested,
+      failed,
+      awaitingReview,
+      reconciling,
+      claimUnavailable,
+      unchanged,
+      items
+    };
   }
 }
 

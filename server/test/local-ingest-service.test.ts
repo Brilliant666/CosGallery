@@ -588,6 +588,80 @@ describe.sequential('LocalIngestService', () => {
     expect((await fs.readdir(path.join(fixture.libraryRoot, fixture.creatorName))).filter((name) => name.includes('NO.007'))).toHaveLength(1);
   }, 60_000);
 
+  it.runIf(process.platform === 'win32')('reports an unfinished reconciliation and then settles it without extracting or committing twice', async () => {
+    fixture = await createFixture({ reconciliationFailures: 1, recycleAfterIngest: false });
+    const discovery = await discoverStable(fixture);
+
+    const first = await fixture.service.runBatch({ jobIds: [discovery.jobs[0].id] });
+    expect(first).toMatchObject({
+      total: 1,
+      examined: 1,
+      settled: 0,
+      ingested: 0,
+      reconciling: 1,
+      claimUnavailable: 0,
+      unchanged: 0
+    });
+    expect(first.items[0]).toMatchObject({
+      outcome: 'reconciling',
+      job: { status: 'reconciling', errorCode: 'RECONCILIATION_INCOMPLETE', attemptCount: 1 }
+    });
+    const targetPath = first.items[0].job.targetPath!;
+    const targetEntries = await fs.readdir(targetPath);
+
+    const second = await fixture.service.runBatch({ creatorIds: [1] });
+    expect(second).toMatchObject({ total: 1, examined: 1, settled: 1, ingested: 1, reconciling: 0 });
+    expect(second.items[0]).toMatchObject({ outcome: 'ingested', job: { attemptCount: 1, targetPath } });
+    expect(await fs.readdir(targetPath)).toEqual(targetEntries);
+    expect(fixture.rescanCalls).toBe(2);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('never includes awaiting-review evidence in a bulk continuation', async () => {
+    fixture = await createFixture({ includeUnknown: true });
+    const discovery = await discoverStable(fixture);
+    const review = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(review).toMatchObject({ status: 'awaiting_review', errorCode: 'UNKNOWN_FILE_TYPE' });
+    const before = fixture.database.prepare('SELECT * FROM local_ingest_jobs WHERE id = ?').get(review.id);
+
+    const batch = await fixture.service.runBatch({ creatorIds: [review.creatorId] });
+
+    expect(batch).toMatchObject({ total: 0, examined: 0, settled: 0, awaitingReview: 0, items: [] });
+    expect(fixture.database.prepare('SELECT * FROM local_ingest_jobs WHERE id = ?').get(review.id)).toEqual(before);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('keeps every unrelated creator ledger row byte-for-byte unchanged during scoped reconciliation', async () => {
+    fixture = await createFixture({ recycleAfterIngest: false });
+    seedSecondCreator(fixture.database, 'Creator Beta');
+    const unrelatedBefore = {
+      creator: fixture.database.prepare('SELECT * FROM archive_catalog_creators WHERE id = 2').get(),
+      collection: fixture.database.prepare('SELECT * FROM archive_catalog_collections WHERE creator_id = 2').all(),
+      work: fixture.database.prepare('SELECT * FROM archive_catalog_works WHERE creator_id = 2').all(),
+      source: fixture.database.prepare(
+        'SELECT source_works.* FROM archive_catalog_source_works source_works JOIN archive_catalog_works works ON works.id = source_works.work_id WHERE works.creator_id = 2'
+      ).all(),
+      download: fixture.database.prepare(
+        'SELECT tasks.* FROM archive_catalog_download_tasks tasks JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id JOIN archive_catalog_works works ON works.id = source_works.work_id WHERE works.creator_id = 2'
+      ).all()
+    };
+    const discovery = await discoverStable(fixture);
+
+    const result = await fixture.service.runBatch({ creatorIds: [1] });
+
+    expect(result).toMatchObject({ total: 1, ingested: 1, reconciling: 0 });
+    expect({
+      creator: fixture.database.prepare('SELECT * FROM archive_catalog_creators WHERE id = 2').get(),
+      collection: fixture.database.prepare('SELECT * FROM archive_catalog_collections WHERE creator_id = 2').all(),
+      work: fixture.database.prepare('SELECT * FROM archive_catalog_works WHERE creator_id = 2').all(),
+      source: fixture.database.prepare(
+        'SELECT source_works.* FROM archive_catalog_source_works source_works JOIN archive_catalog_works works ON works.id = source_works.work_id WHERE works.creator_id = 2'
+      ).all(),
+      download: fixture.database.prepare(
+        'SELECT tasks.* FROM archive_catalog_download_tasks tasks JOIN archive_catalog_source_works source_works ON source_works.id = tasks.source_work_id JOIN archive_catalog_works works ON works.id = source_works.work_id WHERE works.creator_id = 2'
+      ).all()
+    }).toEqual(unrelatedBefore);
+    expect(discovery.jobs[0].creatorId).toBe(1);
+  }, 60_000);
+
   it.runIf(process.platform === 'win32')('retries only cleanup after an ingested work fails to enter the recycle bin', async () => {
     fixture = await createFixture({ recycleFailures: 1 });
     const discovery = await discoverStable(fixture);

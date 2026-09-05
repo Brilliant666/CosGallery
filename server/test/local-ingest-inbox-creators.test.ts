@@ -204,18 +204,38 @@ describe('LocalIngest pending creator discovery', () => {
 
     await expect(fixture.service.scanInbox([])).rejects.toThrow(/allowlist is empty/i);
     const scan = vi.spyOn(fixture.service, 'scanInbox');
-    const runOrder: number[] = [];
-    vi.spyOn(fixture.service, 'runJob').mockImplementation(async (id) => {
-      runOrder.push(id);
-      return fixture.service.getJob(id);
-    });
-
-    await fixture.service.runBatch({ allowlist: ['Creator Alpha', 'Creator Beta'] });
+    const result = await fixture.service.runBatch({ allowlist: ['Creator Alpha', 'Creator Beta'] });
 
     expect(scan).not.toHaveBeenCalled();
-    expect(runOrder).toEqual([5, 6]);
-    expect(runOrder).not.toContain(7);
+    expect(result.items.map((entry) => entry.job.id)).toEqual([5, 6]);
+    expect(result.items.map((entry) => entry.outcome)).toEqual(['unchanged', 'unchanged']);
+    expect(result).toMatchObject({ total: 2, examined: 2, settled: 0, unchanged: 2 });
     expect(fixture.sideEffects).toEqual({ hash: 0, command: 0, recycle: 0, reconcile: 0 });
+    fixture.database.close();
+  });
+
+  it('runs an explicit creator scope from the complete database set instead of a dashboard page', async () => {
+    const fixture = await createDiscoveryFixture();
+    fixture.database.prepare('DELETE FROM local_ingest_jobs').run();
+    for (let id = 1; id <= 75; id += 1) {
+      insertJob(
+        fixture.database,
+        id,
+        id <= 60 ? 1 : 2,
+        path.join(fixture.inboxRoot, id <= 60 ? 'Creator Alpha' : 'Creator Beta', `${id}.7z`),
+        'queued'
+      );
+    }
+
+    const result = await fixture.service.runBatch({
+      allowlist: ['Creator Alpha', 'Creator Beta'],
+      creatorIds: [1]
+    });
+
+    expect(result).toMatchObject({ total: 60, examined: 60, unchanged: 60 });
+    expect(result.items).toHaveLength(60);
+    expect(result.items.every((entry) => entry.job.creatorId === 1)).toBe(true);
+    expect(result.items.some((entry) => entry.job.id > 50)).toBe(true);
     fixture.database.close();
   });
 
@@ -224,11 +244,24 @@ describe('LocalIngest pending creator discovery', () => {
     fixture.database.prepare('DELETE FROM local_ingest_jobs').run();
     const scan = vi.spyOn(fixture.service, 'scanInbox');
     const results = await fixture.service.runBatch({ allowlist: ['Creator Alpha', 'Creator Beta'] });
-    expect(results).toEqual([]);
+    expect(results).toMatchObject({ total: 0, examined: 0, settled: 0, items: [] });
     expect(scan).not.toHaveBeenCalled();
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 0 });
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_file_observations').get()).toEqual({ count: 0 });
     expect(fixture.sideEffects).toEqual({ hash: 0, command: 0, recycle: 0, reconcile: 0 });
+    fixture.database.close();
+  });
+
+  it('does not downgrade or rewrite an already completed job during a creator continuation', async () => {
+    const fixture = await createDiscoveryFixture();
+    fixture.database.prepare('DELETE FROM local_ingest_jobs').run();
+    insertJob(fixture.database, 8, 1, path.join(fixture.inboxRoot, 'Creator Alpha', '023.7z'), 'ingested');
+    const before = fixture.database.prepare('SELECT * FROM local_ingest_jobs WHERE id = 8').get();
+
+    const result = await fixture.service.runBatch({ allowlist: ['Creator Alpha'], creatorIds: [1] });
+
+    expect(result).toMatchObject({ total: 0, examined: 0, settled: 0, items: [] });
+    expect(fixture.database.prepare('SELECT * FROM local_ingest_jobs WHERE id = 8').get()).toEqual(before);
     fixture.database.close();
   });
 

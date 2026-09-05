@@ -124,7 +124,18 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
       ignoredFiles: 2,
       jobs: Array.from({ length: 558 }, () => existingJob)
     });
-    const run = vi.spyOn(localIngestService, 'runBatch').mockResolvedValue([existingJob]);
+    const run = vi.spyOn(localIngestService, 'runBatch').mockResolvedValue({
+      total: 1,
+      examined: 1,
+      settled: 1,
+      ingested: 1,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 0,
+      claimUnavailable: 0,
+      unchanged: 0,
+      items: [{ job: existingJob, outcome: 'ingested' }]
+    });
     const headers = { 'x-foldergram-intent': '1' };
 
     const scanResponse = await requestApp(app, 'POST', '/api/admin/local-ingest/scan', headers, {});
@@ -135,7 +146,29 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
 
     const runResponse = await requestApp(app, 'POST', '/api/admin/local-ingest/run', headers, {});
     expect(runResponse.status).toBe(200);
-    expect(runResponse.body).toEqual({ total: 1, ingested: 1, failed: 0, awaitingReview: 0 });
+    expect(runResponse.body).toEqual({
+      total: 1,
+      examined: 1,
+      settled: 1,
+      ingested: 1,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 0,
+      claimUnavailable: 0,
+      unchanged: 0
+    });
+    const creatorRunResponse = await requestApp(
+      app,
+      'POST',
+      '/api/admin/local-ingest/run',
+      headers,
+      { creatorIds: [1] }
+    );
+    expect(creatorRunResponse.status).toBe(200);
+    expect(run).toHaveBeenLastCalledWith(
+      { jobIds: undefined, creatorIds: [1] },
+      expect.objectContaining({ onProgress: expect.any(Function) })
+    );
     scan.mockRestore();
     run.mockRestore();
   });

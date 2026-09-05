@@ -159,13 +159,17 @@
             </button>
           </div>
         </div>
-        <div v-if="localIngestOperation?.run" class="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 lg:grid-cols-7">
-          <span><strong class="block text-base">{{ localIngestOperation.run.processed }} / {{ localIngestOperation.run.total }}</strong>已处理 / 总数</span>
+        <div v-if="localIngestOperation?.run" class="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 lg:grid-cols-10">
+          <span><strong class="block text-base">{{ localIngestOperation.run.examined }} / {{ localIngestOperation.run.total }}</strong>已检查 / 总数</span>
+          <span><strong class="block text-base">{{ localIngestOperation.run.settled }}</strong>已有明确结果</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.ingested }}</strong>已入库</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.failed }}</strong>失败</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.awaitingReview }}</strong>待核查</span>
+          <span><strong class="block text-base">{{ localIngestOperation.run.reconciling }}</strong>仍待对账</span>
+          <span><strong class="block text-base">{{ localIngestOperation.run.claimUnavailable }}</strong>执行权占用</span>
+          <span><strong class="block text-base">{{ localIngestOperation.run.unchanged }}</strong>状态未变化</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.remaining }}</strong>剩余</span>
-          <span class="col-span-2"><strong class="block text-sm">{{ localIngestOperation.run.currentJob?.creatorName ?? '—' }}</strong>{{ localIngestOperation.run.currentJob?.archiveName ?? '等待下一项' }} · {{ localIngestPhaseLabel(localIngestOperation.run.currentJob?.phase) }}</span>
+          <span><strong class="block text-sm">{{ localIngestOperation.run.currentJob?.creatorName ?? '—' }}</strong>{{ localIngestOperation.run.currentJob?.archiveName ?? '等待下一项' }} · {{ localIngestPhaseLabel(localIngestOperation.run.currentJob?.phase) }}</span>
         </div>
         <p v-if="localIngestOperationLastChecked" class="mt-2 mb-0 text-[0.68rem] text-muted">状态读取：{{ localIngestOperationLastChecked }}</p>
       </div>
@@ -216,7 +220,7 @@
         <button type="button" data-test="validate-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="validateLocalIngestConfig">验证环境</button>
         <button type="button" data-test="smoke-local-ingest-recycle" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="smokeTestRecycleBin">回收站测试</button>
         <button type="button" data-test="scan-local-ingest" class="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="scanLocalInbox">扫描待入库</button>
-        <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch">运行可处理任务</button>
+        <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch()">运行可处理任务</button>
       </div>
       <p v-if="localIngestNotice" data-test="local-ingest-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ localIngestNotice }}</p>
 
@@ -237,11 +241,14 @@
           </button>
           <div v-if="localIngestCreatorId === creator.creatorId" class="border-t border-border bg-surface p-3">
             <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <label class="flex items-center gap-2 text-xs font-semibold text-muted">任务状态
-                <select v-model="localIngestJobStatus" data-test="local-ingest-status-filter" class="h-9 rounded-lg border border-border bg-bg px-3 text-xs text-text" @change="changeLocalIngestJobFilter">
-                  <option value="">全部</option><option value="pending">待处理</option><option value="running">处理中</option><option value="awaiting_review">待核查</option><option value="failed">失败</option><option value="completed">已完成</option>
-                </select>
-              </label>
+              <div class="flex flex-wrap items-center gap-2">
+                <label class="flex items-center gap-2 text-xs font-semibold text-muted">任务状态
+                  <select v-model="localIngestJobStatus" data-test="local-ingest-status-filter" class="h-9 rounded-lg border border-border bg-bg px-3 text-xs text-text" @change="changeLocalIngestJobFilter">
+                    <option value="">全部</option><option value="pending">待处理</option><option value="running">处理中</option><option value="awaiting_review">待核查</option><option value="failed">失败</option><option value="completed">已完成</option>
+                  </select>
+                </label>
+                <button v-if="creator.pending + creator.failed > 0" type="button" data-test="run-local-ingest-creator" class="h-9 rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch(creator.creatorId)">继续该博主待处理</button>
+              </div>
               <span class="text-xs text-muted">共 {{ localIngestDashboard.total }} 条 · 第 {{ localIngestDashboard.page }} / {{ localIngestJobTotalPages }} 页</span>
             </div>
             <div v-if="localIngestJobs.length" class="overflow-x-auto rounded-xl border border-border">
@@ -250,7 +257,7 @@
                 <tbody><tr v-for="job in localIngestJobs" :key="job.id" class="border-t border-border align-top">
                   <td class="p-3"><strong>{{ job.creatorName }}</strong><small class="mt-1 block font-mono text-muted">{{ job.sourceArchiveName }} · {{ formatBytes(job.sourceArchiveSize) }}</small></td>
                   <td class="p-3"><span class="font-mono text-xs">source {{ job.sourceWorkId ?? '—' }}</span><small class="mt-1 block text-muted">task {{ job.archiveDownloadTaskId ?? '—' }}</small></td>
-                  <td class="p-3"><strong>{{ localIngestStatusLabel(job.status) }}</strong><small class="mt-1 block text-muted">{{ localIngestPhaseLabel(job.phase) }}</small><small v-if="job.errorCode" class="mt-1 block text-red-700">{{ localIngestErrorLabel(job) }}</small></td>
+                  <td class="p-3"><strong>{{ localIngestStatusLabel(job.status) }}</strong><small class="mt-1 block text-muted">{{ localIngestPhaseLabel(job.phase) }}</small><small v-if="job.errorCode" class="mt-1 block text-red-700">{{ localIngestErrorLabel(job) }}</small><div v-if="job.status === 'awaiting_review'" data-test="local-ingest-review-evidence" class="mt-2 rounded-lg bg-amber-50 p-2 text-xs leading-5 text-amber-900"><strong>人工核查证据</strong><span class="mt-1 block">未知文件：{{ jobSummaryList(job, 'unknownFiles') }}</span><span class="block break-all">处理目录：{{ job.processingPath ?? '未建立' }}</span><span class="block">正式目录：尚未提交</span><span v-if="job.targetPath" class="block break-all">计划路径：{{ job.targetPath }}</span></div></td>
                   <td class="p-3">{{ job.validationStatus }}<small class="mt-1 block text-muted">cleanup: {{ job.cleanupStatus }}</small></td>
                   <td class="p-3 text-xs"><template v-if="job.summary">图片 {{ jobSummaryValue(job, 'imageCount') }} · 视频 {{ jobSummaryValue(job, 'videoCount') }} · 广告 {{ jobSummaryValue(job, 'advertisementFileCount') }}<small class="mt-1 block break-all text-muted">{{ jobSummaryValue(job, 'plannedTargetPath') }}</small><details class="mt-2 max-w-[30rem]"><summary class="cursor-pointer font-semibold text-accent">完整入库预览</summary><dl class="mt-2 grid grid-cols-[6rem_minmax(12rem,1fr)] gap-x-2 gap-y-1 break-all leading-5 text-muted"><dt>原始标题</dt><dd>{{ jobSummaryValue(job, 'rawTitle') }}</dd><dt>源压缩包</dt><dd>{{ job.sourceArchivePath }}</dd><dt>SHA-256</dt><dd class="font-mono">{{ job.sourceArchiveSha256 }}</dd><dt>外层格式</dt><dd>{{ jobSummaryValue(job, 'outerFormat') }}</dd><dt>第一层输出</dt><dd>{{ jobSummaryList(job, 'levelOneOutput') }}</dd><dt>内层原名</dt><dd>{{ jobSummaryValue(job, 'innerOriginalName') }}</dd><dt>内层工作名</dt><dd>{{ jobSummaryValue(job, 'innerWorkingName') }}</dd><dt>未知文件</dt><dd>{{ jobSummaryList(job, 'unknownFiles') }}</dd><dt>警告</dt><dd>{{ jobSummaryList(job, 'warnings') }}</dd></dl></details></template><span v-else class="text-muted">尚无预览</span></td>
                   <td class="p-3"><button v-if="job.status !== 'ingested' && job.status !== 'awaiting_review'" type="button" data-test="run-local-ingest-job" class="rounded-lg border border-border bg-bg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked" :title="stage3LockReason" @click="runLocalJob(job.id)">继续任务</button><button v-else-if="job.status === 'ingested' && job.cleanupStatus === 'failed'" type="button" data-test="retry-local-ingest-cleanup" class="rounded-lg border border-border bg-bg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked" :title="stage3LockReason" @click="retryLocalCleanup(job.id)">重试回收</button><span v-else class="text-xs text-muted">—</span></td>
@@ -567,7 +574,7 @@ const stage3ElapsedMs = computed(() => {
 const stage3OperationTitle = computed(() => {
   const operation = localIngestOperation.value;
   if (operation?.state === 'scanning') return 'Stage 3 正在扫描待入库';
-  if (operation?.state === 'running' && operation.kind === 'batch') return `正在运行 ${operation.run?.processed ?? 0} / ${operation.run?.total ?? 0}`;
+  if (operation?.state === 'running' && operation.kind === 'batch') return `正在检查 ${operation.run?.examined ?? 0} / ${operation.run?.total ?? 0}`;
   if (operation?.state === 'running') return 'Stage 3 正在执行操作';
   return 'Stage 3 当前空闲';
 });
@@ -731,7 +738,19 @@ function optimisticLocalIngestOperation(
     updatedAt: timestamp,
     elapsedMs: 0,
     message,
-    run: kind === 'batch' ? { total: 0, processed: 0, ingested: 0, failed: 0, awaitingReview: 0, remaining: 0, currentJob: null } : null,
+    run: kind === 'batch' ? {
+      total: 0,
+      examined: 0,
+      settled: 0,
+      ingested: 0,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 0,
+      claimUnavailable: 0,
+      unchanged: 0,
+      remaining: 0,
+      currentJob: null
+    } : null,
     lastCompleted: localIngestOperation.value?.lastCompleted ?? null
   };
 }
@@ -971,14 +990,18 @@ async function runLocalJob(id: number) {
   }
 }
 
-async function runLocalBatch() {
+async function runLocalBatch(creatorId?: number) {
   localIngestRequestBusy.value = true;
-  localIngestOperation.value = optimisticLocalIngestOperation('running', 'batch', '正在启动 Stage 3 批次');
+  localIngestOperation.value = optimisticLocalIngestOperation(
+    'running',
+    'batch',
+    creatorId ? '正在启动当前博主的 Stage 3 继续任务' : '正在启动 Stage 3 批次'
+  );
   scheduleStage3Poll();
   try {
-    const result = await runLocalIngestBatch();
+    const result = await runLocalIngestBatch(creatorId ? { creatorIds: [creatorId] } : {});
     localIngestNotice.value = result.total > 0
-      ? `本批运行 ${result.total} 个任务：已入库 ${result.ingested}，待核查 ${result.awaitingReview}，失败 ${result.failed}。`
+      ? `本批检查 ${result.examined}/${result.total} 个任务：已入库 ${result.ingested}，待核查 ${result.awaitingReview}，失败 ${result.failed}，仍待对账 ${result.reconciling}，执行权被占用 ${result.claimUnavailable}，状态未变化 ${result.unchanged}。`
       : '当前没有可运行任务；批次没有扫描待入库目录。';
     await settleStage3Request('batch', true);
   } catch (reason) {

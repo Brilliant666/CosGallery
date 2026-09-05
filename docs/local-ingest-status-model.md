@@ -53,7 +53,7 @@
 
 ## 恢复规则
 
-服务启动时会按数据库 lease 检查遗留状态，但不会自动执行真实任务：过期的 `running` 转为 `failed + INTERRUPTED_PROCESS`，保留原 phase、processing path、marker 和 attemptCount；过期的 `reconciling` 保持对账路径；`ingested + recycling` 转为可重试的 cleanup failed。管理页统一显示“上次进程中断，可继续”。
+服务启动时会按数据库 lease 检查遗留状态，但不会自动执行真实任务：遗留的 `running` 转为可继续的 `failed`；只有仍持有过期 claim 的 `reconciling` 才标记为真正中断，无 claim 的稳定待对账任务保持原状态；`ingested + recycling` 转为可重试的 cleanup failed。恢复会保留已有业务 `error_code/error_detail`、原 phase、processing path、marker 和 attemptCount，只有原本没有错误证据时才补充 `INTERRUPTED_PROCESS`。管理页据此区分业务错误与“上次进程中断，可继续”。
 
 | 中断位置 | 重启后的行为 |
 | --- | --- |

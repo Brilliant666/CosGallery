@@ -118,7 +118,19 @@ describe('LocalIngestOperationCoordinator', () => {
         state: 'running',
         kind: 'batch',
         message: 'batch',
-        run: { total: 2, processed: 0, ingested: 0, failed: 0, awaitingReview: 0, remaining: 2, currentJob: null }
+        run: {
+          total: 2,
+          examined: 0,
+          settled: 0,
+          ingested: 0,
+          failed: 0,
+          awaitingReview: 0,
+          reconciling: 0,
+          claimUnavailable: 0,
+          unchanged: 0,
+          remaining: 2,
+          currentJob: null
+        }
       },
       async ({ update }) => {
         update({

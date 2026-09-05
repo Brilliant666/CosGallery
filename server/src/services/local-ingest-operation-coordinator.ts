@@ -23,10 +23,14 @@ export type LocalIngestOperationCurrentJob = {
 
 export type LocalIngestOperationRun = {
   total: number;
-  processed: number;
+  examined: number;
+  settled: number;
   ingested: number;
   failed: number;
   awaitingReview: number;
+  reconciling: number;
+  claimUnavailable: number;
+  unchanged: number;
   remaining: number;
   currentJob: LocalIngestOperationCurrentJob | null;
 };
@@ -179,10 +183,14 @@ export class LocalIngestOperationCoordinator {
     if (patch.run) {
       const current = this.active.run ?? {
         total: 0,
-        processed: 0,
+        examined: 0,
+        settled: 0,
         ingested: 0,
         failed: 0,
         awaitingReview: 0,
+        reconciling: 0,
+        claimUnavailable: 0,
+        unchanged: 0,
         remaining: 0,
         currentJob: null
       };

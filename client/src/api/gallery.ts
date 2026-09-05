@@ -486,11 +486,11 @@ export function runLocalIngestJob(id: number) {
   return requestJson<import('../types/api').LocalIngestJob>(`/api/admin/local-ingest/jobs/${id}/run`, { method: 'POST' });
 }
 
-export function runLocalIngestBatch(jobIds?: number[]) {
+export function runLocalIngestBatch(options: { jobIds?: number[]; creatorIds?: number[] } = {}) {
   return requestJson<import('../types/api').LocalIngestBatchResult>('/api/admin/local-ingest/run', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jobIds })
+    body: JSON.stringify(options)
   });
 }
 

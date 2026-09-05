@@ -334,7 +334,17 @@ describe.sequential('LocalIngest cross-platform hardening', () => {
       secondService.runBatch({ jobIds: [discovery.jobs[0].id] })
     ]);
     expect(single.status).toBe('ingested');
-    expect(batch).toHaveLength(1);
+    expect(batch).toMatchObject({
+      total: 1,
+      examined: 1,
+      settled: 0,
+      ingested: 0,
+      claimUnavailable: 1,
+      reconciling: 0,
+      unchanged: 0
+    });
+    expect(batch.items).toHaveLength(1);
+    expect(batch.items[0].outcome).toBe('claim_unavailable');
     expect(fixture.commandCounts).toEqual({ list: 2, test: 2, outer: 1, inner: 1 });
     expect(fixture.rescanCalls()).toBe(1);
     expect(fixture.service.getJob(discovery.jobs[0].id).attemptCount).toBe(1);
@@ -399,6 +409,67 @@ describe.sequential('LocalIngest cross-platform hardening', () => {
     fixture.database.close();
   });
 
+  it('preserves business errors and does not label an unclaimed reconciliation as interrupted', async () => {
+    const fixture = await createFixture();
+    const old = new Date(Date.now() - 10_000).toISOString();
+    fixture.database.prepare(
+      `INSERT INTO local_ingest_jobs (
+         creator_id, source_archive_path, source_archive_name, source_archive_size,
+         source_archive_mtime, source_archive_sha256, status, phase,
+         validation_status, cleanup_status, attempt_count, error_code, error_detail,
+         created_at, updated_at
+       ) VALUES (1, ?, 'stable.7z', 1, 1, 'STABLE', 'reconciling', 'reconciling',
+         'passed', 'pending', 1, 'RECONCILIATION_INCOMPLETE', 'original stable evidence', ?, ?)`
+    ).run(path.join(fixture.inboxRoot, fixture.creatorName, 'stable.7z'), old, old);
+    fixture.database.prepare(
+      `INSERT INTO local_ingest_jobs (
+         creator_id, source_archive_path, source_archive_name, source_archive_size,
+         source_archive_mtime, source_archive_sha256, status, phase,
+         validation_status, cleanup_status, attempt_count, error_code, error_detail,
+         claim_token, claimed_at, claim_heartbeat_at, created_at, updated_at
+       ) VALUES (1, ?, 'stale.7z', 1, 1, 'STALE', 'reconciling', 'reconciling',
+         'passed', 'pending', 1, 'GALLERY_INDEX_INCOMPLETE', 'original stale evidence',
+         'stale-claim', ?, ?, ?, ?)`
+    ).run(path.join(fixture.inboxRoot, fixture.creatorName, 'stale.7z'), old, old, old, old);
+    fixture.database.prepare(
+      `INSERT INTO local_ingest_jobs (
+         creator_id, source_archive_path, source_archive_name, source_archive_size,
+         source_archive_mtime, source_archive_sha256, status, phase,
+         validation_status, cleanup_status, attempt_count, error_code, error_detail,
+         created_at, updated_at
+       ) VALUES (1, ?, 'running.7z', 1, 1, 'RUNNING', 'running', 'extracting_inner',
+         'unknown', 'not_ready', 2, 'ARCHIVE_CORRUPT', 'original archive evidence', ?, ?)`
+    ).run(path.join(fixture.inboxRoot, fixture.creatorName, 'running.7z'), old, old);
+
+    expect(await fixture.service.recoverInterruptedJobs()).toBe(2);
+    expect(fixture.database.prepare(
+      "SELECT status, error_code, error_detail, claim_token, updated_at FROM local_ingest_jobs WHERE source_archive_sha256 = 'STABLE'"
+    ).get()).toEqual({
+      status: 'reconciling',
+      error_code: 'RECONCILIATION_INCOMPLETE',
+      error_detail: 'original stable evidence',
+      claim_token: null,
+      updated_at: old
+    });
+    expect(fixture.database.prepare(
+      "SELECT status, error_code, error_detail, claim_token FROM local_ingest_jobs WHERE source_archive_sha256 = 'STALE'"
+    ).get()).toEqual({
+      status: 'reconciling',
+      error_code: 'GALLERY_INDEX_INCOMPLETE',
+      error_detail: 'original stale evidence',
+      claim_token: null
+    });
+    expect(fixture.database.prepare(
+      "SELECT status, error_code, error_detail, attempt_count FROM local_ingest_jobs WHERE source_archive_sha256 = 'RUNNING'"
+    ).get()).toEqual({
+      status: 'failed',
+      error_code: 'ARCHIVE_CORRUPT',
+      error_detail: 'original archive evidence',
+      attempt_count: 2
+    });
+    fixture.database.close();
+  });
+
   it('rejects a database-replaced source path before archive execution', async () => {
     const fixture = await createFixture();
     const discovery = await discoverStable(fixture);
@@ -425,7 +496,10 @@ describe.sequential('LocalIngest cross-platform hardening', () => {
     fixture.database.prepare(
       "UPDATE local_ingest_jobs SET status = 'reconciling', phase = 'reconciling', target_path = ?, processing_path = NULL, error_code = NULL WHERE id = ?"
     ).run(outsideTarget, discovery.jobs[0].id);
-    await expect(fixture.service.runJob(discovery.jobs[0].id)).rejects.toThrow(/outside its allowed root/i);
+    await expect(fixture.service.runJob(discovery.jobs[0].id)).resolves.toMatchObject({
+      status: 'reconciling',
+      errorCode: 'TARGET_PATH_OUTSIDE_LIBRARY'
+    });
     expect(fixture.rescanCalls()).toBe(0);
     fixture.database.close();
   });
