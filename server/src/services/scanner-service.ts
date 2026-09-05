@@ -42,6 +42,12 @@ import { log } from './log-service.js';
 import { placeResolutionService } from './place-service.js';
 import { storageService } from './storage-service.js';
 import {
+  CreatorWorkPostTopologyError,
+  reconcileCreatorWorkPostTopology,
+  type CreatorWorkPostTopologyEntry,
+  type CreatorWorkPostTopologySummary
+} from './creator-work-post-topology-service.js';
+import {
   createFingerprint,
   getMediaTypeFromExtension,
   getMimeTypeFromExtension,
@@ -159,6 +165,7 @@ interface IndexedFolderScanOptions {
 interface ReservedCarouselScanResult {
   ownerFolder: FolderRecord | null;
   results: SourceFolderScanResult[];
+  postTopologyRepair?: CreatorWorkPostTopologySummary;
 }
 
 interface IndexedFileReference {
@@ -1568,6 +1575,7 @@ class ScannerService {
 
     const activeWorkPaths: string[] = [];
     const results: SourceFolderScanResult[] = [];
+    const expectedPostTopology: CreatorWorkPostTopologyEntry[] = [];
 
     for (const workEntry of workEntries) {
       const workRelativePath = normalizePath(`${sourceFolder.relativePath}/${workEntry.name}`);
@@ -1611,28 +1619,28 @@ class ScannerService {
         .sort((a, b) => compareNaturalFilename(a.relative_path, b.relative_path));
 
       if (indexedImages.length > 0) {
-        const firstItem = indexedImages[0];
-        const existingPost = postRepository.findByExactImageIds(indexedImages.map((image) => image.id))
-          ?? postRepository.findBySourcePath(workRelativePath);
+        if (!result.folder || indexedImages.length !== statResult.discoveredFiles.length) {
+          throw new Error(
+            `LEGACY_POST_SPLIT_UNMAPPED_ITEM: ${workRelativePath} indexed ${indexedImages.length} of ${statResult.discoveredFiles.length} discovered media files`
+          );
+        }
+        const firstItem = indexedImages[0]!;
         const newestItemTimestamp = Math.max(...indexedImages.map((image) => image.sort_timestamp));
 
-        postRepository.upsertPostWithItems({
-          existingPostId: existingPost?.id,
-          id: !existingPost && indexedImages.length === 1 ? firstItem.id : undefined,
-          folderId: ownerFolder.id,
+        expectedPostTopology.push({
+          ownerFolderId: ownerFolder.id,
+          workFolderId: result.folder.id,
+          sourcePath: workRelativePath,
           placeId: firstItem.place_id,
           postType: indexedImages.length > 1 ? 'carousel' : 'single',
-          sourcePath: workRelativePath,
-          caption: existingPost?.caption ?? null,
           takenAt: firstItem.taken_at,
           takenAtSource: firstItem.taken_at_source,
           sortTimestamp: newestItemTimestamp,
-          isDeleted: 0,
-          isTrashed: existingPost?.is_trashed ?? 0
-        }, indexedImages.map((image, index) => ({
-          imageId: image.id,
-          position: index + 1
-        })));
+          items: indexedImages.map((image, index) => ({
+            imageId: image.id,
+            position: index + 1
+          }))
+        });
       }
 
       results.push(result);
@@ -1645,9 +1653,51 @@ class ScannerService {
       );
     }
 
+    const topologyInput = {
+      ownerFolderId: ownerFolder.id,
+      creatorPath: sourceFolder.relativePath,
+      entries: expectedPostTopology,
+      pathExists: (relativePath: string) => {
+        try {
+          return fsSync.existsSync(resolveOriginalPath(relativePath));
+        } catch {
+          return false;
+        }
+      }
+    };
+    const dryRun = reconcileCreatorWorkPostTopology(topologyInput, { dryRun: true });
+    log.info('Creator work Post topology dry-run', {
+      creator: sourceFolder.relativePath,
+      destinationWorks: dryRun.destinationWorks,
+      destinationExistingPosts: dryRun.destinationExistingPosts,
+      postsToCreate: dryRun.postsToCreate,
+      itemsToTransfer: dryRun.itemsToTransfer,
+      postsToRetire: dryRun.postsToRetire,
+      affectedLegacyPosts: dryRun.affectedLegacyPosts,
+      userStateConflicts: dryRun.userStateConflicts,
+      unmappedItems: dryRun.unmappedItems,
+      activeOwnerConflicts: dryRun.activeOwnerConflicts,
+      conflicts: dryRun.conflicts.length
+    });
+    if (!dryRun.canApply) {
+      throw new CreatorWorkPostTopologyError(dryRun.conflicts[0]!, dryRun);
+    }
+    const postTopologyRepair = reconcileCreatorWorkPostTopology(topologyInput, {
+      dryRun: false,
+      expectedRevision: dryRun.revision
+    });
+    log.info('Creator work Post topology committed', {
+      creator: sourceFolder.relativePath,
+      createdPosts: postTopologyRepair.createdPosts,
+      updatedPosts: postTopologyRepair.updatedPosts,
+      transferredItems: postTopologyRepair.transferredItems,
+      retiredPosts: postTopologyRepair.retiredPosts,
+      conflicts: postTopologyRepair.conflicts.length
+    });
+
     postRepository.softDeleteMissingByFolder(ownerFolder.id, activeWorkPaths);
     folderRepository.syncAvatarSelection(ownerFolder.id);
-    return { ownerFolder, results };
+    return { ownerFolder, results, postTopologyRepair };
   }
 
   private async scanReservedCarousels(
