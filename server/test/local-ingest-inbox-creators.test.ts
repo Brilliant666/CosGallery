@@ -271,6 +271,43 @@ describe('LocalIngest pending creator discovery', () => {
     fixture.database.close();
   });
 
+  it('does not credit this batch when a selected job becomes completed before its execution turn', async () => {
+    const fixture = await createDiscoveryFixture();
+    fixture.database.prepare('DELETE FROM local_ingest_jobs').run();
+    insertJob(fixture.database, 9, 1, path.join(fixture.inboxRoot, 'Creator Alpha', '024.7z'), 'queued');
+    let changed = false;
+
+    const result = await fixture.service.runBatch(
+      { allowlist: ['Creator Alpha'], jobIds: [9] },
+      {
+        onProgress: (progress) => {
+          if (changed || progress.examined !== 0 || progress.currentJob !== null) return;
+          changed = true;
+          fixture.database.prepare(
+            "UPDATE local_ingest_jobs SET status = 'ingested', phase = 'done', cleanup_status = 'recycled' WHERE id = 9"
+          ).run();
+        }
+      }
+    );
+
+    expect(result).toMatchObject({
+      total: 1,
+      examined: 1,
+      settled: 0,
+      ingested: 0,
+      failed: 0,
+      awaitingReview: 0,
+      reconciling: 0,
+      claimUnavailable: 0,
+      unchanged: 1
+    });
+    expect(result.items).toEqual([
+      expect.objectContaining({ outcome: 'unchanged', job: expect.objectContaining({ id: 9, status: 'ingested' }) })
+    ]);
+    expect(fixture.sideEffects).toEqual({ hash: 0, command: 0, recycle: 0, reconcile: 0 });
+    fixture.database.close();
+  });
+
   it('scans canonical allowlist creators across their direct alias directories', async () => {
     const fixture = await createDiscoveryFixture();
 

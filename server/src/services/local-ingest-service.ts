@@ -2205,6 +2205,9 @@ export class LocalIngestService {
       if (execution.ownership === 'unavailable') {
         outcome = 'claim_unavailable';
         claimUnavailable += 1;
+      } else if (execution.ownership === 'not_required') {
+        outcome = 'unchanged';
+        unchanged += 1;
       } else if (result.status === 'ingested') {
         outcome = 'ingested';
         ingested += 1;

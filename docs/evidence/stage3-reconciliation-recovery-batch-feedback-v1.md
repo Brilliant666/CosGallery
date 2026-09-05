@@ -70,6 +70,7 @@
 - `total` 明确表示服务器固定选中的任务数；六个业务结果桶彼此互斥，`settled=ingested+failed+awaitingReview` 只是辅助汇总，`remaining` 只表示尚未检查。
 - 独立统计 `reconciling`、`claimUnavailable` 和 `unchanged`；页面运行中和结束提示均显示这些去向。
 - 数据库 claim 失败会返回明确的 `claim_unavailable` 批次结果，不运行压缩、扫描或对账。
+- 任务在固定选中后、轮到执行前若已由其他执行者完成，本批将其记为 `unchanged`，不会把外部完成错误计入本批 `ingested`。
 - 支持 `creatorIds` 或 `jobIds` 的明确批次范围；两者不能同时提交。
 - 显式 ID 在 API 入口执行正整数、非空、上限和去重校验；空集合在服务层仍保持空范围，非法、空或混合范围都不会退化为全量运行。
 - 管理页在展开博主后提供“继续该博主待处理”，范围由服务端从完整数据库任务集生成，不受当前 50 条分页影响；仍由既有 operation coordinator 串行执行并互斥。
@@ -92,7 +93,7 @@
 - 已提交目录的第二次恢复保持 `attemptCount=1`、目录内容不变；
 - creator-scoped 恢复前后，无关博主的 Creator、Collection、Work、Source Work 和 Download Task 完整行逐字段一致。
 
-聚焦验证结果：服务端 5 个测试文件共 62 passed、2 skipped；客户端管理页 20 passed。最终全量验证结果为服务端 82 个测试文件、466 passed、2 skipped，客户端 53 个测试文件、303 passed。服务端 TypeScript 构建和客户端类型检查/生产构建均通过，`git diff --check` 通过。
+聚焦验证结果：服务端 5 个测试文件共 63 passed、2 skipped；客户端管理页 20 passed。最终全量验证结果为服务端 82 个测试文件、467 passed、2 skipped，客户端 53 个测试文件、303 passed。服务端 TypeScript 构建和客户端类型检查/生产构建均通过，`git diff --check` 通过。
 
 ## 真实恢复前的明确写入范围（尚未执行）
 

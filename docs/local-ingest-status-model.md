@@ -74,6 +74,7 @@
 - `ingested`、`failed`、`awaitingReview`、`reconciling`、`claimUnavailable`、`unchanged` 是每个已检查任务唯一落入的互斥结果桶。
 - `settled` 是辅助指标，等于 `ingested + failed + awaitingReview`；它不应再与“遍历过”混用。
 - `claimUnavailable` 表示任务未取得数据库执行权，本次没有执行其解压、扫描或对账，不能计为成功。
+- `unchanged` 包括选中后在轮到执行前已经变为无需执行状态的任务；即使观察到它已由其他执行者入库，也不能归功于当前批次。
 
 显式 `jobIds` 或 `creatorIds` 范围在 API 入口校验并去重，两者不能同时出现。空数组和非法 ID 会被拒绝；服务层收到空集合时也保持空范围，绝不退化为全量批次。
 
