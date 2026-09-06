@@ -194,6 +194,16 @@ export type LocalIngestDiscoveryResult = {
   jobs: LocalIngestJob[];
 };
 
+export type LocalIngestManualPlacementInput = {
+  jobId: number;
+  expectedCreatorId: number;
+  expectedSourceWorkId: number;
+  expectedDownloadTaskId: number;
+  expectedTargetPath: string;
+  removedUnknownFiles: string[];
+  note: string;
+};
+
 type LocalIngestScanPassResult = LocalIngestDiscoveryResult & {
   waitingPaths: string[];
 };
@@ -332,6 +342,17 @@ type ValidationSummary = {
   galleryPostItemCount?: number;
   sourceArchiveRecycled?: boolean;
   processingDirectoryRecycled?: boolean;
+  manualPlacement?: {
+    adoptedAt: string;
+    targetPath: string;
+    note: string;
+    removedUnknownFiles: string[];
+    removedUnknownFileCount: number;
+    previousErrorCode: string;
+    previousErrorDetail: string;
+    extractionReused: false;
+    targetCommitPerformed: false;
+  };
 };
 
 class LocalIngestFailure extends Error {
@@ -361,6 +382,30 @@ function safeJsonParse(value: string | null): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function comparableRelativePath(value: string): string {
+  return value.replace(/\\/g, '/').normalize('NFC').toLocaleLowerCase();
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const leftSet = new Set(left.map(comparableRelativePath));
+  if (leftSet.size !== left.length) return false;
+  return right.every((value) => leftSet.has(comparableRelativePath(value)));
+}
+
+function unknownFilesFromReviewError(detail: string | null): string[] {
+  const prefix = 'Unknown files require review: ';
+  if (!detail?.startsWith(prefix)) return [];
+  return detail.slice(prefix.length).split(', ').filter((value) => value.length > 0);
+}
+
+function manualPlacementSummary(value: Record<string, unknown> | null): Record<string, unknown> | null {
+  const candidate = value?.manualPlacement;
+  return candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+    ? candidate as Record<string, unknown>
+    : null;
 }
 
 function isPathWithin(root: string, candidate: string): boolean {
@@ -1684,7 +1729,7 @@ export class LocalIngestService {
 
     const warnings: string[] = [];
     const declared = mapping.media_summary ?? '';
-    const declaredImages = /(?<!\d)(\d+)P\b/i.exec(declared);
+    const declaredImages = /(?<!\d)(\d+)P(?=\d+V\b|\b)/i.exec(declared);
     const declaredVideos = /(?<!\d)(\d+)V\b/i.exec(declared);
     const declaredSize = /(?<![\d.])(\d+(?:\.\d+)?)\s*(KB|K|MB|M|GB|G)\b/i.exec(declared);
     if (declaredImages && Number(declaredImages[1]) !== imageCount) warnings.push(`Declared ${declaredImages[1]} images; extracted ${imageCount}`);
@@ -1736,6 +1781,386 @@ export class LocalIngestService {
       errorDetail: null
     });
     return summary;
+  }
+
+  async adoptManualPlacement(input: LocalIngestManualPlacementInput): Promise<LocalIngestJob> {
+    if (!Number.isSafeInteger(input.jobId) || input.jobId <= 0) {
+      throw new LocalIngestFailure('MANUAL_PLACEMENT_SCOPE_INVALID', 'A positive jobId is required', true);
+    }
+    if (!Number.isSafeInteger(input.expectedCreatorId) || input.expectedCreatorId <= 0
+      || !Number.isSafeInteger(input.expectedSourceWorkId) || input.expectedSourceWorkId <= 0
+      || !Number.isSafeInteger(input.expectedDownloadTaskId) || input.expectedDownloadTaskId <= 0) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_SCOPE_INVALID',
+        'Positive expected creator, source work, and download task ids are required',
+        true
+      );
+    }
+    if (typeof input.expectedTargetPath !== 'string' || !path.isAbsolute(input.expectedTargetPath)) {
+      throw new LocalIngestFailure('MANUAL_PLACEMENT_SCOPE_INVALID', 'expectedTargetPath must be absolute', true);
+    }
+    if (typeof input.note !== 'string' || !input.note.trim() || input.note.length > 2_000) {
+      throw new LocalIngestFailure('MANUAL_PLACEMENT_SCOPE_INVALID', 'A concise manual-placement note is required', true);
+    }
+    if (!Array.isArray(input.removedUnknownFiles) || input.removedUnknownFiles.length === 0) {
+      throw new LocalIngestFailure('MANUAL_PLACEMENT_SCOPE_INVALID', 'The removed unknown-file evidence is required', true);
+    }
+    for (const removedPath of input.removedUnknownFiles) {
+      if (typeof removedPath !== 'string') {
+        throw new LocalIngestFailure('MANUAL_PLACEMENT_SCOPE_INVALID', 'Removed-file evidence must contain only strings', true);
+      }
+      const normalized = removedPath.replace(/\\/g, '/');
+      if (!removedPath || path.isAbsolute(removedPath) || path.win32.isAbsolute(removedPath)
+        || normalized.split('/').some((segment) => segment === '..')
+        || path.extname(removedPath).toLocaleLowerCase() !== '.jfif') {
+        throw new LocalIngestFailure(
+          'MANUAL_PLACEMENT_SCOPE_INVALID',
+          `Removed-file evidence is not a safe relative JFIF path: ${removedPath}`,
+          true
+        );
+      }
+    }
+    if (new Set(input.removedUnknownFiles.map(comparableRelativePath)).size !== input.removedUnknownFiles.length) {
+      throw new LocalIngestFailure('MANUAL_PLACEMENT_SCOPE_INVALID', 'Removed-file evidence contains duplicates', true);
+    }
+
+    const current = this.getJobRow(input.jobId);
+    const currentSummary = safeJsonParse(current.summary_json);
+    const priorAdoption = manualPlacementSummary(currentSummary);
+    if (current.status === 'ingested' && priorAdoption) {
+      const priorTarget = typeof priorAdoption.targetPath === 'string' ? priorAdoption.targetPath : '';
+      const priorTargetCanonical = priorTarget ? await canonicalizeLocalIngestPath(priorTarget) : '';
+      const requestedTargetCanonical = await canonicalizeLocalIngestPath(input.expectedTargetPath);
+      const sameCompletedTarget = process.platform === 'win32'
+        ? priorTargetCanonical.toLocaleLowerCase() === requestedTargetCanonical.toLocaleLowerCase()
+        : priorTargetCanonical === requestedTargetCanonical;
+      const priorRemoved = Array.isArray(priorAdoption.removedUnknownFiles)
+        ? priorAdoption.removedUnknownFiles.filter((value): value is string => typeof value === 'string')
+        : [];
+      if (
+        current.creator_id !== input.expectedCreatorId
+        || current.source_work_id !== input.expectedSourceWorkId
+        || current.archive_download_task_id !== input.expectedDownloadTaskId
+        || !sameCompletedTarget
+        || !sameStringSet(priorRemoved, input.removedUnknownFiles)
+      ) {
+        throw new LocalIngestFailure(
+          'MANUAL_PLACEMENT_SCOPE_MISMATCH',
+          'The completed manual-placement record does not match this request',
+          true
+        );
+      }
+      return this.getJob(input.jobId);
+    }
+
+    const claimed = await this.runWithClaimOutcome(
+      input.jobId,
+      () => this.adoptManualPlacementClaimed(input)
+    );
+    if (claimed.ownership === 'unavailable') {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_CLAIM_UNAVAILABLE',
+        `Local ingest job ${input.jobId} is already claimed by another operation`,
+        true
+      );
+    }
+    return claimed.job;
+  }
+
+  private async adoptManualPlacementClaimed(input: LocalIngestManualPlacementInput): Promise<LocalIngestJob> {
+    const job = this.getJobRow(input.jobId);
+    if (job.status !== 'awaiting_review'
+      || job.phase !== 'validating'
+      || job.validation_status !== 'failed'
+      || job.error_code !== 'UNKNOWN_FILE_TYPE'
+      || job.attempt_count < 1) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_STATE_MISMATCH',
+        'Only a previously attempted UNKNOWN_FILE_TYPE review job can adopt a manual placement',
+        true
+      );
+    }
+    if (
+      job.creator_id !== input.expectedCreatorId
+      || job.source_work_id !== input.expectedSourceWorkId
+      || job.archive_download_task_id !== input.expectedDownloadTaskId
+    ) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_SCOPE_MISMATCH',
+        'The job no longer matches the explicitly expected creator, source work, and download task',
+        true
+      );
+    }
+    const removedFromOriginalError = unknownFilesFromReviewError(job.error_detail);
+    if (!sameStringSet(removedFromOriginalError, input.removedUnknownFiles)) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_EVIDENCE_MISMATCH',
+        'The supplied removed-file list does not exactly match the preserved review error',
+        true
+      );
+    }
+
+    const settings = await this.checkedSettings();
+    const mapping = this.mappingForJob(job);
+    const creatorDirectoryName = this.safeCreatorDirectoryName(mapping.creator_name);
+    const expectedCreatorDirectory = path.join(settings.libraryRoot, creatorDirectoryName);
+    const mappedTargetPath = path.join(
+      expectedCreatorDirectory,
+      sanitizeWindowsDirectoryName(mapping.raw_title?.trim() || mapping.source_title.trim())
+    );
+    await this.assertInside(
+      settings.libraryRoot,
+      expectedCreatorDirectory,
+      'TARGET_PATH_OUTSIDE_LIBRARY',
+      'Target creator directory',
+      { directChild: true }
+    );
+    const checkedTarget = await this.assertInside(
+      settings.libraryRoot,
+      input.expectedTargetPath,
+      'TARGET_PATH_OUTSIDE_LIBRARY',
+      'Manually placed target directory'
+    );
+    const mappedCanonical = await canonicalizeLocalIngestPath(mappedTargetPath);
+    const jobTargetCanonical = job.target_path ? await canonicalizeLocalIngestPath(job.target_path) : '';
+    const samePath = (left: string, right: string): boolean => process.platform === 'win32'
+      ? left.toLocaleLowerCase() === right.toLocaleLowerCase()
+      : left === right;
+    if (!job.target_path
+      || !samePath(checkedTarget.candidate, mappedCanonical)
+      || !samePath(checkedTarget.candidate, jobTargetCanonical)) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_TARGET_MISMATCH',
+        'The manual target does not exactly match both the preserved Job target and source-work title',
+        true
+      );
+    }
+    const targetStats = await fs.lstat(checkedTarget.candidate);
+    if (!targetStats.isDirectory() || targetStats.isSymbolicLink()) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_TARGET_INVALID',
+        'The manually placed target must be a regular non-symbolic directory',
+        true
+      );
+    }
+
+    await this.assertSourcePath(job, mapping, settings);
+    const sourceStats = await fs.stat(job.source_archive_path);
+    if (sourceStats.size !== job.source_archive_size) {
+      throw new LocalIngestFailure('SOURCE_ARCHIVE_CHANGED', 'The source archive size changed after the failed attempt', true);
+    }
+    const currentSourceHash = await this.hashFile(job.source_archive_path);
+    if (currentSourceHash.toLocaleUpperCase() !== job.source_archive_sha256.toLocaleUpperCase()) {
+      throw new LocalIngestFailure('SOURCE_ARCHIVE_CHANGED', 'The source archive checksum changed after the failed attempt', true);
+    }
+
+    if (job.processing_path) {
+      const checkedProcessing = await this.assertInside(
+        settings.processingRoot,
+        job.processing_path,
+        'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT',
+        'Job processing directory',
+        { directChild: true }
+      );
+      const expectedProcessing = await canonicalizeLocalIngestPath(path.join(settings.processingRoot, String(job.id)));
+      if (!samePath(checkedProcessing.candidate, expectedProcessing)) {
+        throw new LocalIngestFailure(
+          'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT',
+          'Job processing directory does not match this job id',
+          true
+        );
+      }
+    }
+
+    const existingLocalWorks = this.database.prepare(
+      `SELECT local_works.id,
+              local_works.relative_path,
+              local_works.absolute_path,
+              creator_folders.creator_id AS folder_creator_id,
+              creator_folders.absolute_path AS creator_folder_absolute_path
+       FROM archive_catalog_local_works local_works
+       JOIN archive_catalog_source_works source_works ON source_works.work_id = local_works.work_id
+       JOIN archive_catalog_local_creator_folders creator_folders
+         ON creator_folders.id = local_works.local_creator_folder_id
+       WHERE source_works.id = ?
+       AND local_works.is_active = 1`
+    ).all(mapping.source_work_id) as Array<{
+      id: number;
+      relative_path: string;
+      absolute_path: string;
+      folder_creator_id: number | null;
+      creator_folder_absolute_path: string;
+    }>;
+    const existingAbsolutePath = existingLocalWorks.length === 1
+      ? await canonicalizeLocalIngestPath(existingLocalWorks[0].absolute_path)
+      : '';
+    const existingCreatorFolderPath = existingLocalWorks.length === 1
+      ? await canonicalizeLocalIngestPath(existingLocalWorks[0].creator_folder_absolute_path)
+      : '';
+    const targetRelativeToExistingCreator = existingLocalWorks.length === 1
+      ? path.relative(existingCreatorFolderPath, checkedTarget.candidate).replace(/\\/g, '/')
+      : '';
+    if (existingLocalWorks.length > 1 || (existingLocalWorks.length === 1
+      && (existingLocalWorks[0].folder_creator_id !== mapping.creator_id
+        || comparableRelativePath(existingLocalWorks[0].relative_path) !== comparableRelativePath(targetRelativeToExistingCreator)
+        || !samePath(existingAbsolutePath, checkedTarget.candidate)))) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_RELATION_CONFLICT',
+        'The source work already has a conflicting or duplicate active local relationship',
+        true
+      );
+    }
+
+    const tree = await listTree(checkedTarget.candidate);
+    let imageCount = 0;
+    let videoCount = 0;
+    let totalBytes = 0;
+    const remainingNonMedia: string[] = [];
+    const retainedPaths = new Set<string>();
+    for (const entry of tree) {
+      if (entry.symbolic || !isPathWithin(checkedTarget.candidate, entry.absolutePath)) {
+        throw new LocalIngestFailure(
+          'MANUAL_PLACEMENT_TARGET_INVALID',
+          `The manually placed target contains an unsafe entry: ${entry.relativePath}`,
+          true
+        );
+      }
+      if (entry.directory) continue;
+      if (entry.size === 0) {
+        throw new LocalIngestFailure(
+          'MANUAL_PLACEMENT_TARGET_INVALID',
+          `The manually placed target contains an empty file: ${entry.relativePath}`,
+          true
+        );
+      }
+      retainedPaths.add(comparableRelativePath(entry.relativePath));
+      const extension = path.extname(entry.relativePath).toLocaleLowerCase();
+      if (IMAGE_EXTENSIONS.has(extension)) {
+        await validateImage(entry.absolutePath);
+        imageCount += 1;
+        totalBytes += entry.size;
+      } else if (VIDEO_EXTENSIONS.has(extension)) {
+        await validateVideo(entry.absolutePath);
+        videoCount += 1;
+        totalBytes += entry.size;
+      } else {
+        remainingNonMedia.push(entry.relativePath);
+      }
+    }
+    if (remainingNonMedia.length > 0) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_NON_MEDIA_REMAINS',
+        `The manually placed target still contains non-media files: ${remainingNonMedia.join(', ')}`,
+        true
+      );
+    }
+    if (imageCount + videoCount === 0) {
+      throw new LocalIngestFailure('NO_VALID_MEDIA', 'The manually placed target contains no valid media', true);
+    }
+    const removedStillPresent = input.removedUnknownFiles.filter((removedPath) => retainedPaths.has(comparableRelativePath(removedPath)));
+    if (removedStillPresent.length > 0) {
+      throw new LocalIngestFailure(
+        'MANUAL_PLACEMENT_EVIDENCE_MISMATCH',
+        `Files recorded as manually removed are still present: ${removedStillPresent.join(', ')}`,
+        true
+      );
+    }
+
+    const declared = mapping.media_summary ?? '';
+    const declaredImagesMatch = /(?<!\d)(\d+)P(?=\d+V\b|\b)/i.exec(declared);
+    const declaredVideosMatch = /(?<!\d)(\d+)V\b/i.exec(declared);
+    const declaredSizeMatch = /(?<![\d.])(\d+(?:\.\d+)?)\s*(KB|K|MB|M|GB|G)\b/i.exec(declared);
+    const declaredImageCount = declaredImagesMatch ? Number(declaredImagesMatch[1]) : undefined;
+    const declaredVideoCount = declaredVideosMatch ? Number(declaredVideosMatch[1]) : undefined;
+    const declaredSizeMultiplier = declaredSizeMatch
+      ? declaredSizeMatch[2].toLocaleUpperCase().startsWith('G') ? 1024 ** 3
+        : declaredSizeMatch[2].toLocaleUpperCase().startsWith('M') ? 1024 ** 2
+          : 1024
+      : null;
+    const declaredTotalBytes = declaredSizeMatch && declaredSizeMultiplier
+      ? Math.round(Number(declaredSizeMatch[1]) * declaredSizeMultiplier)
+      : undefined;
+    const previousSummary = safeJsonParse(job.summary_json) ?? {};
+    const warnings = Array.isArray(previousSummary.warnings)
+      ? previousSummary.warnings.filter((value): value is string => typeof value === 'string')
+      : [];
+    warnings.push('Adopted a work directory manually placed by the user; extraction and target commit were not rerun');
+    warnings.push(`The user intentionally removed ${input.removedUnknownFiles.length} unsupported JFIF files before adoption: ${input.removedUnknownFiles.join(', ')}`);
+    if (declaredImageCount !== undefined && declaredImageCount !== imageCount) {
+      warnings.push(`Declared ${declaredImageCount} images; retained ${imageCount} after manual removal`);
+    }
+    if (declaredVideoCount !== undefined && declaredVideoCount !== videoCount) {
+      warnings.push(`Declared ${declaredVideoCount} videos; retained ${videoCount} after manual removal`);
+    }
+    const summary: ValidationSummary = {
+      creator: mapping.creator_name,
+      sourceWorkId: mapping.source_work_id,
+      archiveDownloadTaskId: mapping.archive_download_task_id,
+      sourceTitle: mapping.source_title,
+      rawTitle: mapping.raw_title,
+      sourceArchivePath: job.source_archive_path,
+      sourceArchiveSha256: job.source_archive_sha256,
+      outerFormat: archiveExtension(job.source_archive_name).slice(1),
+      levelOneOutput: Array.isArray(previousSummary.levelOneOutput)
+        ? previousSummary.levelOneOutput.filter((value): value is string => typeof value === 'string')
+        : [],
+      innerOriginalName: typeof previousSummary.innerOriginalName === 'string' ? previousSummary.innerOriginalName : '',
+      innerWorkingName: typeof previousSummary.innerWorkingName === 'string' ? previousSummary.innerWorkingName : '',
+      imageCount,
+      videoCount,
+      totalMediaCount: imageCount + videoCount,
+      totalBytes,
+      mediaType: imageCount > 0 && videoCount > 0 ? 'mixed' : imageCount > 0 ? 'image' : 'video',
+      advertisementFileCount: 0,
+      unknownFiles: [],
+      nestedArchives: [],
+      warnings,
+      plannedTargetPath: checkedTarget.candidate,
+      readyPath: typeof previousSummary.readyPath === 'string' ? previousSummary.readyPath : '',
+      declaredMediaSummary: mapping.media_summary,
+      declaredImageCount,
+      declaredVideoCount,
+      declaredTotalBytes,
+      declaredVsActualByteDifference: declaredTotalBytes === undefined ? undefined : totalBytes - declaredTotalBytes,
+      manualPlacement: {
+        adoptedAt: this.timestamp(),
+        targetPath: checkedTarget.candidate,
+        note: input.note.trim(),
+        removedUnknownFiles: [...input.removedUnknownFiles],
+        removedUnknownFileCount: input.removedUnknownFiles.length,
+        previousErrorCode: job.error_code,
+        previousErrorDetail: job.error_detail ?? '',
+        extractionReused: false,
+        targetCommitPerformed: false
+      }
+    };
+    this.updateJob(job.id, {
+      status: 'reconciling',
+      phase: 'rescanning',
+      validationStatus: 'warning',
+      cleanupStatus: 'not_ready',
+      targetPath: checkedTarget.candidate,
+      summaryJson: JSON.stringify(summary),
+      errorCode: null,
+      errorDetail: null
+    });
+    try {
+      return await this.reconcile(job.id);
+    } catch (error) {
+      const failure = error instanceof LocalIngestFailure
+        ? error
+        : new LocalIngestFailure(
+          'MANUAL_PLACEMENT_RECONCILIATION_FAILED',
+          error instanceof Error ? error.message : 'Manual-placement reconciliation failed'
+        );
+      this.updateJob(job.id, {
+        status: 'reconciling',
+        phase: 'reconciling',
+        errorCode: failure.code,
+        errorDetail: failure.message
+      });
+      return this.getJob(job.id);
+    }
   }
 
   private async reconcile(jobId: number): Promise<LocalIngestJob> {
