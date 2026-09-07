@@ -1,6 +1,6 @@
 <template>
   <section class="work-gallery" :aria-busy="loading">
-    <RouterLink class="work-gallery__back" :to="{ name: 'folder', params: { slug } }">
+    <RouterLink class="work-gallery__back" :to="backRoute">
       {{ t('workGallery.backToCreator', { name: creatorName }) }}
     </RouterLink>
     <div v-if="appStore.isLibraryUnavailable" class="card work-gallery__state" role="alert">
@@ -30,6 +30,7 @@
           :ordinal="index + 1"
           :post-id="work.id"
           :background-path="backgroundPath"
+          :creator-id="canonicalId"
         />
       </div>
     </template>
@@ -39,30 +40,42 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { RouterLink, useRouter } from 'vue-router';
+import { RouterLink, useRoute } from 'vue-router';
 
-import { fetchImage } from '../api/gallery';
+import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage } from '../api/gallery';
 import WorkMediaCard from '../components/WorkMediaCard.vue';
 import { useAppStore } from '../stores/app';
 import { useFoldersStore } from '../stores/folders';
 import type { ImageDetail } from '../types/api';
-import { orderedMediaItems, parsePositiveId, workGalleryRoute, workTitle } from '../utils/work-gallery';
+import { canonicalCreatorRoute, orderedMediaItems, parsePositiveId, workTitle } from '../utils/work-gallery';
 
-const props = defineProps<{ slug: string; postId: string }>();
+const props = defineProps<{ slug?: string; creatorId?: string; postId: string }>();
 const { t } = useI18n();
-const router = useRouter();
+const route = useRoute();
 const appStore = useAppStore();
 const foldersStore = useFoldersStore();
 // Independent page state keeps the background DOM and thumbnails alive while PostView uses the viewer store.
 const work = shallowRef<ImageDetail | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const canonicalCreatorName = ref<string | null>(null);
 let loadToken = 0;
 const mediaItems = computed(() => orderedMediaItems(work.value?.mediaItems));
 const imageCount = computed(() => mediaItems.value.filter((item) => item.mediaType === 'image').length);
 const videoCount = computed(() => mediaItems.value.length - imageCount.value);
-const creatorName = computed(() => work.value?.folderName || foldersStore.items.find((folder) => folder.slug === props.slug)?.name || props.slug);
-const backgroundPath = computed(() => router.resolve(workGalleryRoute(props.slug, Number(props.postId))).fullPath);
+const canonicalId = computed(() => props.creatorId ? parsePositiveId(props.creatorId) : null);
+const creatorName = computed(() => canonicalCreatorName.value || work.value?.folderName || foldersStore.items.find((folder) => folder.slug === props.slug)?.name || props.slug || '');
+const backgroundPath = computed(() => route.fullPath);
+const backRoute = computed(() => {
+  if (canonicalId.value !== null) {
+    const candidate = Array.isArray(route.query.returnTo) ? route.query.returnTo[0] : route.query.returnTo;
+    if (typeof candidate === 'string' && new RegExp(`^/creators/${canonicalId.value}(?:\\?|$)`, 'u').test(candidate) && !candidate.includes('\\')) {
+      return candidate;
+    }
+    return canonicalCreatorRoute(canonicalId.value);
+  }
+  return { name: 'folder', params: { slug: props.slug ?? '' } };
+});
 
 async function loadWork() {
   const token = ++loadToken;
@@ -80,13 +93,20 @@ async function loadWork() {
   }
   loading.value = true;
   try {
-    const detail = await fetchImage(postId);
+    const canonicalCreatorId = canonicalId.value;
+    const [detail, creatorPayload] = canonicalCreatorId === null
+      ? [await fetchImage(postId), null]
+      : await Promise.all([
+          fetchCanonicalCreatorWork(canonicalCreatorId, postId),
+          fetchCanonicalCreator(canonicalCreatorId)
+        ]);
     if (token !== loadToken) return;
-    // Fixed not-found behavior: never render another creator's work under a mismatched slug.
-    if (detail.id !== postId || detail.folderSlug !== props.slug) {
+    // Both legacy Folder routes and canonical creator routes verify ownership.
+    if (detail.id !== postId || (canonicalCreatorId === null && detail.folderSlug !== props.slug)) {
       error.value = t('workGallery.notFound');
       return;
     }
+    canonicalCreatorName.value = creatorPayload?.creator.name ?? null;
     work.value = detail;
   } catch (cause) {
     if (token === loadToken) error.value = cause instanceof Error ? cause.message : t('workGallery.loadFailed');
@@ -95,7 +115,7 @@ async function loadWork() {
   }
 }
 
-watch(() => [props.slug, props.postId] as const, loadWork, { immediate: true });
+watch(() => [props.slug, props.creatorId, props.postId] as const, loadWork, { immediate: true });
 onBeforeUnmount(() => { loadToken += 1; });
 </script>
 

@@ -1,6 +1,10 @@
 <template>
   <article class="work-media-card" :data-media-id="item.imageId" :data-position="item.position">
-    <RouterLink :to="workMediaRoute(postId, item.imageId)" custom v-slot="{ href, navigate }">
+    <RouterLink
+      :to="workMediaRoute(postId, item.imageId, creatorId ?? undefined, creatorId ? backgroundPath : undefined)"
+      custom
+      v-slot="{ href, navigate }"
+    >
       <a :href="href" class="work-media-card__link" :aria-label="accessibleName" @click="openMedia($event, navigate)">
         <span class="work-media-card__placeholder" aria-hidden="true">
           <span :class="item.mediaType === 'video' ? 'i-fluent-video-24-regular' : 'i-fluent-image-24-regular'" class="h-8 w-8" />
@@ -46,6 +50,7 @@ const props = defineProps<{
   ordinal: number;
   postId: number;
   backgroundPath: string;
+  creatorId?: number | null;
 }>();
 const { t } = useI18n();
 const appStore = useAppStore();

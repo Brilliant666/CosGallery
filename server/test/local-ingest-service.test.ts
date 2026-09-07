@@ -279,20 +279,44 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     }
     const now = new Date().toISOString();
     const target = db.prepare('SELECT target_path FROM local_ingest_jobs WHERE id = 1').get() as { target_path: string };
-    db.prepare(
-      `INSERT OR IGNORE INTO archive_catalog_local_creator_folders (
-         id, creator_id, root_path, relative_path, absolute_path, folder_name,
-         match_status, match_method, is_active, scanned_at, created_at, updated_at
-       ) VALUES (1, 1, ?, ?, ?, ?, 'matched', 'test', 1, ?, ?, ?)`
-    ).run(libraryRoot, creatorName, path.join(libraryRoot, creatorName), creatorName, now, now, now);
+    const targetCreatorDirectory = path.dirname(target.target_path);
+    let localFolder = db.prepare(
+      `SELECT id FROM archive_catalog_local_creator_folders
+       WHERE creator_id = 1 AND absolute_path = ? AND is_active = 1`
+    ).get(targetCreatorDirectory) as { id: number } | undefined;
+    if (!localFolder) {
+      const result = db.prepare(
+        `INSERT INTO archive_catalog_local_creator_folders (
+           creator_id, root_path, relative_path, absolute_path, folder_name,
+           match_status, match_method, is_active, scanned_at, created_at, updated_at
+         ) VALUES (1, ?, ?, ?, ?, 'matched', 'test', 1, ?, ?, ?)`
+      ).run(
+        libraryRoot,
+        path.relative(libraryRoot, targetCreatorDirectory),
+        targetCreatorDirectory,
+        path.basename(targetCreatorDirectory),
+        now,
+        now,
+        now
+      );
+      localFolder = { id: Number(result.lastInsertRowid) };
+    }
     db.prepare(
       `INSERT OR IGNORE INTO archive_catalog_local_works (
          id, local_creator_folder_id, work_id, relative_path, absolute_path,
          folder_name, parsed_source_order, image_count, video_count,
          advertisement_file_count, other_file_count, total_bytes, match_status,
          match_method, is_active, scanned_at, created_at, updated_at
-       ) VALUES (1, 1, 1, ?, ?, ?, 7, 1, 0, 0, 0, 1, 'matched', 'test', 1, ?, ?, ?)`
-    ).run(path.relative(libraryRoot, target.target_path), target.target_path, path.basename(target.target_path), now, now, now);
+       ) VALUES (1, ?, 1, ?, ?, ?, 7, 1, 0, 0, 0, 1, 'matched', 'test', 1, ?, ?, ?)`
+    ).run(
+      localFolder.id,
+      path.relative(targetCreatorDirectory, target.target_path),
+      target.target_path,
+      path.basename(target.target_path),
+      now,
+      now,
+      now
+    );
     db.prepare("UPDATE archive_catalog_download_tasks SET status = 'ingested' WHERE id = 1").run();
   };
   let clock = Date.now();
@@ -480,6 +504,94 @@ describe.sequential('LocalIngestService', () => {
     expect(rediscovery.jobs[0]).toMatchObject({ id: result.id, status: 'ingested', attemptCount: 1 });
   }, 60_000);
 
+  it.runIf(process.platform === 'win32')('blocks a multi-directory creator until an explicit choice, then preserves that Job plan through the full ingest chain', async () => {
+    fixture = await createFixture();
+    const historical = path.join(fixture.libraryRoot, 'historical-alias');
+    const preferred = path.join(fixture.libraryRoot, 'preferred-root');
+    await Promise.all([fs.mkdir(historical), fs.mkdir(preferred)]);
+    const historicalReal = await fs.realpath(historical);
+    const preferredReal = await fs.realpath(preferred);
+    const timestamp = new Date().toISOString();
+    fixture.database.exec(`
+      INSERT INTO folders(id,slug,name,folder_path,role) VALUES
+        (10,'historical-alias','historical-alias','historical-alias','normal'),
+        (11,'preferred-root','preferred-root','preferred-root','normal');
+    `);
+    const insertBridge = fixture.database.prepare(
+      `INSERT INTO archive_catalog_local_creator_folders
+       (id,gallery_folder_id,creator_id,root_path,relative_path,absolute_path,folder_name,
+        match_status,match_method,is_active,scanned_at,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,'matched','test',1,?,?,?)`
+    );
+    insertBridge.run(10,10,1,fixture.libraryRoot,'historical-alias',historicalReal,'historical-alias',timestamp,timestamp,timestamp);
+    insertBridge.run(11,11,1,fixture.libraryRoot,'preferred-root',preferredReal,'preferred-root',timestamp,timestamp,timestamp);
+
+    const blocked = await discoverStable(fixture);
+    expect(blocked.jobs).toEqual([
+      expect.objectContaining({
+        status: 'awaiting_review',
+        phase: 'mapping',
+        errorCode: 'PREFERRED_INGEST_DIRECTORY_REQUIRED',
+        targetPath: null,
+        attemptCount: 0
+      })
+    ]);
+
+    const { LocalIngestDestinationService } = await import('../src/services/local-ingest-destination-service.js');
+    await new LocalIngestDestinationService(fixture.database, fixture.libraryRoot).setPreferred(1, 11);
+    const replanned = await fixture.service.scanInbox([fixture.creatorName]);
+    expect(replanned).toMatchObject({ createdJobs: 0, existingJobs: 1 });
+    const plannedJob = fixture.service.getJob(blocked.jobs[0]!.id);
+    expect(plannedJob).toMatchObject({ status: 'queued', phase: 'discovered', errorCode: null, attemptCount: 0 });
+    expect(path.dirname(plannedJob.targetPath!)).toBe(preferredReal);
+
+    // If the selected root goes offline after discovery, stop before archive
+    // hashing/extraction and let a later discovery revalidate the same Job.
+    await fs.rm(preferredReal, { recursive: true });
+    const unavailable = await fixture.service.runJob(plannedJob.id);
+    expect(unavailable).toMatchObject({
+      status: 'awaiting_review',
+      phase: 'mapping',
+      errorCode: 'INGEST_DESTINATION_UNAVAILABLE',
+      attemptCount: 0,
+      processingPath: null,
+      targetPath: plannedJob.targetPath
+    });
+
+    // Even while the original directory is offline, selecting another valid
+    // default is a future-Job decision and must not retarget this Job.
+    await new LocalIngestDestinationService(fixture.database, fixture.libraryRoot).setPreferred(1, 10);
+    await fs.mkdir(preferredReal);
+    const resumed = await fixture.service.scanInbox([fixture.creatorName]);
+    expect(resumed).toMatchObject({ createdJobs: 0, existingJobs: 1 });
+    expect(fixture.service.getJob(plannedJob.id)).toMatchObject({
+      status: 'queued',
+      phase: 'discovered',
+      errorCode: null,
+      attemptCount: 0,
+      targetPath: plannedJob.targetPath
+    });
+
+    // A later metadata rename also applies only to new Jobs.
+    fixture.database.prepare(
+      `UPDATE archive_catalog_creators
+       SET canonical_name='Creator Renamed'
+       WHERE id=1`
+    ).run();
+    const completed = await fixture.service.runJob(plannedJob.id);
+    expect(completed).toMatchObject({ status: 'ingested', phase: 'done', cleanupStatus: 'recycled', attemptCount: 1 });
+    expect(path.dirname(completed.targetPath!)).toBe(preferredReal);
+    expect(fixture.rescanScopes).toEqual([{
+      libraryRoot: fixture.libraryRoot,
+      creatorId: 1,
+      creatorFolderName: 'preferred-root'
+    }]);
+    await expect(fs.access(completed.targetPath!)).resolves.toBeUndefined();
+    await expect(fs.access(path.join(fixture.libraryRoot, 'Creator Renamed'))).rejects.toThrow();
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 1 });
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM archive_catalog_local_works').get()).toEqual({ count: 1 });
+  }, 60_000);
+
   it.runIf(process.platform === 'win32')('confirms a stable exact local handoff in one scan operation and advances only staged tasks', async () => {
     fixture = await createFixture();
     const discovery = await fixture.service.scanInboxWithStableRecheck();
@@ -660,9 +772,17 @@ describe.sequential('LocalIngestService', () => {
     await fs.mkdir(target, { recursive: true });
     await fs.writeFile(path.join(target, 'existing.jpg'), 'do not overwrite');
     const discovery = await discoverStable(fixture);
-    expect(discovery.jobs[0]).toMatchObject({ status: 'awaiting_review', errorCode: 'TARGET_EXISTS', attemptCount: 0 });
+    expect(discovery.jobs[0]).toMatchObject({
+      status: 'awaiting_review',
+      errorCode: 'UNCONFIRMED_CREATOR_DIRECTORY_EXISTS',
+      attemptCount: 0
+    });
     const result = await fixture.service.runJob(discovery.jobs[0].id);
-    expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'TARGET_EXISTS', attemptCount: 0 });
+    expect(result).toMatchObject({
+      status: 'awaiting_review',
+      errorCode: 'UNCONFIRMED_CREATOR_DIRECTORY_EXISTS',
+      attemptCount: 0
+    });
     expect(await fs.readFile(path.join(target, 'existing.jpg'), 'utf8')).toBe('do not overwrite');
   }, 60_000);
 

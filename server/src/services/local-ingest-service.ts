@@ -23,6 +23,11 @@ import {
   LocalIngestPathError
 } from '../utils/local-ingest-paths.js';
 import { ProcessTimeoutError, runProcessWithTimeout } from '../utils/run-process.js';
+import {
+  LocalIngestDestinationError,
+  LocalIngestDestinationService,
+  type LocalIngestTargetPlan
+} from './local-ingest-destination-service.js';
 
 const SOURCE_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip']);
 const NESTED_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip', '.rar', '.tar', '.gz', '.bz2', '.xz']);
@@ -411,16 +416,6 @@ function manualPlacementSummary(value: Record<string, unknown> | null): Record<s
 function isPathWithin(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function sanitizeWindowsDirectoryName(value: string): string {
-  const sanitized = value
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/[. ]+$/g, '');
-  if (!sanitized) throw new LocalIngestFailure('INVALID_TARGET_NAME', 'The mapped work has no usable directory name', true);
-  return sanitized.slice(0, 220).replace(/[. ]+$/g, '');
 }
 
 function isTemporaryName(filename: string): boolean {
@@ -1160,12 +1155,53 @@ export class LocalIngestService {
     }
   }
 
-  private safeCreatorDirectoryName(creatorName: string): string {
-    const sanitized = sanitizeWindowsDirectoryName(creatorName);
-    if (sanitized !== creatorName.trim()) {
-      throw new LocalIngestFailure('INVALID_TARGET_NAME', 'Creator name contains path or reserved filename characters', true);
+  private destinationService(settings: LocalIngestSettingsView): LocalIngestDestinationService {
+    return new LocalIngestDestinationService(this.database, settings.libraryRoot);
+  }
+
+  private mappedTargetTitle(mapping: MappingRow): string {
+    return mapping.raw_title?.trim() || mapping.source_title.trim();
+  }
+
+  private destinationFailure(error: unknown): never {
+    if (error instanceof LocalIngestDestinationError) {
+      throw new LocalIngestFailure(error.code, error.message, true);
     }
-    return sanitized;
+    throw error;
+  }
+
+  private async resolveNewTarget(
+    mapping: MappingRow,
+    settings: LocalIngestSettingsView,
+    excludeJobId?: number
+  ): Promise<LocalIngestTargetPlan> {
+    try {
+      return await this.destinationService(settings).resolveNewTarget(
+        mapping.creator_id,
+        this.mappedTargetTitle(mapping),
+        excludeJobId
+      );
+    } catch (error) {
+      return this.destinationFailure(error);
+    }
+  }
+
+  private async validatePersistedTarget(
+    job: LocalIngestJobRow,
+    mapping: MappingRow,
+    settings: LocalIngestSettingsView,
+    requireCreatorDirectory = false
+  ): Promise<LocalIngestTargetPlan> {
+    try {
+      return await this.destinationService(settings).validatePersistedTarget({
+        creatorId: mapping.creator_id,
+        targetPath: job.target_path,
+        workTitle: this.mappedTargetTitle(mapping),
+        requireCreatorDirectory
+      });
+    } catch (error) {
+      return this.destinationFailure(error);
+    }
   }
 
   private findCreatorByFolder(folderName: string): CreatorRow[] {
@@ -1263,6 +1299,47 @@ export class LocalIngestService {
     return Number(updated.changes ?? 0);
   }
 
+  private async replanDestinationBlockedJob(
+    jobId: number,
+    settings: LocalIngestSettingsView
+  ): Promise<void> {
+    const blockedCodes = new Set([
+      'PREFERRED_INGEST_DIRECTORY_REQUIRED',
+      'INGEST_DESTINATION_UNAVAILABLE',
+      'TARGET_PLAN_MISSING'
+    ]);
+    const job = this.getJobRow(jobId);
+    if (
+      job.status !== 'awaiting_review'
+      || job.phase !== 'mapping'
+      || !job.error_code
+      || !blockedCodes.has(job.error_code)
+    ) return;
+    const mapping = this.mappingForJob(job);
+    if (this.localWorkExists(mapping.source_work_id)) return;
+    try {
+      // A non-null target_path is an immutable Job decision. A temporary
+      // outage may put that Job back into mapping review, but a later creator
+      // rename or preference change must not silently retarget it. Only Jobs
+      // that never acquired a target are eligible for fresh resolution.
+      const plan = job.target_path
+        ? await this.validatePersistedTarget(job, mapping, settings)
+        : await this.resolveNewTarget(mapping, settings, jobId);
+      if (await pathExists(plan.targetPath)) return;
+      this.updateJob(jobId, {
+        status: 'queued',
+        phase: 'discovered',
+        validationStatus: 'unknown',
+        ...(job.target_path ? {} : { targetPath: plan.targetPath }),
+        errorCode: null,
+        errorDetail: null
+      });
+    } catch (error) {
+      if (!(error instanceof LocalIngestFailure)) throw error;
+      if (!blockedCodes.has(error.code)) throw error;
+    }
+  }
+
   private async scanInboxPass(
     allowlistInput?: string[],
     onlySourcePaths?: Set<string>
@@ -1349,6 +1426,7 @@ export class LocalIngestService {
            LIMIT 1`
         ).get(creator.id, sourcePath, stats.size, stats.mtimeMs) as { id: number } | undefined;
         if (unchangedExisting) {
+          await this.replanDestinationBlockedJob(unchangedExisting.id, settings);
           this.clearObservation(sourcePath);
           result.reconciledDownloadedTasks += this.inTransaction(
             () => this.reconcileStagedDownloadForJob(unchangedExisting.id)
@@ -1418,6 +1496,7 @@ export class LocalIngestService {
              WHERE creator_id = ? AND source_archive_path = ? AND source_archive_sha256 = ? AND source_work_id IS NULL`
           ).get(creator.id, sourcePath, hash) as { id: number; phase: LocalIngestPhase } | undefined;
         if (existing) {
+          await this.replanDestinationBlockedJob(existing.id, settings);
           result.reconciledDownloadedTasks += this.inTransaction(
             () => {
               if (existing.phase === 'waiting_stable') {
@@ -1450,31 +1529,31 @@ export class LocalIngestService {
           result.awaitingReview += 1;
         } else {
           mapping = mappings[0];
-          const title = mapping.raw_title?.trim() || mapping.source_title.trim();
-          const creatorDirectoryName = this.safeCreatorDirectoryName(creator.canonical_name);
-          const targetCreatorDirectory = path.join(settings.libraryRoot, creatorDirectoryName);
-          await this.assertInside(
-            settings.libraryRoot,
-            targetCreatorDirectory,
-            'TARGET_PATH_OUTSIDE_LIBRARY',
-            'Target creator directory',
-            { directChild: true }
-          );
-          targetPath = path.join(targetCreatorDirectory, sanitizeWindowsDirectoryName(title));
-          await this.assertInside(settings.libraryRoot, targetPath, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target directory');
-          if (this.localWorkExists(mapping.source_work_id)) {
+          try {
+            const targetPlan = await this.resolveNewTarget(mapping, settings);
+            targetPath = targetPlan.targetPath;
+            if (this.localWorkExists(mapping.source_work_id)) {
+              status = 'awaiting_review';
+              phase = 'mapping';
+              validationStatus = 'failed';
+              errorCode = 'SOURCE_WORK_ALREADY_LOCAL';
+              errorDetail = 'The mapped source work is already associated with an active local work';
+              result.awaitingReview += 1;
+            } else if (await pathExists(targetPath)) {
+              status = 'awaiting_review';
+              phase = 'mapping';
+              validationStatus = 'failed';
+              errorCode = 'TARGET_EXISTS';
+              errorDetail = 'The planned target directory already exists';
+              result.awaitingReview += 1;
+            }
+          } catch (error) {
+            if (!(error instanceof LocalIngestFailure)) throw error;
             status = 'awaiting_review';
             phase = 'mapping';
             validationStatus = 'failed';
-            errorCode = 'SOURCE_WORK_ALREADY_LOCAL';
-            errorDetail = 'The mapped source work is already associated with an active local work';
-            result.awaitingReview += 1;
-          } else if (await pathExists(targetPath)) {
-            status = 'awaiting_review';
-            phase = 'mapping';
-            validationStatus = 'failed';
-            errorCode = 'TARGET_EXISTS';
-            errorDetail = 'The planned target directory already exists';
+            errorCode = error.code;
+            errorDetail = error.message;
             result.awaitingReview += 1;
           }
         }
@@ -1704,12 +1783,8 @@ export class LocalIngestService {
     }
     if (media.length === 0) throw new LocalIngestFailure('NO_VALID_MEDIA', 'No valid image or video was found', true);
 
-    const targetName = sanitizeWindowsDirectoryName(mapping.raw_title?.trim() || mapping.source_title.trim());
-    const creatorDirectoryName = this.safeCreatorDirectoryName(mapping.creator_name);
-    const targetCreatorDirectory = path.join(settings.libraryRoot, creatorDirectoryName);
-    await this.assertInside(settings.libraryRoot, targetCreatorDirectory, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target creator directory', { directChild: true });
-    const targetPath = path.join(targetCreatorDirectory, targetName);
-    await this.assertInside(settings.libraryRoot, targetPath, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target directory');
+    const targetPlan = await this.validatePersistedTarget(job, mapping, settings);
+    const targetPath = targetPlan.targetPath;
     if (await pathExists(targetPath)) throw new LocalIngestFailure('TARGET_EXISTS', 'The planned target directory already exists', true);
     const readyBuildPath = path.join(processingPath, `ready-building-${randomUUID()}`);
     const readyPath = path.join(processingPath, 'ready');
@@ -1902,36 +1977,21 @@ export class LocalIngestService {
 
     const settings = await this.checkedSettings();
     const mapping = this.mappingForJob(job);
-    const creatorDirectoryName = this.safeCreatorDirectoryName(mapping.creator_name);
-    const expectedCreatorDirectory = path.join(settings.libraryRoot, creatorDirectoryName);
-    const mappedTargetPath = path.join(
-      expectedCreatorDirectory,
-      sanitizeWindowsDirectoryName(mapping.raw_title?.trim() || mapping.source_title.trim())
-    );
-    await this.assertInside(
-      settings.libraryRoot,
-      expectedCreatorDirectory,
-      'TARGET_PATH_OUTSIDE_LIBRARY',
-      'Target creator directory',
-      { directChild: true }
-    );
+    const persistedPlan = await this.validatePersistedTarget(job, mapping, settings, true);
     const checkedTarget = await this.assertInside(
       settings.libraryRoot,
       input.expectedTargetPath,
       'TARGET_PATH_OUTSIDE_LIBRARY',
       'Manually placed target directory'
     );
-    const mappedCanonical = await canonicalizeLocalIngestPath(mappedTargetPath);
-    const jobTargetCanonical = job.target_path ? await canonicalizeLocalIngestPath(job.target_path) : '';
+    const plannedCanonical = await canonicalizeLocalIngestPath(persistedPlan.targetPath);
     const samePath = (left: string, right: string): boolean => process.platform === 'win32'
       ? left.toLocaleLowerCase() === right.toLocaleLowerCase()
       : left === right;
-    if (!job.target_path
-      || !samePath(checkedTarget.candidate, mappedCanonical)
-      || !samePath(checkedTarget.candidate, jobTargetCanonical)) {
+    if (!samePath(checkedTarget.candidate, plannedCanonical)) {
       throw new LocalIngestFailure(
         'MANUAL_PLACEMENT_TARGET_MISMATCH',
-        'The manual target does not exactly match both the preserved Job target and source-work title',
+        'The manual target does not exactly match the preserved Job target plan and source-work title',
         true
       );
     }
@@ -2170,20 +2230,9 @@ export class LocalIngestService {
     if (!job.target_path || !(await pathExists(job.target_path))) {
       throw new LocalIngestFailure('TARGET_MISSING_AFTER_COMMIT', 'The committed target directory cannot be found');
     }
-    const expectedCreatorDirectory = path.join(settings.libraryRoot, this.safeCreatorDirectoryName(mapping.creator_name));
-    const expectedTargetPath = path.join(
-      expectedCreatorDirectory,
-      sanitizeWindowsDirectoryName(mapping.raw_title?.trim() || mapping.source_title.trim())
-    );
-    await this.assertInside(settings.libraryRoot, expectedCreatorDirectory, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target creator directory', { directChild: true });
-    const checkedTarget = await this.assertInside(settings.libraryRoot, job.target_path, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Committed target directory');
-    const canonicalExpectedTarget = await canonicalizeLocalIngestPath(expectedTargetPath);
-    const sameTarget = process.platform === 'win32'
-      ? checkedTarget.candidate.toLocaleLowerCase() === canonicalExpectedTarget.toLocaleLowerCase()
-      : checkedTarget.candidate === canonicalExpectedTarget;
-    if (!sameTarget) throw new LocalIngestFailure('TARGET_PATH_OUTSIDE_LIBRARY', 'Committed target no longer matches the ledger mapping', true);
+    const targetPlan = await this.validatePersistedTarget(job, mapping, settings, true);
     this.updateJob(jobId, { status: 'reconciling', phase: 'rescanning' });
-    const creatorFolderName = this.safeCreatorDirectoryName(mapping.creator_name);
+    const creatorFolderName = path.basename(targetPlan.creatorDirectory);
     const rescanResult = await this.rescanAndReconcile(
       this.database,
       settings.libraryRoot,
@@ -2342,6 +2391,11 @@ export class LocalIngestService {
         throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The mapped creator is not in the local ingest allowlist', true);
       }
       if (committedOrReconciling) return await this.reconcile(id);
+      // Revalidate the immutable destination before hashing or extracting. A
+      // linked directory can go offline or its bridge can be changed after
+      // discovery; that must fail closed before expensive archive work.
+      this.updateJob(id, { phase: 'mapping' });
+      await this.validatePersistedTarget(job, mapping, settings);
       await this.assertSourcePath(job, mapping, settings);
       const currentStats = await fs.stat(job.source_archive_path);
       if (currentStats.size !== job.source_archive_size || currentStats.mtimeMs !== job.source_archive_mtime) {
@@ -2439,23 +2493,18 @@ export class LocalIngestService {
       job = this.getJobRow(id);
       const summary = await this.validateAndStage(job, mapping, levelTwoRoot, processingPath, levelOneOutput, innerOriginalName, innerWorkingName);
       const commitSettings = await this.checkedSettings();
-      const commitMapping = this.mappingForJob(this.getJobRow(id));
-      const expectedCreatorDirectory = path.join(commitSettings.libraryRoot, this.safeCreatorDirectoryName(commitMapping.creator_name));
-      const expectedTargetPath = path.join(
-        expectedCreatorDirectory,
-        sanitizeWindowsDirectoryName(commitMapping.raw_title?.trim() || commitMapping.source_title.trim())
-      );
-      await this.assertInside(commitSettings.libraryRoot, expectedCreatorDirectory, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target creator directory', { directChild: true });
-      await this.assertInside(commitSettings.libraryRoot, expectedTargetPath, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Target directory');
+      const commitJob = this.getJobRow(id);
+      const commitMapping = this.mappingForJob(commitJob);
+      const commitPlan = await this.validatePersistedTarget(commitJob, commitMapping, commitSettings);
       await this.assertInside(processingPath, summary.readyPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready directory', { directChild: true });
       const plannedCanonical = await canonicalizeLocalIngestPath(summary.plannedTargetPath);
-      const expectedCanonical = await canonicalizeLocalIngestPath(expectedTargetPath);
+      const expectedCanonical = await canonicalizeLocalIngestPath(commitPlan.targetPath);
       const sameTarget = process.platform === 'win32'
         ? plannedCanonical.toLocaleLowerCase() === expectedCanonical.toLocaleLowerCase()
         : plannedCanonical === expectedCanonical;
-      if (!sameTarget) throw new LocalIngestFailure('TARGET_PATH_OUTSIDE_LIBRARY', 'The planned target no longer matches the ledger mapping', true);
+      if (!sameTarget) throw new LocalIngestFailure('TARGET_PLAN_SOURCE_MISMATCH', 'The staged target no longer matches the persisted Job plan', true);
       if (await pathExists(summary.plannedTargetPath)) throw new LocalIngestFailure('TARGET_EXISTS', 'The planned target directory already exists', true);
-      await fs.mkdir(path.dirname(summary.plannedTargetPath), { recursive: true });
+      await fs.mkdir(commitPlan.creatorDirectory, { recursive: true });
       this.updateJob(id, { phase: 'committing' });
       await fs.rename(summary.readyPath, summary.plannedTargetPath);
       this.updateJob(id, { status: 'reconciling', phase: 'rescanning', targetPath: summary.plannedTargetPath });

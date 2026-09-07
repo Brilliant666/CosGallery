@@ -149,6 +149,152 @@ describe.sequential('COS gallery mode', () => {
     expect(detail?.mediaItems.some((item) => item.imageId === creators[0].coverImageId)).toBe(true);
   });
 
+  it('aggregates linked physical folders by canonical creator before filtering and paging', async () => {
+    const roots = [
+      ['lunananya', 'lunananya NO.001'],
+      ['lunana', 'lunana NO.002'],
+      ['lunananya', 'lunananya NO.003'],
+      ['lunana', 'lunana NO.004'],
+      ['Other root', 'Other NO.001'],
+      ['Unlinked root', 'Unlinked NO.001']
+    ] as const;
+    for (const [creatorRoot, work] of roots) {
+      const workPath = path.join(appConfig.galleryRoot, creatorRoot, work);
+      await fs.mkdir(workPath, { recursive: true });
+      await fs.writeFile(path.join(workPath, '01.jpg'), `${creatorRoot}-${work}`);
+    }
+    await scannerService.scanAll('canonical-gallery-test');
+
+    const { ManagedCreatorService } = await import('../src/services/managed-creator-service.js');
+    const managed = new ManagedCreatorService(databaseManager.connection, appConfig.galleryRoot);
+    const lunana = managed.create({ name: 'lunana', rating: 'R18', preference: 'liked' });
+    managed.addAlias(lunana.id, { alias: 'Moon Alias' });
+    const other = managed.create({ name: 'Other', rating: 'R15' });
+    const folders = galleryService.listFolders();
+    for (const name of ['lunananya', 'lunana']) {
+      managed.linkFolder(folders.find((folder) => folder.name === name)!.id, { creatorId: lunana.id });
+    }
+    managed.linkFolder(folders.find((folder) => folder.name === 'Other root')!.id, { creatorId: other.id });
+    const orderedSources = [
+      'lunananya/lunananya NO.001',
+      'lunana/lunana NO.002',
+      'lunananya/lunananya NO.003',
+      'lunana/lunana NO.004'
+    ];
+    orderedSources.forEach((sourcePath, index) => {
+      databaseManager.connection.prepare('UPDATE posts SET sort_timestamp=? WHERE source_path=?')
+        .run(400 - index * 100, sourcePath);
+    });
+
+    const all = await requestTestApp(app, 'GET', '/api/cos-gallery/creators?page=1&limit=50');
+    expect(all.status).toBe(200);
+    expect(all.body).toMatchObject({ total: 3, page: 1, limit: 50, hasMore: false });
+    const canonical = all.body.items.find((item: { key: string }) => item.key === `creator:${lunana.id}`);
+    expect(canonical).toMatchObject({
+      identityType: 'creator',
+      id: lunana.id,
+      canonicalCreatorId: lunana.id,
+      name: 'lunana',
+      workCount: 4,
+      folderIds: expect.arrayContaining([
+        folders.find((folder) => folder.name === 'lunananya')!.id,
+        folders.find((folder) => folder.name === 'lunana')!.id
+      ]),
+      contentRating: 'R18',
+      preference: 'liked'
+    });
+    expect(all.body.items.filter((item: { canonicalCreatorId: number | null }) => item.canonicalCreatorId === lunana.id)).toHaveLength(1);
+    expect(all.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: expect.stringMatching(/^folder:/), identityType: 'folder', name: 'Unlinked root' })
+    ]));
+
+    for (const query of ['lunana', 'lunananya', 'Moon Alias']) {
+      const search = await requestTestApp(app, 'GET', `/api/cos-gallery/creators?q=${encodeURIComponent(query)}`);
+      expect(search.body.items).toEqual([expect.objectContaining({ key: `creator:${lunana.id}`, workCount: 4 })]);
+    }
+    const r18 = await requestTestApp(app, 'GET', '/api/cos-gallery/creators?contentRating=R18');
+    expect(r18.body.items).toEqual([expect.objectContaining({ key: `creator:${lunana.id}` })]);
+    const pageOne = await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}/works?page=1&limit=2`);
+    const pageTwo = await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}/works?page=2&limit=2`);
+    expect(pageOne.body).toMatchObject({ total: 4, page: 1, limit: 2, hasMore: true });
+    expect(pageTwo.body).toMatchObject({ total: 4, page: 2, limit: 2, hasMore: false });
+    expect([...pageOne.body.items, ...pageTwo.body.items].map((item: { sourcePath: string }) => item.sourcePath))
+      .toEqual(orderedSources);
+
+    const coverBeforePreference = canonical.coverImageId;
+    const preferredBridge = databaseManager.connection.prepare(
+      `SELECT id FROM archive_catalog_local_creator_folders
+       WHERE creator_id=? AND gallery_folder_id=? AND is_active=1`
+    ).get(lunana.id, folders.find(folder => folder.name === 'lunana')!.id) as { id: number };
+    databaseManager.connection.prepare(
+      'UPDATE archive_catalog_creators SET preferred_local_creator_folder_id=? WHERE id=?'
+    ).run(preferredBridge.id, lunana.id);
+    const afterPreference = await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}`);
+    expect(afterPreference.body.creator).toMatchObject({ workCount: 4, coverImageId: coverBeforePreference });
+
+    const otherPost = postRepository.listVisibleByFolder(
+      folders.find((folder) => folder.name === 'Other root')!.id,
+      1,
+      1
+    )[0]!;
+    const rejected = await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}/works/${otherPost.id}`);
+    expect(rejected.status).toBe(404);
+    const acceptedPost = pageOne.body.items[0].id;
+    expect((await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}/works/${acceptedPost}`)).status).toBe(200);
+  });
+
+  it('keeps canonical IDs and unlinked Folder IDs in separate namespaces while excluding hidden works', async () => {
+    const roots = ['Same A', 'Same B', 'Unlinked A', 'Unlinked B', 'Hidden only'];
+    for (const root of roots) {
+      const workPath = path.join(appConfig.galleryRoot, root, `${root} work`);
+      await fs.mkdir(workPath, { recursive: true });
+      await fs.writeFile(path.join(workPath, '01.jpg'), root);
+    }
+    await scannerService.scanAll('identity-namespace-test');
+
+    const now = new Date().toISOString();
+    const insertCreator = databaseManager.connection.prepare(
+      `INSERT INTO archive_catalog_creators (
+         canonical_name, normalized_name, effective_rating, is_active,
+         seed_source, seed_source_creator_id, created_at, updated_at
+       ) VALUES ('Same display name', ?, 'R15', 1, 'test', ?, ?, ?)`
+    );
+    const firstCreatorId = Number(insertCreator.run('same-display-a', 'same-a', now, now).lastInsertRowid);
+    const secondCreatorId = Number(insertCreator.run('same-display-b', 'same-b', now, now).lastInsertRowid);
+    const folders = galleryService.listFolders();
+    const { ManagedCreatorService } = await import('../src/services/managed-creator-service.js');
+    const managed = new ManagedCreatorService(databaseManager.connection, appConfig.galleryRoot);
+    managed.linkFolder(folders.find(folder => folder.name === 'Same A')!.id, { creatorId: firstCreatorId });
+    managed.linkFolder(folders.find(folder => folder.name === 'Same B')!.id, { creatorId: secondCreatorId });
+
+    const unlinked = folders.filter(folder => folder.name.startsWith('Unlinked'));
+    for (const folder of unlinked) {
+      databaseManager.connection.prepare("UPDATE folders SET name='Same unlinked name' WHERE id=?").run(folder.id);
+    }
+    const hiddenFolder = folders.find(folder => folder.name === 'Hidden only')!;
+    databaseManager.connection.prepare('UPDATE posts SET is_trashed=1 WHERE folder_id=?').run(hiddenFolder.id);
+
+    const visible = await requestTestApp(app, 'GET', '/api/cos-gallery/creators?limit=50');
+    expect(visible.status).toBe(200);
+    const sameCreators = visible.body.items.filter((item: { name: string }) => item.name === 'Same display name');
+    expect(sameCreators.map((item: { key: string }) => item.key).sort()).toEqual([
+      `creator:${firstCreatorId}`,
+      `creator:${secondCreatorId}`
+    ].sort());
+    const sameUnlinked = visible.body.items.filter((item: { name: string }) => item.name === 'Same unlinked name');
+    expect(sameUnlinked).toHaveLength(2);
+    expect(new Set(sameUnlinked.map((item: { key: string }) => item.key)).size).toBe(2);
+    expect(sameUnlinked.every((item: { key: string }) => item.key.startsWith('folder:'))).toBe(true);
+    expect(visible.body.items.some((item: { folderIds: number[] }) => item.folderIds.includes(hiddenFolder.id))).toBe(false);
+
+    databaseManager.connection.prepare('UPDATE archive_catalog_creators SET is_active=0, deactivated_at=? WHERE id=?')
+      .run(now, secondCreatorId);
+    const defaultList = await requestTestApp(app, 'GET', '/api/cos-gallery/creators?limit=50');
+    expect(defaultList.body.items.some((item: { key: string }) => item.key === `creator:${secondCreatorId}`)).toBe(false);
+    const inactive = await requestTestApp(app, 'GET', '/api/cos-gallery/creators?contentRating=inactive');
+    expect(inactive.body.items).toEqual([expect.objectContaining({ key: `creator:${secondCreatorId}`, rosterStatus: 'inactive' })]);
+  });
+
   it('allows only creator rating changes in public demo mode', async () => {
     const workPath = path.join(appConfig.galleryRoot, 'Creator B', 'Creator B NO.001');
     await fs.mkdir(workPath, { recursive: true });

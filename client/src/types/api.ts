@@ -496,6 +496,8 @@ export interface ImageCaptionMutationResult {
 }
 
 export interface CosGalleryCreator {
+  key: string;
+  identityType: 'creator' | 'folder';
   canonicalCreatorId: number | null;
   canonicalName: string | null;
   rosterStatus: 'active' | 'inactive' | 'unlinked';
@@ -504,6 +506,10 @@ export interface CosGalleryCreator {
   slug: string;
   name: string;
   folderPath: string;
+  folderIds: number[];
+  folderNames: string[];
+  aliases: string[];
+  preference: ArchiveCatalogPreference | null;
   workCount: number;
   latestWorkAt: number | null;
   contentRating: ContentRating | null;
@@ -518,6 +524,44 @@ export interface CosGalleryCreator {
 export interface CosGalleryCreatorsPayload {
   items: CosGalleryCreator[];
   total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
+  summary: {
+    all: number;
+    R15: number;
+    R18: number;
+    unclassified: number;
+    unlinked: number;
+    inactive: number;
+  };
+}
+
+export interface CanonicalCreatorWorksPayload extends PaginatedFeed {
+  creator: CosGalleryCreator;
+}
+
+export interface LocalIngestDestinationCandidate {
+  localCreatorFolderId: number;
+  galleryFolderId: number;
+  name: string;
+  folderPath: string;
+  absolutePath: string;
+  workCount: number;
+  valid: boolean;
+  unavailableReason: string | null;
+}
+
+export interface LocalIngestDestinationPreference {
+  creatorId: number;
+  creatorName: string;
+  preferredLocalCreatorFolderId: number | null;
+  mode: 'explicit' | 'single-linked' | 'new-creator' | 'selection-required' | 'preferred-unavailable' | 'linked-folders-unavailable';
+  resolvedLocalCreatorFolderId: number | null;
+  resolvedGalleryFolderId: number | null;
+  resolvedCreatorDirectory: string | null;
+  message: string;
+  candidates: LocalIngestDestinationCandidate[];
 }
 
 export type ArchiveCatalogPreference = 'liked' | 'kept';

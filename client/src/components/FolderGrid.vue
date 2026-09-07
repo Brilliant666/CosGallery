@@ -6,7 +6,7 @@
         class="group relative overflow-hidden bg-surface-alt"
         :class="variant === 'reels' ? 'aspect-[9/14]' : variant === 'posts' ? 'aspect-[3/4]' : 'aspect-square'"
         @click="handleImageNavigation($event, navigate)"
-        :aria-label="navigationMode === 'work-gallery' && !sharedSlug ? t('workGallery.openWork', { title: item.caption || item.carouselTitle || item.filename }) : item.postType === 'carousel' ? t('post.carousel.open', { count: item.itemCount ?? item.mediaItems?.length ?? 0 }) : undefined"
+        :aria-label="navigationMode !== 'post' && !sharedSlug ? t('workGallery.openWork', { title: item.caption || item.carouselTitle || item.filename }) : item.postType === 'carousel' ? t('post.carousel.open', { count: item.itemCount ?? item.mediaItems?.length ?? 0 }) : undefined"
       >
         <ResilientImage
           :src="item.thumbnailUrl"
@@ -51,7 +51,7 @@ import { useAppStore } from '../stores/app';
 import type { FeedItem, SharedFeedItem } from '../types/api';
 import { formatCosGalleryWorkLabel } from '../utils/cos-gallery-titles';
 import { formatMediaDuration } from '../utils/media';
-import { workGalleryRoute } from '../utils/work-gallery';
+import { canonicalWorkGalleryRoute, workGalleryRoute } from '../utils/work-gallery';
 import ResilientImage from './ResilientImage.vue';
 
 const props = withDefaults(
@@ -61,14 +61,16 @@ const props = withDefaults(
     columns?: 'adaptive' | 'three';
     sharedSlug?: string | null;
     showWorkLabels?: boolean;
-    navigationMode?: 'post' | 'work-gallery';
+    navigationMode?: 'post' | 'work-gallery' | 'canonical-work-gallery';
+    canonicalCreatorId?: number | null;
   }>(),
   {
     variant: 'square',
     columns: 'adaptive',
     sharedSlug: null,
     showWorkLabels: false,
-    navigationMode: 'post'
+    navigationMode: 'post',
+    canonicalCreatorId: null
   }
 );
 
@@ -92,6 +94,10 @@ function buildItemRoute(item: FeedItem | SharedFeedItem) {
     return workGalleryRoute(item.folderSlug, item.id);
   }
 
+  if (props.navigationMode === 'canonical-work-gallery' && props.canonicalCreatorId) {
+    return canonicalWorkGalleryRoute(props.canonicalCreatorId, item.id, route.fullPath);
+  }
+
   return {
     name: 'image',
     params: { id: String(item.id) },
@@ -105,7 +111,7 @@ function handleImageNavigation(event: MouseEvent, navigate: () => void) {
   }
 
   event.preventDefault();
-  if (props.sharedSlug || props.navigationMode === 'work-gallery') {
+  if (props.sharedSlug || props.navigationMode !== 'post') {
     navigate();
     return;
   }

@@ -316,13 +316,35 @@ export function fetchCosGalleryWorks(
 
 export function fetchCosGalleryCreators(
   contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive',
-  query?: string
+  query?: string,
+  page = 1,
+  limit = 50
 ) {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (contentRating) params.set('contentRating', contentRating);
   if (query?.trim()) params.set('q', query.trim());
-  const suffix = params.size > 0 ? `?${params.toString()}` : '';
-  return requestJson<import('../types/api').CosGalleryCreatorsPayload>(`/api/cos-gallery/creators${suffix}`);
+  return requestJson<import('../types/api').CosGalleryCreatorsPayload>(`/api/cos-gallery/creators?${params.toString()}`);
+}
+
+export function fetchCanonicalCreator(id: number) {
+  return requestJson<{ creator: import('../types/api').CosGalleryCreator }>(`/api/cos-gallery/creators/${id}`);
+}
+
+export function fetchCanonicalCreatorWorks(id: number, page = 1, limit = 24, mediaType?: 'image' | 'video') {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (mediaType) params.set('mediaType', mediaType);
+  return requestJson<import('../types/api').CanonicalCreatorWorksPayload>(
+    `/api/cos-gallery/creators/${id}/works?${params.toString()}`
+  );
+}
+
+export function fetchCanonicalCreatorWork(id: number, postId: number, mediaType?: 'image' | 'video') {
+  const params = new URLSearchParams();
+  if (mediaType) params.set('mediaType', mediaType);
+  const suffix = params.size ? `?${params.toString()}` : '';
+  return requestJson<import('../types/api').ImageDetail>(
+    `/api/cos-gallery/creators/${id}/works/${postId}${suffix}`
+  );
 }
 
 export function updateCreatorContentRating(id: number, contentRating: 'R15' | 'R18' | null) {

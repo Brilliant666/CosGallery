@@ -9,6 +9,7 @@ import CollectionView from '../views/CollectionView.vue';
 import ExploreView from '../views/ExploreView.vue';
 import FolderView from '../views/FolderView.vue';
 import WorkGalleryView from '../views/WorkGalleryView.vue';
+import CanonicalCreatorView from '../views/CanonicalCreatorView.vue';
 import MomentView from '../views/MomentView.vue';
 import PlaceView from '../views/PlaceView.vue';
 import PlacesView from '../views/PlacesView.vue';
@@ -140,6 +141,18 @@ export const router = createRouter({
       path: '/places/:slug',
       name: 'place',
       component: PlaceView,
+      props: true
+    },
+    {
+      path: '/creators/:creatorId/works/:postId',
+      name: 'canonical-work-gallery',
+      component: WorkGalleryView,
+      props: true
+    },
+    {
+      path: '/creators/:creatorId',
+      name: 'canonical-creator',
+      component: CanonicalCreatorView,
       props: true
     },
     {

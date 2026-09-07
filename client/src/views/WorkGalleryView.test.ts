@@ -3,13 +3,19 @@ import path from 'node:path';
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchImage } from '../api/gallery';
+import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage } from '../api/gallery';
 import { useAppStore } from '../stores/app';
 import { galleryTestRouter, mediaItem, mixedOrientationItems, workDetail } from '../../test/work-gallery-fixtures';
 import WorkGalleryView from './WorkGalleryView.vue';
 
-vi.mock('../api/gallery', () => ({ fetchImage: vi.fn() }));
+vi.mock('../api/gallery', () => ({
+  fetchImage: vi.fn(),
+  fetchCanonicalCreator: vi.fn(),
+  fetchCanonicalCreatorWork: vi.fn()
+}));
 const fetchMock = vi.mocked(fetchImage);
+const fetchCanonicalCreatorMock = vi.mocked(fetchCanonicalCreator);
+const fetchCanonicalWorkMock = vi.mocked(fetchCanonicalCreatorWork);
 const source = readFileSync(path.resolve(process.cwd(), 'src/views/WorkGalleryView.vue'), 'utf8');
 
 describe('WorkGalleryView', () => {
@@ -17,12 +23,39 @@ describe('WorkGalleryView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     fetchMock.mockReset().mockResolvedValue(workDetail());
+    fetchCanonicalCreatorMock.mockReset().mockResolvedValue({
+      creator: {
+        id: 166,
+        key: 'creator:166',
+        identityType: 'creator',
+        canonicalCreatorId: 166,
+        canonicalName: 'lunana',
+        name: 'lunana'
+      }
+    } as Awaited<ReturnType<typeof fetchCanonicalCreator>>);
+    fetchCanonicalWorkMock.mockReset().mockResolvedValue(workDetail());
   });
 
   async function render(postId = '123', slug = 'creator') {
     const router = galleryTestRouter();
     await router.push(`/f/${slug}/works/${postId}`);
     const wrapper = mount(WorkGalleryView, { attachTo: document.body, props: { postId, slug }, global: { plugins: [router] } });
+    await flushPromises();
+    return { wrapper, router };
+  }
+
+  async function renderCanonical(returnTo = '/creators/166?page=2') {
+    const router = galleryTestRouter();
+    await router.push({
+      name: 'canonical-work-gallery',
+      params: { creatorId: '166', postId: '123' },
+      query: { returnTo }
+    });
+    const wrapper = mount(WorkGalleryView, {
+      attachTo: document.body,
+      props: { creatorId: '166', postId: '123' },
+      global: { plugins: [router] }
+    });
     await flushPromises();
     return { wrapper, router };
   }
@@ -44,6 +77,33 @@ describe('WorkGalleryView', () => {
     expect(wrapper.find('video, media-player, video-media-player').exists()).toBe(false);
     expect(wrapper.findAll('img').every(img => getComputedStyle(img.element).objectFit === 'cover')).toBe(true);
     expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/f/creator');
+  });
+
+  it('loads a canonical-owned work and carries its aggregated creator return path into the viewer', async () => {
+    const { wrapper, router } = await renderCanonical();
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledExactlyOnceWith(166, 123);
+    expect(fetchCanonicalCreatorMock).toHaveBeenCalledExactlyOnceWith(166);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(wrapper.get('.work-gallery__creator').text()).toBe('lunana');
+    expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/creators/166?page=2');
+
+    const background = router.currentRoute.value.fullPath;
+    await wrapper.get('[data-position="2"] a').trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.name).toBe('image');
+    expect(router.currentRoute.value.params.id).toBe('123');
+    expect(router.currentRoute.value.query).toEqual({
+      media: '702',
+      context: 'work',
+      creator: '166',
+      returnTo: background
+    });
+    expect(useAppStore().imageModalBackgroundPath).toBe(background);
+  });
+
+  it('does not accept a canonical return path for a different creator', async () => {
+    const { wrapper } = await renderCanonical('/creators/999?page=4');
+    expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/creators/166');
   });
 
   it('uses the same compact 1px gap as the creator cover grid', () => {

@@ -69,7 +69,7 @@ import { useLikesStore } from '../stores/likes';
 import { useFoldersStore } from '../stores/folders';
 import { useMomentsStore } from '../stores/moments';
 import { useViewerStore } from '../stores/viewer';
-import { workGalleryRoute } from '../utils/work-gallery';
+import { canonicalWorkGalleryRoute, parsePositiveId, workGalleryRoute } from '../utils/work-gallery';
 
 const props = defineProps<{
   id: string;
@@ -95,10 +95,25 @@ const deleteError = ref<string | null>(null);
 
 const imageId = computed(() => Number(props.id));
 const activeMediaType = computed(() => (route.query.tab === 'reels' ? 'video' : undefined));
+const canonicalCreatorId = computed(() => {
+  const value = Array.isArray(route.query.creator) ? route.query.creator[0] : route.query.creator;
+  return parsePositiveId(value) ?? undefined;
+});
 const activeImage = computed(() => (viewerStore.image?.id === imageId.value ? viewerStore.image : null));
-const returnToWork = computed(() => route.query.context === 'work' && activeImage.value
-  ? workGalleryRoute(activeImage.value.folderSlug, activeImage.value.id)
-  : null);
+const returnToWork = computed(() => {
+  if (route.query.context !== 'work' || !activeImage.value) return null;
+  const creatorValue = Array.isArray(route.query.creator) ? route.query.creator[0] : route.query.creator;
+  const creatorId = parsePositiveId(creatorValue);
+  const requestedReturn = Array.isArray(route.query.returnTo) ? route.query.returnTo[0] : route.query.returnTo;
+  if (creatorId !== null && typeof requestedReturn === 'string'
+    && new RegExp(`^/creators/${creatorId}/works/${activeImage.value.id}(?:\\?|$)`, 'u').test(requestedReturn)
+    && !requestedReturn.includes('\\')) {
+    return requestedReturn;
+  }
+  return creatorId === null
+    ? workGalleryRoute(activeImage.value.folderSlug, activeImage.value.id)
+    : canonicalWorkGalleryRoute(creatorId, activeImage.value.id);
+});
 const folder = computed(() =>
   activeImage.value ? foldersStore.items.find((entry) => entry.slug === activeImage.value?.folderSlug) ?? null : null
 );
@@ -111,11 +126,11 @@ const deleteDialogConfirmLabel = computed(() => (deleteOriginalFromDisk.value ? 
 
 async function loadImage() {
   if (Number.isFinite(imageId.value)) {
-    await viewerStore.loadImage(imageId.value, activeMediaType.value);
+    await viewerStore.loadImage(imageId.value, activeMediaType.value, canonicalCreatorId.value);
   }
 }
 
-watch(() => [imageId.value, activeMediaType.value] as const, loadImage, { immediate: true });
+watch([imageId, activeMediaType, canonicalCreatorId], loadImage, { immediate: true });
 
 function openDeleteDialog() {
   deleteOriginalFromDisk.value = false;
