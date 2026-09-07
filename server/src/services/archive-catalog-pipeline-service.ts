@@ -20,6 +20,7 @@ import {
 } from './archive-download-task-service.js';
 import {
   ArchiveMetadataTaskService,
+  validateArchiveIds,
   type ArchiveMetadataPlanResult
 } from './archive-metadata-task-service.js';
 
@@ -59,6 +60,23 @@ type ArchiveCatalogCreatorPipelineOptions = {
 
 export class ArchiveCatalogPipelineService {
   constructor(private readonly database: DatabaseSync = databaseManager.connection) {}
+
+  /** Source handoff is not a gallery scan. Only reconcile known local folders for this exact batch. */
+  async refreshAfterMetadataTasks(options: {creatorIds:number[];galleryRoot?:string;defaultInboxRoot?:string}) {
+    const creatorIds=validateArchiveIds(options.creatorIds);
+    const galleryRoot=path.resolve(options.galleryRoot ?? appConfig.galleryRoot);
+    const rows=this.database.prepare(`SELECT id FROM archive_catalog_creators WHERE is_active=1 AND id IN (${creatorIds.map(()=>'?').join(',')})`).all(...creatorIds);
+    if(rows.length!==creatorIds.length) throw new Error('来源收尾包含不存在或停用的博主。');
+    const folders=this.database.prepare(`SELECT DISTINCT creator_id AS creatorId, relative_path AS folderName
+      FROM archive_catalog_local_creator_folders WHERE is_active=1 AND creator_id IN (${creatorIds.map(()=>'?').join(',')})`)
+      .all(...creatorIds) as Array<{creatorId:number;folderName:string}>;
+    const local=folders.length ? await new ArchiveCatalogService(this.database).reconcileLocalCreators({rootPath:galleryRoot,creators:folders}) : null;
+    const download=new ArchiveDownloadTaskService(this.database);
+    const targetRoot=this.getSetting(ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY) ?? download.getLatestTargetRoot()
+      ?? options.defaultInboxRoot ?? path.join(path.dirname(galleryRoot),'cos待入库');
+    const plan=download.planMissing({targetRoot,creatorIds,provider:'baidu'});
+    return {creatorIds,local,plan};
+  }
 
   private getSetting(key: string): string | null {
     const row = this.database.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as

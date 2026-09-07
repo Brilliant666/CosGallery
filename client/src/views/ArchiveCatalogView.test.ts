@@ -1,6 +1,8 @@
 vi.mock('../components/ManagedCreatorRoster.vue', () => ({default:{template:'<div data-test="managed-roster-slot" />'}}));
-import { flushPromises, mount } from '@vue/test-utils';
+vi.mock('../components/FirstCollectionSelector.vue', () => ({default:{template:'<button data-test="first-collection-slot" @click="$emit(\'planned\', [123])">从博主库选择</button>',emits:['planned']}}));
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+enableAutoUnmount(afterEach);
 
 import ArchiveCatalogView from './ArchiveCatalogView.vue';
 import type { LocalIngestJob } from '../types/api';
@@ -479,7 +481,7 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
 
-    expect(wrapper.text()).toContain('本地博主来源关联');
+    expect(wrapper.text()).toContain('Costuan 来源收录');
     await wrapper.get('[data-test="plan-metadata"]').trigger('click');
     await flushPromises();
 
@@ -905,9 +907,9 @@ describe('ArchiveCatalogView', () => {
     await vi.advanceTimersByTimeAsync(0);
     await flushPromises();
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(initialOperationReads + 2);
-    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads + 1);
+    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads + 2);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads + 1);
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1Reads);
+    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1Reads + 1);
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(initialOperationReads + 2);
@@ -922,6 +924,31 @@ describe('ArchiveCatalogView', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(reads);
     wrapper.unmount();
+  });
+
+  it('refreshes only Stage 1/2 on selected submission, visible return and confirmed plugin state events without automation or polling',async()=>{
+    vi.useFakeTimers();
+    const wrapper=mount(ArchiveCatalogView);await flushPromises();
+    const stage1=vi.mocked(fetchArchiveMetadataTasks).mock.calls.length;
+    const stage2=vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
+    const catalog=vi.mocked(fetchArchiveCatalog).mock.calls.length;
+    await wrapper.get('[data-test=first-collection-slot]').trigger('click');await flushPromises();
+    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+1);
+    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2+1);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalog);
+    window.dispatchEvent(new MessageEvent('message',{source:window,origin:window.location.origin,data:{source:'costuan-archive-manager',type:'cosgallery:archive-state-changed'}}));
+    await flushPromises();
+    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+2);
+    window.dispatchEvent(new MessageEvent('message',{source:window,origin:'https://untrusted.invalid',data:{source:'costuan-archive-manager',type:'cosgallery:archive-state-changed'}}));
+    await flushPromises();
+    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+2);
+    Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));
+    Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'));await flushPromises();
+    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+3);
+    await vi.advanceTimersByTimeAsync(30_000);await flushPromises();
+    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+3);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalog);
+    expect(planArchiveMetadataTasks).not.toHaveBeenCalled();expect(planArchiveDownloadTasks).not.toHaveBeenCalled();expect(scanLocalIngestInbox).not.toHaveBeenCalled();expect(runLocalIngestBatch).not.toHaveBeenCalled();
   });
 
   it('renders no more than one creator page while all 558 jobs remain pageable', async () => {
