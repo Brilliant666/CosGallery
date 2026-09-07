@@ -4,7 +4,7 @@
       <a
         :href="href"
         class="group relative overflow-hidden bg-surface-alt"
-        :class="variant === 'reels' ? 'aspect-[9/14]' : variant === 'posts' ? 'aspect-[3/4]' : 'aspect-square'"
+        :class="variant === 'reels' ? 'aspect-[9/14]' : variant === 'works' ? 'aspect-[2/3]' : variant === 'posts' ? 'aspect-[3/4]' : 'aspect-square'"
         @click="handleImageNavigation($event, navigate)"
         :aria-label="navigationMode !== 'post' && !sharedSlug ? t('workGallery.openWork', { title: item.caption || item.carouselTitle || item.filename }) : item.postType === 'carousel' ? t('post.carousel.open', { count: item.itemCount ?? item.mediaItems?.length ?? 0 }) : undefined"
       >
@@ -57,7 +57,7 @@ import ResilientImage from './ResilientImage.vue';
 const props = withDefaults(
   defineProps<{
     items: Array<FeedItem | SharedFeedItem>;
-    variant?: 'square' | 'posts' | 'reels';
+    variant?: 'square' | 'posts' | 'works' | 'reels';
     columns?: 'adaptive' | 'three';
     sharedSlug?: string | null;
     showWorkLabels?: boolean;
