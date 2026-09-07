@@ -90,17 +90,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { RouterLink, useRoute, useRouter } from 'vue-router';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { RouterLink, useRoute, useRouter, onBeforeRouteLeave } from 'vue-router';
 
 import { fetchCosGalleryCreators } from '../api/gallery';
 import type { ContentRating, CosGalleryCreator } from '../types/api';
+import { canonicalCreatorRoute } from '../utils/work-gallery';
+import { useCreatorReadingStore } from '../stores/creator-reading';
 
 type RatingFilter = 'all' | ContentRating | 'unclassified' | 'unlinked' | 'inactive';
 
 const creators = ref<CosGalleryCreator[]>([]);
 const route = useRoute();
 const router = useRouter();
+const reading = useCreatorReadingStore();
+let requestToken = 0;
+let generation = reading.generation;
 const initialRating = Array.isArray(route.query.rating) ? route.query.rating[0] : route.query.rating;
 const initialQuery = Array.isArray(route.query.q) ? route.query.q[0] : route.query.q;
 const initialPage = Array.isArray(route.query.page) ? route.query.page[0] : route.query.page;
@@ -132,16 +137,29 @@ function ratingBadgeClass(value: ContentRating | null) {
 }
 
 async function loadCreators() {
+  const token = ++requestToken;
+  generation = reading.generation;
   loading.value = true;
   error.value = '';
+  const cached = reading.libraryPages[route.fullPath];
+  if (cached) {
+    creators.value = cached.items;
+    total.value = cached.total;
+    loading.value = false;
+    await nextTick();
+    requestAnimationFrame(() => { if (token === requestToken) window.scrollTo({ top: cached.scrollY }); });
+    return;
+  }
   try {
     const payload = await fetchCosGalleryCreators(rating.value === 'all' ? undefined : rating.value, query.value, page.value, 50);
+    if (token !== requestToken) return;
     creators.value = payload.items;
     total.value = payload.total;
   } catch (reason) {
+    if (token !== requestToken) return;
     error.value = reason instanceof Error ? reason.message : '无法读取博主目录';
   } finally {
-    loading.value = false;
+    if (token === requestToken) loading.value = false;
   }
 }
 
@@ -159,7 +177,6 @@ async function syncLocation() {
 async function applyFilters() {
   page.value = 1;
   await syncLocation();
-  await loadCreators();
 }
 
 async function setRating(value: RatingFilter) {
@@ -167,20 +184,32 @@ async function setRating(value: RatingFilter) {
   rating.value = value;
   page.value = 1;
   await syncLocation();
-  await loadCreators();
 }
 
 async function setPage(value: number) {
   page.value = value;
   await syncLocation();
-  await loadCreators();
 }
 
 function creatorRoute(creator: CosGalleryCreator) {
   return creator.identityType === 'creator'
-    ? { name: 'canonical-creator', params: { creatorId: String(creator.id) }, query: { returnTo: route.fullPath } }
+    ? canonicalCreatorRoute(creator.id, route.fullPath)
     : { name: 'folder', params: { slug: creator.slug } };
 }
 
-onMounted(loadCreators);
+onBeforeRouteLeave(() => {
+  if (!loading.value && !error.value && generation === reading.generation) {
+    reading.libraryPages[route.fullPath] = { items: [...creators.value], total: total.value, scrollY: window.scrollY };
+    const keys = Object.keys(reading.libraryPages);
+    if (keys.length > 10) delete reading.libraryPages[keys[0]!];
+  }
+});
+watch(() => route.fullPath, () => {
+  if (route.name !== 'library') return;
+  query.value = typeof route.query.q === 'string' ? route.query.q : '';
+  rating.value = typeof route.query.rating === 'string' && ratingOptions.some(option => option.value === route.query.rating) ? route.query.rating as RatingFilter : 'all';
+  page.value = typeof route.query.page === 'string' && /^\d+$/.test(route.query.page) && Number(route.query.page) > 0 ? Number(route.query.page) : 1;
+  void loadCreators();
+}, { immediate: true });
+onBeforeUnmount(() => { requestToken += 1; });
 </script>

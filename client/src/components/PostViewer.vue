@@ -320,7 +320,7 @@
         >
           <RouterLink
             class="viewer__sidebar-folder-link flex items-center gap-[0.85rem] min-w-0"
-            :to="{ name: 'folder', params: { slug: image.folderSlug } }"
+            :to="folderReadingRoute(image.folderSlug)"
             :aria-label="t('post.viewer.openFolder')"
           >
             <Avatar
@@ -594,6 +594,7 @@
 </template>
 
 <script setup lang="ts">
+import { folderReadingRoute } from '../utils/work-gallery';
   import "vidstack/bundle"
 
   import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"

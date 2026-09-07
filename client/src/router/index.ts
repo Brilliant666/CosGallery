@@ -144,16 +144,24 @@ export const router = createRouter({
       props: true
     },
     {
-      path: '/creators/:creatorId/works/:postId',
+      path: '/library/:creatorId/works/:postId',
       name: 'canonical-work-gallery',
       component: WorkGalleryView,
       props: true
     },
     {
-      path: '/creators/:creatorId',
+      path: '/library/:creatorId',
       name: 'canonical-creator',
       component: CanonicalCreatorView,
       props: true
+    },
+    {
+      path: '/creators/:creatorId/works/:postId',
+      redirect: to => ({ name: 'canonical-work-gallery', params: to.params, query: to.query })
+    },
+    {
+      path: '/creators/:creatorId',
+      redirect: to => ({ name: 'canonical-creator', params: to.params, query: to.query })
     },
     {
       path: '/f/:slug/works/:postId',
@@ -197,6 +205,10 @@ export const router = createRouter({
     }
   ],
   scrollBehavior(to, from, savedPosition) {
+    if (to.name === 'canonical-creator' && from.name === to.name && to.params.creatorId === from.params.creatorId) {
+      // Infinite loading records its range in the URL without jumping to the top.
+      return false;
+    }
     // Work modals keep the gallery mounted. Its exact locked position wins over
     // an older history position (e.g. after Back, re-opening and closing again).
     if ((to.query.context === 'work' || from.query.context === 'work') && shouldPreserveModalScroll(to, from)) {

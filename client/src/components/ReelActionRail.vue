@@ -49,7 +49,7 @@
 
     <RouterLink
       class="reel-action-rail__button"
-      :to="{ name: 'folder', params: { slug: item.folderSlug } }"
+      :to="folderReadingRoute(item.folderSlug)"
       :aria-label="t('reels.rail.openFolder')"
       :title="t('reels.rail.openFolder')"
     >
@@ -59,6 +59,7 @@
 </template>
 
 <script setup lang="ts">
+import { folderReadingRoute } from '../utils/work-gallery';
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';

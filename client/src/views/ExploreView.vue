@@ -333,6 +333,7 @@
 </template>
 
 <script setup lang="ts">
+import { folderReadingRoute } from '../utils/work-gallery';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
@@ -573,7 +574,7 @@ function selectSearchTab(tab: SearchTab) {
 
 async function openFolder(folder: FolderSummary) {
   commitSearch();
-  await router.push({ name: 'folder', params: { slug: folder.slug } });
+  await router.push(folderReadingRoute(folder.slug, folder.canonicalCreatorId));
 }
 
 function handleSearchMediaOpen() {

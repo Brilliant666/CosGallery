@@ -265,7 +265,7 @@
           v-for="folder in featuredFolders"
           :key="folder.id"
           custom
-          :to="{ name: 'folder', params: { slug: folder.slug } }"
+          :to="folderReadingRoute(folder.slug, folder.canonicalCreatorId)"
           v-slot="{ href, navigate, isActive }"
         >
           <a
@@ -431,6 +431,7 @@
 </template>
 
 <script setup lang="ts">
+import { folderReadingRoute } from '../utils/work-gallery';
   import { computed, onMounted, onUnmounted, ref, watch } from "vue"
   import { useI18n } from "vue-i18n"
   import { RouterLink, useRoute } from "vue-router"

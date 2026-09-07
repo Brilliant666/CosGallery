@@ -37,6 +37,7 @@ import { useCollectionsStore } from './stores/collections';
 import { useExploreStore } from './stores/explore';
 import { useLikesStore } from './stores/likes';
 import { useFoldersStore } from './stores/folders';
+import { useCreatorReadingStore } from './stores/creator-reading';
 import { useFeedStore } from './stores/feed';
 import { useMomentsStore } from './stores/moments';
 import { useReelsStore } from './stores/reels';
@@ -101,6 +102,7 @@ const displayRoute = computed<RouteLocationNormalizedLoaded | undefined>(() =>
 const showAuthLoading = computed(() => !authStore.ready && authStore.loading);
 
 function resetProtectedState() {
+  useCreatorReadingStore().invalidate();
   unlockModalScroll();
   appStore.resetProtectedState();
   feedStore.resetForRebuild();
@@ -202,6 +204,11 @@ watch(
     await foldersStore.fetchFolders(true);
   }
 );
+
+watch(() => [appStore.stats?.indexedPosts, appStore.stats?.scan.lastCompletedScan?.id, authStore.role, authStore.authenticated] as const, (values, previous) => {
+  if (previous && values.every((value, index) => value === previous[index])) return;
+  useCreatorReadingStore().invalidate();
+});
 
 watch(
   () => [authStore.accessGranted, authStore.likesMode] as const,

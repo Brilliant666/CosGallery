@@ -29,7 +29,7 @@
     <div class="reels-info-sidebar__folder-row">
       <RouterLink
         class="reels-info-sidebar__folder-link"
-        :to="{ name: 'folder', params: { slug: item.folderSlug } }"
+        :to="folderReadingRoute(item.folderSlug)"
         :aria-label="t('reels.info.openFolder')"
         :title="t('reels.info.openFolder')"
       >
@@ -100,6 +100,7 @@
 </template>
 
 <script setup lang="ts">
+import { folderReadingRoute } from '../utils/work-gallery';
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';

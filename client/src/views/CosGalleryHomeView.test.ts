@@ -1,23 +1,28 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
 import CosGalleryHomeView from './CosGalleryHomeView.vue';
 import { fetchCosGalleryCreators } from '../api/gallery';
 
 vi.mock('../api/gallery', () => ({ fetchCosGalleryCreators: vi.fn() }));
 const routerState = vi.hoisted(() => ({
-  route: { query: {} as Record<string, string>, fullPath: '/library' },
+  route: { name: 'library', query: {} as Record<string, string>, fullPath: '/library' },
   replace: vi.fn()
 }));
-vi.mock('vue-router', async (importOriginal) => ({
-  ...await importOriginal<typeof import('vue-router')>(),
-  useRoute: () => routerState.route,
-  useRouter: () => ({ replace: routerState.replace })
-}));
+vi.mock('vue-router', async (importOriginal) => {
+  const { reactive } = await import('vue');
+  routerState.route = reactive(routerState.route);
+  return { ...await importOriginal<typeof import('vue-router')>(), onBeforeRouteLeave: vi.fn(), useRoute: () => routerState.route, useRouter: () => ({ replace: routerState.replace }) };
+});
 
 describe('managed gallery classifications', () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.mocked(fetchCosGalleryCreators).mockReset();
-    routerState.replace.mockReset();
+    routerState.replace.mockReset().mockImplementation(async location => {
+      routerState.route.query = location.query;
+      routerState.route.fullPath = '/library?' + new URLSearchParams(location.query).toString();
+    });
     routerState.route.query = {};
     routerState.route.fullPath = '/library';
   });

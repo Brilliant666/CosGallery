@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.vue';
 import WorkGalleryView from './views/WorkGalleryView.vue';
 import { workDetail } from '../test/work-gallery-fixtures';
-import { fetchImage } from './api/gallery';
+import { fetchImage, fetchFolder } from './api/gallery';
 import { useAppStore } from './stores/app';
 import { useAuthStore } from './stores/auth';
 import { useFoldersStore } from './stores/folders';
@@ -13,7 +13,7 @@ import { useLikesStore } from './stores/likes';
 import { useCollectionsStore } from './stores/collections';
 
 vi.mock('./router', () => ({ canAccessRoute: () => true, routeAllowsPublicShareAccess: () => false }));
-vi.mock('./api/gallery', async () => ({ ...await vi.importActual('./api/gallery'), fetchImage: vi.fn() }));
+vi.mock('./api/gallery', async () => ({ ...await vi.importActual('./api/gallery'), fetchImage: vi.fn(), fetchFolder: vi.fn().mockResolvedValue({ canonicalCreatorId: null }) }));
 vi.mock('./views/PostView.vue', async () => {
   const { defineComponent } = await import('vue');
   const { useRouter, useRoute } = await import('vue-router');
@@ -34,6 +34,7 @@ describe('work gallery route modal history and background', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.mocked(fetchImage).mockReset().mockResolvedValue(workDetail());
+    vi.mocked(fetchFolder).mockResolvedValue({ canonicalCreatorId: null } as Awaited<ReturnType<typeof fetchFolder>>);
     useAuthStore().ready = true;
     vi.spyOn(useAppStore(), 'fetchStats').mockResolvedValue();
     vi.spyOn(useFoldersStore(), 'fetchFolders').mockResolvedValue();

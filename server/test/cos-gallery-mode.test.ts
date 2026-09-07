@@ -175,6 +175,12 @@ describe.sequential('COS gallery mode', () => {
       managed.linkFolder(folders.find((folder) => folder.name === name)!.id, { creatorId: lunana.id });
     }
     managed.linkFolder(folders.find((folder) => folder.name === 'Other root')!.id, { creatorId: other.id });
+    const linkedFolders = folders.filter(folder => ['lunananya', 'lunana'].includes(folder.name))
+      .sort((left, right) => left.id - right.id);
+    linkedFolders.forEach((folder, index) => {
+      databaseManager.connection.prepare('UPDATE folders SET description=? WHERE id=?')
+        .run(`Existing biography ${index}`, folder.id);
+    });
     const orderedSources = [
       'lunananya/lunananya NO.001',
       'lunana/lunana NO.002',
@@ -196,6 +202,7 @@ describe.sequential('COS gallery mode', () => {
       canonicalCreatorId: lunana.id,
       name: 'lunana',
       workCount: 4,
+      description: 'Existing biography 0',
       folderIds: expect.arrayContaining([
         folders.find((folder) => folder.name === 'lunananya')!.id,
         folders.find((folder) => folder.name === 'lunana')!.id
@@ -204,6 +211,18 @@ describe.sequential('COS gallery mode', () => {
       preference: 'liked'
     });
     expect(all.body.items.filter((item: { canonicalCreatorId: number | null }) => item.canonicalCreatorId === lunana.id)).toHaveLength(1);
+    expect(canonical.avatarUrl).toBe(canonical.coverUrl);
+    const canonicalDetail = (await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}`)).body.creator;
+    expect(canonicalDetail).toMatchObject({ imageCount: 4, videoCount: 0 });
+    expect(canonicalDetail.latestImageMtimeMs).toBeGreaterThan(0);
+    expect(canonical.localFolders.map((folder: { id: number }) => folder.id)).toEqual(linkedFolders.map(folder => folder.id));
+    for (const folder of linkedFolders) {
+      const physical = await requestTestApp(app, 'GET', `/api/folders/${folder.slug}`);
+      expect(physical.body.canonicalCreatorId).toBe(lunana.id);
+      expect(physical.body.id).toBe(folder.id);
+    }
+    const unlinkedFolder = folders.find(folder => folder.name === 'Unlinked root')!;
+    expect((await requestTestApp(app, 'GET', `/api/folders/${unlinkedFolder.slug}`)).body.canonicalCreatorId).toBeNull();
     expect(all.body.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: expect.stringMatching(/^folder:/), identityType: 'folder', name: 'Unlinked root' })
     ]));
@@ -230,7 +249,13 @@ describe.sequential('COS gallery mode', () => {
       'UPDATE archive_catalog_creators SET preferred_local_creator_folder_id=? WHERE id=?'
     ).run(preferredBridge.id, lunana.id);
     const afterPreference = await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}`);
-    expect(afterPreference.body.creator).toMatchObject({ workCount: 4, coverImageId: coverBeforePreference });
+    expect(afterPreference.body.creator).toMatchObject({
+      workCount: 4, coverImageId: coverBeforePreference, description: 'Existing biography 0', imageCount: 4
+    });
+
+    const single = await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${other.id}/works?limit=2`);
+    expect(single.body).toMatchObject({ total: 1, hasMore: false, creator: { imageCount: 1, videoCount: 0 } });
+    expect(Object.keys(single.body.creator).sort()).toEqual(Object.keys(canonicalDetail).sort());
 
     const otherPost = postRepository.listVisibleByFolder(
       folders.find((folder) => folder.name === 'Other root')!.id,
@@ -241,6 +266,26 @@ describe.sequential('COS gallery mode', () => {
     expect(rejected.status).toBe(404);
     const acceptedPost = pageOne.body.items[0].id;
     expect((await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}/works/${acceptedPost}`)).status).toBe(200);
+
+    const ownerFolder = databaseManager.connection.prepare('SELECT folder_id FROM posts WHERE id=?')
+      .get(acceptedPost) as { folder_id: number };
+    databaseManager.connection.prepare("UPDATE folders SET role='story_root' WHERE id=?").run(ownerFolder.folder_id);
+    expect((await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}/works/${acceptedPost}`)).status).toBe(404);
+    databaseManager.connection.prepare("UPDATE folders SET role='normal' WHERE id=?").run(ownerFolder.folder_id);
+
+    // A synthetic damaged legacy index must fail closed consistently. Normal
+    // production schema disallows this duplicate active bridge altogether.
+    databaseManager.connection.exec('DROP INDEX idx_catalog_folder_gallery_active');
+    databaseManager.connection.prepare('UPDATE archive_catalog_local_creator_folders SET gallery_folder_id=? WHERE creator_id=?')
+      .run(ownerFolder.folder_id, other.id);
+    const damagedFolder = folders.find(folder => folder.id === ownerFolder.folder_id)!;
+    expect((await requestTestApp(app, 'GET', `/api/folders/${damagedFolder.slug}`)).body.canonicalCreatorId).toBeNull();
+    const scoped = await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${lunana.id}/works?limit=10`);
+    expect(scoped.body).toMatchObject({ total: 2, creator: { workCount: 2, imageCount: 2 } });
+    expect(scoped.body.items).toHaveLength(2);
+    for (const creatorId of [lunana.id, other.id]) {
+      expect((await requestTestApp(app, 'GET', `/api/cos-gallery/creators/${creatorId}/works/${acceptedPost}`)).status).toBe(404);
+    }
   });
 
   it('keeps canonical IDs and unlinked Folder IDs in separate namespaces while excluding hidden works', async () => {

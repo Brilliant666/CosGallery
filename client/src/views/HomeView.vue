@@ -232,7 +232,7 @@
           <strong class="block text-text text-[0.87rem] font-bold">{{ formatDisplayFolderTitle(homeSummaryFolder) }}</strong>
           <p class="m-0 mt-[0.12rem] text-[0.79rem] truncate">{{ homeSummaryFolder.breadcrumb ?? t('folder.shared.topLevelSourceFolder') }}</p>
         </div>
-        <RouterLink class="ml-auto text-accent-strong text-[0.76rem] font-bold" :to="{ name: 'folder', params: { slug: homeSummaryFolder.slug } }">{{ t('home.sidebar.openFolder') }}</RouterLink>
+        <RouterLink class="ml-auto text-accent-strong text-[0.76rem] font-bold" :to="folderReadingRoute(homeSummaryFolder.slug, homeSummaryFolder.canonicalCreatorId)">{{ t('home.sidebar.openFolder') }}</RouterLink>
       </div>
 
       <div class="flex items-center justify-between gap-4 text-text text-[0.96rem] font-bold">
@@ -245,7 +245,7 @@
           v-for="folder in recommendedFolders"
           :key="folder.id"
           class="flex items-center gap-[0.8rem]"
-          :to="{ name: 'folder', params: { slug: folder.slug } }"
+          :to="folderReadingRoute(folder.slug, folder.canonicalCreatorId)"
         >
           <Avatar class="w-11 h-11" :name="formatDisplayFolderTitle(folder)" :src="folder.avatarUrl" />
           <div class="flex-1 min-w-0">
@@ -272,6 +272,7 @@
 </template>
 
 <script setup lang="ts">
+import { folderReadingRoute } from '../utils/work-gallery';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';

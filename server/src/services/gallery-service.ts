@@ -693,8 +693,13 @@ function mapTrashImage(image: IndexedTrashImage, derivativeVersion = getDerivati
   };
 }
 
-function buildFolderSummary(folder: FolderSummaryRecord) {
+function buildFolderSummary(folder: FolderSummaryRecord, preloadedCanonicalCreatorId?: number | null) {
   const workNavigationMode = appConfig.cosGalleryMode && folder.role === 'normal' ? 'work-gallery' : 'post';
+  const canonicalCreatorId = preloadedCanonicalCreatorId !== undefined
+    ? preloadedCanonicalCreatorId
+    : appConfig.cosGalleryMode
+      ? canonicalCreatorGalleryRepository.getUniqueCreatorIdForFolder(folder.id)
+      : null;
   const derivativeVersion = getDerivativeAssetVersion();
   const hasPreloadedAvatarSummary =
     Object.hasOwn(folder, 'summary_avatar_image_id') || Object.hasOwn(folder, 'summary_avatar_thumbnail_path');
@@ -702,6 +707,7 @@ function buildFolderSummary(folder: FolderSummaryRecord) {
   if (hasPreloadedAvatarSummary) {
     return {
       id: folder.id,
+      canonicalCreatorId,
       slug: folder.slug,
       name: folder.name,
       description: folder.description,
@@ -732,6 +738,7 @@ function buildFolderSummary(folder: FolderSummaryRecord) {
 
   return {
     id: folder.id,
+    canonicalCreatorId,
     slug: folder.slug,
     name: folder.name,
     description: folder.description,
@@ -900,6 +907,9 @@ type CosGalleryIdentityItem = {
   coverUrl: string | null;
   coverWidth: number | null;
   coverHeight: number | null;
+  avatarUrl: string | null;
+  description: string | null;
+  localFolders: Array<{ id: number; slug: string; name: string; path: string; workCount: number }>;
 };
 
 function chooseCanonicalCreatorCover<T extends {
@@ -947,6 +957,10 @@ function buildCosGalleryIdentityItems(): CosGalleryIdentityItem[] {
       : imageRepository.getById(coverSource.coverImageId);
     const canonicalCreatorId = first.canonicalCreatorId;
     const linked = canonicalCreatorId !== null;
+    const localFolders = [...values].sort((left, right) => left.folderId - right.folderId);
+    const coverUrl = cover?.thumbnail_path
+      ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, derivativeVersion)
+      : null;
     return {
       key,
       identityType: linked ? 'creator' as const : 'folder' as const,
@@ -963,6 +977,13 @@ function buildCosGalleryIdentityItems(): CosGalleryIdentityItem[] {
       folderIds: values.map(value => value.folderId).sort((left, right) => left - right),
       folderNames: values.map(value => value.folderName).sort((left, right) => left.localeCompare(right)),
       folderPath: coverSource.folderPath,
+      // Display metadata is read-only and independent of the ingest destination.
+      // Retain the first non-empty description by stable physical Folder ID.
+      description: localFolders.find(value => value.description?.trim())?.description ?? null,
+      localFolders: localFolders.map(value => ({
+        id: value.folderId, slug: value.slug, name: value.folderName,
+        path: value.folderPath, workCount: Number(value.workCount)
+      })),
       workCount: values.reduce((sum, value) => sum + Number(value.workCount), 0),
       latestWorkAt: values.reduce<number | null>((latest, value) => {
         const current = value.latestWorkAt === null ? null : Number(value.latestWorkAt);
@@ -974,9 +995,8 @@ function buildCosGalleryIdentityItems(): CosGalleryIdentityItem[] {
       ratingConflict: false,
       aliases: linked ? aliasesByCreator.get(canonicalCreatorId) ?? [] : [],
       coverImageId: cover?.id ?? null,
-      coverUrl: cover?.thumbnail_path
-        ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, derivativeVersion)
-        : null,
+      coverUrl,
+      avatarUrl: coverUrl,
       coverWidth: cover?.width ?? null,
       coverHeight: cover?.height ?? null
     };
@@ -1470,7 +1490,8 @@ export const galleryService = {
 
   getCanonicalCreator(id: number) {
     if (!storageService.getState().libraryAvailable) return null;
-    return buildCosGalleryIdentityItems().find(item => item.identityType === 'creator' && item.id === id) ?? null;
+    const creator = buildCosGalleryIdentityItems().find(item => item.identityType === 'creator' && item.id === id);
+    return creator ? { ...creator, ...canonicalCreatorGalleryRepository.getVisibleMediaSummary(id) } : null;
   },
 
   getCanonicalCreatorWorks(
@@ -1496,7 +1517,7 @@ export const galleryService = {
   },
 
   getCanonicalCreatorWork(id: number, postId: number, mediaType?: MediaType) {
-    if (!this.getCanonicalCreator(id) || !canonicalCreatorGalleryRepository.ownsVisiblePost(id, postId)) return null;
+    if (!storageService.getState().libraryAvailable || !canonicalCreatorGalleryRepository.ownsVisiblePost(id, postId)) return null;
     return this.getImageDetail(postId, mediaType);
   },
 
@@ -1696,7 +1717,10 @@ export const galleryService = {
       return [];
     }
 
-    return folderRepository.getAllSummaries().map(buildFolderSummary);
+    const creatorIds = new Map(appConfig.cosGalleryMode
+      ? canonicalCreatorGalleryRepository.listUniqueFolderCreatorIds().map(row => [row.folderId, row.creatorId])
+      : []);
+    return folderRepository.getAllSummaries().map(folder => buildFolderSummary(folder, creatorIds.get(folder.id) ?? null));
   },
 
   listPlaces() {

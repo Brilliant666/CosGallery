@@ -128,6 +128,7 @@ export interface PlaceDetail extends PlaceSummary {
 }
 
 export interface FolderSummary {
+  canonicalCreatorId?: number | null;
   id: number;
   slug: string;
   name: string;
@@ -496,6 +497,12 @@ export interface ImageCaptionMutationResult {
 }
 
 export interface CosGalleryCreator {
+  avatarUrl?: string | null;
+  description?: string | null;
+  imageCount?: number;
+  videoCount?: number;
+  latestImageMtimeMs?: number | null;
+  localFolders?: Array<{ id: number; slug: string; name: string; path: string; workCount: number }>;
   key: string;
   identityType: 'creator' | 'folder';
   canonicalCreatorId: number | null;
