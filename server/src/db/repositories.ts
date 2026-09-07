@@ -326,6 +326,77 @@ const FOLDER_SUMMARY_SELECT_SQL = `
   FROM folders
 `;
 
+// Assemble the same physical-folder summaries in batches. In particular, the
+// all-member mtime aggregate must not be reevaluated for each avatar projection.
+// Keep the single-folder projection above for targeted reads.
+const ALL_FOLDER_SUMMARIES_SQL = `
+  WITH active_posts AS MATERIALIZED (
+    SELECT posts.* FROM posts
+    JOIN folders ON folders.id=posts.folder_id AND folders.role='normal'
+    WHERE posts.is_deleted=0 AND posts.is_trashed=0
+  ), post_totals AS (
+    SELECT folder_id, COUNT(*) AS post_count,
+      MAX(CASE WHEN content_rating='R18' THEN 1 ELSE 0 END) AS has_r18
+    FROM active_posts GROUP BY folder_id
+  ), representative_totals AS (
+    SELECT p.folder_id,
+      SUM(CASE WHEN NOT (img.folder_id=p.folder_id AND LOWER(img.filename) IN (${COVER_FILENAME_SQL})) THEN 1 ELSE 0 END) AS image_count,
+      SUM(CASE WHEN p.post_type='carousel' AND NOT (img.folder_id=p.folder_id AND LOWER(img.filename) IN (${COVER_FILENAME_SQL})) THEN 1 ELSE 0 END) AS carousel_count,
+      SUM(CASE WHEN p.post_type='single' AND img.media_type='video' THEN 1 ELSE 0 END) AS video_count
+    FROM active_posts p JOIN post_items pi ON pi.post_id=p.id AND pi.position=1
+    JOIN images img ON img.id=pi.image_id GROUP BY p.folder_id
+  ), media_times AS (
+    SELECT p.folder_id, MAX(img.mtime_ms) AS latest_image_mtime_ms
+    FROM active_posts p JOIN post_items pi ON pi.post_id=p.id
+    JOIN images img ON img.id=pi.image_id GROUP BY p.folder_id
+  ), story_owners AS (
+    SELECT DISTINCT story_folders.story_owner_folder_id AS folder_id
+    FROM folders story_folders JOIN images story_images ON story_images.folder_id=story_folders.id
+    WHERE story_folders.role IN ('story_root','story_capsule')
+      AND story_images.is_deleted=0 AND story_images.is_trashed=0
+  ), ranked_covers AS (
+    SELECT images.folder_id, images.id,
+      ROW_NUMBER() OVER (PARTITION BY images.folder_id ORDER BY
+        CASE LOWER(images.filename)
+          WHEN 'cover.jpg' THEN 1 WHEN 'cover.jpeg' THEN 2 WHEN 'cover.png' THEN 3
+          WHEN 'cover.webp' THEN 4 WHEN 'cover.avif' THEN 5 WHEN 'cover.gif' THEN 6 ELSE 7 END,
+        images.id ASC) AS rank
+    FROM images JOIN folders ON folders.id=images.folder_id AND folders.role='normal'
+    WHERE images.is_deleted=0 AND images.is_trashed=0 AND LOWER(images.filename) IN (${COVER_FILENAME_SQL})
+  ), ranked_fallbacks AS (
+    SELECT p.folder_id, pi.image_id,
+      ROW_NUMBER() OVER (PARTITION BY p.folder_id ORDER BY p.sort_timestamp DESC,p.id DESC) AS rank
+    FROM active_posts p JOIN post_items pi ON pi.post_id=p.id AND pi.position=1
+    JOIN images fallback_images ON fallback_images.id=pi.image_id
+  ), avatar_ids AS MATERIALIZED (
+    SELECT folders.id AS folder_id,
+      COALESCE((${ACTIVE_FOLDER_AVATAR_IMAGE_ID_SQL}), ranked_covers.id, ranked_fallbacks.image_id) AS image_id
+    FROM folders
+    LEFT JOIN ranked_covers ON ranked_covers.folder_id=folders.id AND ranked_covers.rank=1
+    LEFT JOIN ranked_fallbacks ON ranked_fallbacks.folder_id=folders.id AND ranked_fallbacks.rank=1
+    WHERE folders.role='normal'
+  )
+  SELECT folders.*,
+    CASE WHEN post_totals.has_r18=1 THEN 'R18' ELSE 'R15' END AS content_rating,
+    COALESCE(post_totals.post_count,0) AS post_count,
+    COALESCE(representative_totals.image_count,0) AS image_count,
+    COALESCE(representative_totals.carousel_count,0) AS carousel_count,
+    COALESCE(representative_totals.video_count,0) AS video_count,
+    media_times.latest_image_mtime_ms,
+    CASE WHEN story_owners.folder_id IS NULL THEN 0 ELSE 1 END AS has_avatar_story,
+    avatar_ids.image_id AS summary_avatar_image_id,
+    avatar_image.thumbnail_path AS summary_avatar_thumbnail_path
+  FROM folders
+  LEFT JOIN post_totals ON post_totals.folder_id=folders.id
+  LEFT JOIN representative_totals ON representative_totals.folder_id=folders.id
+  LEFT JOIN media_times ON media_times.folder_id=folders.id
+  LEFT JOIN story_owners ON story_owners.folder_id=folders.id
+  LEFT JOIN avatar_ids ON avatar_ids.folder_id=folders.id
+  LEFT JOIN images avatar_image ON avatar_image.id=avatar_ids.image_id
+  WHERE folders.role='normal' AND (COALESCE(post_totals.post_count,0)>0 OR avatar_ids.image_id IS NOT NULL)
+  ORDER BY latest_image_mtime_ms DESC, name COLLATE NOCASE ASC, folder_path COLLATE NOCASE ASC
+`;
+
 interface MediaSearchSql {
   whereSql: string;
   whereParams: string[];
@@ -627,16 +698,7 @@ export const folderRepository = {
 
   getAllSummaries(): FolderSummaryRecord[] {
     return database
-      .prepare(
-        `
-        SELECT * FROM (
-          ${FOLDER_SUMMARY_SELECT_SQL}
-          WHERE folders.role = 'normal'
-        ) AS summaries
-        WHERE post_count > 0 OR summary_avatar_image_id IS NOT NULL
-        ORDER BY latest_image_mtime_ms DESC, name COLLATE NOCASE ASC, folder_path COLLATE NOCASE ASC
-        `
-      )
+      .prepare(ALL_FOLDER_SUMMARIES_SQL)
       .all() as unknown as FolderSummaryRecord[];
   },
 

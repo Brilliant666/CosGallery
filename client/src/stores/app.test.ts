@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_LOCALE, i18n } from '../locales';
 import type { AppStatus } from '../types/api';
 import { useAppStore } from './app';
+import { useAuthStore } from './auth';
 
 const {
   fetchAdminScanProgressMock,
@@ -101,6 +102,49 @@ describe('useAppStore locale preferences', () => {
     fetchAdminStatsMock.mockReset();
     fetchScanProgressMock.mockReset();
     fetchStatusMock.mockReset();
+  });
+
+  it('ignores a late stats response after access reset and permits a new read', async () => {
+    let resolve!: (value: AppStatus) => void;
+    fetchAdminStatsMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolve = done; }));
+    const store = useAppStore();
+    const first = store.fetchStats();
+    expect(fetchAdminStatsMock).toHaveBeenCalledTimes(1);
+    store.resetProtectedState();
+    resolve(createAppStatus());
+    await first;
+    expect(store.stats).toBeNull();
+    fetchAdminStatsMock.mockResolvedValueOnce(createAppStatus());
+    await store.fetchStats();
+    expect(store.stats).not.toBeNull();
+  });
+
+  it('does not deduplicate a newer post-mutation stats refresh into an older read', async () => {
+    let resolveOld!: (value: AppStatus) => void;
+    fetchAdminStatsMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolveOld = done; }))
+      .mockResolvedValueOnce({ ...createAppStatus(), indexedPosts: 99 });
+    const store = useAppStore();
+    const old = store.fetchStats();
+    await store.fetchStats({ background: true });
+    expect(fetchAdminStatsMock).toHaveBeenCalledTimes(2);
+    resolveOld({ ...createAppStatus(), indexedPosts: 1 });
+    await old;
+    expect(store.stats?.indexedPosts).toBe(99);
+    expect(store.loadingStats).toBe(false);
+  });
+
+  it('does not reuse or accept an admin stats request after the endpoint capability changes', async () => {
+    let resolveOld!: (value: AppStatus) => void;
+    fetchAdminStatsMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolveOld = done; }));
+    fetchStatusMock.mockResolvedValueOnce(createAppStatus('fr'));
+    const store = useAppStore();
+    const old = store.fetchStats();
+    useAuthStore().capabilities.canAccessSettings = false;
+    await store.fetchStats();
+    resolveOld(createAppStatus('en'));
+    await old;
+    expect(fetchStatusMock).toHaveBeenCalledTimes(1);
+    expect(store.stats?.preferences.defaultLocale).toBe('fr');
   });
 
   it('initializes locale from localStorage before browser preferences', () => {

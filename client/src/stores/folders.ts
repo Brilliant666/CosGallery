@@ -25,6 +25,8 @@ type FolderMediaFilter = 'all' | 'video';
 
 interface FoldersState {
   items: FolderSummary[];
+  hasLoadedList: boolean;
+  listGeneration: number;
   loadingList: boolean;
   pendingListRefresh: boolean;
   listError: string | null;
@@ -45,9 +47,15 @@ interface FoldersState {
   lastCreatedShareUrl: string | null;
 }
 
+// Per-store, ephemeral request ownership: a reset detaches old consumers without
+// letting their eventual response repopulate a different access context.
+const listRequests = new WeakMap<object, Promise<void>>();
+
 export const useFoldersStore = defineStore('folders', {
   state: (): FoldersState => ({
     items: [],
+    hasLoadedList: false,
+    listGeneration: 0,
     loadingList: false,
     pendingListRefresh: false,
     listError: null,
@@ -135,7 +143,10 @@ export const useFoldersStore = defineStore('folders', {
     },
 
     resetForRebuild() {
+      this.listGeneration += 1;
+      listRequests.delete(this);
       this.items = [];
+      this.hasLoadedList = false;
       this.loadingList = false;
       this.pendingListRefresh = false;
       this.listError = null;
@@ -159,29 +170,41 @@ export const useFoldersStore = defineStore('folders', {
     },
 
     async fetchFolders(force = false) {
-      if (this.loadingList) {
+      const running = listRequests.get(this);
+      if (running) {
         this.pendingListRefresh = this.pendingListRefresh || force;
-        return;
+        return running;
       }
 
-      if (!force && this.items.length > 0) {
+      if (!force && this.hasLoadedList) {
         return;
       }
-
+      const generation = this.listGeneration;
       this.loadingList = true;
       this.listError = null;
-
-      try {
-        this.items = await fetchFolders();
-      } catch (error) {
-        this.listError = error instanceof Error ? error.message : 'Unable to load folders';
-      } finally {
-        this.loadingList = false;
-      }
-
-      if (this.pendingListRefresh) {
-        this.pendingListRefresh = false;
-        await this.fetchFolders(true);
+      const request = (async () => {
+        do {
+          this.pendingListRefresh = false;
+          try {
+            const items = await fetchFolders();
+            if (generation !== this.listGeneration) return;
+            this.items = items;
+            this.hasLoadedList = true;
+            this.listError = null;
+          } catch (error) {
+            if (generation !== this.listGeneration) return;
+            this.hasLoadedList = false;
+            this.listError = error instanceof Error ? error.message : 'Unable to load folders';
+          }
+        } while (generation === this.listGeneration && this.pendingListRefresh);
+      })();
+      listRequests.set(this, request);
+      try { await request; }
+      finally {
+        if (generation === this.listGeneration) {
+          this.loadingList = false;
+          listRequests.delete(this);
+        }
       }
     },
 

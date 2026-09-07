@@ -103,7 +103,7 @@ async function loadMore() {
   }
 }
 
-watch(() => props.creatorId, async id => {
+watch(() => [props.creatorId, reading.generation] as const, async ([id]) => {
   save();
   const token = ++loadToken;
   activeKey = id;

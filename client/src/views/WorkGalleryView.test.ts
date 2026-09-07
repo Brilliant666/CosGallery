@@ -9,6 +9,7 @@ import { galleryTestRouter, mediaItem, mixedOrientationItems, workDetail } from 
 import WorkGalleryView from './WorkGalleryView.vue';
 import PostView from './PostView.vue';
 import { useAuthStore } from '../stores/auth';
+import type { AppStatus } from '../types/api';
 
 vi.mock('../api/gallery', () => ({
   fetchFolder: vi.fn().mockResolvedValue({ canonicalCreatorId: null }),
@@ -120,6 +121,17 @@ describe('WorkGalleryView', () => {
   it('does not accept a canonical return path for a different creator', async () => {
     const { wrapper } = await renderCanonical('/library/999?page=4');
     expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/library/166');
+  });
+
+  it('does not reload for initial stats hydration but does reload for a later completed scan', async () => {
+    await renderCanonical();
+    const app = useAppStore();
+    app.stats = { indexedPosts: 100, storage: { available: true }, scan: { lastCompletedScan: { id: 1 } } } as AppStatus;
+    await flushPromises();
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(1);
+    app.stats = { ...app.stats, scan: { ...app.stats.scan, lastCompletedScan: { ...app.stats.scan.lastCompletedScan!, id: 2 } } };
+    await flushPromises();
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(2);
   });
 
   it('revalidates retained canonical data after authorization changes and removes unauthorized media', async () => {
