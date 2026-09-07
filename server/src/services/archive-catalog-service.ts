@@ -187,13 +187,13 @@ function asNumber(value: number | bigint): number {
 }
 
 function withTransaction<T>(database: DatabaseSync, operation: () => T): T {
-  database.exec('BEGIN IMMEDIATE');
+  database.exec('SAVEPOINT archive_catalog_import');
   try {
     const result = operation();
-    database.exec('COMMIT');
+    database.exec('RELEASE archive_catalog_import');
     return result;
   } catch (error) {
-    database.exec('ROLLBACK');
+    database.exec('ROLLBACK TO archive_catalog_import; RELEASE archive_catalog_import');
     throw error;
   }
 }
@@ -393,7 +393,7 @@ export class ArchiveCatalogService {
 
   importCostuanRecord(
     recordInput: unknown,
-    options: { observedAt?: string; sourcePath?: string } = {}
+    options: { observedAt?: string; sourcePath?: string; expectedCreatorId?: number } = {}
   ): CostuanCatalogImportResult {
     const record = costuanRecordSchema.parse(recordInput);
     const serialized = Buffer.from(JSON.stringify(record));
@@ -401,8 +401,22 @@ export class ArchiveCatalogService {
       observedAt: options.observedAt ?? record.costuan.checkedAt ?? new Date().toISOString(),
       sourcePath: options.sourcePath ?? `bridge:costuan:${record.costuan.postId}`,
       sourceVersion: 'bridge-v1',
-      checksum: sha256(serialized)
+      checksum: sha256(serialized),
+      expectedCreatorId: options.expectedCreatorId
     });
+  }
+
+  validateCostuanIdentity(expectedCreatorId: number, postId: string, title: string): void {
+    const active = this.database.prepare('SELECT is_active FROM archive_catalog_creators WHERE id=?').get(expectedCreatorId) as {is_active:number}|undefined;
+    if (!active?.is_active) throw new Error('指定规范博主不存在或已停用。');
+    const owners = this.database.prepare(`SELECT creator_id FROM archive_catalog_creator_sources
+      WHERE source='costuan' AND source_creator_id=? UNION SELECT creator_id FROM archive_catalog_collections
+      WHERE source='costuan' AND source_collection_id=?`).all(`collection:${postId}`,postId) as Array<{creator_id:number}>;
+    const alias=collectionCreatorAlias(title), matches=alias ? this.findCreatorIdsByAliases([alias]) : [];
+    if (owners.length ? owners.length !== 1 || owners[0].creator_id !== expectedCreatorId
+      : matches.length !== 1 || matches[0] !== expectedCreatorId) {
+      throw new Error('Costuan 合集身份与指定规范博主不一致或存在歧义，未写入来源。');
+    }
   }
 
   private importCostuanRecords(
@@ -412,6 +426,7 @@ export class ArchiveCatalogService {
       sourcePath: string;
       sourceVersion: string;
       checksum: string;
+      expectedCreatorId?: number;
     }
   ): CostuanCatalogImportResult {
     const observedAt = importMetadata.observedAt;
@@ -443,6 +458,13 @@ export class ArchiveCatalogService {
           SELECT creator_id FROM archive_catalog_collections WHERE source='costuan' AND source_collection_id=?`)
           .all(`collection:${record.costuan.postId}`, record.costuan.postId) as Array<{creator_id:number}>;
         const creatorMatches = owners.length ? owners.map(owner => owner.creator_id) : this.findCreatorIdsByAliases(candidateNames);
+        if (importMetadata.expectedCreatorId !== undefined) {
+          const expected = importMetadata.expectedCreatorId;
+          // The task name in a submitted record is not independent source evidence.
+          // A first collection must identify this creator through its own title.
+          this.validateCostuanIdentity(expected, record.costuan.postId, record.costuan.title);
+          creatorMatches.splice(0, creatorMatches.length, expected);
+        }
         if (creatorMatches.length !== 1) {
           result.unmatchedCreators.push(record.creatorName);
           continue;
@@ -450,7 +472,9 @@ export class ArchiveCatalogService {
 
         const creatorId = creatorMatches[0];
         result.matchedCreators += 1;
-        for (const alias of candidateNames) this.upsertAlias(creatorId, alias, 'costuan');
+        if (importMetadata.expectedCreatorId === undefined) {
+          for (const alias of candidateNames) this.upsertAlias(creatorId, alias, 'costuan');
+        }
         this.upsertCreatorSource({
           creatorId,
           source: 'costuan',

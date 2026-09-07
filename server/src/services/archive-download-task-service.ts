@@ -251,6 +251,8 @@ export class ArchiveDownloadTaskService {
              WHERE candidate.collection_id = collections.id
                AND candidate.provider = ?
                AND candidate.status IN ('saved', 'already-saved')
+               AND TRIM(COALESCE(candidate.source_folder_name,''))<>''
+               AND TRIM(COALESCE(candidate.destination_path,''))<>''
              ORDER BY candidate.transferred_at DESC, candidate.id DESC
              LIMIT 1
            )
@@ -433,7 +435,27 @@ export class ArchiveDownloadTaskService {
     const timestamp = nowIso();
     const ids: number[] = [];
 
-    this.reconcileAlreadyLocalTasks('baidu');
+    if (options.seedTaskId !== undefined) {
+      if (!Number.isSafeInteger(options.seedTaskId) || options.seedTaskId <= 0) throw new Error('指定暂存任务 ID 无效，不能扩大领取范围。');
+      const target = this.database.prepare(`SELECT works.creator_id, tasks.provider,
+          creators.is_active AS creator_active, source_works.is_active AS source_active, collections.is_active AS collection_active,
+          EXISTS (SELECT 1 FROM archive_catalog_deliveries deliveries WHERE deliveries.collection_id=collections.id
+            AND deliveries.provider=tasks.provider AND deliveries.status IN ('saved','already-saved')
+            AND TRIM(COALESCE(deliveries.source_folder_name,''))<>'' AND TRIM(COALESCE(deliveries.destination_path,''))<>'') AS delivery_ready
+        FROM archive_catalog_download_tasks tasks
+        JOIN archive_catalog_source_works source_works ON source_works.id=tasks.source_work_id
+        JOIN archive_catalog_works works ON works.id=source_works.work_id
+        JOIN archive_catalog_creators creators ON creators.id=works.creator_id
+        JOIN archive_catalog_collections collections ON collections.id=source_works.collection_id
+        WHERE tasks.id=?`).get(options.seedTaskId) as {creator_id:number;provider:string;creator_active:number;source_active:number;collection_active:number;delivery_ready:number}|undefined;
+      if (!target) throw new Error('指定暂存任务不存在。');
+      if (!target.creator_active || !target.source_active || !target.collection_active || !target.delivery_ready) {
+        throw new Error('指定暂存任务的博主已停用或来源目录不可用，请先核验 Stage 1。');
+      }
+      this.reconcileAlreadyLocalTasks(target.provider,[target.creator_id]);
+    } else {
+      this.reconcileAlreadyLocalTasks('baidu');
+    }
 
     this.database.exec('BEGIN IMMEDIATE');
     try {

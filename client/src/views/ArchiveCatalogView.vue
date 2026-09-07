@@ -13,7 +13,7 @@
       </span>
     </header>
 
-    <ManagedCreatorRoster @changed="loadCatalog({ refreshExpanded: true })" />
+    <ManagedCreatorRoster @changed="loadCatalog({ refreshExpanded: true })" @source-planned="refreshSourceRegions" />
 
     <div v-if="summary" class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6" aria-label="账本概览">
       <article v-for="card in summaryCards" :key="card.label" class="rounded-2xl border border-border bg-surface p-4 shadow-sm">
@@ -27,9 +27,9 @@
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 1</p>
-          <h2 class="mt-1 mb-0 text-lg font-semibold">本地博主来源关联</h2>
+          <h2 class="mt-1 mb-0 text-lg font-semibold">Costuan 来源收录</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            找出 G:\cos图集 中已经有作品、但尚无 Costuan 合集元数据的博主。CostuanArchiveManager 领取后复用现有搜索与百度转存流程，整批完成时会把元数据直接写回账本，再统一核对本地作品并生成真正缺失的作品任务。
+            从博主库明确选择首次收录对象，无需先建立本地目录。复制本次任务范围到插件 Stage 1，采集完整来源并核验网盘来源目录；仅为本批博主规划 Stage 2 缺失文件。下载仍由你通过百度客户端完成，再进入 Stage 3。
           </p>
         </div>
         <div v-if="metadataTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
@@ -42,10 +42,12 @@
       </div>
 
       <div class="mt-4 flex flex-wrap items-center gap-3">
+        <FirstCollectionSelector @planned="refreshSourceRegions" />
+        <button type="button" data-test="refresh-stage1" class="h-11 rounded-xl border border-border bg-bg px-4 text-sm disabled:opacity-50" :disabled="sourceRegionsRefreshing" @click="refreshSourceRegions()">刷新来源状态</button>
         <button type="button" data-test="plan-metadata" class="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-white disabled:opacity-50" :disabled="planningMetadata" @click="planMetadata">
           {{ planningMetadata ? '正在生成…' : '生成/刷新待关联博主任务' }}
         </button>
-        <p class="m-0 text-sm text-muted">运行一次“图库扫描”也会自动刷新这组任务。</p>
+        <p class="m-0 text-sm text-muted">旧“待关联”入口只处理已有本地作品的博主；不会自动选择整个博主库。刷新状态只读取，不领取或执行任务。</p>
       </div>
       <p v-if="metadataNotice" data-test="metadata-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ metadataNotice }}</p>
 
@@ -58,11 +60,11 @@
               <td class="p-3">{{ task.preference === 'liked' ? '喜欢' : task.preference === 'kept' ? '保留' : '未分类' }}</td>
               <td class="p-3">{{ task.localWorks }} 套</td>
               <td class="p-3 uppercase">{{ task.source }}</td>
-              <td class="p-3">{{ metadataStatusLabel(task.status) }}</td>
+              <td class="p-3">{{ metadataStatusLabel(task.status) }}<small class="block text-muted">{{ sourceStateLabel(task.sourceState) }}</small></td>
             </tr>
           </tbody>
         </table>
-        <p v-if="metadataTasks.total > 20" class="m-0 border-t border-border p-3 text-center text-xs text-muted">管理页预览前 20 位；插件领取完整队列。</p>
+        <p v-if="metadataTasks.total > 20" class="m-0 border-t border-border p-3 text-center text-xs text-muted">管理页预览前 20 位；本次指定任务范围不受此预览分页限制，插件仅执行明确选中的任务。</p>
       </div>
     </section>
 
@@ -72,7 +74,7 @@
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 2</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">缺失作品下载队列</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            仅检查 G:\cos图集 中已存在并匹配到博主 ID 的目录；为这些博主已转存到百度网盘、但本地尚未关联的 Costuan 作品生成任务。插件会按博主批量复制缺失压缩包到“我的网盘/cos待入库/博主 ID”，供你随后整目录下载。
+            来源收录完成后，仅为该批博主规划已具备网盘来源、但本地缺失的 Costuan 作品，首次收录无需先有本地目录。插件精确复制缺失压缩包到“我的网盘/cos待入库/博主 ID”，再由你手动下载；旧全量规划入口保留原有本地博主范围。
           </p>
         </div>
         <div v-if="downloadTasks" class="grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-7">
@@ -390,7 +392,7 @@
               <div class="mb-2 flex items-center justify-between gap-3">
                 <h2 class="m-0 text-sm font-semibold">待收录作品</h2>
                 <div class="flex items-center gap-3">
-                  <button v-if="details[creator.id].missing.length && creator.localWorks > 0" type="button" class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold" @click="planDownloads(creator.id)">只生成此博主任务</button>
+                  <button v-if="details[creator.id].missing.length" type="button" class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold" @click="planDownloads(creator.id)">只生成此博主任务</button>
                   <span class="text-xs font-semibold" :class="details[creator.id].missing.length ? 'text-amber-600' : 'text-emerald-600'">
                     {{ details[creator.id].missing.length }} 套
                   </span>
@@ -439,6 +441,8 @@
 
 <script setup lang="ts">
 import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
+import FirstCollectionSelector from '../components/FirstCollectionSelector.vue';
+import { sourceStateLabel } from '../api/first-collection';
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import {
@@ -524,6 +528,7 @@ const rotatingBridgeToken = ref(false);
 const metadataTasks = ref<ArchiveMetadataTasksPayload | null>(null);
 const planningMetadata = ref(false);
 const metadataNotice = ref('');
+const sourceRegionsRefreshing = ref(false);
 const localIngestSettings = ref<LocalIngestSettings | null>(null);
 const localIngestAllowlistText = ref('');
 const localIngestInboxCreators = ref<LocalIngestInboxCreatorsResult | null>(null);
@@ -1067,6 +1072,28 @@ function handleStage3VisibilityChange() {
   if (stage3OperationActive.value) scheduleStage3Poll(0);
 }
 
+function handleSourceVisibilityChange() {
+  if (!document.hidden) void refreshSourceRegions();
+}
+
+function handlePluginStateMessage(event: MessageEvent) {
+  if (document.hidden || event.source !== window || event.origin !== window.location.origin) return;
+  if (event.data?.source === 'costuan-archive-manager' && event.data?.type === 'cosgallery:archive-state-changed') {
+    void refreshSourceRegions();
+  }
+}
+
+async function refreshSourceRegions(_creatorIds?: number[]) {
+  if (sourceRegionsRefreshing.value) return;
+  sourceRegionsRefreshing.value = true;
+  try {
+    await Promise.all([loadMetadataTasks(), loadDownloadTasks()]);
+    metadataNotice.value = 'Stage 1/2 状态已读取；未执行任务规划、转存或扫描。';
+  } catch (reason) {
+    metadataNotice.value = reason instanceof Error ? reason.message : '无法刷新来源状态';
+  } finally { sourceRegionsRefreshing.value = false; }
+}
+
 function preferenceClass(value: ArchiveCatalogPreference | null) {
   if (value === 'liked') return 'bg-red-100 text-red-700';
   if (value === 'kept') return 'bg-amber-100 text-amber-800';
@@ -1109,7 +1136,7 @@ function metadataStatusLabel(status: ArchiveMetadataTaskStatus) {
   return ({
     pending: '待采集',
     claimed: '插件已领取',
-    completed: '已接入',
+    completed: '元数据已接入',
     not_found: 'Costuan 未收录',
     failed: '失败待重试',
     cancelled: '已取消'
@@ -1277,6 +1304,8 @@ onMounted(async () => {
     localIngestOperation.value = null;
   }
   document.addEventListener('visibilitychange', handleStage3VisibilityChange);
+  document.addEventListener('visibilitychange', handleSourceVisibilityChange);
+  window.addEventListener('message', handlePluginStateMessage);
   await Promise.all([
     loadCatalog(),
     loadDownloadTasks().catch(() => undefined),
@@ -1288,6 +1317,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleStage3VisibilityChange);
+  document.removeEventListener('visibilitychange', handleSourceVisibilityChange);
+  window.removeEventListener('message', handlePluginStateMessage);
   stopStage3Polling();
 });
 </script>

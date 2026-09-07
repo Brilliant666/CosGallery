@@ -56,6 +56,7 @@
         <button class="primary" :disabled="busy">{{ busy ? '正在保存…' : detail ? '保存博主' : '创建博主' }}</button>
       </form>
       <template v-if="detail">
+        <section><h3>Stage 1 来源收录</h3><FirstCollectionSelector :creator="detail" :disabled="busy || !detail.isActive" @planned="handleSourcePlanned" /></section>
         <section><h3>别名</h3>
           <ul class="alias-list"><li v-for="alias in detail.aliases" :key="alias.id"><span>{{ alias.alias }} <small>{{ sourceLabel(alias.source) }}</small></span>
             <button v-if="alias.editable" :disabled="busy" @click="removeAlias(alias.id)">删除别名</button><small v-else>只读</small></li></ul>
@@ -104,12 +105,13 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
+import FirstCollectionSelector from './FirstCollectionSelector.vue';
 import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
 import { RequestError } from '../api/http';
 import * as api from '../api/managed-creators';
 import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ContentRating, LocalIngestDestinationPreference } from '../types/api';
 
-const emit = defineEmits<{ changed: [] }>();
+const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]] }>();
 const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
 const detail = ref<ArchiveCatalogCreatorDetail | null>(null);
 const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no' });
@@ -141,6 +143,10 @@ async function load() {
   finally { if (generation === loadGeneration) loading.value = false; }
 }
 async function search() { page.value = 1; error.value = ''; await load(); }
+async function handleSourcePlanned(creatorIds: number[]) {
+  emit('sourcePlanned', creatorIds);
+  await load();
+}
 async function goPage(value:number) { page.value = value; await load(); }
 function showDialog() { if (!dialog.value?.open) dialog.value?.showModal(); dialogOpen.value = true; }
 function closeDialog() { if (!busy.value) { dialog.value?.close(); dialogOpen.value = false; } }

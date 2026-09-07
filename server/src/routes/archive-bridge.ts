@@ -43,22 +43,28 @@ const updateBodySchema = z.object({
 const idSchema = z.object({ id: z.coerce.number().int().positive() });
 const metadataListQuerySchema = z.object({
   status: z.enum(['pending', 'claimed', 'completed', 'not_found', 'failed', 'cancelled']).optional(),
-  limit: z.coerce.number().int().min(1).max(500).default(100)
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  page: z.coerce.number().int().positive().default(1)
 });
 const metadataClaimBodySchema = z.object({
   workerId: z.string().trim().min(1).max(120),
-  limit: z.coerce.number().int().min(1).max(500).default(100)
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  taskIds: z.array(z.number().int().positive()).min(1).max(500).optional()
 });
 const metadataResultBodySchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('completed'),
     workerId: z.string().trim().min(1).max(120),
-    record: z.record(z.unknown())
+    record: z.record(z.unknown()),
+    canonicalCreatorId:z.number().int().positive().optional(),
+    receiptId:z.string().trim().min(1).max(120).optional(),
+    expectedAttempt:z.number().int().positive().optional()
   }),
   z.object({
     status: z.enum(['not_found', 'failed', 'pending']),
     workerId: z.string().trim().min(1).max(120),
-    error: z.union([z.string().trim().max(1000), z.null()]).optional()
+    error: z.union([z.string().trim().max(1000), z.null()]).optional(),
+    expectedAttempt:z.number().int().positive().optional()
   })
 ]);
 
@@ -88,7 +94,7 @@ router.use((request, response, next) => {
 });
 
 router.get('/ping', (_request, response) => {
-  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 2 });
+  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 3, capabilities:{rosterFirstCollectionV1:true} });
 });
 
 router.get('/metadata-tasks', (request, response) => {
@@ -97,7 +103,8 @@ router.get('/metadata-tasks', (request, response) => {
   response.json(service.list({
     source: 'costuan',
     status: query.status as ArchiveMetadataTaskStatus | undefined,
-    limit: query.limit
+    limit: query.limit,
+    page:query.page
   }));
 });
 
@@ -115,7 +122,8 @@ router.patch('/metadata-tasks/:id', (request, response) => {
     response.json({ ok: true, ...service.complete({
       id: params.id,
       workerId: body.workerId,
-      record: body.record
+      record: body.record,
+      canonicalCreatorId:body.canonicalCreatorId,receiptId:body.receiptId,expectedAttempt:body.expectedAttempt
     }) });
     return;
   }
@@ -123,8 +131,23 @@ router.patch('/metadata-tasks/:id', (request, response) => {
     id: params.id,
     workerId: body.workerId,
     status: body.status,
-    error: body.error
+    error: body.error,expectedAttempt:body.expectedAttempt
   }) });
+});
+
+router.post('/metadata-tasks/:id/validate-source', (request,response) => {
+  const {id}=idSchema.parse(request.params);
+  const body=z.object({workerId:z.string().trim().min(1).max(120),canonicalCreatorId:z.number().int().positive(),
+    postId:z.string().trim().min(1).max(255),title:z.string().trim().min(1).max(1000),expectedAttempt:z.number().int().positive().optional()}).strict().parse(request.body);
+  response.json({ok:true,task:new ArchiveMetadataTaskService().validateSource({id,...body})});
+});
+
+router.post('/metadata-tasks/finalize-selected', async (request, response) => {
+    const body=z.object({workerId:z.string().trim().min(1).max(120),creatorIds:z.array(z.number().int().positive()).min(1).max(500),
+      taskIds:z.array(z.number().int().positive()).min(1).max(500)}).strict().parse(request.body);
+    const creatorIds=new ArchiveMetadataTaskService().validateFinalize(body);
+    const catalog=await new ArchiveCatalogPipelineService().refreshAfterMetadataTasks({creatorIds});
+    response.json({ok:true,catalog});
 });
 
 router.post('/metadata-tasks/finalize', async (_request, response) => {

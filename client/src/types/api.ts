@@ -774,6 +774,14 @@ export interface ArchiveMetadataTask {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+  sourceState?: ArchiveSourceState;
+}
+
+export interface ArchiveSourceState {
+  metadataAccepted: boolean;
+  deliveryReady: boolean;
+  deliveryEvidence: 'verified' | 'historical' | 'missing';
+  missing: string[];
 }
 
 export interface ArchiveMetadataTasksPayload {

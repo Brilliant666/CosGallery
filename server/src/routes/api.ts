@@ -311,7 +311,8 @@ const archiveDownloadPlanBodySchema = z.object({
 });
 const archiveMetadataTaskQuerySchema = z.object({
   status: z.enum(['pending', 'claimed', 'completed', 'not_found', 'failed', 'cancelled']).optional(),
-  limit: z.coerce.number().int().min(1).max(500).default(100)
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  page:z.coerce.number().int().positive().default(1)
 });
 const archiveMetadataPlanBodySchema = z.object({
   retryNotFound: z.boolean().default(false)
@@ -1490,6 +1491,26 @@ router.post(
     const result = service.planMissing(body);
     appSettingsRepository.set(ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY, result.targetRoot);
     response.json(result);
+  }
+);
+
+router.get(
+  '/admin/archive-catalog/metadata-tasks/candidates',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (request,response) => {
+    const query=z.object({q:z.string().trim().max(255).optional(),page:z.coerce.number().int().positive().default(1),
+      limit:z.coerce.number().int().min(1).max(100).default(50),active:z.enum(['active','inactive','all']).default('active'),
+      hasSource:z.enum(['yes','no','all']).default('no')}).parse(request.query);
+    response.json(new ArchiveMetadataTaskService().candidates(query));
+  }
+);
+
+router.post(
+  '/admin/archive-catalog/metadata-tasks/plan-selected',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  (request,response) => {
+    const body=z.object({creatorIds:z.array(z.number().int().positive()).min(1).max(500),retry:z.boolean().default(false)}).strict().parse(request.body);
+    response.json(new ArchiveMetadataTaskService().planSelected(body));
   }
 );
 
