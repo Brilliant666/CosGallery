@@ -27,7 +27,7 @@
         </header>
         <section class="mx-auto w-[min(100%,66.5625rem)]">
           <div class="mb-px flex justify-center border-b border-border py-2" aria-label="全部图册"><span class="i-fluent-grid-24-regular h-7 w-7" aria-hidden="true" /></div>
-          <FolderGrid v-if="items.length" :items="items" variant="posts" navigation-mode="canonical-work-gallery" :canonical-creator-id="creator.id" show-work-labels />
+          <FolderGrid v-if="items.length" :items="items" variant="works" navigation-mode="canonical-work-gallery" :canonical-creator-id="creator.id" show-work-labels />
           <div v-else-if="!loading && !error" class="p-8 text-center text-muted">该博主当前没有可浏览作品。</div>
           <InfiniteLoader v-if="!error" :loading="loading" :has-more="hasMore" @load-more="loadMore" />
         </section>
