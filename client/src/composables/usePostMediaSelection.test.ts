@@ -6,9 +6,9 @@ import { usePostMediaSelection } from './usePostMediaSelection';
 
 describe('usePostMediaSelection', () => {
   enableAutoUnmount(afterEach);
-  async function setup(query = '') {
+  async function setup(query = '', base = '/post/123') {
     const router = galleryTestRouter();
-    await router.push(`/post/123${query}`);
+    await router.push(`${base}${query}`);
     const replace = vi.spyOn(router, 'replace');
     const push = vi.spyOn(router, 'push');
     const image = shallowRef(workDetail());
@@ -59,5 +59,25 @@ describe('usePostMediaSelection', () => {
     expect(selection.carouselIndex.value).toBe(0);
     expect(replace).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
+  });
+
+  it('canonical media uses the route identity, position sequence and replace only, including rapid switches', async () => {
+    const { selection, router, push, replace } = await setup('?media=704&q=old&loaded=3', '/library/166/works/123');
+    expect(selection.isWorkContext.value).toBe(true);
+    expect(selection.activeMediaItem.value?.imageId).toBe(704);
+    selection.carouselIndex.value = 2;
+    selection.carouselIndex.value = 4;
+    await flushPromises();
+    expect(selection.activeMediaItem.value?.imageId).toBe(705);
+    expect(router.currentRoute.value.path).toBe('/library/166/works/123');
+    expect(router.currentRoute.value.query).toEqual({ media: '705', q: 'old', loaded: '3' });
+    expect(replace).toHaveBeenCalledTimes(2);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it.each(['999', 'abc', '704&media=705'])('leaves canonical invalid media %s intact for explicit error UI', async media => {
+    const { replace, router } = await setup(`?media=${media}`, '/library/166/works/123');
+    expect(replace).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.fullPath).toContain(`media=${media}`);
   });
 });

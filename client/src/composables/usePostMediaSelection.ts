@@ -9,7 +9,8 @@ export function usePostMediaSelection(image: Readonly<Ref<ImageDetail | null>>) 
   const router = useRouter();
   const index = ref(0);
   const items = computed(() => orderedMediaItems(image.value?.mediaItems));
-  const isWorkContext = computed(() => route.query.context === 'work');
+  const isWorkContext = computed(() => route.name === 'canonical-work-gallery' || route.query.context === 'work');
+  const isCanonicalContext = computed(() => route.name === 'canonical-work-gallery' || (route.query.context === 'work' && route.query.creator !== undefined));
 
   watch(
     [() => image.value?.id, () => items.value.map((item) => `${item.position}:${item.imageId}`).join(','), () => route.query.media],
@@ -17,7 +18,7 @@ export function usePostMediaSelection(image: Readonly<Ref<ImageDetail | null>>) 
       if (!image.value) return;
       const selection = resolveMediaSelection(items.value, route.query.media);
       index.value = selection.index;
-      if (selection.invalid) {
+      if (selection.invalid && !isCanonicalContext.value) {
         const { media: _invalidMedia, ...query } = route.query;
         void router.replace({ name: 'image', params: { id: String(image.value.id) }, query, hash: route.hash });
       }
@@ -35,8 +36,8 @@ export function usePostMediaSelection(image: Readonly<Ref<ImageDetail | null>>) 
       // Work links are durable, but an ordinary feed carousel keeps its existing route semantics.
       if (isWorkContext.value || route.query.media !== undefined) {
         void router.replace({
-          name: 'image',
-          params: { id: String(image.value.id) },
+          name: route.name === 'canonical-work-gallery' ? 'canonical-work-gallery' : 'image',
+          params: route.name === 'canonical-work-gallery' ? { creatorId: route.params.creatorId, postId: String(image.value.id) } : { id: String(image.value.id) },
           query: { ...route.query, media: String(items.value[boundedIndex]!.imageId) },
           hash: route.hash
         });

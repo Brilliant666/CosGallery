@@ -7,6 +7,8 @@ import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage, fetchFold
 import { useAppStore } from '../stores/app';
 import { galleryTestRouter, mediaItem, mixedOrientationItems, workDetail } from '../../test/work-gallery-fixtures';
 import WorkGalleryView from './WorkGalleryView.vue';
+import PostView from './PostView.vue';
+import { useAuthStore } from '../stores/auth';
 
 vi.mock('../api/gallery', () => ({
   fetchFolder: vi.fn().mockResolvedValue({ canonicalCreatorId: null }),
@@ -104,23 +106,48 @@ describe('WorkGalleryView', () => {
     expect(wrapper.get('.work-gallery__creator').text()).toBe('lunana');
     expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/library/166?loaded=2');
 
-    const background = router.currentRoute.value.fullPath;
+    const grid = wrapper.get('.work-gallery__grid').element;
     await wrapper.get('[data-position="2"] a').trigger('click');
     await flushPromises();
-    expect(router.currentRoute.value.name).toBe('image');
-    expect(router.currentRoute.value.params.id).toBe('123');
-    expect(router.currentRoute.value.query).toEqual({
-      media: '702',
-      context: 'work',
-      creator: '166',
-      returnTo: background
-    });
-    expect(useAppStore().imageModalBackgroundPath).toBe(background);
+    expect(router.currentRoute.value.name).toBe('canonical-work-gallery');
+    expect(router.currentRoute.value.params.postId).toBe('123');
+    expect(router.currentRoute.value.query).toEqual({ media: '702' });
+    expect(useAppStore().imageModalBackgroundPath).toBeNull();
+    expect(wrapper.get('.work-gallery__grid').element).toBe(grid);
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not accept a canonical return path for a different creator', async () => {
     const { wrapper } = await renderCanonical('/library/999?page=4');
     expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/library/166');
+  });
+
+  it('revalidates retained canonical data after authorization changes and removes unauthorized media', async () => {
+    const { wrapper } = await renderCanonical();
+    await wrapper.get('[data-position="2"] a').trigger('click');
+    await flushPromises();
+    expect(wrapper.findComponent(PostView).exists()).toBe(true);
+    fetchCanonicalWorkMock.mockRejectedValueOnce(new Error('Access revoked'));
+    useAuthStore().authenticated = !useAuthStore().authenticated;
+    await flushPromises();
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(2);
+    expect(wrapper.findComponent(PostView).exists()).toBe(false);
+    expect(wrapper.text()).toContain('Access revoked');
+  });
+
+  it('retains caption changes and revalidates deleted work instead of re-adopting a stale detail', async () => {
+    const { wrapper } = await renderCanonical();
+    await wrapper.get('[data-position="2"] a').trigger('click');
+    await flushPromises();
+    wrapper.getComponent(PostView).vm.$emit('updatedWork', { ...workDetail(), caption: 'Edited caption' });
+    await flushPromises();
+    expect(wrapper.get('h1').text()).toBe('Edited caption');
+    fetchCanonicalWorkMock.mockRejectedValueOnce(new Error('Post is trashed'));
+    wrapper.getComponent(PostView).vm.$emit('removedWork');
+    await flushPromises();
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('.work-gallery__grid').exists()).toBe(false);
+    expect(wrapper.text()).toContain('Post is trashed');
   });
 
   it('uses the same compact 1px gap as the creator cover grid', () => {

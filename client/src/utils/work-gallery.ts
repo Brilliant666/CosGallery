@@ -72,6 +72,10 @@ export function canonicalWorkGalleryRoute(creatorId: number, postId: number, ret
 }
 
 export function workMediaRoute(postId: number, imageId: number, creatorId?: number, returnTo?: string) {
+  if (creatorId) return {
+    ...canonicalWorkGalleryRoute(creatorId, postId, returnTo),
+    query: { ...libraryReadingQuery(returnTo), media: String(imageId) }
+  };
   return {
     name: 'image',
     params: { id: String(postId) },

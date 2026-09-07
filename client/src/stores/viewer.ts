@@ -20,6 +20,12 @@ export const useViewerStore = defineStore('viewer', {
     error: null
   }),
   actions: {
+    adoptAuthorizedWork(image: ImageDetail) {
+      viewerLoadToken += 1;
+      this.image = image;
+      this.loading = false;
+      this.error = null;
+    },
     reset() {
       viewerLoadToken += 1;
       this.image = null;
@@ -32,6 +38,7 @@ export const useViewerStore = defineStore('viewer', {
       const requestToken = ++viewerLoadToken;
       this.loading = true;
       this.error = null;
+      this.image = null;
 
       try {
         const image = creatorId === undefined

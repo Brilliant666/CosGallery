@@ -34,20 +34,29 @@
         />
       </div>
     </template>
+    <div v-if="showMedia" class="work-gallery__viewer" @click.self="closeMedia">
+      <PostView v-if="work && !loading && !error" :id="postId" :authorized-work="work" modal @close="closeMedia" @updated-work="work = $event" @removed-work="loadWork" />
+      <div v-else class="card work-gallery__state" role="alert">
+        <p>{{ error || t('workGallery.loading') }}</p>
+        <button type="button" class="btn" @click="closeMedia">{{ t('workGallery.backToGallery') }}</button>
+      </div>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 
 import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage, fetchFolder } from '../api/gallery';
 import WorkMediaCard from '../components/WorkMediaCard.vue';
+import PostView from './PostView.vue';
+import { useAuthStore } from '../stores/auth';
 import { useAppStore } from '../stores/app';
 import { useFoldersStore } from '../stores/folders';
 import type { ImageDetail } from '../types/api';
-import { canonicalCreatorRoute, canonicalWorkGalleryRoute, orderedMediaItems, parsePositiveId, workTitle } from '../utils/work-gallery';
+import { canonicalCreatorRoute, canonicalWorkGalleryRoute, libraryReadingQuery, orderedMediaItems, parsePositiveId, workTitle } from '../utils/work-gallery';
 
 const props = defineProps<{ slug?: string; creatorId?: string; postId: string }>();
 const { t } = useI18n();
@@ -55,6 +64,7 @@ const route = useRoute();
 const router = useRouter();
 const appStore = useAppStore();
 const foldersStore = useFoldersStore();
+const authStore = useAuthStore();
 // Independent page state keeps the background DOM and thumbnails alive while PostView uses the viewer store.
 const work = shallowRef<ImageDetail | null>(null);
 const loading = ref(false);
@@ -66,7 +76,29 @@ const imageCount = computed(() => mediaItems.value.filter((item) => item.mediaTy
 const videoCount = computed(() => mediaItems.value.length - imageCount.value);
 const canonicalId = computed(() => props.creatorId ? parsePositiveId(props.creatorId) : null);
 const creatorName = computed(() => canonicalCreatorName.value || work.value?.folderName || foldersStore.items.find((folder) => folder.slug === props.slug)?.name || props.slug || '');
-const backgroundPath = computed(() => route.fullPath);
+const backgroundPath = computed(() => route.name !== 'canonical-work-gallery' ? route.fullPath
+  : router.resolve({ path: route.path, query: libraryReadingQuery(route.fullPath) }).fullPath);
+const showMedia = computed(() => route.name === 'canonical-work-gallery' && route.query.media !== undefined);
+let closingMedia = false;
+async function closeMedia() {
+  if (closingMedia || !showMedia.value) return;
+  closingMedia = true;
+  const target = backgroundPath.value;
+  const back = router.options.history.state.back;
+  const previous = typeof back === 'string' && back.startsWith('/') && !back.startsWith('//') && !back.includes('\\') ? router.resolve(back) : null;
+  const verifiedBackground = previous?.name === 'canonical-work-gallery' && previous.path === route.path
+    && previous.query.media === undefined
+    && JSON.stringify(libraryReadingQuery(previous.fullPath)) === JSON.stringify(libraryReadingQuery(target));
+  if (verifiedBackground) router.back();
+  else await router.replace(target);
+}
+watch(() => route.fullPath, () => { closingMedia = false; });
+function onEscape(event: KeyboardEvent) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (event.defaultPrevented || target?.closest('input, textarea, [contenteditable="true"], [role="dialog"]')) return;
+  if (showMedia.value && event.key === 'Escape') { event.preventDefault(); void closeMedia(); }
+}
+onMounted(() => window.addEventListener('keydown', onEscape));
 const backRoute = computed(() => {
   if (canonicalId.value !== null) {
     const candidate = Array.isArray(route.query.returnTo) ? route.query.returnTo[0] : route.query.returnTo;
@@ -83,7 +115,7 @@ async function loadWork() {
   work.value = null;
   error.value = null;
   const postId = parsePositiveId(props.postId);
-  if (postId === null) {
+  if (postId === null || (props.creatorId !== undefined && canonicalId.value === null)) {
     error.value = t('workGallery.notFound');
     loading.value = false;
     return;
@@ -125,7 +157,9 @@ async function loadWork() {
 }
 
 watch(() => [props.slug, props.creatorId, props.postId] as const, loadWork, { immediate: true });
-onBeforeUnmount(() => { loadToken += 1; });
+watch(() => [authStore.authenticated, authStore.role, appStore.stats?.indexedPosts, appStore.stats?.scan.lastCompletedScan?.id, appStore.isLibraryUnavailable] as const,
+  () => { void loadWork(); });
+onBeforeUnmount(() => { loadToken += 1; window.removeEventListener('keydown', onEscape); });
 </script>
 
 <style scoped>
@@ -138,6 +172,8 @@ onBeforeUnmount(() => { loadToken += 1; });
 .work-gallery__state { padding: 2rem; text-align: center; overflow-wrap: anywhere; }
 .work-gallery__state h1 { font-size: 1.2rem; }
 .work-gallery__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; }
+.work-gallery__viewer { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 2rem; height: 100dvh; overflow: hidden; background: rgb(0 0 0 / 72%); overscroll-behavior: contain; }
+@media (max-width: 768px) { .work-gallery__viewer { padding: 0.85rem; } }
 @media (min-width: 640px) { .work-gallery__grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (min-width: 1024px) { .work-gallery__grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (min-width: 1280px) { .work-gallery__grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
