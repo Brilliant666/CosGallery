@@ -67,6 +67,7 @@ export class ArchiveCatalogPipelineService {
     const galleryRoot=path.resolve(options.galleryRoot ?? appConfig.galleryRoot);
     const rows=this.database.prepare(`SELECT id FROM archive_catalog_creators WHERE is_active=1 AND id IN (${creatorIds.map(()=>'?').join(',')})`).all(...creatorIds);
     if(rows.length!==creatorIds.length) throw new Error('来源收尾包含不存在或停用的博主。');
+    await this.assertMetadataHandoffLocalState(galleryRoot, creatorIds);
     const folders=this.database.prepare(`SELECT DISTINCT creator_id AS creatorId, relative_path AS folderName
       FROM archive_catalog_local_creator_folders WHERE is_active=1 AND creator_id IN (${creatorIds.map(()=>'?').join(',')})`)
       .all(...creatorIds) as Array<{creatorId:number;folderName:string}>;
@@ -76,6 +77,39 @@ export class ArchiveCatalogPipelineService {
       ?? options.defaultInboxRoot ?? path.join(path.dirname(galleryRoot),'cos待入库');
     const plan=download.planMissing({targetRoot,creatorIds,provider:'baidu'});
     return {creatorIds,local,plan};
+  }
+
+  /** Unknown/offline local state must not become an empty set. This does not gate source collection. */
+  private async assertMetadataHandoffLocalState(galleryRoot: string, creatorIds: number[]): Promise<void> {
+    const entries = await (async () => {
+      try {
+        const root = await fs.lstat(galleryRoot);
+        if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('不是安全的直接目录');
+        return await fs.readdir(galleryRoot, { withFileTypes: true });
+      } catch (cause) {
+        const code = (cause as NodeJS.ErrnoException).code;
+        throw new Error(`图库根目录不可用或无法读取${code ? `（${code}）` : ''}，已保留来源；尚未计算缺失作品。`, {cause});
+      }
+    })();
+    const placeholders = creatorIds.map(() => '?').join(',');
+    const bridges = this.database.prepare(`SELECT creator_id, root_path, relative_path, is_active
+      FROM archive_catalog_local_creator_folders WHERE creator_id IN (${placeholders})`)
+      .all(...creatorIds) as Array<{creator_id:number;root_path:string;relative_path:string;is_active:number}>;
+    if (bridges.some(bridge => !bridge.is_active || path.resolve(bridge.root_path).toLocaleLowerCase() !== galleryRoot.toLocaleLowerCase())) {
+      throw new Error('选中博主存在失效或其他图库根的目录关系，本地状态待确认；已保留来源，尚未计算缺失作品。');
+    }
+    const names = this.database.prepare(`SELECT id AS creator_id, canonical_name AS name FROM archive_catalog_creators
+      WHERE id IN (${placeholders}) UNION SELECT creator_id, alias AS name FROM archive_catalog_creator_aliases
+      WHERE creator_id IN (${placeholders})`).all(...creatorIds, ...creatorIds) as Array<{creator_id:number;name:string}>;
+    for (const entry of entries) {
+      const matches = names.filter(row => row.name.localeCompare(entry.name, undefined, {sensitivity:'accent'}) === 0);
+      if (!matches.length || matches.every(match => bridges.some(bridge => bridge.creator_id === match.creator_id
+        && bridge.relative_path.localeCompare(entry.name, undefined, {sensitivity:'accent'}) === 0))) continue;
+      // An unindexed empty directory is genuinely zero works; populated or unsafe paths need an existing identity bridge.
+      if (!entry.isDirectory() || entry.isSymbolicLink() || (await fs.readdir(path.join(galleryRoot, entry.name))).length) {
+        throw new Error(`目录“${entry.name}”尚未确认本地归属或内容，不能按零作品计算缺失；已保留来源。`);
+      }
+    }
   }
 
   private getSetting(key: string): string | null {

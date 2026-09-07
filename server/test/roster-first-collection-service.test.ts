@@ -186,9 +186,10 @@ describe('explicit roster first collection service',()=>{
     const local=vi.spyOn(ArchiveCatalogService.prototype,'reconcileLocalCreators');
     const ids=service.validateFinalize({creatorIds:[first.id],taskIds:[task.id],workerId:'worker'});
     const pipeline=new ArchiveCatalogPipelineService(db);
+    await fs.mkdir(path.join(root,'gallery'));
     expect(await pipeline.refreshAfterMetadataTasks({creatorIds:ids,galleryRoot:path.join(root,'gallery'),defaultInboxRoot:path.join(root,'inbox')})).toMatchObject({local:null,plan:{created:2}});
     expect(await pipeline.refreshAfterMetadataTasks({creatorIds:ids,galleryRoot:path.join(root,'gallery'),defaultInboxRoot:path.join(root,'inbox')})).toMatchObject({plan:{created:0,existing:2}});
-    expect(scan).not.toHaveBeenCalled();expect(local).not.toHaveBeenCalled();expect(await fs.readdir(root)).toEqual([]);
+    expect(scan).not.toHaveBeenCalled();expect(local).not.toHaveBeenCalled();expect(await fs.readdir(path.join(root,'gallery'))).toEqual([]);
     expect(JSON.stringify(service.get(untouched.taskIds[0]))).toBe(others);
   });
 
@@ -229,5 +230,72 @@ describe('explicit roster first collection service',()=>{
     db.prepare("UPDATE archive_catalog_deliveries SET destination_path='' WHERE source_folder_name='200'").run();
     const missingDelivery=all();
     expect(()=>download.claim({workerId:'stage2',seedTaskId:otherSeed})).toThrow(/来源目录不可用/);expect(all()).toEqual(missingDelivery);
+  });
+
+  it.each([0,1,3])('uses the same scoped handoff for three source works and %i local works',async(count)=>{
+    const first=creator(),other=creator('Other'),gallery=path.join(root,'gallery');
+    await fs.mkdir(path.join(gallery,'First'),{recursive:true});
+    for(let order=1;order<=count;order++) {
+      const directory=path.join(gallery,'First',`First NO.00${order} Work ${order}`);
+      await fs.mkdir(directory);await fs.writeFile(path.join(directory,'1.jpg'),'fixture');
+    }
+    const catalog=new ArchiveCatalogService(db);
+    await catalog.reconcileLocalRoot(gallery);
+    service.planSelected({creatorIds:[other.id]});
+    const task=claimed(first.id),payload=record();
+    payload.costuan.works=[1,2,3].map(order=>({order,sourceOrder:`NO.00${order}`,label:`Work ${order}`,mediaSummary:'1P'}));
+    service.complete({id:task.id,workerId:'worker',canonicalCreatorId:first.id,expectedAttempt:1,receiptId:'three',record:payload});
+    const otherBefore=JSON.stringify(service.list().items.filter(row=>row.creatorId===other.id));
+    const pipeline=new ArchiveCatalogPipelineService(db);
+    expect(await pipeline.refreshAfterMetadataTasks({creatorIds:[first.id],galleryRoot:gallery,defaultInboxRoot:path.join(root,'inbox')})).toMatchObject({plan:{created:3-count}});
+    expect(await pipeline.refreshAfterMetadataTasks({creatorIds:[first.id],galleryRoot:gallery,defaultInboxRoot:path.join(root,'inbox')})).toMatchObject({plan:{created:0,existing:3-count}});
+    expect(JSON.stringify(service.list().items.filter(row=>row.creatorId===other.id))).toBe(otherBefore);
+  });
+
+  it.each(['offline','inactive-history','unknown-populated','empty-unindexed'])('preserves accepted source and avoids guessing local state: %s',async(mode)=>{
+    const first=creator(),gallery=path.join(root,'gallery');
+    if(mode!=='offline') await fs.mkdir(gallery);
+    if(mode==='inactive-history') {
+      await fs.mkdir(path.join(gallery,'First'));
+      await new ArchiveCatalogService(db).reconcileLocalRoot(gallery);
+      db.prepare('UPDATE archive_catalog_local_creator_folders SET is_active=0 WHERE creator_id=?').run(first.id);
+    }
+    if(mode==='unknown-populated'||mode==='empty-unindexed') {
+      await fs.mkdir(path.join(gallery,'First'));
+      if(mode==='unknown-populated') await fs.mkdir(path.join(gallery,'First','First NO.001 One'));
+    }
+    const task=claimed(first.id);
+    service.complete({id:task.id,workerId:'worker',canonicalCreatorId:first.id,expectedAttempt:1,receiptId:'accepted',record:record()});
+    const before=all(),localBefore=['archive_catalog_local_creator_folders','archive_catalog_local_works'].map(table);
+    const result=new ArchiveCatalogPipelineService(db).refreshAfterMetadataTasks({creatorIds:[first.id],galleryRoot:gallery,defaultInboxRoot:path.join(root,'inbox')});
+    if(mode==='empty-unindexed') await expect(result).resolves.toMatchObject({local:null,plan:{created:2}});
+    else { await expect(result).rejects.toThrow(); expect(all()).toEqual(before); }
+    expect(['archive_catalog_local_creator_folders','archive_catalog_local_works'].map(table)).toEqual(localBefore);
+    expect(service.get(task.id)?.status).toBe('completed');
+  });
+
+  it.each(['missing-linked-directory','permission-denied'])('does not lose existing links or plan downloads when local state is %s',async(mode)=>{
+    const first=creator(),gallery=path.join(root,'gallery'),directory=path.join(gallery,'First');
+    await fs.mkdir(path.join(directory,'First NO.001 One'),{recursive:true});
+    await fs.writeFile(path.join(directory,'First NO.001 One','1.jpg'),'fixture');
+    const task=claimed(first.id);
+    service.complete({id:task.id,workerId:'worker',canonicalCreatorId:first.id,expectedAttempt:1,receiptId:'accepted',record:record()});
+    await new ArchiveCatalogService(db).reconcileLocalRoot(gallery);
+    const before=all(),localBefore=['archive_catalog_local_creator_folders','archive_catalog_local_works'].map(table);
+    if(mode==='missing-linked-directory') await fs.rename(directory,path.join(root,'temporarily-offline'));
+    else vi.spyOn(fs,'readdir').mockRejectedValueOnce(Object.assign(new Error('fixture permission denied'),{code:'EACCES'}));
+    await expect(new ArchiveCatalogPipelineService(db).refreshAfterMetadataTasks({creatorIds:[first.id],galleryRoot:gallery,defaultInboxRoot:path.join(root,'inbox')})).rejects.toThrow();
+    expect(all()).toEqual(before);
+    expect(['archive_catalog_local_creator_folders','archive_catalog_local_works'].map(table)).toEqual(localBefore);
+  });
+
+  it('does not use another selected creator bridge to conceal a populated ambiguous alias directory',async()=>{
+    const first=creator(),other=creator('Other'),gallery=path.join(root,'gallery');
+    await fs.mkdir(path.join(gallery,'First','First NO.001 One'),{recursive:true});
+    await new ArchiveCatalogService(db).reconcileLocalRoot(gallery);
+    db.prepare("INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES (?,'First','first','manual')").run(other.id);
+    const before=all(),localBefore=['archive_catalog_local_creator_folders','archive_catalog_local_works'].map(table);
+    await expect(new ArchiveCatalogPipelineService(db).refreshAfterMetadataTasks({creatorIds:[first.id,other.id],galleryRoot:gallery,defaultInboxRoot:path.join(root,'inbox')})).rejects.toThrow(/不能按零作品/);
+    expect(all()).toEqual(before);expect(['archive_catalog_local_creator_folders','archive_catalog_local_works'].map(table)).toEqual(localBefore);
   });
 });
