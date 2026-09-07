@@ -184,7 +184,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, onMounted, ref, watch } from "vue"
+  import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
   import { useI18n } from "vue-i18n"
   import { useRoute, useRouter } from "vue-router"
 
@@ -198,6 +198,7 @@
   import { useAppStore } from "../stores/app"
   import { useFolderStoriesStore } from "../stores/folder-stories"
   import { useFoldersStore } from "../stores/folders"
+  import { fetchFolder } from '../api/gallery'
 
   const props = defineProps<{
     slug: string
@@ -210,6 +211,7 @@
   const router = useRouter()
   const { t } = useI18n()
   const hasLoadedOnce = ref(false)
+  let loadToken = 0
   const activeStoryViewerId = ref<string | null>(null)
   const activeTab = computed(() =>
     route.query.tab === "reels" ? "reels" : "posts",
@@ -219,11 +221,27 @@
   )
 
   async function loadFolder() {
+    const token = ++loadToken
+    const slug = props.slug
     if (appStore.isLibraryUnavailable) {
       hasLoadedOnce.value = true
       return
     }
 
+    if (route.query.physical !== '1') {
+      try {
+        const folder = await fetchFolder(slug)
+        if (token !== loadToken || slug !== props.slug) return
+        if (folder.canonicalCreatorId) {
+          await router.replace({ name: 'canonical-creator', params: { creatorId: String(folder.canonicalCreatorId) } })
+          return
+        }
+      } catch (cause) {
+        if (token !== loadToken) return
+        foldersStore.folderError = cause instanceof Error ? cause.message : 'Unable to load folder'
+        return
+      }
+    }
     await Promise.all([
       foldersStore.loadFolder(
         props.slug,
@@ -232,6 +250,8 @@
       ),
       folderStoriesStore.fetchStories(props.slug, folderStoriesStore.currentFolderSlug !== props.slug),
     ])
+
+    if (token !== loadToken || slug !== props.slug) return
 
     if (activeTab.value === "reels" && !hasReelsTab.value) {
       await router.replace({
@@ -297,8 +317,9 @@
   }
 
   onMounted(loadFolder)
+  onBeforeUnmount(() => { loadToken += 1 })
   watch(
-    () => [props.slug, activeTab.value] as const,
+    () => [props.slug, activeTab.value, route.query.physical] as const,
     async () => {
       hasLoadedOnce.value = false
       activeStoryViewerId.value = null

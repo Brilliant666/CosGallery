@@ -281,6 +281,27 @@ describe.sequential('folder share API routes', () => {
     expect(rejectedRes.status).toBe(401);
   });
 
+  it('does not promote a folder share session to canonical creator library access', async () => {
+    const { folderShareService } = await import('../src/services/folder-share-service.js');
+    const link = folderShareService.createLink('folder-a', { expiresAt: null })!;
+    const grant = folderShareService.verifyLinkToken('folder-a', link.rawToken)!;
+    const mockRes = { cookie: vi.fn().mockReturnThis(), setHeader: vi.fn() };
+    folderShareService.setShareSession(mockRes as any, { secure: false, get: () => undefined } as any, grant);
+    const headers = { Cookie: `foldergram_share_session=${mockRes.cookie.mock.calls.at(-1)?.[1]}` };
+    const shared = await requestApp(app, 'GET', '/api/share/folders/folder-a', headers);
+    expect(shared.status).toBe(200);
+    expect(shared.body).not.toHaveProperty('canonicalCreatorId');
+    for (const route of [
+      '/api/cos-gallery/creators',
+      '/api/cos-gallery/creators/1',
+      '/api/cos-gallery/creators/1/works',
+      '/api/cos-gallery/creators/1/works/1',
+      '/api/folders/folder-a'
+    ]) {
+      expect((await requestApp(app, 'GET', route, headers)).status).toBe(401);
+    }
+  });
+
   it('immediately revokes active share sessions when link is revoked', async () => {
     const { folderShareService } = await import('../src/services/folder-share-service.js');
     const link = folderShareService.createLink('folder-a', { expiresAt: null })!;

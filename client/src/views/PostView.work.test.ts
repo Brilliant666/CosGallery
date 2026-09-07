@@ -28,7 +28,7 @@ describe('PostView work deep links', () => {
     const store = useViewerStore();
     const load = vi.spyOn(store, 'loadImage').mockImplementation(async () => { store.image = workDetail(); });
     const router = galleryTestRouter();
-    const returnTo = '/creators/166/works/123?returnTo=/creators/166?page=2';
+    const returnTo = '/library/166/works/123?loaded=2';
     await router.push({
       name: 'image',
       params: { id: '123' },

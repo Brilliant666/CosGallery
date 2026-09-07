@@ -1,4 +1,38 @@
 import type { ImageDetail, PostMediaItem } from '../types/api';
+import type { LocationQuery } from 'vue-router';
+import { useFoldersStore } from '../stores/folders';
+
+export function folderReadingRoute(slug: string, creatorId?: number | null) {
+  const canonicalId = creatorId ?? useFoldersStore().items.find(folder => folder.slug === slug)?.canonicalCreatorId;
+  return canonicalId ? canonicalCreatorRoute(canonicalId) : { name: 'folder', params: { slug } };
+}
+
+// Carry only browser state, never a nested arbitrary return URL.
+export function libraryReadingQuery(path?: string): Record<string, string> {
+  if (!path || !/^\/(?:library|creators)(?:\/|\?|$)/u.test(path) || path.includes('\\')) return {};
+  const url = new URL(path, 'http://library.invalid');
+  const query: Record<string, string> = {};
+  for (const key of ['q', 'rating', 'libraryPage', 'loaded']) {
+    const value = url.searchParams.get(key);
+    if (value) query[key] = value;
+  }
+  if (url.pathname === '/library' && url.searchParams.get('page')) query.libraryPage = url.searchParams.get('page')!;
+  // Read one old library return target for bookmarks created before unified routes.
+  const legacy = url.searchParams.get('returnTo');
+  if (legacy && /^\/library(?:\?|$)/u.test(legacy) && !legacy.includes('\\')) {
+    const old = new URL(legacy, 'http://library.invalid');
+    for (const key of ['q', 'rating']) if (!query[key] && old.searchParams.get(key)) query[key] = old.searchParams.get(key)!;
+    if (!query.libraryPage && old.searchParams.get('page')) query.libraryPage = old.searchParams.get('page')!;
+  }
+  return query;
+}
+
+export function libraryReturnRoute(query: LocationQuery) {
+  const encoded = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (typeof value === 'string') encoded.set(key, value);
+  const state = libraryReadingQuery(`/library/reader?${encoded}`);
+  return { name: 'library', query: { q: state.q, rating: state.rating, page: state.libraryPage } };
+}
 
 export function parsePositiveId(value: unknown): number | null {
   if (typeof value !== 'string' || !/^\d+$/.test(value)) return null;
@@ -25,7 +59,7 @@ export function canonicalCreatorRoute(creatorId: number, returnTo?: string) {
   return {
     name: 'canonical-creator',
     params: { creatorId: String(creatorId) },
-    ...(returnTo ? { query: { returnTo } } : {})
+    ...(returnTo ? { query: libraryReadingQuery(returnTo) } : {})
   };
 }
 
@@ -33,7 +67,7 @@ export function canonicalWorkGalleryRoute(creatorId: number, postId: number, ret
   return {
     name: 'canonical-work-gallery',
     params: { creatorId: String(creatorId), postId: String(postId) },
-    ...(returnTo ? { query: { returnTo } } : {})
+    ...(returnTo ? { query: libraryReadingQuery(returnTo) } : {})
   };
 }
 

@@ -111,6 +111,7 @@ export interface CosGalleryFolderCandidateRecord {
   slug: string;
   folderName: string;
   folderPath: string;
+  description: string | null;
   canonicalCreatorId: number | null;
   canonicalName: string | null;
   creatorIsActive: number | null;

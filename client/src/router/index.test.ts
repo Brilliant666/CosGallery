@@ -198,6 +198,15 @@ import { useAuthStore } from '../stores/auth';
 import { useAppStore } from '../stores/app';
 
 describe('router', () => {
+  it('generates numeric library routes and replaces old canonical URLs without a loop', async () => {
+    expect(router.options.scrollBehavior!(router.resolve('/library/166?loaded=2'), router.resolve('/library/166'), null)).toBe(false);
+    expect(router.resolve({ name: 'canonical-creator', params: { creatorId: '166' } }).fullPath).toBe('/library/166');
+    expect(router.resolve({ name: 'canonical-work-gallery', params: { creatorId: '166', postId: '88555' } }).fullPath).toBe('/library/166/works/88555');
+    await router.replace('/creators/166?loaded=2');
+    expect(router.currentRoute.value.fullPath).toBe('/library/166?loaded=2');
+    await router.replace('/creators/166/works/88555');
+    expect(router.currentRoute.value.fullPath).toBe('/library/166/works/88555');
+  });
   it('lets work modal scroll restoration win over stale saved history positions', () => {
     const appStore = useAppStore(pinia);
     appStore.setImageModalBackground('/f/creator/works/123');

@@ -19,14 +19,14 @@
         <RouterLink
           v-else
           class="block rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text/55 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-          :to="{ name: 'folder', params: { slug: item.folderSlug } }"
+          :to="folderReadingRoute(item.folderSlug)"
           :aria-label="folderAvatarLabel"
           :title="folderAvatarLabel"
         >
           <Avatar class="w-8 h-8" :name="displayFolderTitle" :src="avatarUrl" />
         </RouterLink>
         <div class="min-w-0">
-          <RouterLink class="block min-w-0 text-inherit no-underline" :to="{ name: 'folder', params: { slug: item.folderSlug } }">
+          <RouterLink class="block min-w-0 text-inherit no-underline" :to="folderReadingRoute(item.folderSlug)">
             <h3 class="m-0 text-[0.88rem] font-semibold truncate">
               {{ displayFolderTitle }}
             </h3>
@@ -247,7 +247,7 @@
           </RouterLink>
           <RouterLink
             class="inline-flex items-center justify-center w-8 h-8 border-0 bg-transparent cursor-pointer color-inherit transition-[opacity,transform] duration-180 hover:opacity-72 hover:-translate-y-px"
-            :to="{ name: 'folder', params: { slug: item.folderSlug } }"
+            :to="folderReadingRoute(item.folderSlug)"
             :aria-label="t('post.viewer.openFolder')"
             :title="t('post.viewer.openFolder')"
           >
@@ -427,6 +427,7 @@
 </template>
 
 <script setup lang="ts">
+import { folderReadingRoute } from '../utils/work-gallery';
 import 'vidstack/bundle';
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';

@@ -40,18 +40,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { RouterLink, useRoute } from 'vue-router';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 
-import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage } from '../api/gallery';
+import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage, fetchFolder } from '../api/gallery';
 import WorkMediaCard from '../components/WorkMediaCard.vue';
 import { useAppStore } from '../stores/app';
 import { useFoldersStore } from '../stores/folders';
 import type { ImageDetail } from '../types/api';
-import { canonicalCreatorRoute, orderedMediaItems, parsePositiveId, workTitle } from '../utils/work-gallery';
+import { canonicalCreatorRoute, canonicalWorkGalleryRoute, orderedMediaItems, parsePositiveId, workTitle } from '../utils/work-gallery';
 
 const props = defineProps<{ slug?: string; creatorId?: string; postId: string }>();
 const { t } = useI18n();
 const route = useRoute();
+const router = useRouter();
 const appStore = useAppStore();
 const foldersStore = useFoldersStore();
 // Independent page state keeps the background DOM and thumbnails alive while PostView uses the viewer store.
@@ -69,10 +70,10 @@ const backgroundPath = computed(() => route.fullPath);
 const backRoute = computed(() => {
   if (canonicalId.value !== null) {
     const candidate = Array.isArray(route.query.returnTo) ? route.query.returnTo[0] : route.query.returnTo;
-    if (typeof candidate === 'string' && new RegExp(`^/creators/${canonicalId.value}(?:\\?|$)`, 'u').test(candidate) && !candidate.includes('\\')) {
-      return candidate;
+    if (typeof candidate === 'string' && new RegExp(`^/(?:library|creators)/${canonicalId.value}(?:\\?|$)`, 'u').test(candidate) && !candidate.includes('\\')) {
+      return canonicalCreatorRoute(canonicalId.value, candidate);
     }
-    return canonicalCreatorRoute(canonicalId.value);
+    return canonicalCreatorRoute(canonicalId.value, route.fullPath);
   }
   return { name: 'folder', params: { slug: props.slug ?? '' } };
 });
@@ -105,6 +106,14 @@ async function loadWork() {
     if (detail.id !== postId || (canonicalCreatorId === null && detail.folderSlug !== props.slug)) {
       error.value = t('workGallery.notFound');
       return;
+    }
+    if (!props.creatorId && props.slug && route.query.physical !== '1') {
+      const folder = await fetchFolder(props.slug);
+      if (token !== loadToken) return;
+      if (folder.canonicalCreatorId) {
+        await router.replace(canonicalWorkGalleryRoute(folder.canonicalCreatorId, postId));
+        return;
+      }
     }
     canonicalCreatorName.value = creatorPayload?.creator.name ?? null;
     work.value = detail;

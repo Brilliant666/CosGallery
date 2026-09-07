@@ -3,12 +3,13 @@ import path from 'node:path';
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage } from '../api/gallery';
+import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage, fetchFolder } from '../api/gallery';
 import { useAppStore } from '../stores/app';
 import { galleryTestRouter, mediaItem, mixedOrientationItems, workDetail } from '../../test/work-gallery-fixtures';
 import WorkGalleryView from './WorkGalleryView.vue';
 
 vi.mock('../api/gallery', () => ({
+  fetchFolder: vi.fn().mockResolvedValue({ canonicalCreatorId: null }),
   fetchImage: vi.fn(),
   fetchCanonicalCreator: vi.fn(),
   fetchCanonicalCreatorWork: vi.fn()
@@ -23,6 +24,7 @@ describe('WorkGalleryView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     fetchMock.mockReset().mockResolvedValue(workDetail());
+    vi.mocked(fetchFolder).mockReset().mockResolvedValue({ canonicalCreatorId: null } as Awaited<ReturnType<typeof fetchFolder>>);
     fetchCanonicalCreatorMock.mockReset().mockResolvedValue({
       creator: {
         id: 166,
@@ -44,7 +46,7 @@ describe('WorkGalleryView', () => {
     return { wrapper, router };
   }
 
-  async function renderCanonical(returnTo = '/creators/166?page=2') {
+  async function renderCanonical(returnTo = '/library/166?loaded=2') {
     const router = galleryTestRouter();
     await router.push({
       name: 'canonical-work-gallery',
@@ -79,13 +81,28 @@ describe('WorkGalleryView', () => {
     expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/f/creator');
   });
 
+  it('redirects a valid legacy work to its canonical route only after physical owner verification', async () => {
+    vi.mocked(fetchFolder).mockResolvedValue({ canonicalCreatorId: 166 } as Awaited<ReturnType<typeof fetchFolder>>);
+    const { router } = await render();
+    expect(router.currentRoute.value.fullPath).toBe('/library/166/works/123');
+  });
+
+  it('does not broaden a legacy wrong-Folder work to another directory of the same creator', async () => {
+    fetchMock.mockResolvedValue({ ...workDetail(), folderSlug: 'other-physical-folder' });
+    vi.mocked(fetchFolder).mockResolvedValue({ canonicalCreatorId: 166 } as Awaited<ReturnType<typeof fetchFolder>>);
+    const { router, wrapper } = await render();
+    expect(router.currentRoute.value.fullPath).toBe('/f/creator/works/123');
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true);
+    expect(fetchFolder).not.toHaveBeenCalled();
+  });
+
   it('loads a canonical-owned work and carries its aggregated creator return path into the viewer', async () => {
     const { wrapper, router } = await renderCanonical();
     expect(fetchCanonicalWorkMock).toHaveBeenCalledExactlyOnceWith(166, 123);
     expect(fetchCanonicalCreatorMock).toHaveBeenCalledExactlyOnceWith(166);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(wrapper.get('.work-gallery__creator').text()).toBe('lunana');
-    expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/creators/166?page=2');
+    expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/library/166?loaded=2');
 
     const background = router.currentRoute.value.fullPath;
     await wrapper.get('[data-position="2"] a').trigger('click');
@@ -102,8 +119,8 @@ describe('WorkGalleryView', () => {
   });
 
   it('does not accept a canonical return path for a different creator', async () => {
-    const { wrapper } = await renderCanonical('/creators/999?page=4');
-    expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/creators/166');
+    const { wrapper } = await renderCanonical('/library/999?page=4');
+    expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/library/166');
   });
 
   it('uses the same compact 1px gap as the creator cover grid', () => {

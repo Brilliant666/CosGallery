@@ -60,7 +60,7 @@
           <div class="reel-player-card__copy">
             <RouterLink
               class="reel-player-card__folder-row reel-player-card__folder-link"
-              :to="{ name: 'folder', params: { slug: item.folderSlug } }"
+              :to="folderReadingRoute(item.folderSlug)"
               aria-label="Open folder"
               @click.stop
             >
@@ -112,6 +112,7 @@
 </template>
 
 <script setup lang="ts">
+import { folderReadingRoute } from '../utils/work-gallery';
 import 'vidstack/bundle';
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';

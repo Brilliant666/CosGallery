@@ -76,6 +76,14 @@ const NOT_EXPLICIT_FOLDER_COVER_SQL =
 
 const VISIBLE_POST_WHERE_SQL =
   `posts.is_deleted = 0 AND posts.is_trashed = 0 AND ${NORMAL_FOLDER_ROLE_SQL} AND ${NOT_EXPLICIT_FOLDER_COVER_SQL}`;
+// Match the gallery identity projection: ambiguous physical owners are not a
+// canonical creator's readable scope, even if a damaged legacy index permits them.
+const CANONICAL_CREATOR_FOLDER_IDS_SQL = `
+  SELECT gallery_folder_id FROM archive_catalog_local_creator_folders
+  WHERE is_active=1 AND match_status='matched' AND creator_id IS NOT NULL
+  GROUP BY gallery_folder_id
+  HAVING COUNT(DISTINCT creator_id)=1 AND MIN(creator_id)=?
+`;
 const VISIBLE_POST_WHERE_UNSCOPED_SQL =
   `is_deleted = 0 AND is_trashed = 0 AND folder_id IN (${NORMAL_FOLDER_ID_SUBQUERY_SQL}) AND ${NOT_EXPLICIT_FOLDER_COVER_SQL}`;
 
@@ -2242,6 +2250,41 @@ export const creatorRatingRepository = {
 };
 
 export const canonicalCreatorGalleryRepository = {
+  listUniqueFolderCreatorIds(): Array<{ folderId: number; creatorId: number }> {
+    return database.prepare(`SELECT local.gallery_folder_id AS folderId, MIN(local.creator_id) AS creatorId
+      FROM archive_catalog_local_creator_folders local
+      JOIN archive_catalog_creators creators ON creators.id=local.creator_id
+      JOIN folders ON folders.id=local.gallery_folder_id AND folders.role='normal'
+      WHERE local.is_active=1 AND local.match_status='matched'
+      GROUP BY local.gallery_folder_id HAVING COUNT(DISTINCT local.creator_id)=1`).all() as unknown as Array<{
+        folderId: number; creatorId: number;
+      }>;
+  },
+
+  getVisibleMediaSummary(creatorId: number) {
+    return database.prepare(`SELECT
+      COUNT(DISTINCT CASE WHEN media.media_type='image' THEN media.id END) AS imageCount,
+      COUNT(DISTINCT CASE WHEN media.media_type='video' THEN media.id END) AS videoCount,
+      MAX(media.mtime_ms) AS latestImageMtimeMs
+      FROM posts JOIN folders ON folders.id=posts.folder_id
+      JOIN post_items ON post_items.post_id=posts.id
+      JOIN images media ON media.id=post_items.image_id
+      WHERE posts.folder_id IN (${CANONICAL_CREATOR_FOLDER_IDS_SQL}) AND ${VISIBLE_POST_WHERE_SQL}
+        AND media.is_deleted=0 AND media.is_trashed=0`).get(creatorId) as {
+          imageCount: number; videoCount: number; latestImageMtimeMs: number | null;
+        };
+  },
+
+  getUniqueCreatorIdForFolder(folderId: number): number | null {
+    const row = database.prepare(`SELECT MIN(local.creator_id) AS creatorId
+      FROM archive_catalog_local_creator_folders local
+      JOIN archive_catalog_creators creators ON creators.id=local.creator_id
+      JOIN folders ON folders.id=local.gallery_folder_id AND folders.role='normal'
+      WHERE local.gallery_folder_id=? AND local.is_active=1 AND local.match_status='matched'
+      HAVING COUNT(DISTINCT local.creator_id)=1`).get(folderId) as { creatorId: number } | undefined;
+    return row?.creatorId ?? null;
+  },
+
   listFolderCandidates(): CosGalleryFolderCandidateRecord[] {
     return database.prepare(
       `
@@ -2278,6 +2321,7 @@ export const canonicalCreatorGalleryRepository = {
         folders.slug,
         folders.name AS folderName,
         folders.folder_path AS folderPath,
+        folders.description,
         creators.id AS canonicalCreatorId,
         creators.canonical_name AS canonicalName,
         creators.is_active AS creatorIsActive,
@@ -2340,11 +2384,13 @@ export const canonicalCreatorGalleryRepository = {
         END AS coverPriority
       FROM folders
       INNER JOIN folder_totals ON folder_totals.folder_id = folders.id
-      LEFT JOIN archive_catalog_local_creator_folders AS local
+      LEFT JOIN (
+        SELECT gallery_folder_id, MIN(creator_id) AS creator_id
+        FROM archive_catalog_local_creator_folders
+        WHERE is_active=1 AND match_status='matched' AND creator_id IS NOT NULL
+        GROUP BY gallery_folder_id HAVING COUNT(DISTINCT creator_id)=1
+      ) AS local
         ON local.gallery_folder_id = folders.id
-       AND local.is_active = 1
-       AND local.match_status = 'matched'
-       AND local.creator_id IS NOT NULL
       LEFT JOIN archive_catalog_creators AS creators ON creators.id = local.creator_id
       WHERE folders.role = 'normal'
       ORDER BY folder_totals.latest_work_at DESC, folders.id ASC
@@ -2376,14 +2422,7 @@ export const canonicalCreatorGalleryRepository = {
     const posts = database.prepare(
       `
       ${BASE_POST_SELECT_SQL}
-      WHERE EXISTS (
-        SELECT 1
-        FROM archive_catalog_local_creator_folders AS local
-        WHERE local.creator_id = ?
-          AND local.gallery_folder_id = posts.folder_id
-          AND local.is_active = 1
-          AND local.match_status = 'matched'
-      )
+      WHERE posts.folder_id IN (${CANONICAL_CREATOR_FOLDER_IDS_SQL})
         AND ${VISIBLE_POST_WHERE_SQL}${mediaTypeClause}
       ORDER BY posts.sort_timestamp ${direction}, posts.id ${direction}
       LIMIT ? OFFSET ?
@@ -2400,14 +2439,7 @@ export const canonicalCreatorGalleryRepository = {
        INNER JOIN folders ON folders.id = posts.folder_id
        INNER JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
        INNER JOIN images ON images.id = post_items.image_id
-       WHERE EXISTS (
-         SELECT 1
-         FROM archive_catalog_local_creator_folders AS local
-         WHERE local.creator_id = ?
-           AND local.gallery_folder_id = posts.folder_id
-           AND local.is_active = 1
-           AND local.match_status = 'matched'
-       )
+       WHERE posts.folder_id IN (${CANONICAL_CREATOR_FOLDER_IDS_SQL})
          AND ${VISIBLE_POST_WHERE_SQL}${mediaTypeClause}`
     ).get(...(mediaType ? [creatorId, mediaType] : [creatorId])) as { count: number };
     return Number(row.count);
@@ -2419,14 +2451,7 @@ export const canonicalCreatorGalleryRepository = {
        FROM posts
        INNER JOIN folders ON folders.id = posts.folder_id
        WHERE posts.id = ?
-         AND EXISTS (
-           SELECT 1
-           FROM archive_catalog_local_creator_folders AS local
-           WHERE local.creator_id = ?
-             AND local.gallery_folder_id = posts.folder_id
-             AND local.is_active = 1
-             AND local.match_status = 'matched'
-         )
+         AND posts.folder_id IN (${CANONICAL_CREATOR_FOLDER_IDS_SQL})
          AND ${VISIBLE_POST_WHERE_SQL}
        LIMIT 1`
     ).get(postId, creatorId));

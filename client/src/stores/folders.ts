@@ -19,6 +19,7 @@ import type {
   FolderSummary
 } from '../types/api';
 import { updateCaptionInItems } from '../utils/caption';
+import { useCreatorReadingStore } from './creator-reading';
 
 type FolderMediaFilter = 'all' | 'video';
 
@@ -71,6 +72,7 @@ export const useFoldersStore = defineStore('folders', {
   }),
   actions: {
     removeImage(imageId: number, folderSlug: string, mediaType: FeedItem['mediaType'] = 'image') {
+      useCreatorReadingStore().invalidate();
       let removedFolder = false;
 
       this.items = this.items.flatMap((folder) => {
@@ -116,6 +118,7 @@ export const useFoldersStore = defineStore('folders', {
     },
 
     removeFolder(slug: string) {
+      useCreatorReadingStore().invalidate();
       this.items = this.items.filter((folder) => folder.slug !== slug);
 
       if (this.currentFolder?.slug === slug) {
@@ -127,6 +130,7 @@ export const useFoldersStore = defineStore('folders', {
     },
 
     updateImageCaption(id: number, caption: string | null) {
+      useCreatorReadingStore().invalidate();
       this.currentImages = updateCaptionInItems(this.currentImages, id, caption);
     },
 
@@ -216,6 +220,7 @@ export const useFoldersStore = defineStore('folders', {
 
     async updateFolderProfile(slug: string, name: string, description: string | null) {
       const updated = await updateFolderProfile(slug, name, description);
+      useCreatorReadingStore().invalidate();
       this.items = this.items.map((folder) => (folder.slug === slug ? updated : folder));
       
       if (this.currentFolder?.slug === slug) {
@@ -225,6 +230,7 @@ export const useFoldersStore = defineStore('folders', {
 
     async setFolderCover(slug: string, imageId: number) {
       await setFolderCover(slug, imageId);
+      useCreatorReadingStore().invalidate();
       await this.fetchFolders(true);
       
       if (this.currentFolder?.slug === slug) {

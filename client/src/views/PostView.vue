@@ -106,9 +106,9 @@ const returnToWork = computed(() => {
   const creatorId = parsePositiveId(creatorValue);
   const requestedReturn = Array.isArray(route.query.returnTo) ? route.query.returnTo[0] : route.query.returnTo;
   if (creatorId !== null && typeof requestedReturn === 'string'
-    && new RegExp(`^/creators/${creatorId}/works/${activeImage.value.id}(?:\\?|$)`, 'u').test(requestedReturn)
+    && new RegExp(`^/(?:library|creators)/${creatorId}/works/${activeImage.value.id}(?:\\?|$)`, 'u').test(requestedReturn)
     && !requestedReturn.includes('\\')) {
-    return requestedReturn;
+    return canonicalWorkGalleryRoute(creatorId, activeImage.value.id, requestedReturn);
   }
   return creatorId === null
     ? workGalleryRoute(activeImage.value.folderSlug, activeImage.value.id)
