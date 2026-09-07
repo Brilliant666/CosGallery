@@ -1,13 +1,17 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { workDetail } from '../../test/work-gallery-fixtures';
-import { fetchImage } from '../api/gallery';
+import { fetchCanonicalCreatorWork, fetchImage } from '../api/gallery';
 import { useViewerStore } from './viewer';
 
-vi.mock('../api/gallery', () => ({ fetchImage: vi.fn(), deleteImage: vi.fn(), trashImage: vi.fn() }));
+vi.mock('../api/gallery', () => ({ fetchImage: vi.fn(), fetchCanonicalCreatorWork: vi.fn(), deleteImage: vi.fn(), trashImage: vi.fn() }));
 
 describe('viewer store loads', () => {
-  beforeEach(() => { setActivePinia(createPinia()); vi.mocked(fetchImage).mockReset(); });
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.mocked(fetchImage).mockReset();
+    vi.mocked(fetchCanonicalCreatorWork).mockReset();
+  });
   it('loads full ordered-media metadata with Post identity', async () => {
     const store = useViewerStore();
     vi.mocked(fetchImage).mockResolvedValue(workDetail());
@@ -36,5 +40,13 @@ describe('viewer store loads', () => {
     expect(store.image).toBeNull();
     expect(store.error).toBe('Not found');
     expect(store.loading).toBe(false);
+  });
+  it('uses the ownership-checking canonical endpoint in creator context', async () => {
+    const store = useViewerStore();
+    vi.mocked(fetchCanonicalCreatorWork).mockResolvedValue(workDetail());
+    await store.loadImage(123, undefined, 166);
+    expect(fetchCanonicalCreatorWork).toHaveBeenCalledWith(166, 123, undefined);
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(store.image?.id).toBe(123);
   });
 });

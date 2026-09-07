@@ -658,9 +658,19 @@ describe.sequential('LocalIngest root and process boundaries', () => {
     fixture.database.prepare("UPDATE archive_catalog_creators SET canonical_name = '../escape' WHERE id = 1").run();
     await fixture.service.scanInbox();
     fixture.advance(1_100);
-    await expect(fixture.service.scanInbox()).rejects.toThrow(/reserved filename characters/i);
+    const result = await fixture.service.scanInbox();
+    expect(result.jobs).toEqual([
+      expect.objectContaining({
+        status: 'awaiting_review',
+        phase: 'mapping',
+        errorCode: 'INVALID_TARGET_NAME',
+        errorDetail: expect.stringMatching(/reserved filename characters/i),
+        targetPath: null,
+        attemptCount: 0
+      })
+    ]);
     await expect(fs.access(path.join(fixture.root, 'escape'))).rejects.toThrow();
-    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 0 });
+    expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 1 });
     fixture.database.close();
   });
 

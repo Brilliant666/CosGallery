@@ -21,11 +21,32 @@ export function workGalleryRoute(slug: string, postId: number) {
   return { name: 'work-gallery', params: { slug, postId: String(postId) } };
 }
 
-export function workMediaRoute(postId: number, imageId: number) {
+export function canonicalCreatorRoute(creatorId: number, returnTo?: string) {
+  return {
+    name: 'canonical-creator',
+    params: { creatorId: String(creatorId) },
+    ...(returnTo ? { query: { returnTo } } : {})
+  };
+}
+
+export function canonicalWorkGalleryRoute(creatorId: number, postId: number, returnTo?: string) {
+  return {
+    name: 'canonical-work-gallery',
+    params: { creatorId: String(creatorId), postId: String(postId) },
+    ...(returnTo ? { query: { returnTo } } : {})
+  };
+}
+
+export function workMediaRoute(postId: number, imageId: number, creatorId?: number, returnTo?: string) {
   return {
     name: 'image',
     params: { id: String(postId) },
-    query: { media: String(imageId), context: 'work' }
+    query: {
+      media: String(imageId),
+      context: 'work',
+      ...(creatorId ? { creator: String(creatorId) } : {}),
+      ...(returnTo ? { returnTo } : {})
+    }
   };
 }
 

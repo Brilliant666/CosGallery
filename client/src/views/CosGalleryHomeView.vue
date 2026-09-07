@@ -6,7 +6,7 @@
         <h1 class="m-0 text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">我的图库</h1>
       </div>
 
-      <form class="flex gap-2" @submit.prevent="loadCreators">
+      <form class="flex gap-2" @submit.prevent="applyFilters">
         <label class="relative min-w-0 flex-1">
           <span class="sr-only">搜索博主</span>
           <input
@@ -43,8 +43,8 @@
     >
       <RouterLink
         v-for="creator in creators"
-        :key="creator.id"
-        :to="{ name: 'folder', params: { slug: creator.slug } }"
+        :key="creator.key"
+        :to="creatorRoute(creator)"
         class="group min-w-0 overflow-hidden rounded-2xl border border-border bg-surface text-text no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-lg"
       >
         <div class="relative aspect-[4/5] overflow-hidden bg-surface-alt">
@@ -81,12 +81,17 @@
     <div v-else class="rounded-2xl border border-dashed border-border py-16 text-center text-muted">
       没有符合当前条件的博主。
     </div>
+    <nav v-if="totalPages > 1" class="mt-7 flex items-center justify-center gap-4" aria-label="博主分页">
+      <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page <= 1 || loading" @click="setPage(page - 1)">上一页</button>
+      <span class="text-sm text-muted">第 {{ page }} / {{ totalPages }} 页</span>
+      <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page >= totalPages || loading" @click="setPage(page + 1)">下一页</button>
+    </nav>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { RouterLink } from 'vue-router';
+import { computed, onMounted, ref } from 'vue';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 
 import { fetchCosGalleryCreators } from '../api/gallery';
 import type { ContentRating, CosGalleryCreator } from '../types/api';
@@ -94,11 +99,18 @@ import type { ContentRating, CosGalleryCreator } from '../types/api';
 type RatingFilter = 'all' | ContentRating | 'unclassified' | 'unlinked' | 'inactive';
 
 const creators = ref<CosGalleryCreator[]>([]);
-const query = ref('');
-const rating = ref<RatingFilter>('all');
+const route = useRoute();
+const router = useRouter();
+const initialRating = Array.isArray(route.query.rating) ? route.query.rating[0] : route.query.rating;
+const initialQuery = Array.isArray(route.query.q) ? route.query.q[0] : route.query.q;
+const initialPage = Array.isArray(route.query.page) ? route.query.page[0] : route.query.page;
+const query = ref(typeof initialQuery === 'string' ? initialQuery : '');
+const rating = ref<RatingFilter>(['R15','R18','unclassified','unlinked','inactive'].includes(initialRating ?? '') ? initialRating as RatingFilter : 'all');
+const page = ref(typeof initialPage === 'string' && /^\d+$/.test(initialPage) && Number(initialPage) > 0 ? Number(initialPage) : 1);
 const total = ref(0);
 const loading = ref(false);
 const error = ref('');
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / 50)));
 
 const ratingOptions: Array<{ value: RatingFilter; label: string }> = [
   { value: 'all', label: '全部' },
@@ -123,7 +135,7 @@ async function loadCreators() {
   loading.value = true;
   error.value = '';
   try {
-    const payload = await fetchCosGalleryCreators(rating.value === 'all' ? undefined : rating.value, query.value);
+    const payload = await fetchCosGalleryCreators(rating.value === 'all' ? undefined : rating.value, query.value, page.value, 50);
     creators.value = payload.items;
     total.value = payload.total;
   } catch (reason) {
@@ -133,10 +145,41 @@ async function loadCreators() {
   }
 }
 
+async function syncLocation() {
+  await router.replace({
+    name: 'library',
+    query: {
+      ...(query.value.trim() ? { q: query.value.trim() } : {}),
+      ...(rating.value !== 'all' ? { rating: rating.value } : {}),
+      ...(page.value > 1 ? { page: String(page.value) } : {})
+    }
+  });
+}
+
+async function applyFilters() {
+  page.value = 1;
+  await syncLocation();
+  await loadCreators();
+}
+
 async function setRating(value: RatingFilter) {
   if (rating.value === value) return;
   rating.value = value;
+  page.value = 1;
+  await syncLocation();
   await loadCreators();
+}
+
+async function setPage(value: number) {
+  page.value = value;
+  await syncLocation();
+  await loadCreators();
+}
+
+function creatorRoute(creator: CosGalleryCreator) {
+  return creator.identityType === 'creator'
+    ? { name: 'canonical-creator', params: { creatorId: String(creator.id) }, query: { returnTo: route.fullPath } }
+    : { name: 'folder', params: { slug: creator.slug } };
 }
 
 onMounted(loadCreators);

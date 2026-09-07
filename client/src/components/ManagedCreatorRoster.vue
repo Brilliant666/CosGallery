@@ -71,6 +71,23 @@
           <ul class="alias-list"><li v-for="folder in detail.localFolders" :key="folder.id"><span>#{{ folder.id }} {{ folder.folderPath }} · {{ folder.workCount }} 套 <small>{{ folder.matchStatus }} / {{ folder.matchMethod ?? '未关联' }}</small></span><button :disabled="busy" @click="pendingAction = { kind: 'unlink', folderId: folder.id }">解除关联</button></li></ul>
           <form class="inline-form" @submit.prevent="linkFolder"><label>未关联目录<select v-model="folderDraft" :disabled="busy"><option :value="null">选择本地目录</option><option v-for="folder in detail.unlinkedLocalFolders" :key="folder.id" :value="folder.id">#{{ folder.id }} {{ folder.folderPath }}</option></select></label><button :disabled="busy || folderDraft === null">关联目录</button></form>
         </section>
+        <section><h3>首选入库目录</h3>
+          <p class="hint">只保存目录桥接 ID；不移动文件、不扫描、不创建任务。多个目录未选择时，新任务会关闭式等待确认。</p>
+          <p v-if="ingestDestination" :class="{ error: ['selection-required','preferred-unavailable','linked-folders-unavailable'].includes(ingestDestination.mode) }">
+            {{ ingestDestination.message }}<template v-if="ingestDestination.resolvedCreatorDirectory">：{{ ingestDestination.resolvedCreatorDirectory }}</template>
+          </p>
+          <form v-if="ingestDestination" class="inline-form" @submit.prevent="saveIngestDestination">
+            <label>首选入库目录
+              <select v-model="preferredFolderDraft" :disabled="busy">
+                <option :value="null">不显式选择（使用实际回退规则）</option>
+                <option v-for="folder in ingestDestination.candidates" :key="folder.localCreatorFolderId" :value="folder.localCreatorFolderId" :disabled="!folder.valid">
+                  桥接 #{{ folder.localCreatorFolderId }} · {{ folder.absolutePath }} · {{ folder.workCount }} 套{{ folder.valid ? '' : ` · ${folder.unavailableReason}` }}
+                </option>
+              </select>
+            </label>
+            <button :disabled="busy || preferredFolderDraft === ingestDestination.preferredLocalCreatorFolderId">保存目录选择</button>
+          </form>
+        </section>
         <section class="state-controls"><h3>{{ detail.isActive ? '停用博主' : '恢复博主' }}</h3>
           <p>来源 {{ detail.impact.sources }} · 合集 {{ detail.impact.collections }} · 平台作品 {{ detail.impact.remoteWorks }} · 本地作品 {{ detail.impact.localWorks }} · 未完成下载任务 {{ detail.impact.unfinishedDownloadTasks }}</p>
           <p class="hint">停用仅影响未来任务规划及默认展示；既有作品、任务和关系保留。恢复也不会自动生成任务。</p>
@@ -90,7 +107,7 @@ import { onMounted, reactive, ref } from 'vue';
 import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
 import { RequestError } from '../api/http';
 import * as api from '../api/managed-creators';
-import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ContentRating } from '../types/api';
+import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ContentRating, LocalIngestDestinationPreference } from '../types/api';
 
 const emit = defineEmits<{ changed: [] }>();
 const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
@@ -100,6 +117,8 @@ const page = ref(1), loading = ref(false), busy = ref(false), error = ref(''), n
 const dialog = ref<HTMLDialogElement | null>(null), dialogOpen = ref(false);
 const draft = reactive<api.ManagedCreatorInput>({ name:'', preference:null, rating:null, confirmDistinct:false });
 const aliasDraft = ref(''), folderDraft = ref<number|null>(null);
+const ingestDestination = ref<LocalIngestDestinationPreference | null>(null);
+const preferredFolderDraft = ref<number | null>(null);
 const candidates = ref<Array<{id:number;name:string}>>([]);
 const pendingAction = ref<{kind:'state'}|{kind:'unlink';folderId:number}|null>(null);
 let loadGeneration = 0;
@@ -132,14 +151,26 @@ function setDetail(value:ArchiveCatalogCreatorDetail) {
   candidates.value = []; pendingAction.value = null;
 }
 function openNew() {
-  detail.value = null; error.value = ''; candidates.value = []; notice.value = '';
+  detail.value = null; ingestDestination.value = null; preferredFolderDraft.value = null; error.value = ''; candidates.value = []; notice.value = '';
   Object.assign(draft,{name:'',preference:null,rating:null,confirmDistinct:false});
   showDialog();
 }
 async function openCreator(id:number) {
   if (busy.value) return;
   error.value = ''; candidates.value = []; pendingAction.value = null; aliasDraft.value = ''; folderDraft.value = null;
-  try { setDetail(await fetchArchiveCatalogCreator(id)); showDialog(); } catch (reason) { showError(reason); }
+  try {
+    const [creator, destination] = await Promise.all([fetchArchiveCatalogCreator(id), api.fetchIngestDestination(id)]);
+    setDetail(creator);
+    ingestDestination.value = destination;
+    preferredFolderDraft.value = destination.preferredLocalCreatorFolderId;
+    showDialog();
+  } catch (reason) { showError(reason); }
+}
+async function refreshIngestDestination() {
+  if (!detail.value) return;
+  const destination = await api.fetchIngestDestination(detail.value.id);
+  ingestDestination.value = destination;
+  preferredFolderDraft.value = destination.preferredLocalCreatorFolderId;
 }
 async function mutation(action:()=>Promise<ArchiveCatalogCreatorDetail|void>) {
   if (busy.value) return;
@@ -147,6 +178,7 @@ async function mutation(action:()=>Promise<ArchiveCatalogCreatorDetail|void>) {
   try {
     const result = await action();
     if (result) setDetail(result);
+    if (detail.value) await refreshIngestDestination();
     await load(); emit('changed'); notice.value = '博主元数据已保存；未执行扫描或任务规划。';
   } catch (reason) { showError(reason); }
   finally { busy.value = false; }
@@ -155,6 +187,22 @@ async function save() { await mutation(() => detail.value ? api.updateManagedCre
 async function addAlias() { if (detail.value) await mutation(async () => { const result = await api.addManagedAlias(detail.value!.id,aliasDraft.value,draft.confirmDistinct); aliasDraft.value = ''; return result; }); }
 async function removeAlias(id:string) { if (detail.value) await mutation(() => api.deleteManagedAlias(detail.value!.id,id)); }
 async function linkFolder() { if (detail.value && folderDraft.value !== null) await mutation(async () => { const result = await api.linkManagedFolder(folderDraft.value!,detail.value!.id); folderDraft.value = null; return result; }); }
+async function saveIngestDestination() {
+  if (!detail.value || !ingestDestination.value) return;
+  if (busy.value) return;
+  busy.value = true; error.value = ''; notice.value = '';
+  try {
+    ingestDestination.value = await api.setIngestDestination(
+      detail.value.id,
+      typeof preferredFolderDraft.value === 'number' ? preferredFolderDraft.value : null
+    );
+    preferredFolderDraft.value = ingestDestination.value.preferredLocalCreatorFolderId;
+    await load();
+    emit('changed');
+    notice.value = '首选入库目录已保存；未移动文件、扫描或创建任务。';
+  } catch (reason) { showError(reason); }
+  finally { busy.value = false; }
+}
 async function confirmAction() {
   const action = pendingAction.value;
   if (!detail.value || !action) return;

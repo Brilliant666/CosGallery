@@ -8,6 +8,8 @@ import type {
   CollectionRecord,
   CollectionSummaryRecord,
   CosGalleryCreatorRecord,
+  CosGalleryCreatorAliasRecord,
+  CosGalleryFolderCandidateRecord,
   CreatorRatingSourceRecord,
   FeedImage,
   FeedPost,
@@ -2236,6 +2238,198 @@ export const creatorRatingRepository = {
       ORDER BY creator_works.latest_work_at DESC, folders.name COLLATE NOCASE ASC
       `
     ).all() as unknown as CosGalleryCreatorRecord[];
+  }
+};
+
+export const canonicalCreatorGalleryRepository = {
+  listFolderCandidates(): CosGalleryFolderCandidateRecord[] {
+    return database.prepare(
+      `
+      WITH visible_works AS (
+        SELECT
+          posts.id,
+          posts.folder_id,
+          posts.sort_timestamp
+        FROM posts
+        INNER JOIN folders ON folders.id = posts.folder_id
+        WHERE posts.is_deleted = 0
+          AND posts.is_trashed = 0
+          AND folders.role = 'normal'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM post_items AS cover_items
+            INNER JOIN images AS cover_images ON cover_images.id = cover_items.image_id
+            WHERE cover_items.post_id = posts.id
+              AND cover_items.position = 1
+              AND cover_images.folder_id = posts.folder_id
+              AND LOWER(cover_images.filename) IN (${COVER_FILENAME_SQL})
+          )
+      ),
+      folder_totals AS (
+        SELECT
+          folder_id,
+          COUNT(DISTINCT id) AS work_count,
+          MAX(sort_timestamp) AS latest_work_at
+        FROM visible_works
+        GROUP BY folder_id
+      )
+      SELECT
+        folders.id AS folderId,
+        folders.slug,
+        folders.name AS folderName,
+        folders.folder_path AS folderPath,
+        creators.id AS canonicalCreatorId,
+        creators.canonical_name AS canonicalName,
+        creators.is_active AS creatorIsActive,
+        creators.effective_rating AS contentRating,
+        creators.preference,
+        CASE WHEN creators.id IS NULL THEN 0 ELSE (
+          SELECT COUNT(*)
+          FROM archive_catalog_creator_sources AS sources
+          WHERE sources.creator_id = creators.id
+        ) END AS ratingSourceCount,
+        folder_totals.work_count AS workCount,
+        folder_totals.latest_work_at AS latestWorkAt,
+        COALESCE(
+          (
+            SELECT avatar.id
+            FROM images AS avatar
+            WHERE avatar.id = folders.avatar_image_id
+              AND avatar.is_deleted = 0
+              AND avatar.is_trashed = 0
+            LIMIT 1
+          ),
+          (
+            SELECT cover.id
+            FROM images AS cover
+            WHERE cover.folder_id = folders.id
+              AND cover.is_deleted = 0
+              AND cover.is_trashed = 0
+              AND LOWER(cover.filename) IN (${COVER_FILENAME_SQL})
+            ORDER BY cover.id ASC
+            LIMIT 1
+          ),
+          (
+            SELECT media.id
+            FROM visible_works AS candidate_works
+            INNER JOIN post_items AS candidate_items ON candidate_items.post_id = candidate_works.id
+            INNER JOIN images AS media ON media.id = candidate_items.image_id
+            WHERE candidate_works.folder_id = folders.id
+              AND media.is_deleted = 0
+              AND media.is_trashed = 0
+              AND media.media_type = 'image'
+            ORDER BY candidate_works.sort_timestamp DESC, candidate_works.id DESC, candidate_items.position ASC
+            LIMIT 1
+          )
+        ) AS coverImageId,
+        CASE
+          WHEN EXISTS (
+            SELECT 1 FROM images AS avatar
+            WHERE avatar.id = folders.avatar_image_id
+              AND avatar.is_deleted = 0
+              AND avatar.is_trashed = 0
+          ) THEN 1
+          WHEN EXISTS (
+            SELECT 1 FROM images AS cover
+            WHERE cover.folder_id = folders.id
+              AND cover.is_deleted = 0
+              AND cover.is_trashed = 0
+              AND LOWER(cover.filename) IN (${COVER_FILENAME_SQL})
+          ) THEN 2
+          ELSE 3
+        END AS coverPriority
+      FROM folders
+      INNER JOIN folder_totals ON folder_totals.folder_id = folders.id
+      LEFT JOIN archive_catalog_local_creator_folders AS local
+        ON local.gallery_folder_id = folders.id
+       AND local.is_active = 1
+       AND local.match_status = 'matched'
+       AND local.creator_id IS NOT NULL
+      LEFT JOIN archive_catalog_creators AS creators ON creators.id = local.creator_id
+      WHERE folders.role = 'normal'
+      ORDER BY folder_totals.latest_work_at DESC, folders.id ASC
+      `
+    ).all() as unknown as CosGalleryFolderCandidateRecord[];
+  },
+
+  listAliases(): CosGalleryCreatorAliasRecord[] {
+    return database.prepare(
+      `SELECT creator_id AS creatorId, alias
+       FROM archive_catalog_creator_aliases
+       ORDER BY creator_id, alias COLLATE NOCASE`
+    ).all() as unknown as CosGalleryCreatorAliasRecord[];
+  },
+
+  listVisibleWorks(
+    creatorId: number,
+    page: number,
+    limit: number,
+    order: FolderImageOrder = 'newest',
+    mediaType?: MediaType
+  ): FeedPost[] {
+    const offset = (page - 1) * limit;
+    const direction = order === 'oldest' ? 'ASC' : 'DESC';
+    const mediaTypeClause = mediaType ? ' AND images.media_type = ?' : '';
+    const params = mediaType
+      ? [creatorId, mediaType, limit, offset]
+      : [creatorId, limit, offset];
+    const posts = database.prepare(
+      `
+      ${BASE_POST_SELECT_SQL}
+      WHERE EXISTS (
+        SELECT 1
+        FROM archive_catalog_local_creator_folders AS local
+        WHERE local.creator_id = ?
+          AND local.gallery_folder_id = posts.folder_id
+          AND local.is_active = 1
+          AND local.match_status = 'matched'
+      )
+        AND ${VISIBLE_POST_WHERE_SQL}${mediaTypeClause}
+      ORDER BY posts.sort_timestamp ${direction}, posts.id ${direction}
+      LIMIT ? OFFSET ?
+      `
+    ).all(...params) as unknown as FeedPost[];
+    return postRepository.hydratePostItems(posts);
+  },
+
+  countVisibleWorks(creatorId: number, mediaType?: MediaType): number {
+    const mediaTypeClause = mediaType ? ' AND images.media_type = ?' : '';
+    const row = database.prepare(
+      `SELECT COUNT(DISTINCT posts.id) AS count
+       FROM posts
+       INNER JOIN folders ON folders.id = posts.folder_id
+       INNER JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
+       INNER JOIN images ON images.id = post_items.image_id
+       WHERE EXISTS (
+         SELECT 1
+         FROM archive_catalog_local_creator_folders AS local
+         WHERE local.creator_id = ?
+           AND local.gallery_folder_id = posts.folder_id
+           AND local.is_active = 1
+           AND local.match_status = 'matched'
+       )
+         AND ${VISIBLE_POST_WHERE_SQL}${mediaTypeClause}`
+    ).get(...(mediaType ? [creatorId, mediaType] : [creatorId])) as { count: number };
+    return Number(row.count);
+  },
+
+  ownsVisiblePost(creatorId: number, postId: number): boolean {
+    return Boolean(database.prepare(
+      `SELECT posts.id
+       FROM posts
+       INNER JOIN folders ON folders.id = posts.folder_id
+       WHERE posts.id = ?
+         AND EXISTS (
+           SELECT 1
+           FROM archive_catalog_local_creator_folders AS local
+           WHERE local.creator_id = ?
+             AND local.gallery_folder_id = posts.folder_id
+             AND local.is_active = 1
+             AND local.match_status = 'matched'
+         )
+         AND ${VISIBLE_POST_WHERE_SQL}
+       LIMIT 1`
+    ).get(postId, creatorId));
   }
 };
 

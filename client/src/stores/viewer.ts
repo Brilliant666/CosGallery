@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 
-import { deleteImage, fetchImage, trashImage } from '../api/gallery';
+import { deleteImage, fetchCanonicalCreatorWork, fetchImage, trashImage } from '../api/gallery';
 import type { DeleteImageResult, ImageDetail } from '../types/api';
 
 interface ViewerState {
@@ -28,13 +28,15 @@ export const useViewerStore = defineStore('viewer', {
       this.error = null;
     },
 
-    async loadImage(id: number, mediaType?: 'image' | 'video') {
+    async loadImage(id: number, mediaType?: 'image' | 'video', creatorId?: number) {
       const requestToken = ++viewerLoadToken;
       this.loading = true;
       this.error = null;
 
       try {
-        const image = await fetchImage(id, mediaType);
+        const image = creatorId === undefined
+          ? await fetchImage(id, mediaType)
+          : await fetchCanonicalCreatorWork(creatorId, id, mediaType);
         if (requestToken !== viewerLoadToken) {
           return;
         }

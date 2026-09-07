@@ -213,6 +213,8 @@ CREATE TABLE IF NOT EXISTS archive_catalog_creators (
   effective_rating TEXT NULL,
   is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
   deactivated_at TEXT NULL,
+  preferred_local_creator_folder_id INTEGER NULL
+    REFERENCES archive_catalog_local_creator_folders(id) ON DELETE RESTRICT,
   seed_source TEXT NOT NULL,
   seed_source_creator_id TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -522,6 +524,8 @@ CREATE INDEX IF NOT EXISTS idx_folder_share_links_expires_at ON folder_share_lin
 CREATE INDEX IF NOT EXISTS idx_managed_creators_active ON archive_catalog_creators(is_active);
 CREATE INDEX IF NOT EXISTS idx_managed_creators_preference ON archive_catalog_creators(preference);
 CREATE INDEX IF NOT EXISTS idx_managed_creators_rating ON archive_catalog_creators(effective_rating);
+CREATE INDEX IF NOT EXISTS idx_archive_catalog_creators_preferred_local_folder
+  ON archive_catalog_creators(preferred_local_creator_folder_id);
 CREATE INDEX IF NOT EXISTS idx_catalog_folder_gallery ON archive_catalog_local_creator_folders(gallery_folder_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_folder_gallery_active ON archive_catalog_local_creator_folders(gallery_folder_id) WHERE is_active=1 AND gallery_folder_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_creators_normalized_name ON archive_catalog_creators(normalized_name);

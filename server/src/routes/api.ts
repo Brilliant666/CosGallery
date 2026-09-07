@@ -27,6 +27,10 @@ import {
   type LocalIngestOperationSnapshot
 } from '../services/local-ingest-operation-coordinator.js';
 import { localIngestSettingsService } from '../services/local-ingest-settings-service.js';
+import {
+  LocalIngestDestinationError,
+  LocalIngestDestinationService
+} from '../services/local-ingest-destination-service.js';
 import { recycleBinAdapter } from '../services/recycle-bin-adapter.js';
 import {
   FOLDER_SHARE_PASSWORD_MAX_LENGTH,
@@ -80,13 +84,51 @@ for (const [operation, active] of [['deactivate', false], ['restore', true]] as 
 router.get('/admin/archive-catalog/local-creator-folders', managedAccess, (_request, response) => {
   response.json({ items: new ArchiveCatalogQueryService().listLocalFolders() });
 });
-router.post('/admin/archive-catalog/local-creator-folders/:id/link', managedAccess, (request, response) => {
+const managedCreatorDestinationSchema = z.object({
+  localCreatorFolderId: z.number().int().positive().nullable()
+}).strict();
+
+router.get('/admin/archive-catalog/creators/:id/ingest-destination', managedAccess, async (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
-  managedResponse(response, () => new ManagedCreatorService().linkFolder(id, request.body));
+  try {
+    response.json(await new LocalIngestDestinationService().getPreference(id));
+  } catch (error) {
+    if (!(error instanceof LocalIngestDestinationError)) throw error;
+    response.status(error.status).json({ code: error.code, message: error.message });
+  }
 });
-router.post('/admin/archive-catalog/local-creator-folders/:id/unlink', managedAccess, (request, response) => {
+
+router.put('/admin/archive-catalog/creators/:id/ingest-destination', managedAccess, async (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
-  managedResponse(response, () => new ManagedCreatorService().unlinkFolder(id, request.body));
+  try {
+    const body = managedCreatorDestinationSchema.parse(request.body);
+    await respondWithLocalIngestOperation(
+      response,
+      { state: 'running', kind: 'save-settings', message: '正在保存首选入库目录' },
+      () => new LocalIngestDestinationService().setPreferred(id, body.localCreatorFolderId),
+      (result) => ({
+        creatorId: result.creatorId,
+        preferredLocalCreatorFolderId: result.preferredLocalCreatorFolderId
+      })
+    );
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      response.status(400).json({ code: 'INVALID_INGEST_DESTINATION_INPUT', message: error.errors.map(issue => issue.message).join('; ') });
+      return;
+    }
+    if (!(error instanceof LocalIngestDestinationError)) throw error;
+    response.status(error.status).json({ code: error.code, message: error.message });
+  }
+});
+router.post('/admin/archive-catalog/local-creator-folders/:id/link', managedAccess, async (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  await managedOperationResponse(response, '正在关联博主目录', () =>
+    new ManagedCreatorService().linkFolder(id, request.body));
+});
+router.post('/admin/archive-catalog/local-creator-folders/:id/unlink', managedAccess, async (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  await managedOperationResponse(response, '正在解除博主目录关联', () =>
+    new ManagedCreatorService().unlinkFolder(id, request.body));
 });
 
 function operationCurrentJob(job: LocalIngestJob) {
@@ -137,6 +179,34 @@ async function respondWithLocalIngestOperation<T>(
       return;
     }
     throw error;
+  }
+}
+
+async function managedOperationResponse<T>(
+  response: express.Response,
+  message: string,
+  action: () => T
+): Promise<void> {
+  try {
+    await respondWithLocalIngestOperation(
+      response,
+      { state: 'running', kind: 'save-settings', message },
+      action
+    );
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      response.status(400).json({
+        code: 'INVALID_CREATOR_INPUT',
+        message: error.errors.map(issue => issue.message).join('; ')
+      });
+      return;
+    }
+    if (!(error instanceof ManagedCreatorError)) throw error;
+    response.status(error.status).json({
+      code: error.code,
+      message: error.message,
+      candidates: error.candidates
+    });
   }
 }
 
@@ -199,8 +269,14 @@ const cosGalleryWorksQuerySchema = paginationQuerySchema.extend({
   q: z.string().trim().max(160).optional()
 });
 const cosGalleryCreatorsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
   contentRating: z.enum(['R15', 'R18', 'unclassified', 'unlinked', 'inactive']).optional(),
   q: z.string().trim().max(160).optional()
+});
+const canonicalCreatorWorkParamsSchema = z.object({
+  creatorId: z.coerce.number().int().positive(),
+  postId: z.coerce.number().int().positive()
 });
 const archiveCatalogQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -1334,7 +1410,39 @@ router.get('/cos-gallery/works', (request, response) => {
 
 router.get('/cos-gallery/creators', (request, response) => {
   const query = cosGalleryCreatorsQuerySchema.parse(request.query);
-  response.json(galleryService.getCosGalleryCreators(query.contentRating, query.q));
+  response.json(galleryService.getCosGalleryCreators(query.page, query.limit, query.contentRating, query.q));
+});
+
+router.get('/cos-gallery/creators/:id', (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  const creator = galleryService.getCanonicalCreator(id);
+  if (!creator) {
+    response.status(404).json({ message: 'Creator not found' });
+    return;
+  }
+  response.json({ creator });
+});
+
+router.get('/cos-gallery/creators/:id/works', (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  const query = paginationQuerySchema.merge(mediaTypeQuerySchema).parse(request.query);
+  const payload = galleryService.getCanonicalCreatorWorks(id, query.page, query.limit, query.mediaType);
+  if (!payload) {
+    response.status(404).json({ message: 'Creator not found' });
+    return;
+  }
+  response.json(payload);
+});
+
+router.get('/cos-gallery/creators/:creatorId/works/:postId', (request, response) => {
+  const params = canonicalCreatorWorkParamsSchema.parse(request.params);
+  const query = mediaTypeQuerySchema.parse(request.query);
+  const work = galleryService.getCanonicalCreatorWork(params.creatorId, params.postId, query.mediaType);
+  if (!work) {
+    response.status(404).json({ message: 'Creator work not found' });
+    return;
+  }
+  response.json(work);
 });
 
 router.patch('/cos-gallery/creators/:id/content-rating', requireCapability('canManageLibrary', 'Admin access is required.'), (request, response) => {

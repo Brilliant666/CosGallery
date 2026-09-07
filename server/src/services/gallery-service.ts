@@ -22,9 +22,9 @@ import {
 import { appConfig } from '../config/env.js';
 import {
   appSettingsRepository,
+  canonicalCreatorGalleryRepository,
   collectionConstants,
   collectionRepository,
-  creatorRatingRepository,
   folderRepository,
   folderScanStateRepository,
   imageRepository,
@@ -876,6 +876,117 @@ function buildPaginatedPayload(items: FeedImage[], page: number, limit: number, 
   };
 }
 
+type CosGalleryIdentityItem = {
+  key: string;
+  identityType: 'creator' | 'folder';
+  id: number;
+  slug: string;
+  name: string;
+  canonicalCreatorId: number | null;
+  canonicalName: string | null;
+  rosterStatus: 'active' | 'inactive' | 'unlinked';
+  linkStatus: 'linked' | 'unlinked';
+  preference: 'liked' | 'kept' | null;
+  folderIds: number[];
+  folderNames: string[];
+  folderPath: string;
+  workCount: number;
+  latestWorkAt: number | null;
+  contentRating: 'R15' | 'R18' | null;
+  ratingSourceCount: number;
+  ratingConflict: boolean;
+  aliases: string[];
+  coverImageId: number | null;
+  coverUrl: string | null;
+  coverWidth: number | null;
+  coverHeight: number | null;
+};
+
+function chooseCanonicalCreatorCover<T extends {
+  folderId: number;
+  latestWorkAt: number | null;
+  coverImageId: number | null;
+  coverPriority: number;
+}>(candidates: T[]): T {
+  return [...candidates].sort((left, right) => {
+    const leftMissing = left.coverImageId === null ? 1 : 0;
+    const rightMissing = right.coverImageId === null ? 1 : 0;
+    if (leftMissing !== rightMissing) return leftMissing - rightMissing;
+    if (left.coverPriority !== right.coverPriority) return left.coverPriority - right.coverPriority;
+    if (left.coverPriority < 3) return left.folderId - right.folderId;
+    const latestDifference = (right.latestWorkAt ?? 0) - (left.latestWorkAt ?? 0);
+    return latestDifference || left.folderId - right.folderId;
+  })[0]!;
+}
+
+function buildCosGalleryIdentityItems(): CosGalleryIdentityItem[] {
+  const candidates = canonicalCreatorGalleryRepository.listFolderCandidates();
+  const aliasesByCreator = new Map<number, string[]>();
+  for (const row of canonicalCreatorGalleryRepository.listAliases()) {
+    const aliases = aliasesByCreator.get(row.creatorId) ?? [];
+    if (!aliases.includes(row.alias)) aliases.push(row.alias);
+    aliasesByCreator.set(row.creatorId, aliases);
+  }
+
+  const grouped = new Map<string, typeof candidates>();
+  for (const candidate of candidates) {
+    const key = candidate.canonicalCreatorId === null
+      ? `folder:${candidate.folderId}`
+      : `creator:${candidate.canonicalCreatorId}`;
+    const values = grouped.get(key) ?? [];
+    values.push(candidate);
+    grouped.set(key, values);
+  }
+
+  const derivativeVersion = getDerivativeAssetVersion();
+  return [...grouped.entries()].map(([key, values]) => {
+    const first = values[0]!;
+    const coverSource = chooseCanonicalCreatorCover(values);
+    const cover = coverSource.coverImageId === null
+      ? undefined
+      : imageRepository.getById(coverSource.coverImageId);
+    const canonicalCreatorId = first.canonicalCreatorId;
+    const linked = canonicalCreatorId !== null;
+    return {
+      key,
+      identityType: linked ? 'creator' as const : 'folder' as const,
+      id: linked ? canonicalCreatorId : first.folderId,
+      slug: coverSource.slug,
+      name: linked ? first.canonicalName! : first.folderName,
+      canonicalCreatorId,
+      canonicalName: first.canonicalName,
+      rosterStatus: linked
+        ? (first.creatorIsActive === 1 ? 'active' as const : 'inactive' as const)
+        : 'unlinked' as const,
+      linkStatus: linked ? 'linked' as const : 'unlinked' as const,
+      preference: linked ? first.preference : null,
+      folderIds: values.map(value => value.folderId).sort((left, right) => left - right),
+      folderNames: values.map(value => value.folderName).sort((left, right) => left.localeCompare(right)),
+      folderPath: coverSource.folderPath,
+      workCount: values.reduce((sum, value) => sum + Number(value.workCount), 0),
+      latestWorkAt: values.reduce<number | null>((latest, value) => {
+        const current = value.latestWorkAt === null ? null : Number(value.latestWorkAt);
+        if (current === null) return latest;
+        return latest === null || current > latest ? current : latest;
+      }, null),
+      contentRating: linked ? first.contentRating : null,
+      ratingSourceCount: linked ? Number(first.ratingSourceCount) : 0,
+      ratingConflict: false,
+      aliases: linked ? aliasesByCreator.get(canonicalCreatorId) ?? [] : [],
+      coverImageId: cover?.id ?? null,
+      coverUrl: cover?.thumbnail_path
+        ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, derivativeVersion)
+        : null,
+      coverWidth: cover?.width ?? null,
+      coverHeight: cover?.height ?? null
+    };
+  }).sort((left, right) =>
+    (right.latestWorkAt ?? 0) - (left.latestWorkAt ?? 0)
+    || left.name.localeCompare(right.name)
+    || left.key.localeCompare(right.key)
+  );
+}
+
 function buildTrashPaginatedPayload(items: TrashImage[], page: number, limit: number, total: number) {
   return {
     items,
@@ -1301,51 +1412,92 @@ function listFallbackAvatarStoryItems(
 }
 
 export const galleryService = {
-  getCosGalleryCreators(contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive', query?: string) {
+  getCosGalleryCreators(
+    page = 1,
+    limit = 50,
+    contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive',
+    query?: string
+  ) {
     if (!storageService.getState().libraryAvailable) {
-      return { items: [], total: 0 };
+      return {
+        items: [], page, limit, total: 0, hasMore: false,
+        summary: { all: 0, R15: 0, R18: 0, unclassified: 0, unlinked: 0, inactive: 0 }
+      };
     }
 
     const normalizedQuery = query?.trim().toLocaleLowerCase() ?? '';
-    const derivativeVersion = getDerivativeAssetVersion();
-    const items = creatorRatingRepository
-      .listCreators()
-      .filter((creator) => {
-        if (contentRating === 'inactive') return creator.rosterStatus === 'inactive' && (!normalizedQuery || (creator.canonicalName ?? creator.name).toLocaleLowerCase().includes(normalizedQuery));
+    const allItems = buildCosGalleryIdentityItems();
+    const summary = {
+      all: allItems.filter(item => item.rosterStatus !== 'inactive').length,
+      R15: allItems.filter(item => item.rosterStatus !== 'inactive' && item.contentRating === 'R15').length,
+      R18: allItems.filter(item => item.rosterStatus !== 'inactive' && item.contentRating === 'R18').length,
+      unclassified: allItems.filter(item => item.rosterStatus !== 'inactive' && item.linkStatus === 'linked' && item.contentRating === null).length,
+      unlinked: allItems.filter(item => item.rosterStatus !== 'inactive' && item.linkStatus === 'unlinked').length,
+      inactive: allItems.filter(item => item.rosterStatus === 'inactive').length
+    };
+    const filtered = allItems.filter((creator) => {
+      if (contentRating === 'inactive') {
+        if (creator.rosterStatus !== 'inactive') return false;
+      } else {
         if (creator.rosterStatus === 'inactive') return false;
         if (contentRating === 'unlinked' && creator.linkStatus !== 'unlinked') return false;
         if (contentRating === 'unclassified' && (creator.linkStatus !== 'linked' || creator.contentRating !== null)) return false;
         if ((contentRating === 'R15' || contentRating === 'R18') && creator.contentRating !== contentRating) return false;
-        return !normalizedQuery || (creator.canonicalName ?? creator.name).toLocaleLowerCase().includes(normalizedQuery);
-      })
-      .map((creator) => ({
-        id: creator.id,
-        slug: creator.slug,
-        name: creator.canonicalName ?? creator.name,
-        canonicalCreatorId: creator.canonicalCreatorId,
-        canonicalName: creator.canonicalName,
-        rosterStatus: creator.rosterStatus,
-        linkStatus: creator.linkStatus,
-        folderPath: creator.folderPath,
-        workCount: Number(creator.workCount),
-        latestWorkAt: creator.latestWorkAt === null ? null : Number(creator.latestWorkAt),
-        contentRating: creator.contentRating,
-        ratingSourceCount: Number(creator.ratingSourceCount),
-        ratingConflict: Boolean(creator.ratingConflict),
-        coverImageId: creator.coverImageId,
-        coverUrl: creator.coverThumbnailPath
-          ? toPublicMediaUrl('/thumbnails', creator.coverThumbnailPath, derivativeVersion)
-          : null,
-        coverWidth: creator.coverWidth,
-        coverHeight: creator.coverHeight
-      }));
-
-    return { items, total: items.length };
+      }
+      if (!normalizedQuery) return true;
+      return [creator.name, creator.canonicalName, ...creator.aliases, ...creator.folderNames]
+        .some(value => value?.toLocaleLowerCase().includes(normalizedQuery));
+    });
+    const offset = (page - 1) * limit;
+    return {
+      items: filtered.slice(offset, offset + limit),
+      page,
+      limit,
+      total: filtered.length,
+      hasMore: offset + limit < filtered.length,
+      summary
+    };
   },
 
   updateCreatorContentRating(id: number, contentRating: 'R15' | 'R18' | null) {
+    // This legacy route has always received a physical Folder ID. Keep that
+    // contract intact; canonical-creator APIs use their own explicit routes.
     const canonical = new ManagedCreatorService().updateFolderRating(id, { contentRating });
-    return this.getCosGalleryCreators(canonical.isActive ? undefined : 'inactive').items.find(creator => creator.id === id) ?? null;
+    return buildCosGalleryIdentityItems().find(creator =>
+      creator.identityType === 'creator' && creator.id === canonical.id
+    ) ?? null;
+  },
+
+  getCanonicalCreator(id: number) {
+    if (!storageService.getState().libraryAvailable) return null;
+    return buildCosGalleryIdentityItems().find(item => item.identityType === 'creator' && item.id === id) ?? null;
+  },
+
+  getCanonicalCreatorWorks(
+    id: number,
+    page: number,
+    limit: number,
+    mediaType?: MediaType
+  ) {
+    const creator = this.getCanonicalCreator(id);
+    if (!creator) return null;
+    const total = canonicalCreatorGalleryRepository.countVisibleWorks(id, mediaType);
+    const items = canonicalCreatorGalleryRepository.listVisibleWorks(
+      id,
+      page,
+      limit,
+      getDefaultFolderImageOrder(),
+      mediaType
+    );
+    return {
+      creator,
+      ...buildPaginatedPayload(mapFeedItems(items), page, limit, total)
+    };
+  },
+
+  getCanonicalCreatorWork(id: number, postId: number, mediaType?: MediaType) {
+    if (!this.getCanonicalCreator(id) || !canonicalCreatorGalleryRepository.ownsVisiblePost(id, postId)) return null;
+    return this.getImageDetail(postId, mediaType);
   },
 
   getCosGalleryWorks(

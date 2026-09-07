@@ -14,7 +14,7 @@ describe.sequential('managed creator admin API', () => {
   beforeAll(async()=>{
     tempRoot=await fs.mkdtemp(path.join(os.tmpdir(),'roster-routes-'));
     vi.stubEnv('NODE_ENV','test');vi.stubEnv('COS_GALLERY_MODE','1');vi.stubEnv('DATA_ROOT',tempRoot);vi.stubEnv('GALLERY_ROOT',path.join(tempRoot,'gallery'));vi.stubEnv('DB_DIR',path.join(tempRoot,'db'));
-    await fs.mkdir(path.join(tempRoot,'gallery'));vi.resetModules();
+    await fs.mkdir(path.join(tempRoot,'gallery','Unlinked'),{recursive:true});vi.resetModules();
     db=(await import('../src/db/database.js')).databaseManager;
     app=(await import('../src/app.js')).createApp();
     folderId=Number(db.connection.prepare(`INSERT INTO folders(slug,name,folder_path) VALUES('unlinked','Unlinked','Unlinked')`).run().lastInsertRowid);
@@ -48,6 +48,45 @@ describe.sequential('managed creator admin API', () => {
     expect((await requestTestApp(app,'GET','/api/cos-gallery/creators?contentRating=inactive')).body.total).toBe(1);
     expect((await requestTestApp(app,'GET','/api/folders/unlinked')).status).toBe(200);
     expect(db.connection.prepare('SELECT count(*) AS count FROM creator_rating_sources').get()).toEqual({count:0});
+  });
+  it('validates and serializes preferred destination changes without scanning or creating jobs',async()=>{
+    const beforeScans=db.connection.prepare('SELECT COUNT(*) AS count FROM scan_runs').get();
+    const beforeJobs=db.connection.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get();
+    const preferenceUrl=base+`/creators/${id}/ingest-destination`;
+    let response=await requestTestApp(app,'GET',preferenceUrl);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      creatorId:id,
+      mode:'single-linked',
+      preferredLocalCreatorFolderId:null,
+      resolvedGalleryFolderId:folderId,
+      candidates:[expect.objectContaining({galleryFolderId:folderId,valid:true})]
+    });
+    const bridgeId=response.body.candidates[0].localCreatorFolderId as number;
+    expect((await requestTestApp(app,'PUT',preferenceUrl,headers,{localCreatorFolderId:bridgeId,extra:true})).status).toBe(400);
+
+    const {localIngestOperationCoordinator}=await import('../src/services/local-ingest-operation-coordinator.js');
+    let release!:()=>void;
+    const held=localIngestOperationCoordinator.run(
+      {state:'running',kind:'batch',message:'held for route test'},
+      ()=>new Promise<void>(resolve=>{release=resolve;})
+    );
+    await vi.waitFor(()=>expect(localIngestOperationCoordinator.snapshot().state).toBe('running'));
+    response=await requestTestApp(app,'PUT',preferenceUrl,headers,{localCreatorFolderId:bridgeId});
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('LOCAL_INGEST_OPERATION_ACTIVE');
+    response=await requestTestApp(app,'POST',base+`/local-creator-folders/${folderId}/unlink`,headers,{confirm:true});
+    expect(response.status).toBe(409);
+    release();await held;
+
+    response=await requestTestApp(app,'PUT',preferenceUrl,headers,{localCreatorFolderId:bridgeId});
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({mode:'explicit',preferredLocalCreatorFolderId:bridgeId});
+    response=await requestTestApp(app,'PUT',preferenceUrl,headers,{localCreatorFolderId:null});
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({mode:'single-linked',preferredLocalCreatorFolderId:null});
+    expect(db.connection.prepare('SELECT COUNT(*) AS count FROM scan_runs').get()).toEqual(beforeScans);
+    expect(db.connection.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual(beforeJobs);
   });
   it('requires administrator capability even for alias and relationship mutations',async()=>{
     const {authService}=await import('../src/services/auth-service.js');

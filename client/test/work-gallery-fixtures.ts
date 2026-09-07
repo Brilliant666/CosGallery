@@ -52,6 +52,9 @@ export function galleryTestRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: '/', name: 'home', component: blank },
+      { path: '/library', name: 'library', component: blank },
+      { path: '/creators/:creatorId', name: 'canonical-creator', component: blank },
+      { path: '/creators/:creatorId/works/:postId', name: 'canonical-work-gallery', component: blank },
       { path: '/f/:slug', name: 'folder', component: blank },
       { path: '/f/:slug/works/:postId', name: 'work-gallery', component: blank },
       { path: '/post/:id', name: 'image', component: blank },

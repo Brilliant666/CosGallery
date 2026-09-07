@@ -106,6 +106,28 @@ export interface CosGalleryCreatorRecord {
   coverHeight: number | null;
 }
 
+export interface CosGalleryFolderCandidateRecord {
+  folderId: number;
+  slug: string;
+  folderName: string;
+  folderPath: string;
+  canonicalCreatorId: number | null;
+  canonicalName: string | null;
+  creatorIsActive: number | null;
+  contentRating: ContentRating | null;
+  preference: 'liked' | 'kept' | null;
+  ratingSourceCount: number;
+  workCount: number;
+  latestWorkAt: number | null;
+  coverImageId: number | null;
+  coverPriority: number;
+}
+
+export interface CosGalleryCreatorAliasRecord {
+  creatorId: number;
+  alias: string;
+}
+
 export interface ImageRecord {
   id: number;
   folder_id: number;

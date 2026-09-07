@@ -1,5 +1,5 @@
 import { requestJson } from './http';
-import type { ArchiveCatalogCreatorDetail } from '../types/api';
+import type { ArchiveCatalogCreatorDetail, LocalIngestDestinationPreference } from '../types/api';
 
 const root = '/api/admin/archive-catalog';
 export type ManagedCreatorInput = {
@@ -15,3 +15,5 @@ export const deleteManagedAlias=(id:number,aliasId:string)=>mutate<ArchiveCatalo
 export const setManagedCreatorActive=(id:number,active:boolean)=>mutate<ArchiveCatalogCreatorDetail>(`/creators/${id}/${active?'restore':'deactivate'}`,'POST',{confirm:true});
 export const linkManagedFolder=(folderId:number,creatorId:number)=>mutate<ArchiveCatalogCreatorDetail>(`/local-creator-folders/${folderId}/link`,'POST',{creatorId});
 export const unlinkManagedFolder=(folderId:number)=>mutate<{folderId:number;creatorId:null}>(`/local-creator-folders/${folderId}/unlink`,'POST',{confirm:true});
+export const fetchIngestDestination=(creatorId:number)=>requestJson<LocalIngestDestinationPreference>(`${root}/creators/${creatorId}/ingest-destination`);
+export const setIngestDestination=(creatorId:number,localCreatorFolderId:number|null)=>mutate<LocalIngestDestinationPreference>(`/creators/${creatorId}/ingest-destination`,'PUT',{localCreatorFolderId});

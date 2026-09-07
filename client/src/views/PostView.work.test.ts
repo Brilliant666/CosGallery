@@ -23,4 +23,27 @@ describe('PostView work deep links', () => {
     await wrapper.setProps({ modal: true });
     expect(wrapper.find('a').exists()).toBe(false);
   });
+
+  it('reloads canonical deep links through the ownership-scoped endpoint and returns to the exact work URL', async () => {
+    const store = useViewerStore();
+    const load = vi.spyOn(store, 'loadImage').mockImplementation(async () => { store.image = workDetail(); });
+    const router = galleryTestRouter();
+    const returnTo = '/creators/166/works/123?returnTo=/creators/166?page=2';
+    await router.push({
+      name: 'image',
+      params: { id: '123' },
+      query: { media: '704', context: 'work', creator: '166', returnTo }
+    });
+    const wrapper = mount(PostView, {
+      props: { id: '123' },
+      global: { plugins: [router], stubs: { PostViewer: true, ConfirmDialog: true } }
+    });
+    await flushPromises();
+
+    expect(load).toHaveBeenCalledExactlyOnceWith(123, undefined, 166);
+    expect(wrapper.get('a').attributes('href')).toBe(returnTo);
+    await router.replace({ query: { ...router.currentRoute.value.query, media: '705' } });
+    await flushPromises();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
 });
