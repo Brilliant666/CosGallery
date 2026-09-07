@@ -80,6 +80,21 @@ describe('CanonicalCreatorView', () => {
     fetchWorks.mockReset().mockImplementation(async (_id, page) => payload(page));
   });
 
+  it('reloads a genuinely invalidated active creator and rejects the previous response', async () => {
+    let resolveOld!: (value: CanonicalCreatorWorksPayload) => void;
+    fetchWorks.mockImplementationOnce(() => new Promise(done => { resolveOld = done; }));
+    const router = galleryTestRouter();
+    await router.push('/library/166');
+    const wrapper = mount(CanonicalCreatorView, { props: { creatorId: '166' }, global: { plugins: [router] } });
+    await flushPromises();
+    useCreatorReadingStore().invalidate();
+    await flushPromises();
+    expect(fetchWorks).toHaveBeenCalledTimes(2);
+    resolveOld({ ...payload(1), creator: { ...creator(), name: 'Stale creator' } });
+    await flushPromises();
+    expect(wrapper.get('h1').text()).toBe('lunana');
+  });
+
   it('renders works from every linked Folder and preserves canonical navigation context', async () => {
     const router = galleryTestRouter();
     await router.push('/library/166?returnTo=/library%3Fq%3Dlunananya%26page%3D2');

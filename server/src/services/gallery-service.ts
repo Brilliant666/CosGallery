@@ -693,14 +693,17 @@ function mapTrashImage(image: IndexedTrashImage, derivativeVersion = getDerivati
   };
 }
 
-function buildFolderSummary(folder: FolderSummaryRecord, preloadedCanonicalCreatorId?: number | null) {
+function buildFolderSummary(
+  folder: FolderSummaryRecord,
+  preloadedCanonicalCreatorId?: number | null,
+  derivativeVersion = getDerivativeAssetVersion()
+) {
   const workNavigationMode = appConfig.cosGalleryMode && folder.role === 'normal' ? 'work-gallery' : 'post';
   const canonicalCreatorId = preloadedCanonicalCreatorId !== undefined
     ? preloadedCanonicalCreatorId
     : appConfig.cosGalleryMode
       ? canonicalCreatorGalleryRepository.getUniqueCreatorIdForFolder(folder.id)
       : null;
-  const derivativeVersion = getDerivativeAssetVersion();
   const hasPreloadedAvatarSummary =
     Object.hasOwn(folder, 'summary_avatar_image_id') || Object.hasOwn(folder, 'summary_avatar_thumbnail_path');
 
@@ -1720,7 +1723,8 @@ export const galleryService = {
     const creatorIds = new Map(appConfig.cosGalleryMode
       ? canonicalCreatorGalleryRepository.listUniqueFolderCreatorIds().map(row => [row.folderId, row.creatorId])
       : []);
-    return folderRepository.getAllSummaries().map(folder => buildFolderSummary(folder, creatorIds.get(folder.id) ?? null));
+    const derivativeVersion = getDerivativeAssetVersion();
+    return folderRepository.getAllSummaries().map(folder => buildFolderSummary(folder, creatorIds.get(folder.id) ?? null, derivativeVersion));
   },
 
   listPlaces() {

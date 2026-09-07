@@ -204,7 +204,7 @@ onBeforeRouteLeave(() => {
     if (keys.length > 10) delete reading.libraryPages[keys[0]!];
   }
 });
-watch(() => route.fullPath, () => {
+watch(() => [route.fullPath, reading.generation] as const, () => {
   if (route.name !== 'library') return;
   query.value = typeof route.query.q === 'string' ? route.query.q : '';
   rating.value = typeof route.query.rating === 'string' && ratingOptions.some(option => option.value === route.query.rating) ? route.query.rating as RatingFilter : 'all';

@@ -158,7 +158,12 @@ async function loadWork() {
 
 watch(() => [props.slug, props.creatorId, props.postId] as const, loadWork, { immediate: true });
 watch(() => [authStore.authenticated, authStore.role, appStore.stats?.indexedPosts, appStore.stats?.scan.lastCompletedScan?.id, appStore.isLibraryUnavailable] as const,
-  () => { void loadWork(); });
+  (values, previous) => {
+    if (values.every((value, index) => value === previous[index])) return;
+    if (previous[2] === undefined && values[0] === previous[0] && values[1] === previous[1]
+      && values[4] === previous[4]) return;
+    void loadWork();
+  });
 onBeforeUnmount(() => { loadToken += 1; window.removeEventListener('keydown', onEscape); });
 </script>
 

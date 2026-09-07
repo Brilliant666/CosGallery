@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { useCreatorReadingStore } from '../stores/creator-reading';
 import CosGalleryHomeView from './CosGalleryHomeView.vue';
 import { fetchCosGalleryCreators } from '../api/gallery';
 
@@ -44,6 +45,22 @@ describe('managed gallery classifications', () => {
     expect(wrapper.text()).toContain('Canonical A');
     wrapper.unmount();
   });
+  it('reloads an active library after real invalidation without accepting an old response', async () => {
+    type Payload = Awaited<ReturnType<typeof fetchCosGalleryCreators>>;
+    const empty: Payload = {total:0,page:1,limit:50,hasMore:false,summary:{all:0,R15:0,R18:0,unclassified:0,unlinked:0,inactive:0},items:[]};
+    let resolveOld!: (value: Payload) => void;
+    vi.mocked(fetchCosGalleryCreators).mockImplementationOnce(() => new Promise(done => { resolveOld = done; })).mockResolvedValue(empty);
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+    useCreatorReadingStore().invalidate();
+    await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenCalledTimes(2);
+    resolveOld({ ...empty, total: 99 });
+    await flushPromises();
+    expect(wrapper.text()).toContain('0 位博主');
+    wrapper.unmount();
+  });
+
   it('requests exact rating and lifecycle filters rather than inferring from names', async () => {
     vi.mocked(fetchCosGalleryCreators).mockResolvedValue({total:0,page:1,limit:50,hasMore:false,summary:{all:0,R15:0,R18:0,unclassified:0,unlinked:0,inactive:0},items:[]});
     const wrapper=mount(CosGalleryHomeView,{global:{stubs:{RouterLink:true}}});

@@ -19,6 +19,7 @@ import { useAuthStore } from './auth';
 
 interface AppState {
   stats: AppStatus | null;
+  statsGeneration: number;
   loadingStats: boolean;
   error: string | null;
   theme: 'light' | 'dark';
@@ -84,6 +85,7 @@ function resolveSavedDefaultLocale(locale: string | null | undefined): Supported
 export const useAppStore = defineStore('app', {
   state: (): AppState => ({
     stats: null,
+    statsGeneration: 0,
     loadingStats: false,
     error: null,
     theme: 'light',
@@ -357,6 +359,7 @@ export const useAppStore = defineStore('app', {
     },
 
     resetProtectedState() {
+      this.statsGeneration += 1;
       this.stopStatsPolling();
       this.stats = null;
       this.loadingStats = false;
@@ -401,33 +404,34 @@ export const useAppStore = defineStore('app', {
     },
 
     async fetchStats(options: { background?: boolean } = {}) {
+      // Stats calls also follow mutations: do not share an older read with a
+      // newer refresh. Only the latest request in this access context may win.
+      this.statsGeneration += 1;
+      const admin = this.shouldUseAdminScanProgress();
+      const contextKey = () => `${this.statsGeneration}:${useAuthStore().role}:${useAuthStore().authenticated}:${this.shouldUseAdminScanProgress()}`;
+      const key = contextKey();
+      const current = () => contextKey() === key;
       if (!options.background) {
         this.loadingStats = true;
         this.error = null;
       }
-
       try {
-        this.stats = this.shouldUseAdminScanProgress()
-          ? await fetchAdminStats()
-          : await fetchStatus();
+        const stats = admin ? await fetchAdminStats() : await fetchStatus();
+        if (!current()) return;
+        this.stats = stats;
         this.syncLocaleFromStats(this.stats);
         this.statsPollFailures = 0;
-
-        if (options.background && this.error) {
-          this.error = null;
-        }
-
+        if (options.background && this.error) this.error = null;
         if (this.stats.scan.isScanning) {
           this.startStatsPolling();
         } else {
           this.stopStatsPolling();
         }
       } catch (error) {
+        if (!current()) return;
         const message = error instanceof Error ? error.message : 'Unable to load app stats';
-
         if (options.background) {
           this.statsPollFailures += 1;
-
           if (this.statsPollFailures >= 3) {
             this.stopStatsPolling();
             this.markScanStatusUnavailable();
@@ -437,9 +441,7 @@ export const useAppStore = defineStore('app', {
           this.error = message;
         }
       } finally {
-        if (!options.background) {
-          this.loadingStats = false;
-        }
+        if (current()) this.loadingStats = false;
       }
     },
 

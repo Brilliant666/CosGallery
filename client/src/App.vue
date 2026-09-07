@@ -196,9 +196,12 @@ watch(
 );
 
 watch(
-  () => appStore.stats?.folders ?? 0,
-  async (folderCount) => {
-    if (appStore.isLibraryUnavailable || folderCount === 0 || folderCount === foldersStore.items.length) {
+  () => [appStore.stats?.folders, appStore.stats?.scan.lastCompletedScan?.id, appStore.isLibraryUnavailable] as const,
+  async (values, previous) => {
+    // Initial stats establish the baseline; the concurrently running list is
+    // already fetching that baseline. Only subsequent business changes refresh.
+    if (!previous || previous[0] === undefined || appStore.isLibraryUnavailable
+      || values.every((value, index) => value === previous[index])) {
       return;
     }
 
@@ -207,13 +210,14 @@ watch(
 );
 
 watch(() => [appStore.stats?.indexedPosts, appStore.stats?.scan.lastCompletedScan?.id, authStore.role, authStore.authenticated] as const, (values, previous) => {
-  if (previous && values.every((value, index) => value === previous[index])) return;
+  if (!previous || values.every((value, index) => value === previous[index])) return;
+  if (previous[0] === undefined && values[2] === previous[2] && values[3] === previous[3]) return;
   useCreatorReadingStore().invalidate();
 });
 
 watch(
-  () => [authStore.accessGranted, authStore.likesMode] as const,
-  async ([accessGranted, likesMode], previous) => {
+  () => [authStore.accessGranted, authStore.likesMode, authStore.role, authStore.authenticated, authStore.canAccessSettings] as const,
+  async ([accessGranted, likesMode, role, authenticated, adminStats], previous) => {
     const hadAccess = previous?.[0] ?? false;
     const previousLikesMode = previous?.[1] ?? null;
 
@@ -222,7 +226,9 @@ watch(
       return;
     }
 
-    if (!hadAccess || !appStore.stats || likesMode !== previousLikesMode) {
+    const identityChanged = hadAccess && (role !== previous?.[2] || authenticated !== previous?.[3] || adminStats !== previous?.[4]);
+    if (identityChanged) resetProtectedState();
+    if (!hadAccess || !appStore.stats || likesMode !== previousLikesMode || identityChanged) {
       await loadProtectedState(Boolean(hadAccess));
     }
   },
