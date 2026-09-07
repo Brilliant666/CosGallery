@@ -3,7 +3,10 @@
     <RouterLink v-if="!modal && returnToWork" class="mb-4 inline-flex font-semibold text-text" :to="returnToWork">
       {{ t('workGallery.backToGallery') }}
     </RouterLink>
-    <ErrorState v-if="viewerStore.error" title="Could not load post" :message="viewerStore.error" />
+    <div v-if="viewError" role="alert">
+      <ErrorState title="Could not load post" :message="viewError" />
+      <button v-if="modal" type="button" class="btn" @click="emit('close')">{{ t('workGallery.backToGallery') }}</button>
+    </div>
     <PostViewer
       v-else-if="activeImage"
       :image="activeImage"
@@ -56,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 
@@ -69,15 +72,19 @@ import { useLikesStore } from '../stores/likes';
 import { useFoldersStore } from '../stores/folders';
 import { useMomentsStore } from '../stores/moments';
 import { useViewerStore } from '../stores/viewer';
-import { canonicalWorkGalleryRoute, parsePositiveId, workGalleryRoute } from '../utils/work-gallery';
+import type { ImageDetail } from '../types/api';
+import { canonicalWorkGalleryRoute, libraryReadingQuery, orderedMediaItems, parsePositiveId, resolveMediaSelection, workGalleryRoute, workMediaRoute } from '../utils/work-gallery';
 
 const props = defineProps<{
   id: string;
   modal?: boolean;
+  authorizedWork?: ImageDetail;
 }>();
 
 const emit = defineEmits<{
   close: [];
+  updatedWork: [work: ImageDetail];
+  removedWork: [];
 }>();
 
 const appStore = useAppStore();
@@ -96,10 +103,16 @@ const deleteError = ref<string | null>(null);
 const imageId = computed(() => Number(props.id));
 const activeMediaType = computed(() => (route.query.tab === 'reels' ? 'video' : undefined));
 const canonicalCreatorId = computed(() => {
-  const value = Array.isArray(route.query.creator) ? route.query.creator[0] : route.query.creator;
+  const value = route.name === 'canonical-work-gallery' ? route.params.creatorId : route.query.creator;
   return parsePositiveId(value) ?? undefined;
 });
 const activeImage = computed(() => (viewerStore.image?.id === imageId.value ? viewerStore.image : null));
+const identityError = computed(() => (route.name === 'canonical-work-gallery' || route.query.creator !== undefined)
+  && canonicalCreatorId.value === undefined ? 'Invalid canonical creator identity' : null);
+const viewError = computed(() => identityError.value || viewerStore.error ||
+  ((route.name === 'canonical-work-gallery' || (route.query.context === 'work' && route.query.creator !== undefined)) && activeImage.value
+    && resolveMediaSelection(orderedMediaItems(activeImage.value.mediaItems), route.query.media).invalid
+    ? 'Requested media does not exist or does not belong to this work' : null));
 const returnToWork = computed(() => {
   if (route.query.context !== 'work' || !activeImage.value) return null;
   const creatorValue = Array.isArray(route.query.creator) ? route.query.creator[0] : route.query.creator;
@@ -125,12 +138,38 @@ const deleteDialogMessage = computed(() =>
 const deleteDialogConfirmLabel = computed(() => (deleteOriginalFromDisk.value ? 'Permanently Delete' : 'Delete'));
 
 async function loadImage() {
+  if (identityError.value) { viewerStore.reset(); return; }
+  if (route.name === 'canonical-work-gallery' && props.authorizedWork?.id === imageId.value) {
+    viewerStore.adoptAuthorizedWork(props.authorizedWork);
+    return;
+  }
   if (Number.isFinite(imageId.value)) {
     await viewerStore.loadImage(imageId.value, activeMediaType.value, canonicalCreatorId.value);
   }
 }
 
-watch([imageId, activeMediaType, canonicalCreatorId], loadImage, { immediate: true });
+watch([imageId, activeMediaType, canonicalCreatorId, () => props.authorizedWork, identityError], loadImage, { immediate: true });
+watch(() => viewerStore.image, (image) => {
+  if (props.authorizedWork && image?.id === props.authorizedWork.id && image !== props.authorizedWork) emit('updatedWork', image);
+});
+// Old canonical bookmarks redirect only after the ownership-scoped request and media validation.
+watch([activeImage, viewError, () => viewerStore.loading, () => route.fullPath], async () => {
+  if (route.name !== 'image' || route.query.context !== 'work' || !canonicalCreatorId.value || !activeImage.value || viewError.value || viewerStore.loading) return;
+  const mediaId = parsePositiveId(route.query.media);
+  const returnTo = typeof route.query.returnTo === 'string' ? route.query.returnTo : undefined;
+  const destination = mediaId === null
+    ? canonicalWorkGalleryRoute(canonicalCreatorId.value, imageId.value, returnTo)
+    : workMediaRoute(imageId.value, mediaId, canonicalCreatorId.value, returnTo);
+  const encoded = new URLSearchParams();
+  for (const key of ['q', 'rating', 'libraryPage', 'loaded']) {
+    const value = route.query[key];
+    if (typeof value === 'string') encoded.set(key, value);
+  }
+  await router.replace({ ...destination, query: {
+    ...destination.query, ...libraryReadingQuery(`/library/reader?${encoded}`)
+  } });
+}, { immediate: true });
+onBeforeUnmount(() => { viewerStore.reset(); });
 
 function openDeleteDialog() {
   deleteOriginalFromDisk.value = false;
@@ -158,6 +197,7 @@ async function handleDelete() {
     const removedFolder = foldersStore.removeImage(deleted.id, deleted.folderSlug, currentImage.mediaType);
     momentsStore.removeImage(deleted.id);
     appStore.removeIndexedImage(removedFolder ? 1 : 0, currentImage.mediaType);
+    emit('removedWork');
 
     if (props.modal) {
       emit('close');

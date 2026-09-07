@@ -205,6 +205,11 @@ export const router = createRouter({
     }
   ],
   scrollBehavior(to, from, savedPosition) {
+    if (to.name === 'canonical-work-gallery' && from.name === to.name
+      && to.params.creatorId === from.params.creatorId && to.params.postId === from.params.postId) {
+      // The same grid stays mounted while its query-driven viewer opens/switches/closes.
+      return false;
+    }
     if (to.name === 'canonical-creator' && from.name === to.name && to.params.creatorId === from.params.creatorId) {
       // Infinite loading records its range in the URL without jumping to the top.
       return false;

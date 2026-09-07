@@ -95,6 +95,7 @@ const modalBackgroundRoute = computed<RouteLocationNormalizedLoaded | null>(() =
 const showImageModal = computed(
   () => route.name === 'image' && modalBackgroundRoute.value !== null && modalBackgroundRoute.value.fullPath !== route.fullPath
 );
+const modalVisible = computed(() => showImageModal.value || (route.name === 'canonical-work-gallery' && route.query.media !== undefined));
 const isPublicShareRoute = computed(() => routeAllowsPublicShareAccess(route));
 const displayRoute = computed<RouteLocationNormalizedLoaded | undefined>(() =>
   showImageModal.value ? modalBackgroundRoute.value ?? undefined : route
@@ -259,7 +260,7 @@ watch(
 );
 
 watch(
-  showImageModal,
+  modalVisible,
   async (isVisible, wasVisible) => {
     if (isVisible) {
       lockModalScroll();
@@ -271,6 +272,7 @@ watch(
     }
 
     await nextTick();
+    if (modalVisible.value) return;
     unlockModalScroll();
 
     requestAnimationFrame(() => {
