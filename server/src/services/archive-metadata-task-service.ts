@@ -29,6 +29,7 @@ export type ArchiveMetadataTask = {
   creatorName: string;
   canonicalCreatorId: number;
   aliases: string[];
+  legacyIdentity?: { source: 'hentaiclub'; sourceCreatorId: string } | null;
   explicitSelection: boolean;
   sourceState: ArchiveSourceState;
   preference: 'liked' | 'kept' | null;
@@ -108,6 +109,14 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function legacyRosterSeedKey(value: string): string {
+  // Match CostuanArchiveManager's old normalizeCreatorName seed-ID encoding,
+  // not canonical identity/name matching. Never normalize the returned seed ID.
+  return value.normalize('NFKC').replace(/[\u200b-\u200d\ufeff]/g, '')
+    .replace(/\s+/g, ' ').trim().toLocaleLowerCase()
+    .replace(/[\s_.·・‧\-—–()（）\[\]【】]/g, '');
+}
+
 function mapTask(row: TaskRow): Omit<ArchiveMetadataTask, 'canonicalCreatorId' | 'aliases' | 'explicitSelection' | 'sourceState'> {
   return {
     id: row.id,
@@ -169,8 +178,24 @@ export class ArchiveMetadataTaskService {
       .all(creatorId) as Array<{alias:string}>).map(row => row.alias);
   }
 
-  private enrich(row: TaskRow): ArchiveMetadataTask {
+  private legacyIdentityMap(): Map<number, string> {
+    // Include inactive creators and creators without metadata tasks: a paged
+    // task result cannot prove global ownership of the old roster record ID.
+    const rows = this.database.prepare(`SELECT id, seed_source_creator_id AS sourceCreatorId
+      FROM archive_catalog_creators WHERE seed_source='hentaiclub'`).all() as Array<{id:number;sourceCreatorId:string}>;
+    const owners = new Map<string, number | null>();
+    for (const row of rows) {
+      const key = legacyRosterSeedKey(row.sourceCreatorId);
+      if (key) owners.set(key, owners.has(key) ? null : row.id);
+    }
+    return new Map(rows.filter(row => owners.get(legacyRosterSeedKey(row.sourceCreatorId)) === row.id)
+      .map(row => [row.id, row.sourceCreatorId]));
+  }
+
+  private enrich(row: TaskRow, identities = this.legacyIdentityMap()): ArchiveMetadataTask {
+    const seedId = identities.get(row.creator_id);
     return {...mapTask(row),canonicalCreatorId:row.creator_id, aliases:this.aliases(row.creator_id),
+      legacyIdentity:seedId === undefined ? null : {source:'hentaiclub',sourceCreatorId:seedId},
       explicitSelection:!!this.context(row.id).explicitSelection,sourceState:this.sourceState(row.creator_id)};
   }
 
@@ -365,9 +390,10 @@ export class ArchiveMetadataTaskService {
        FROM archive_catalog_metadata_tasks tasks
        WHERE ${where}`
     ).get(...parameters) as { count: number };
+    const identities = this.legacyIdentityMap();
     return {
       summary: this.getSummary(source),
-      items: items.map(row => this.enrich(row)),
+      items: items.map(row => this.enrich(row, identities)),
       total: total.count, page, limit
     };
   }

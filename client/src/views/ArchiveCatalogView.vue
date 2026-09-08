@@ -117,20 +117,34 @@
         </div>
       </div>
 
-      <div v-if="downloadTasks?.items.length" class="mt-4 overflow-x-auto rounded-xl border border-border">
-        <table class="w-full min-w-[52rem] border-collapse text-left text-sm">
-          <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主</th><th class="p-3">作品</th><th class="p-3">网盘目录</th><th class="p-3">本地目标</th><th class="p-3">状态</th></tr></thead>
-          <tbody>
-            <tr v-for="task in downloadTasks.items.slice(0, 20)" :key="task.id" class="border-t border-border">
-              <td class="p-3 font-semibold">{{ task.creatorName }}</td>
-              <td class="p-3"><span class="font-semibold">{{ task.sourceOrderLabel ?? task.targetFilename }}</span><small class="mt-0.5 block text-muted">{{ task.title }}</small></td>
-              <td class="p-3 font-mono text-xs">{{ task.destinationPath }}/{{ task.sourceFolderName }}</td>
-              <td class="p-3 font-mono text-xs">{{ task.targetRelativeDirectory }}\{{ task.targetFilename }}</td>
-              <td class="p-3">{{ downloadStatusLabel(task.status) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-if="downloadTasks.total > 20" class="m-0 border-t border-border p-3 text-center text-xs text-muted">管理页预览前 20 条；插件按完整队列领取。</p>
+      <div v-if="downloadTasks?.items.length" data-test="stage2-creators" class="mt-4 grid gap-2">
+        <p data-test="stage2-preview-scope" class="m-0 text-xs text-muted">
+          当前预览 {{ downloadTasks.items.length }} / {{ downloadTasks.total }} 条，按博主折叠；下方数量仅统计当前预览，顶部为全队列总计。插件仍按完整队列领取。
+        </p>
+        <article v-for="group in downloadCreatorGroups" :key="group.creatorId" :data-creator-id="group.creatorId" class="overflow-hidden rounded-xl border border-border bg-bg">
+          <button type="button" data-test="toggle-stage2-creator" class="flex w-full flex-wrap items-center justify-between gap-3 p-3 text-left text-xs" :aria-expanded="expandedDownloadCreatorIds.has(group.creatorId)" :aria-controls="`stage2-creator-${group.creatorId}`" @click="toggleDownloadCreator(group.creatorId)">
+            <span class="min-w-0">
+              <strong class="block text-sm">{{ group.creatorName }} <small class="font-normal text-muted">#{{ group.creatorId }}</small></strong>
+              <small class="mt-1 block text-muted">预览 {{ group.tasks.length }} 条 · {{ expandedDownloadCreatorIds.has(group.creatorId) ? '收起作品' : '展开作品' }}</small>
+            </span>
+            <span class="flex flex-wrap gap-x-4 gap-y-2">
+              <span v-for="count in group.counts" :key="count.status" class="text-muted"><strong class="mr-1 text-text">{{ count.total }}</strong>{{ downloadStatusLabel(count.status) }}</span>
+            </span>
+          </button>
+          <div v-if="expandedDownloadCreatorIds.has(group.creatorId)" :id="`stage2-creator-${group.creatorId}`" class="max-h-[32rem] overflow-auto border-t border-border bg-surface">
+            <table class="w-full min-w-[46rem] border-collapse text-left text-sm">
+              <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">作品</th><th class="p-3">网盘目录</th><th class="p-3">本地目标</th><th class="p-3">状态</th></tr></thead>
+              <tbody>
+                <tr v-for="task in group.tasks" :key="task.id" data-test="stage2-task" class="border-t border-border">
+                  <td class="p-3"><span class="font-semibold">{{ task.sourceOrderLabel ?? task.targetFilename }}</span><small class="mt-0.5 block text-muted">{{ task.title }}</small></td>
+                  <td class="p-3 font-mono text-xs">{{ task.destinationPath }}/{{ task.sourceFolderName }}</td>
+                  <td class="p-3 font-mono text-xs">{{ task.targetRelativeDirectory }}\{{ task.targetFilename }}</td>
+                  <td class="p-3">{{ downloadStatusLabel(task.status) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
       </div>
     </section>
 
@@ -472,6 +486,7 @@ import type {
   ArchiveCatalogPreference,
   ArchiveCatalogState,
   ArchiveCatalogSummary,
+  ArchiveDownloadTask,
   ArchiveDownloadTaskStatus,
   ArchiveDownloadTasksPayload,
   ArchiveMetadataTaskStatus,
@@ -519,6 +534,29 @@ const details = ref<Record<number, ArchiveCatalogCreatorDetail>>({});
 const detailErrors = ref<Record<number, string>>({});
 const inboxRoot = ref('G:\\cos待入库');
 const downloadTasks = ref<ArchiveDownloadTasksPayload | null>(null);
+const expandedDownloadCreatorIds = ref(new Set<number>());
+const downloadCreatorGroups = computed(() => {
+  const groups = new Map<number, { creatorId: number; creatorName: string; tasks: ArchiveDownloadTask[] }>();
+  for (const task of downloadTasks.value?.items ?? []) {
+    let group = groups.get(task.creatorId);
+    if (!group) {
+      group = { creatorId: task.creatorId, creatorName: task.creatorName, tasks: [] };
+      groups.set(task.creatorId, group);
+    }
+    group.tasks.push(task);
+  }
+  const statuses: ArchiveDownloadTaskStatus[] = ['pending', 'claimed', 'downloading', 'staged', 'downloaded', 'ingested', 'failed', 'cancelled'];
+  return [...groups.values()].map((group) => ({
+    ...group,
+    counts: statuses.map((status) => ({ status, total: group.tasks.filter((task) => task.status === status).length })).filter((count) => count.total > 0)
+  }));
+});
+
+function toggleDownloadCreator(creatorId: number) {
+  if (expandedDownloadCreatorIds.value.has(creatorId)) expandedDownloadCreatorIds.value.delete(creatorId);
+  else expandedDownloadCreatorIds.value.add(creatorId);
+}
+
 const planningDownloads = ref(false);
 const stage2Refreshing = ref(false);
 const downloadNotice = ref('');
@@ -694,7 +732,11 @@ function jobSummaryList(job: LocalIngestJob, key: string) {
 }
 
 async function loadLocalIngestVisiblePage() {
-  if (!localIngestCreatorId.value) return;
+  if (!localIngestCreatorId.value) {
+    // Collapsed rows still need live totals; omit creatorId to avoid fetching job details.
+    localIngestDashboard.value = await fetchLocalIngestJobs({ page: 1, limit: localIngestJobLimit });
+    return;
+  }
   let payload = await fetchLocalIngestJobs({
     creatorId: localIngestCreatorId.value,
     status: localIngestJobStatus.value || undefined,
@@ -820,7 +862,7 @@ async function pollStage3Operation() {
     localIngestOperationLastChecked.value = formatClockTime(new Date());
     if (operation.state !== 'idle') {
       lastActiveOperationKind = operation.kind;
-      if (operation.state === 'running' && localIngestCreatorId.value) await loadLocalIngestVisiblePage();
+      if (operation.state === 'running') await loadLocalIngestVisiblePage();
       scheduleStage3Poll();
       return;
     }
@@ -849,7 +891,7 @@ async function refreshStage3State() {
       lastActiveOperationKind = null;
     } else {
       lastActiveOperationKind = operation.kind;
-      if (operation.state === 'running' && localIngestCreatorId.value) await loadLocalIngestVisiblePage();
+      if (operation.state === 'running') await loadLocalIngestVisiblePage();
       scheduleStage3Poll();
     }
   } catch (reason) {
