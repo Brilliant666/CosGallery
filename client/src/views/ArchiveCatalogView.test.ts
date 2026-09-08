@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 enableAutoUnmount(afterEach);
 
 import ArchiveCatalogView from './ArchiveCatalogView.vue';
+import { fetchDownloadCreators, fetchDownloadTaskPage } from '../api/creator-sync';
+vi.mock('../api/creator-sync', () => ({ fetchDownloadCreators: vi.fn(), fetchDownloadTaskPage: vi.fn() }));
 import type { LocalIngestJob } from '../types/api';
 import { RequestError } from '../api/http';
 import {
@@ -430,6 +432,25 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(rotateArchiveBridgeToken).mockResolvedValue({ token: 'test-token' });
   });
 
+  beforeEach(() => {
+    // Shared read model fixtures retain the existing view-level refresh assertions.
+    vi.mocked(fetchDownloadCreators).mockImplementation(async () => {
+      const old = await fetchArchiveDownloadTasks();
+      const groups = new Map<number, typeof old.items>();
+      for (const task of old.items) groups.set(task.creatorId, [...(groups.get(task.creatorId) ?? []), task]);
+      return { summary: old.summary, taskTotal: old.total, total: groups.size, page: 1, limit: 20, hasMore: false, readAt: 'now',
+        items: [...groups.entries()].map(([creatorId, tasks]) => ({ creatorId, creatorName: tasks[0]!.creatorName, preference: tasks[0]!.preference, rating: tasks[0]!.rating, isActive: true, total: tasks.length,
+          summary: { total: tasks.length, pending: tasks.filter(t=>t.status==='pending').length, claimed:0, staged:tasks.filter(t=>t.status==='staged').length, downloading:0, downloaded:tasks.filter(t=>t.status==='downloaded').length, ingested:tasks.filter(t=>t.status==='ingested').length, failed:0, cancelled:0 }
+        }))
+      };
+    });
+    vi.mocked(fetchDownloadTaskPage).mockImplementation(async ({ creatorId }) => {
+      const old = await fetchArchiveDownloadTasks();
+      const items = old.items.filter(task => task.creatorId === creatorId);
+      return { items, total: items.length, page: 1, limit: 50, hasMore: false, readAt: 'now', summary: old.summary };
+    });
+  });
+
   it('shows ledger totals and loads missing works when a creator is expanded', async () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
@@ -452,7 +473,7 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
 
-    const selects = wrapper.get('form').findAll('select');
+    const selects = wrapper.get('[data-test="catalog-filters"]').findAll('select');
     await selects[0].setValue('liked');
     await flushPromises();
     await selects[1].setValue('R18');
@@ -475,19 +496,17 @@ describe('ArchiveCatalogView', () => {
     expect(planArchiveDownloadTasks).toHaveBeenCalledWith('G:\\cos待入库', undefined);
     expect(wrapper.get('[data-test="download-notice"]').text()).toContain('已新增 1 条任务');
     await wrapper.get('[data-test="toggle-stage2-creator"]').trigger('click');
+    await flushPromises();
     expect(wrapper.text()).toContain('rua阮阮\\014.7z');
   });
 
-  it('generates Costuan metadata tasks for creators that only exist locally', async () => {
-    const wrapper = mount(ArchiveCatalogView);
-    await flushPromises();
-
-    expect(wrapper.text()).toContain('Costuan 来源收录');
-    await wrapper.get('[data-test="plan-metadata"]').trigger('click');
-    await flushPromises();
-
-    expect(planArchiveMetadataTasks).toHaveBeenCalledWith(false);
-    expect(wrapper.get('[data-test="metadata-notice"]').text()).toContain('检测到 17 位本地待关联博主');
+  it('retires the unscoped metadata planner while retaining the explicit selector and read-only refresh', async () => {
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    expect(wrapper.text()).toContain('检查来源与补齐缺失');
+    expect(wrapper.find('[data-test="plan-metadata"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="first-collection-slot"]').exists()).toBe(true);
+    await wrapper.get('[data-test="refresh-stage1"]').trigger('click'); await flushPromises();
+    expect(planArchiveMetadataTasks).not.toHaveBeenCalled();
   });
 
   it('shows a redacted full ingest preview and can run the allowlisted batch', async () => {
@@ -801,6 +820,7 @@ describe('ArchiveCatalogView', () => {
     const stage2 = wrapper.get('[aria-label="缺失作品下载队列"]');
 
     await stage2.get('[data-test="toggle-stage2-creator"]').trigger('click');
+    await flushPromises();
     expect(stage2.text()).toContain('网盘已暂存，待本地确认');
     expect(stage2.text()).toContain('本地已下载，待入库');
     expect(stage2.text()).toContain('已入库');
@@ -808,66 +828,6 @@ describe('ArchiveCatalogView', () => {
     expect(stage2.text()).toContain('本地待入库');
     expect(stage2.text()).not.toContain('网盘待下载');
     wrapper.unmount();
-  });
-
-  it('groups Stage 2 by creator identity, preserves task order, and exposes preview rows beyond twenty only when expanded', async () => {
-    const initial = await fetchArchiveDownloadTasks();
-    const tasks = Array.from({ length: 24 }, (_, index) => ({
-      ...initial.items[0],
-      id: index + 1,
-      creatorId: index === 1 ? 22 : 21,
-      creatorName: '同名博主',
-      title: `测试作品-${index + 1}`
-    }));
-    vi.mocked(fetchArchiveDownloadTasks).mockResolvedValue({ ...initial, items: tasks, total: 653 });
-    const wrapper = mount(ArchiveCatalogView);
-    await flushPromises();
-    const groups = wrapper.get('[data-test="stage2-creators"]');
-    expect(groups.findAll('article')).toHaveLength(2);
-    expect(wrapper.findAll('[data-test="stage2-task"]')).toHaveLength(0);
-    expect(wrapper.get('[data-test="stage2-preview-scope"]').text()).toContain('24 / 653');
-    expect(wrapper.get('[data-test="stage2-preview-scope"]').text()).toContain('仅统计当前预览');
-    const reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
-
-    await groups.get('[data-creator-id="21"] button').trigger('click');
-    expect(groups.get('[data-creator-id="21"] button').attributes('aria-expanded')).toBe('true');
-    expect(groups.get('[data-creator-id="21"] button').text()).toContain('预览 23 条');
-    expect(wrapper.findAll('[data-test="stage2-task"]')).toHaveLength(23);
-    const titles = wrapper.findAll('[data-test="stage2-task"] td:first-child small').map((cell) => cell.text());
-    expect(titles).toEqual(tasks.filter((task) => task.creatorId === 21).map((task) => task.title));
-    await groups.get('[data-creator-id="22"] button').trigger('click');
-    expect(wrapper.findAll('[data-test="stage2-task"]')).toHaveLength(24);
-    await groups.get('[data-creator-id="21"] button').trigger('click');
-    expect(wrapper.findAll('[data-test="stage2-task"]')).toHaveLength(1);
-    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(reads);
-    expect(planArchiveDownloadTasks).not.toHaveBeenCalled();
-    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
-    expect(runLocalIngestBatch).not.toHaveBeenCalled();
-  });
-
-  it('keeps Stage 2 creator expansion while refreshing task states and removes stale rows on an empty result', async () => {
-    const initial = await fetchArchiveDownloadTasks();
-    const wrapper = mount(ArchiveCatalogView);
-    await flushPromises();
-    await wrapper.get('[data-test="toggle-stage2-creator"]').trigger('click');
-    vi.mocked(fetchArchiveDownloadTasks).mockResolvedValue({
-      ...initial,
-      items: [{ ...initial.items[0], status: 'ingested' }],
-      summary: { ...initial.summary, pending: 0, ingested: 1 }
-    });
-    await wrapper.get('[data-test="refresh-stage2"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.get('[data-test="toggle-stage2-creator"]').attributes('aria-expanded')).toBe('true');
-    expect(wrapper.get('[data-test="toggle-stage2-creator"]').text()).toContain('已入库');
-    expect(wrapper.get('[data-test="stage2-task"]').text()).toContain('已入库');
-    expect(wrapper.get('[data-test="stage2-task"]').text()).not.toContain('待转存');
-
-    vi.mocked(fetchArchiveDownloadTasks).mockResolvedValue({ ...initial, items: [], total: 0 });
-    await wrapper.get('[data-test="refresh-stage2"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.find('[data-test="stage2-creators"]').exists()).toBe(false);
-    expect(planArchiveDownloadTasks).not.toHaveBeenCalled();
-    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
   });
 
   it('does not poll operation, jobs, Stage 2, or the catalog while a same-page scan request is pending', async () => {

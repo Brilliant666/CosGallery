@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { databaseManager } from '../db/database.js';
 import {
@@ -30,6 +30,8 @@ export type ArchiveMetadataTask = {
   canonicalCreatorId: number;
   aliases: string[];
   legacyIdentity?: { source: 'hentaiclub'; sourceCreatorId: string } | null;
+  checkRoundId?: string | null;
+  lastSuccessfulSource?: { postId:string; url:string|null; sourceFolderName:string|null; destinationPath:string|null; observedAt:string } | null;
   explicitSelection: boolean;
   sourceState: ArchiveSourceState;
   preference: 'liked' | 'kept' | null;
@@ -67,9 +69,19 @@ export class ArchiveMetadataTaskError extends Error {
 
 type TaskContext = {
   explicitSelection?: boolean;
+  checkRoundId?: string;
+  requestId?: string;
+  history?: Array<{attemptCount:number;checkRoundId?:string;status:ArchiveMetadataTaskStatus;completedAt:string|null;lastError:string|null;receipt?:TaskContext['receipt'];finalized?:TaskContext['finalized']}>;
+  finalized?: {attemptCount:number;scopeKey:string;result:unknown};
   receipt?: { workerId: string; receiptId: string; checksum: string; importResult: CostuanCatalogImportResult };
 };
 const CONTEXT_PREFIX = 'archive.metadata-task.context.';
+const REQUEST_PREFIX = 'archive.metadata-check.request.';
+type CheckRequest = {creatorIds:number[];tasks:Array<{id:number;checkRoundId:string|null}>;createdAt:string};
+export type MetadataFinalizeOptions = {creatorIds:number[];taskIds:number[];workerId:string;attempts?:Array<{taskId:number;expectedAttempt:number}>};
+// Protect the existing asynchronous post-source handoff within this server
+// process/connection. This is not a distributed or cross-process lease.
+const finalizingTasks = new WeakMap<DatabaseSync, Set<number>>();
 
 export function validateArchiveIds(ids: number[], label = 'creatorIds'): number[] {
   if (!Array.isArray(ids) || !ids.length || ids.length > 500 || ids.some(id => !Number.isSafeInteger(id) || id <= 0)) {
@@ -192,11 +204,24 @@ export class ArchiveMetadataTaskService {
       .map(row => [row.id, row.sourceCreatorId]));
   }
 
+  private lastSuccessfulSource(creatorId:number): ArchiveMetadataTask['lastSuccessfulSource'] {
+    return this.database.prepare(`SELECT c.source_collection_id AS postId,c.source_url AS url,
+      d.source_folder_name AS sourceFolderName,d.destination_path AS destinationPath,c.observed_at AS observedAt
+      FROM archive_catalog_collections c LEFT JOIN archive_catalog_deliveries d ON d.id=(
+        SELECT id FROM archive_catalog_deliveries WHERE collection_id=c.id AND provider='baidu'
+          AND status IN ('saved','already-saved') ORDER BY last_seen_at DESC,id DESC LIMIT 1)
+      WHERE c.creator_id=? AND c.source='costuan' AND c.is_active=1
+        AND EXISTS(SELECT 1 FROM archive_catalog_source_works sw WHERE sw.collection_id=c.id AND sw.is_active=1)
+      ORDER BY c.observed_at DESC,c.id DESC LIMIT 1`).get(creatorId) as NonNullable<ArchiveMetadataTask['lastSuccessfulSource']> | undefined ?? null;
+  }
+
   private enrich(row: TaskRow, identities = this.legacyIdentityMap()): ArchiveMetadataTask {
     const seedId = identities.get(row.creator_id);
+    const context = this.context(row.id);
     return {...mapTask(row),canonicalCreatorId:row.creator_id, aliases:this.aliases(row.creator_id),
       legacyIdentity:seedId === undefined ? null : {source:'hentaiclub',sourceCreatorId:seedId},
-      explicitSelection:!!this.context(row.id).explicitSelection,sourceState:this.sourceState(row.creator_id)};
+      checkRoundId:context.checkRoundId ?? null,lastSuccessfulSource:this.lastSuccessfulSource(row.creator_id),
+      explicitSelection:!!context.explicitSelection,sourceState:this.sourceState(row.creator_id)};
   }
 
   candidates(options: { q?:string; page?:number; limit?:number; active?:'active'|'inactive'|'all'; hasSource?:'yes'|'no'|'all' } = {}) {
@@ -222,28 +247,54 @@ export class ArchiveMetadataTaskService {
     return row ? this.get(row.id) : null;
   }
 
-  planSelected(options: {creatorIds:number[];retry?:boolean}) {
+  planSelected(options: {creatorIds:number[];retry?:boolean;requestId?:string}) {
     const ids = validateArchiveIds(options.creatorIds);
+    const requestId=options.requestId;
+    if (requestId !== undefined && (typeof requestId!=='string' || !/^[A-Za-z0-9_-]{1,120}$/.test(requestId))) {
+      throw new ArchiveMetadataTaskError('requestId 必须是 1～120 位有效请求标识；同一次提交重试必须复用。');
+    }
     const creators = ids.map(id => this.database.prepare('SELECT id,canonical_name,is_active FROM archive_catalog_creators WHERE id=?').get(id) as {id:number;canonical_name:string;is_active:number}|undefined);
     if (creators.some(row => !row)) throw new ArchiveMetadataTaskError('选中范围包含不存在的规范博主。');
     return this.transaction(() => {
+      const requestKey=requestId ? REQUEST_PREFIX+createHash('sha256').update(requestId).digest('hex') : null;
+      const saved=requestKey ? this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(requestKey) as {value:string}|undefined : undefined;
+      if (saved) {
+        const request=JSON.parse(saved.value) as CheckRequest;
+        if (JSON.stringify([...request.creatorIds].sort((a,b)=>a-b))!==JSON.stringify([...ids].sort((a,b)=>a-b))) {
+          throw new ArchiveMetadataTaskError('requestId 已用于其他选择范围，不能扩大或更换博主。',409);
+        }
+        const tasks=request.tasks.map(item=>this.get(item.id));
+        if (tasks.some((task,index)=>!task || (task.checkRoundId ?? null)!==request.tasks[index].checkRoundId)) {
+          throw new ArchiveMetadataTaskError('该请求轮次已被之后的明确检查替代，不能领取新轮次。',409);
+        }
+        return {requestId,replayed:true,taskIds:tasks.filter(task=>task && ['pending','claimed'].includes(task.status)).map(task=>task!.id),
+          items:creators.map(creator=>({creatorId:creator!.id,creatorName:creator!.canonical_name,result:'replayed' as const,
+            task:tasks.find(task=>task?.creatorId===creator!.id) ?? null,sourceState:this.sourceState(creator!.id)}))};
+      }
       const taskIds:number[] = [];
       const items = creators.map(creator => {
         const row = creator!;
         let task = this.taskForCreator(row.id);
-        let result:'created'|'reused'|'claimed'|'source_ready'|'delivery_required'|'retry_required'|'inactive';
+        if (task && finalizingTasks.get(this.database)?.has(task.id)) {
+          throw new ArchiveMetadataTaskError('该博主正在完成本轮差集对账，请等待收尾后再发起检查。',409);
+        }
+        let result:'created'|'reused'|'claimed'|'delivery_required'|'retry_required'|'inactive';
         const state = this.sourceState(row.id);
         if (!row.is_active) result='inactive';
         else if (task?.status === 'claimed') result='claimed';
         else if (task?.status === 'pending') result='reused';
-        else if (state.metadataAccepted && state.deliveryReady) result='source_ready';
-        else if (task && !options.retry) result=task.status === 'completed' ? 'delivery_required' : 'retry_required';
+        else if (task && !requestId && !options.retry) result=task.status === 'completed' ? 'delivery_required' : 'retry_required';
         else {
+          if (task && !requestId) throw new ArchiveMetadataTaskError('新检查轮次需要 requestId；不能用无幂等标识的重试重新打开任务。');
           const timestamp=nowIso();
           if (!task) {
             this.database.prepare("INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status,created_at,updated_at) VALUES (?,'costuan','pending',?,?)").run(row.id,timestamp,timestamp);
             result='created';
           } else {
+            const context=this.context(task.id);
+            const history=[...(context.history ?? []),{attemptCount:task.attemptCount,checkRoundId:context.checkRoundId,
+              status:task.status,completedAt:task.completedAt,lastError:task.lastError,receipt:context.receipt,finalized:context.finalized}];
+            this.saveContext(task.id,{...context,receipt:undefined,finalized:undefined,history,checkRoundId:randomUUID(),requestId});
             this.database.prepare("UPDATE archive_catalog_metadata_tasks SET status='pending',claimed_by=NULL,claimed_at=NULL,completed_at=NULL,last_error=NULL,updated_at=? WHERE id=?").run(timestamp,task.id);
             result='reused';
           }
@@ -251,12 +302,16 @@ export class ArchiveMetadataTaskService {
         }
         if (task && ['created','reused','claimed'].includes(result)) {
           const context=this.context(task.id);
-          if (result !== 'claimed') this.saveContext(task.id,{...context,explicitSelection:true});
+          if (result !== 'claimed') this.saveContext(task.id,{...context,explicitSelection:true,
+            ...(requestId && !context.checkRoundId ? {checkRoundId:randomUUID(),requestId} : {})});
           task=this.get(task.id); taskIds.push(task!.id);
         }
         return {creatorId:row.id,creatorName:row.canonical_name,result,task,sourceState:state};
       });
-      return {items,taskIds};
+      if (requestKey) this.database.prepare('INSERT INTO app_settings(key,value) VALUES (?,?)')
+        .run(requestKey,JSON.stringify({creatorIds:ids,tasks:items.filter(item=>item.task && taskIds.includes(item.task.id))
+          .map(item=>({id:item.task!.id,checkRoundId:item.task!.checkRoundId ?? null})),createdAt:nowIso()} satisfies CheckRequest));
+      return {items,taskIds,requestId:requestId ?? null,replayed:false};
     });
   }
 
@@ -398,7 +453,7 @@ export class ArchiveMetadataTaskService {
     };
   }
 
-  claim(options: { workerId: string; source?: string; limit?: number; taskIds?: number[] }): ArchiveMetadataTask[] {
+  claim(options: { workerId: string; source?: string; limit?: number; taskIds?: number[];rounds?:Array<{taskId:number;checkRoundId:string}> }): ArchiveMetadataTask[] {
     const workerId = options.workerId.trim().slice(0, 120);
     if (!workerId) throw new Error('采集工作端标识不能为空。');
     const source = options.source ?? 'costuan';
@@ -406,10 +461,19 @@ export class ArchiveMetadataTaskService {
     const timestamp = nowIso();
     const ids: number[] = [];
     const scope = options.taskIds === undefined ? null : validateArchiveIds(options.taskIds, 'taskIds');
+    const rounds=options.rounds ?? [];
+    if (!Array.isArray(rounds) || rounds.some(round=>!round || !Number.isSafeInteger(round.taskId) || round.taskId<=0 || typeof round.checkRoundId!=='string' || !round.checkRoundId)
+      || new Set(rounds.map(round=>round.taskId)).size!==rounds.length || rounds.some(round=>!scope?.includes(round.taskId))) {
+      throw new ArchiveMetadataTaskError('rounds 必须精确标识所选任务，不能重复、为空或扩大范围。');
+    }
     if (scope) {
       for (const id of scope) {
         const task=this.get(id);
         if (!task) throw new ArchiveMetadataTaskError('领取范围包含不存在的元数据任务。');
+        const round=rounds.find(item=>item.taskId===id);
+        if ((task.checkRoundId && round?.checkRoundId!==task.checkRoundId) || (!task.checkRoundId && round)) {
+          throw new ArchiveMetadataTaskError('来源检查轮次已变化或未提供 checkRoundId，请重新读取本次范围。',409);
+        }
         this.requireActive(task.creatorId);
       }
     }
@@ -484,11 +548,12 @@ export class ArchiveMetadataTaskService {
         }
         throw new ArchiveMetadataTaskError('已完成任务结果与回放凭据不一致，不能覆盖。',409);
       }
-      if (context.receipt && context.receipt.receiptId === options.receiptId) throw new ArchiveMetadataTaskError('旧尝试的回传已经结束，不能用于新领取。',409);
+      if ((context.receipt && context.receipt.receiptId === options.receiptId)
+        || context.history?.some(attempt=>attempt.receipt?.receiptId===options.receiptId)) throw new ArchiveMetadataTaskError('旧尝试的回传已经结束，不能用于新领取。',409);
       const current=this.requireClaim(options.id,options.workerId,options.expectedAttempt);
       if (options.canonicalCreatorId !== undefined && options.canonicalCreatorId !== current.creatorId) throw new ArchiveMetadataTaskError('规范博主身份与任务不一致。');
       const importResult=new ArchiveCatalogService(this.database).importCostuanRecord(options.record,{
-        sourcePath:`bridge:metadata-task:${current.id}`,expectedCreatorId:current.creatorId
+        sourcePath:`bridge:metadata-task:${current.id}`,expectedCreatorId:current.creatorId,completeCheckRoundId:context.checkRoundId
       });
       if (importResult.matchedCreators!==1 || importResult.unmatchedCreators.length || importResult.importedWorks===0) throw new ArchiveMetadataTaskError('来源必须包含有效作品，并唯一关联到本任务博主。');
       const timestamp=nowIso();
@@ -506,12 +571,57 @@ export class ArchiveMetadataTaskService {
     return task;
   }
 
-  validateFinalize(options: {creatorIds:number[];taskIds:number[];workerId:string}): number[] {
+  validateDirectory(options:{id:number;workerId:string;expectedAttempt?:number;canonicalCreatorId:number;record:unknown}) {
+    const task=this.requireClaim(options.id,options.workerId,options.expectedAttempt);
+    if (task.creatorId!==options.canonicalCreatorId) throw new ArchiveMetadataTaskError('规范博主身份与任务不一致。');
+    if (!task.checkRoundId) throw new ArchiveMetadataTaskError('该任务没有本轮检查身份，请从规范博主选择器发起新的明确检查。',409);
+    const {requiredFilenames,sourceFilenames}=new ArchiveCatalogService(this.database).validateCompleteCostuanDirectory(options.record,task.creatorId);
+    return {task,requiredFilenames,sourceFilenames};
+  }
+
+  async finalizeSelected<T>(options:MetadataFinalizeOptions, action:(creatorIds:number[])=>Promise<T>):Promise<T> {
+    const creatorIds=this.validateFinalize(options);
+    const taskIds=[...new Set(options.taskIds)].sort((a,b)=>a-b);
+    const scopeKey=createHash('sha256').update(JSON.stringify({creatorIds:[...creatorIds].sort((a,b)=>a-b),
+      tasks:taskIds.map(id=>({id,attempt:this.get(id)!.attemptCount})),workerId:options.workerId})).digest('hex');
+    const contexts=taskIds.map(id=>this.context(id));
+    if (contexts.every(context=>context.finalized?.scopeKey===scopeKey)) {
+      return structuredClone(contexts[0].finalized!.result) as T;
+    }
+    if (contexts.some(context=>context.finalized)) throw new ArchiveMetadataTaskError('本轮已有部分任务按其他范围收尾，请复用原收尾范围，不重复对账。',409);
+    const locks=finalizingTasks.get(this.database) ?? new Set<number>();
+    if (taskIds.some(id=>locks.has(id))) throw new ArchiveMetadataTaskError('本轮来源对账正在执行，不能重复提交。',409);
+    finalizingTasks.set(this.database,locks);
+    taskIds.forEach(id=>locks.add(id));
+    try {
+      const result=await action(creatorIds);
+      // Guard again before recording completion. A different DB connection is
+      // outside the in-process lock, so a changed attempt must never be accepted.
+      this.validateFinalize(options);
+      this.transaction(()=>taskIds.forEach(id=>{
+        const task=this.get(id)!;
+        this.saveContext(id,{...this.context(id),finalized:{attemptCount:task.attemptCount,scopeKey,result}});
+      }));
+      return result;
+    } finally {
+      taskIds.forEach(id=>locks.delete(id));
+      if (!locks.size) finalizingTasks.delete(this.database);
+    }
+  }
+
+  validateFinalize(options: MetadataFinalizeOptions): number[] {
     const ids=validateArchiveIds(options.creatorIds), tasks=validateArchiveIds(options.taskIds,'taskIds');
+    const attempts=options.attempts ?? [];
+    if (!Array.isArray(attempts) || attempts.some(item=>!item || !tasks.includes(item.taskId) || !Number.isSafeInteger(item.expectedAttempt) || item.expectedAttempt<=0)
+      || new Set(attempts.map(item=>item.taskId)).size!==attempts.length) throw new ArchiveMetadataTaskError('收尾 attempts 必须属于明确任务范围且不能重复。');
     const actual=new Set<number>();
     for (const id of tasks) {
       const task=this.get(id), context=this.context(id);
       if (!task || task.status!=='completed' || context.receipt?.workerId!==options.workerId) throw new ArchiveMetadataTaskError('仅可收尾本工作端已确认回传的任务。',409);
+      const attempt=attempts.find(item=>item.taskId===id);
+      if ((task.checkRoundId && !attempt) || (attempt && attempt.expectedAttempt!==task.attemptCount)) {
+        throw new ArchiveMetadataTaskError('收尾尝试已变化，旧轮次不能收尾当前检查。',409);
+      }
       this.requireActive(task.creatorId); actual.add(task.creatorId);
     }
     if (actual.size!==ids.length || ids.some(id=>!actual.has(id))) throw new ArchiveMetadataTaskError('收尾 creatorIds 与 taskIds 必须严格一致，不能扩大范围。');

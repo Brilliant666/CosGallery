@@ -56,7 +56,7 @@
         <button class="primary" :disabled="busy">{{ busy ? '正在保存…' : detail ? '保存博主' : '创建博主' }}</button>
       </form>
       <template v-if="detail">
-        <section><h3>Stage 1 来源收录</h3><FirstCollectionSelector :creator="detail" :disabled="busy || !detail.isActive" @planned="handleSourcePlanned" /></section>
+        <section><h3>Stage 1 检查来源与补齐缺失</h3><FirstCollectionSelector :creator="detail" :disabled="busy || !detail.isActive" @planned="handleSourcePlanned" /></section>
         <section><h3>别名</h3>
           <ul class="alias-list"><li v-for="alias in detail.aliases" :key="alias.id"><span>{{ alias.alias }} <small>{{ sourceLabel(alias.source) }}</small></span>
             <button v-if="alias.editable" :disabled="busy" @click="removeAlias(alias.id)">删除别名</button><small v-else>只读</small></li></ul>

@@ -6,19 +6,27 @@ import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
 import {requestTestApp} from './http-test-utils.js';
 
 describe.sequential('roster first-collection HTTP contract',()=>{
-  let app:express.Application,root:string,id:number,taskId:number;
+  let app:express.Application,root:string,id:number,taskId:number,noTaskId:number,checkRoundId:string;
   let db:typeof import('../src/db/database.js')['databaseManager'];
   let bridgeHeaders:Record<string,string>;
   const base='/api/admin/archive-catalog/metadata-tasks',bridge='/api/archive-bridge';
   const headers={'x-foldergram-intent':'1'};
+  const admin='/api/admin/archive-catalog';
+  const snapshot=()=>JSON.stringify(db.connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>{
+    const name=String(row.name);
+    return [name,db.connection.prepare(`SELECT * FROM "${name.replaceAll('"','""')}"`).all()];
+  }));
+  const withoutReadAt=(body:Record<string,unknown>)=>{const {readAt,...result}=body;expect(readAt).toEqual(expect.any(String));return result;};
   beforeAll(async()=>{
     root=await fs.mkdtemp(path.join(os.tmpdir(),'roster-handoff-routes-'));
+    await fs.mkdir(path.join(root,'gallery'));
     vi.stubEnv('NODE_ENV','test');vi.stubEnv('COS_GALLERY_MODE','1');
     for(const [key,leaf] of Object.entries({DATA_ROOT:'',DB_DIR:'db',GALLERY_ROOT:'gallery',THUMBNAILS_DIR:'thumbnails',PREVIEWS_DIR:'previews'})) vi.stubEnv(key,path.join(root,leaf));
     vi.resetModules();db=(await import('../src/db/database.js')).databaseManager;
     app=(await import('../src/app.js')).createApp();
     const {ManagedCreatorService}=await import('../src/services/managed-creator-service.js');
     id=new ManagedCreatorService().create({name:'HttpFirst',rating:'R18',aliases:['HttpAlias']}).id;
+    noTaskId=new ManagedCreatorService().create({name:'HttpNoTask',rating:'R15'}).id;
     const {ArchiveBridgeService}=await import('../src/services/archive-bridge-service.js');
     bridgeHeaders={'x-cosgallery-bridge-token':new ArchiveBridgeService().rotateToken()};
   });
@@ -28,20 +36,27 @@ describe.sequential('roster first-collection HTTP contract',()=>{
     expect((await requestTestApp(app,'GET',base+'/candidates?q=HttpAlias')).body).toMatchObject({total:1,items:[{creatorId:id,localWorks:0,task:null}]});
     expect(db.connection.prepare('SELECT COUNT(*) AS n FROM archive_catalog_metadata_tasks').get()).toEqual({n:0});
     expect((await requestTestApp(app,'POST',base+'/plan-selected',{}, {creatorIds:[id]})).status).toBe(403);
-    for(const body of [{creatorIds:[]},{creatorIds:[String(id)]},{creatorIds:[id],all:true},{creatorIds:[99999]}]) {
+    for(const body of [{creatorIds:[id]},{creatorIds:[],requestId:'invalid'}, {creatorIds:[String(id)],requestId:'invalid'},{creatorIds:[id],requestId:'invalid',all:true},{creatorIds:[99999],requestId:'invalid'}]) {
       expect((await requestTestApp(app,'POST',base+'/plan-selected',headers,body)).status).toBe(400);
     }
-    const plan=await requestTestApp(app,'POST',base+'/plan-selected',headers,{creatorIds:[id]});
+    const plan=await requestTestApp(app,'POST',base+'/plan-selected',headers,{creatorIds:[id],requestId:'http-first-round'});
     expect(plan.status).toBe(200); taskId=plan.body.taskIds[0];
-    expect((await requestTestApp(app,'POST',base+'/plan-selected',headers,{creatorIds:[id]})).body.taskIds).toEqual([taskId]);
+    checkRoundId=plan.body.items[0].task.checkRoundId;
+    expect(checkRoundId).toEqual(expect.any(String));
+    expect((await requestTestApp(app,'POST',base+'/plan-selected',headers,{creatorIds:[id],requestId:'http-first-round'})).body).toMatchObject({taskIds:[taskId],replayed:true});
   });
 
   it('advertises capabilities, old claim cannot take explicit tasks, GET refresh has no side effects',async()=>{
     expect((await requestTestApp(app,'GET',bridge+'/ping')).status).toBe(401);
-    expect((await requestTestApp(app,'GET',bridge+'/ping',bridgeHeaders)).body).toMatchObject({version:3,capabilities:{rosterFirstCollectionV1:true}});
-    expect((await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'old'})).body.items).toEqual([]);
+    expect((await requestTestApp(app,'GET',bridge+'/ping',bridgeHeaders)).body).toMatchObject({version:4,capabilities:{rosterFirstCollectionV1:true,unifiedCreatorSyncV1:true}});
+    expect((await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'old'})).status).toBe(400);
     expect((await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'new',taskIds:[]})).status).toBe(400);
-    const result=await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'new',taskIds:[taskId]});
+    for(const rounds of [undefined,[{taskId,checkRoundId:'wrong-round'}]]) {
+      const rejected=await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'new',taskIds:[taskId],rounds});
+      expect(rejected.status,JSON.stringify(rejected.body)).toBe(409);
+      expect(rejected.body.message).toContain('checkRoundId');
+    }
+    const result=await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'new',taskIds:[taskId],rounds:[{taskId,checkRoundId}]});
     expect(result.body.items).toMatchObject([{id:taskId,creatorId:id,canonicalCreatorId:id,aliases:['HttpAlias','HttpFirst'],explicitSelection:true,status:'claimed'}]);
     const before=JSON.stringify(db.connection.prepare('SELECT * FROM archive_catalog_metadata_tasks').all());
     await requestTestApp(app,'GET',bridge+'/metadata-tasks?page=1&limit=1',bridgeHeaders);
@@ -53,16 +68,72 @@ describe.sequential('roster first-collection HTTP contract',()=>{
     const validation={workerId:'new',expectedAttempt:1,canonicalCreatorId:id,postId:'fixture-http',title:'HttpFirst COS写真图片包合集[1套][持续更新]'};
     expect((await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-source`,bridgeHeaders,validation)).body.ok).toBe(true);
     expect(db.connection.prepare('SELECT COUNT(*) AS n FROM archive_catalog_collections').get()).toEqual({n:0});
-    const record={creatorName:'HttpFirst',costuan:{postId:'fixture-http',title:validation.title,works:[{order:1,sourceOrder:'NO.001',label:'One'}]}};
-    expect((await requestTestApp(app,'PATCH',bridge+`/metadata-tasks/${taskId}`,bridgeHeaders,{workerId:'new',status:'completed',record})).status).toBe(400);
+    const record={creatorName:'HttpFirst',costuan:{postId:'fixture-http',title:validation.title,works:[{order:1,sourceOrder:'NO.001',label:'One'}],
+      directoryVerification:{complete:true,checkedAt:'2026-09-08T00:00:00Z',parsedWorkCount:1}},
+      baidu:{status:'saved',sourceFolderName:'fixture-http',destinationPath:'我的网盘/cos图集',verification:{method:'saved',checkedAt:'2026-09-08T00:00:00Z',sourceDirectory:'我的网盘/cos图集/fixture-http',checkRoundId,files:['001.7z']}}};
+    const before=snapshot();
+    const directory=await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-directory`,bridgeHeaders,{workerId:'new',canonicalCreatorId:id,expectedAttempt:1,record});
+    expect(directory.status).toBe(200);expect(directory.body.requiredFilenames).toEqual(['001.7z']);
+    expect(snapshot()).toBe(before);
+    expect((await requestTestApp(app,'PATCH',bridge+`/metadata-tasks/${taskId}`,bridgeHeaders,{workerId:'new',status:'completed',record})).status).toBe(409);
+    expect((await requestTestApp(app,'PATCH',bridge+`/metadata-tasks/${taskId}`,bridgeHeaders,{workerId:'new',status:'completed',expectedAttempt:1,record})).status).toBe(400);
     const body={workerId:'new',status:'completed',expectedAttempt:1,canonicalCreatorId:id,receiptId:'http-fixture',record};
     const result=await requestTestApp(app,'PATCH',bridge+`/metadata-tasks/${taskId}`,bridgeHeaders,body);
-    expect(result.body.task).toMatchObject({status:'completed',sourceState:{metadataAccepted:true,deliveryReady:false}});
+    expect(result.status).toBe(200);
+    expect(result.body.task).toMatchObject({status:'completed',sourceState:{metadataAccepted:true,deliveryReady:true}});
     expect((await requestTestApp(app,'PATCH',bridge+`/metadata-tasks/${taskId}`,bridgeHeaders,body)).body).toEqual(result.body);
     for(const invalid of [undefined,{}, {creatorIds:[],taskIds:[],workerId:'new'}]) {
       expect((await requestTestApp(app,'POST',bridge+'/metadata-tasks/finalize-selected',bridgeHeaders,invalid)).status).toBe(400);
     }
     expect(db.connection.prepare('SELECT COUNT(*) AS n FROM scan_runs').get()).toEqual({n:0});
+  });
+
+  it('finalizes only the accepted attempt, creates scoped gaps once and never scans',async()=>{
+    const body={workerId:'new',creatorIds:[id],taskIds:[taskId],attempts:[{taskId,expectedAttempt:1}]};
+    const stale=await requestTestApp(app,'POST',bridge+'/metadata-tasks/finalize-selected',bridgeHeaders,{...body,attempts:[{taskId,expectedAttempt:2}]});
+    expect(stale.status).toBe(409);expect(stale.body.message).toContain('收尾尝试已变化');
+    const result=await requestTestApp(app,'POST',bridge+'/metadata-tasks/finalize-selected',bridgeHeaders,body);
+    expect(result.status).toBe(200);
+    expect(db.connection.prepare('SELECT COUNT(*) AS n FROM archive_catalog_download_tasks').get()).toEqual({n:1});
+    const before=snapshot();
+    expect((await requestTestApp(app,'POST',bridge+'/metadata-tasks/finalize-selected',bridgeHeaders,body)).body).toEqual(result.body);
+    expect(snapshot()).toBe(before);
+    expect(db.connection.prepare('SELECT COUNT(*) AS n FROM scan_runs').get()).toEqual({n:0});
+  });
+
+  it('admin and bridge share complete roster, stats and paged download counts without writes',async()=>{
+    const before=snapshot();
+    for(const endpoint of ['/creator-sync/roster?enabled=all&local=absent&source=all&limit=1',
+      '/creator-sync/stats?enabled=all&local=absent&source=all',
+      '/download-creators?enabled=all&status=pending&limit=1',
+      `/download-task-page?enabled=all&creatorId=${id}&status=pending&limit=1`]) {
+      const web=await requestTestApp(app,'GET',admin+endpoint);
+      const extension=await requestTestApp(app,'GET',bridge+endpoint,bridgeHeaders);
+      expect(web.status).toBe(200);expect(extension.status).toBe(200);
+      expect(web.headers.get('cache-control')).toBe('no-store');expect(extension.headers.get('cache-control')).toBe('no-store');
+      expect(withoutReadAt(web.body)).toEqual(withoutReadAt(extension.body));
+    }
+    const roster=await requestTestApp(app,'GET',admin+'/creator-sync/roster?enabled=all');
+    expect(roster.body.total).toBe(2);
+    expect(roster.body.items).toContainEqual(expect.objectContaining({creatorId:noTaskId,metadataTask:null,localWorks:0,sourceWorks:0}));
+    const stats=await requestTestApp(app,'GET',admin+'/creator-sync/stats?enabled=all');
+    expect(stats.body).toMatchObject({creators:{total:2,withSource:1},works:{source:1,missing:1},execution:{metadata:{total:1},download:{total:1}}});
+    for(const endpoint of ['/download-creators?enabled=all&status=pending&limit=1&page=2',`/download-task-page?enabled=all&creatorId=${id}&status=pending&limit=1&page=2`]) {
+      expect((await requestTestApp(app,'GET',admin+endpoint)).body).toMatchObject({items:[],total:1,page:2,hasMore:false,summary:{total:1,pending:1}});
+    }
+    expect((await requestTestApp(app,'GET',admin+`/download-task-page?creatorId=${noTaskId}`)).body).toMatchObject({items:[],total:0,summary:{total:0}});
+    expect(snapshot()).toBe(before);
+  });
+
+  it('read scopes fail closed and legacy global mutations are retired',async()=>{
+    const before=snapshot();
+    for(const endpoint of ['/creator-sync/roster?all=true','/creator-sync/stats?local=unknown','/download-creators?status=queued','/download-task-page','/download-task-page?creatorId=0','/download-task-page?creatorId=1&limit=101']) {
+      expect((await requestTestApp(app,'GET',admin+endpoint)).status).toBe(400);
+      expect((await requestTestApp(app,'GET',bridge+endpoint,bridgeHeaders)).status).toBe(400);
+    }
+    expect((await requestTestApp(app,'POST',base+'/plan',headers,{})).status).toBe(410);
+    expect((await requestTestApp(app,'POST',bridge+'/metadata-tasks/finalize',bridgeHeaders,{})).status).toBe(410);
+    expect(snapshot()).toBe(before);
   });
 
   it('viewer cannot enumerate selection candidates or plan explicit tasks',async()=>{
@@ -72,5 +143,10 @@ describe.sequential('roster first-collection HTTP contract',()=>{
     const cookie=login.headers.get('set-cookie')!.split(';')[0];
     expect((await requestTestApp(app,'GET',base+'/candidates',{cookie})).status).toBe(403);
     expect((await requestTestApp(app,'POST',base+'/plan-selected',{...headers,cookie},{creatorIds:[id]})).status).toBe(403);
+    for(const endpoint of ['/creator-sync/roster','/creator-sync/stats','/download-creators',`/download-task-page?creatorId=${id}`]) {
+      expect((await requestTestApp(app,'GET',admin+endpoint,{cookie})).status).toBe(403);
+      expect((await requestTestApp(app,'GET',bridge+endpoint)).status).toBe(401);
+      expect((await requestTestApp(app,'GET',bridge+endpoint,bridgeHeaders)).status).toBe(200);
+    }
   });
 });

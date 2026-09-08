@@ -27,6 +27,11 @@ describe('explicit roster first collection service',()=>{
     const plan=service.planSelected({creatorIds:[id]});
     return service.claim({workerId,taskIds:plan.taskIds})[0];
   };
+  const checkedRecord=(checkRoundId:string)=>{
+    const payload=record();
+    return {...payload,costuan:{...payload.costuan,directoryVerification:{complete:true,checkedAt:'2026-09-08T00:00:00Z',parsedWorkCount:2}},
+      baidu:{...payload.baidu!,verification:{...payload.baidu!.verification,checkRoundId,files:['001.7z','002.7z']}}};
+  };
   beforeEach(async()=>{
     root=await fs.mkdtemp(path.join(os.tmpdir(),'roster-first-service-'));
     db=new DatabaseSync(':memory:'); db.exec(schemaSql);
@@ -87,7 +92,7 @@ describe('explicit roster first collection service',()=>{
       expect(service.planSelected({creatorIds:[first.id]}).items[0].result).toBe('retry_required');
       expect(table('archive_catalog_metadata_tasks')).toBe(before);
     }
-    expect(service.planSelected({creatorIds:[first.id],retry:true})).toMatchObject({taskIds:[task.id],items:[{result:'reused',task:{status:'pending'}}]});
+    expect(service.planSelected({creatorIds:[first.id],requestId:'retry-status'})).toMatchObject({taskIds:[task.id],items:[{result:'reused',task:{status:'pending'}}]});
   });
 
   it('checks independent title and owner before import, even if one wrong creator matches',()=>{
@@ -114,7 +119,8 @@ describe('explicit roster first collection service',()=>{
     expect(new ArchiveMetadataTaskService(db).complete(request)).toEqual(response); expect(all()).toEqual(after);
     expect(()=>service.complete({...request,workerId:'late-worker'})).toThrow();
     expect(()=>service.complete({...request,record:record('First','changed')})).toThrow(); expect(all()).toEqual(after);
-    expect(service.planSelected({creatorIds:[first.id],retry:true}).items[0].result).toBe('source_ready'); expect(all()).toEqual(after);
+    expect(()=>service.planSelected({creatorIds:[first.id],retry:true})).toThrow(/requestId/); expect(all()).toEqual(after);
+    expect(service.planSelected({creatorIds:[first.id],requestId:'explicit-next-check'}).items[0]).toMatchObject({result:'reused',task:{status:'pending'}});
   });
 
   it('rolls back source writes if task completion fails, and preserves claim for retry',()=>{
@@ -129,19 +135,21 @@ describe('explicit roster first collection service',()=>{
     const first=creator(),task=claimed(first.id);
     const old={id:task.id,workerId:'worker',canonicalCreatorId:first.id,expectedAttempt:1,receiptId:'late-never-accepted',record:record()};
     service.report({id:task.id,workerId:'worker',expectedAttempt:1,status:'failed',error:'fixture network interruption'});
-    service.planSelected({creatorIds:[first.id],retry:true});
-    expect(service.claim({workerId:'worker',taskIds:[task.id]})[0].attemptCount).toBe(2);
+    const retryPlan=service.planSelected({creatorIds:[first.id],requestId:'retry-attempt'});
+    const checkRoundId=retryPlan.items[0].task!.checkRoundId!;
+    expect(service.claim({workerId:'worker',taskIds:[task.id],rounds:[{taskId:task.id,checkRoundId}]})[0].attemptCount).toBe(2);
     const before=all();
     expect(()=>service.complete(old)).toThrow(/尝试已变化/);
     expect(()=>service.report({id:task.id,workerId:'worker',expectedAttempt:1,status:'pending'})).toThrow(/尝试已变化/);
     expect(()=>service.validateSource({id:task.id,workerId:'worker',canonicalCreatorId:first.id,expectedAttempt:1,postId:'100',title:record().costuan.title})).toThrow(/尝试已变化/);
     expect(()=>service.complete({...old,expectedAttempt:undefined})).toThrow(/尝试已变化/);
     expect(all()).toEqual(before);
-    service.complete({...old,expectedAttempt:2,receiptId:'fresh-attempt'});
+    const fresh={...old,expectedAttempt:2,receiptId:'fresh-attempt',record:checkedRecord(checkRoundId)};
+    service.complete(fresh);
     db.prepare('UPDATE archive_catalog_creators SET is_active=0 WHERE id=?').run(first.id);
     const accepted=all();
     // A response-loss replay is read-only; later deactivation need not conceal the accepted receipt.
-    expect(service.complete({...old,expectedAttempt:2,receiptId:'fresh-attempt'}).task.status).toBe('completed');
+    expect(service.complete(fresh).task.status).toBe('completed');
     expect(all()).toEqual(accepted);
   });
 
@@ -157,10 +165,12 @@ describe('explicit roster first collection service',()=>{
     service.complete({id:task.id,workerId:'worker',expectedAttempt:1,canonicalCreatorId:first.id,receiptId:'metadata',record:record('First','100',false)});
     expect(service.get(task.id)?.sourceState).toMatchObject({metadataAccepted:true,deliveryReady:false,deliveryEvidence:'missing'});
     const before=all(); expect(service.planSelected({creatorIds:[first.id]}).items[0].result).toBe('delivery_required');expect(all()).toEqual(before);
-    expect(service.planSelected({creatorIds:[first.id],retry:true}).taskIds).toEqual([task.id]);
+    const retryPlan=service.planSelected({creatorIds:[first.id],requestId:'repair-delivery'});
+    expect(retryPlan.taskIds).toEqual([task.id]);
     service.planLocalOnly(); expect(service.get(task.id)?.status).toBe('pending');
-    const [retry]=service.claim({workerId:'repair',taskIds:[task.id]});expect(retry.attemptCount).toBe(2);
-    service.complete({id:task.id,workerId:'repair',expectedAttempt:2,canonicalCreatorId:first.id,receiptId:'delivery',record:record()});
+    const checkRoundId=retryPlan.items[0].task!.checkRoundId!;
+    const [retry]=service.claim({workerId:'repair',taskIds:[task.id],rounds:[{taskId:task.id,checkRoundId}]});expect(retry.attemptCount).toBe(2);
+    service.complete({id:task.id,workerId:'repair',expectedAttempt:2,canonicalCreatorId:first.id,receiptId:'delivery',record:checkedRecord(checkRoundId)});
     expect(service.get(task.id)?.sourceState.deliveryReady).toBe(true);
     expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_works').get()).toEqual({n:2});
   });

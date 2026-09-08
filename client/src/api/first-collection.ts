@@ -12,9 +12,11 @@ export interface FirstCollectionCandidates {
   items: FirstCollectionCandidate[]; total: number; page: number; limit: number; pages: number;
 }
 export interface FirstCollectionResult {
+  requestId?: string;
+  replayed?: boolean;
   items: Array<{
     creatorId: number; creatorName: string;
-    result: 'created' | 'reused' | 'claimed' | 'source_ready' | 'delivery_required' | 'retry_required' | 'inactive';
+    result: 'created' | 'reused' | 'claimed' | 'replayed' | 'source_ready' | 'delivery_required' | 'retry_required' | 'inactive';
     task: ArchiveMetadataTask | null;
   }>;
   taskIds: number[];
@@ -24,13 +26,14 @@ export function fetchFirstCollectionCandidates(options: {
 }) {
   return requestJson<FirstCollectionCandidates>(`${root}/candidates?${new URLSearchParams(Object.entries(options).map(([key, value]) => [key, String(value)]))}`);
 }
-export function planFirstCollection(creatorIds: number[], retry = false) {
+export function planFirstCollection(creatorIds: number[], requestId: string) {
   if (!creatorIds.length || creatorIds.some(id => !Number.isSafeInteger(id) || id <= 0)) {
     return Promise.reject(new Error('请明确选择合法的博主 ID，空范围不能提交。'));
   }
+  if (!requestId) return Promise.reject(new Error('缺少本次检查请求标识，未创建任务。'));
   return requestJson<FirstCollectionResult>(`${root}/plan-selected`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ creatorIds: [...new Set(creatorIds)], retry })
+    body: JSON.stringify({ creatorIds: [...new Set(creatorIds)], requestId })
   });
 }
 
