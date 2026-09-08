@@ -75,6 +75,57 @@ describe('shared creator sync read model', () => {
     expect(service.roster().items[0].missingWorks).toBe(1);
   });
 
+  it('projects the Stage1 source/task union with independent real evidence and task timestamps', () => {
+    const historical = creator('Same'), failed = creator('Same'), absent = creator('Not found');
+    const empty = creator('Empty collection'), retired = creator('Inactive source'), other = creator('Other source task');
+    collection(empty);
+    const historicalCollection = collection(historical);
+    source(historical, historicalCollection, 1); source(historical, collection(historical), 2); delivery(historicalCollection, true);
+    source(failed, collection(failed), 1);
+    const inactiveSource = source(retired, collection(retired), 1);
+    db.prepare('UPDATE archive_catalog_source_works SET is_active=0 WHERE id=?').run(inactiveSource.id);
+    const updatedAt = '2026-09-09T03:00:00Z';
+    for (const [id, status] of [[failed, 'failed'], [absent, 'not_found']] as const) {
+      db.prepare(`INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status,attempt_count,last_error,updated_at)
+        VALUES(?,'costuan',?,2,'Real attempt error',?)`).run(id, status, updatedAt);
+    }
+    db.prepare("INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status) VALUES(?,'other','pending')").run(other);
+    const before = snapshot(); db.exec('PRAGMA query_only=ON');
+    const result = service.metadataCreators();
+    expect(result).toMatchObject({ total: 3, summary: { sourceCreators: 2, sourceCollections: 3,
+      taskTotal: 2, tasks: { total: 2, failed: 1, not_found: 1, completed: 0 } } });
+    expect(result.items.find(row => row.creatorId === historical)).toMatchObject({ metadataTask: null,
+      sourceCollections: 2, latestSourceAt: timestamp, sourceState: { metadataAccepted: true, deliveryEvidence: 'verified' } });
+    expect(result.items.find(row => row.creatorId === failed)).toMatchObject({ latestSourceAt: timestamp,
+      sourceState: { metadataAccepted: true }, metadataTask: { status: 'failed', attemptCount: 2, updatedAt, lastError: 'Real attempt error' } });
+    expect(result.items.find(row => row.creatorId === absent)).toMatchObject({ latestSourceAt: null,
+      sourceState: { metadataAccepted: false }, metadataTask: { status: 'not_found', updatedAt } });
+    expect(service.metadataCreators({ q: 'Same' }).total).toBe(2);
+    expect(service.metadataCreators({ source: 'absent' }).items.map(row => row.creatorId)).toEqual([absent]);
+    expect(service.metadataCreators({ status: 'no_task' })).toMatchObject({ total: 1, summary: { taskTotal: 0 } });
+    expect(service.metadataCreators({ status: 'failed' })).toMatchObject({ total: 1, summary: { sourceCreators: 1, taskTotal: 1 } });
+    expect(snapshot()).toBe(before);
+  });
+
+  it('paginates the complete Stage1 union beyond 100 creators with full filtered summaries', () => {
+    const ids: number[] = [];
+    for (let n = 0; n < 107; n++) {
+      const id = creator(`Creator ${String(n).padStart(3, '0')}`); ids.push(id);
+      if (n % 2 === 0) source(id, collection(id), 1);
+      else db.prepare("INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status) VALUES(?,'costuan','pending')").run(id);
+    }
+    const first = service.metadataCreators({ limit: 100 });
+    const second = service.metadataCreators({ limit: 100, page: 2 });
+    expect(first).toMatchObject({ total: 107, hasMore: true, summary: { sourceCreators: 54, sourceCollections: 54, taskTotal: 53 } });
+    expect(second).toMatchObject({ total: 107, hasMore: false, summary: first.summary });
+    expect(second.items).toHaveLength(7);
+    expect([...first.items, ...second.items].map(row => row.creatorId)).toEqual(ids);
+    expect(service.metadataCreators({ page: 999 })).toMatchObject({ total: 107, items: [], summary: first.summary });
+    expect(service.metadataCreators({ q: 'Creator 106' }).items.map(row => row.creatorId)).toEqual([ids[106]]);
+    expect(service.metadataCreators({ q: 'missing' })).toMatchObject({ total: 0, summary: { sourceCreators: 0, sourceCollections: 0, taskTotal: 0 } });
+    expect(() => service.metadataCreators({ status: 'bad' as 'failed' })).toThrow();
+  });
+
   it('uses complete stable identity for gaps: NO and VOL same number remain different, equal counts can still have gaps', () => {
     const a = creator('A'), col = collection(a), f = folder(a, 'A');
     const no = source(a, col, 1), vol = source(a, col, 1, 'VOL');
@@ -144,6 +195,7 @@ describe('shared creator sync read model', () => {
     const before = snapshot(); db.exec('PRAGMA query_only=ON');
     const prepare = vi.spyOn(db, 'prepare');
     service.roster({ limit: 100 }); expect(prepare).toHaveBeenCalledTimes(2); prepare.mockClear();
+    service.metadataCreators({ limit: 100 }); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockClear();
     service.stats(); expect(prepare).toHaveBeenCalledTimes(5); prepare.mockClear();
     service.downloadCreators(); expect(prepare).toHaveBeenCalledTimes(2); prepare.mockClear();
     service.downloadTaskPage({ creatorId: a }); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockRestore();

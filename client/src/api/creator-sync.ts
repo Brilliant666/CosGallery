@@ -24,6 +24,9 @@ export interface CreatorSyncStats {
   execution: { metadata: Record<string, number>; download: ArchiveDownloadTaskSummary; ingest: Record<string, number> };
   unlinkedLocalFolders: { total: number; localWorks: number };
 }
+export type MetadataCreatorPage = SyncPage<CreatorSyncRow> & {
+  summary: { sourceCreators: number; sourceCollections: number; taskTotal: number; tasks: Record<ArchiveMetadataTask['status'] | 'total', number> };
+};
 export interface DownloadCreatorSummary {
   creatorId: number; creatorName: string; preference: 'liked' | 'kept' | null;
   rating: 'R15' | 'R18' | null; isActive: boolean; total: number; summary: ArchiveDownloadTaskSummary;
@@ -40,6 +43,9 @@ export function fetchCreatorSyncRoster(options: CreatorSyncFilters & { page?: nu
 }
 export function fetchCreatorSyncStats(options: CreatorSyncFilters = {}) {
   return requestJson<CreatorSyncStats>(`${root}/creator-sync/stats?${query(options)}`);
+}
+export function fetchMetadataCreators(options: CreatorSyncFilters & { page?: number; limit?: number } = {}) {
+  return requestJson<MetadataCreatorPage>(`${root}/creator-sync/metadata-creators?${query(options)}`);
 }
 export function fetchDownloadCreators(options: DownloadFilters & { page?: number; limit?: number } = {}) {
   return requestJson<DownloadCreatorPage>(`${root}/download-creators?${query(options)}`);

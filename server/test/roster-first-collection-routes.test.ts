@@ -105,6 +105,7 @@ describe.sequential('roster first-collection HTTP contract',()=>{
     const before=snapshot();
     for(const endpoint of ['/creator-sync/roster?enabled=all&local=absent&source=all&limit=1',
       '/creator-sync/stats?enabled=all&local=absent&source=all',
+      '/creator-sync/metadata-creators?enabled=all&limit=1',
       '/download-creators?enabled=all&status=pending&limit=1',
       `/download-task-page?enabled=all&creatorId=${id}&status=pending&limit=1`]) {
       const web=await requestTestApp(app,'GET',admin+endpoint);
@@ -118,6 +119,9 @@ describe.sequential('roster first-collection HTTP contract',()=>{
     expect(roster.body.items).toContainEqual(expect.objectContaining({creatorId:noTaskId,metadataTask:null,localWorks:0,sourceWorks:0}));
     const stats=await requestTestApp(app,'GET',admin+'/creator-sync/stats?enabled=all');
     expect(stats.body).toMatchObject({creators:{total:2,withSource:1},works:{source:1,missing:1},execution:{metadata:{total:1},download:{total:1}}});
+    const metadata=await requestTestApp(app,'GET',admin+'/creator-sync/metadata-creators?enabled=all');
+    expect(metadata.body).toMatchObject({total:1,items:[{creatorId:id,metadataTask:{id:taskId,status:'completed'}}],
+      summary:{sourceCreators:1,sourceCollections:1,taskTotal:1,tasks:{total:1,completed:1}}});
     for(const endpoint of ['/download-creators?enabled=all&status=pending&limit=1&page=2',`/download-task-page?enabled=all&creatorId=${id}&status=pending&limit=1&page=2`]) {
       expect((await requestTestApp(app,'GET',admin+endpoint)).body).toMatchObject({items:[],total:1,page:2,hasMore:false,summary:{total:1,pending:1}});
     }
@@ -127,7 +131,7 @@ describe.sequential('roster first-collection HTTP contract',()=>{
 
   it('read scopes fail closed and legacy global mutations are retired',async()=>{
     const before=snapshot();
-    for(const endpoint of ['/creator-sync/roster?all=true','/creator-sync/stats?local=unknown','/download-creators?status=queued','/download-task-page','/download-task-page?creatorId=0','/download-task-page?creatorId=1&limit=101']) {
+    for(const endpoint of ['/creator-sync/roster?all=true','/creator-sync/stats?local=unknown','/creator-sync/metadata-creators?status=unknown','/creator-sync/metadata-creators?limit=101','/download-creators?status=queued','/download-task-page','/download-task-page?creatorId=0','/download-task-page?creatorId=1&limit=101']) {
       expect((await requestTestApp(app,'GET',admin+endpoint)).status).toBe(400);
       expect((await requestTestApp(app,'GET',bridge+endpoint,bridgeHeaders)).status).toBe(400);
     }
@@ -143,7 +147,7 @@ describe.sequential('roster first-collection HTTP contract',()=>{
     const cookie=login.headers.get('set-cookie')!.split(';')[0];
     expect((await requestTestApp(app,'GET',base+'/candidates',{cookie})).status).toBe(403);
     expect((await requestTestApp(app,'POST',base+'/plan-selected',{...headers,cookie},{creatorIds:[id]})).status).toBe(403);
-    for(const endpoint of ['/creator-sync/roster','/creator-sync/stats','/download-creators',`/download-task-page?creatorId=${id}`]) {
+    for(const endpoint of ['/creator-sync/roster','/creator-sync/stats','/creator-sync/metadata-creators','/download-creators',`/download-task-page?creatorId=${id}`]) {
       expect((await requestTestApp(app,'GET',admin+endpoint,{cookie})).status).toBe(403);
       expect((await requestTestApp(app,'GET',bridge+endpoint)).status).toBe(401);
       expect((await requestTestApp(app,'GET',bridge+endpoint,bridgeHeaders)).status).toBe(200);

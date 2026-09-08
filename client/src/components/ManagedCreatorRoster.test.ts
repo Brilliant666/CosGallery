@@ -19,6 +19,7 @@ const destination:LocalIngestDestinationPreference={creatorId:1,creatorName:'Alp
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(b=>b.text()===text)!;
 describe('managed roster UI',()=>{
   enableAutoUnmount(afterEach);
+  afterEach(() => { vi.useRealTimers(); });
   beforeEach(()=>{
     vi.clearAllMocks();
     HTMLDialogElement.prototype.showModal=function(){this.open=true;};
@@ -30,7 +31,7 @@ describe('managed roster UI',()=>{
     for(const fn of [api.createManagedCreator,api.updateManagedCreator,api.addManagedAlias,api.deleteManagedAlias,api.setManagedCreatorActive,api.linkManagedFolder]) vi.mocked(fn).mockResolvedValue(structuredClone(creator));
     vi.mocked(api.unlinkManagedFolder).mockResolvedValue({folderId:11,creatorId:null});
   });
-  it('uses paging and explicit combined filters, not an all-roster render',async()=>{
+  it('uses paging and immediate combined filters, not an all-roster render',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();
     expect(fetchArchiveCatalog).toHaveBeenCalledWith(expect.objectContaining({page:1,limit:50,active:'active'}));
     expect(w.findAll('tbody tr')).toHaveLength(1);expect(w.text()).toContain('593');
@@ -39,6 +40,83 @@ describe('managed roster UI',()=>{
     await filters.findAll('select')[2].setValue('inactive');await filters.trigger('submit');await flushPromises();
     expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'alias',preference:'unset',rating:'unclassified',active:'inactive',limit:50}));
     await button(w,'下一页').trigger('click');await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:2}));
+  });
+  it('immediately applies all five selects, resets pagination, and resets filters once',async()=>{
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    await button(w,'下一页').trigger('click');await flushPromises();
+    const selects=w.get('.roster-filters').findAll('select');
+    const values=['liked','R18','inactive','yes','no'];
+    for(let index=0;index<values.length;index++) {
+      const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
+      await selects[index]!.setValue(values[index]);await flushPromises();
+      expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count+1);
+      expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1}));
+    }
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({preference:'liked',rating:'R18',active:'inactive',hasLocal:'yes',hasSource:'no'}));
+    const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
+    await button(w,'重置筛选').trigger('click');await flushPromises();
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count+1);
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith({page:1,limit:50,query:'',active:'active',preference:undefined,rating:undefined,hasLocal:undefined,hasSource:undefined});
+    expect(w.text()).toContain('全库总数');expect(w.text()).toContain('筛选结果');
+  });
+  it('debounces typing, flushes Enter once, and applies clearing immediately',async()=>{
+    vi.useFakeTimers();
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    const input=w.get('.roster-filters input');
+    await input.setValue('a');await vi.advanceTimersByTimeAsync(200);
+    await input.setValue('alpha');await vi.advanceTimersByTimeAsync(299);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(2);
+    await input.setValue('beta');await input.trigger('keydown',{key:'Enter'});
+    await w.get('.roster-filters').trigger('submit');await vi.advanceTimersByTimeAsync(300);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(3);
+    await input.setValue('');expect(fetchArchiveCatalog).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(4);
+  });
+  it('waits for IME composition and cancels delayed searches on select changes and unmount',async()=>{
+    vi.useFakeTimers();
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    const input=w.get('.roster-filters input');
+    await input.trigger('compositionstart');await input.setValue('中文');
+    await input.trigger('keydown',{key:'Enter',isComposing:true});await vi.advanceTimersByTimeAsync(500);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(1);
+    await input.trigger('compositionend');await vi.advanceTimersByTimeAsync(300);
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'中文'}));
+    await input.setValue('新名称');await w.get('.roster-filters select').setValue('liked');
+    const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'新名称',preference:'liked'}));
+    await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
+    await input.setValue('unmounted');w.unmount();await vi.advanceTimersByTimeAsync(300);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
+  });
+  it('applies a pending search on page one when paging is clicked during the debounce',async()=>{
+    vi.useFakeTimers();
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    await button(w,'下一页').trigger('click');await flushPromises();
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:2,query:''}));
+    await w.get('.roster-filters input').setValue('new filter');
+    await button(w,'下一页').trigger('click');await flushPromises();
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1,query:'new filter'}));
+    expect(w.get('.roster-paging').text()).toContain('第 1 页');
+    const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(300);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
+  });
+  it('prevents old requests from replacing new rows, totals, errors, or loading state',async()=>{
+    const pending:Array<{resolve:(value:ArchiveCatalogCreatorsPayload)=>void;reject:(error:Error)=>void}>=[];
+    vi.mocked(fetchArchiveCatalog).mockImplementation(()=>new Promise((resolve,reject)=>pending.push({resolve,reject})));
+    const w=mount(ManagedCreatorRoster);
+    await w.get('.roster-filters select').setValue('liked');
+    pending[0]!.resolve({...payload,total:100,items:[{...creator,name:'Old'}]});await flushPromises();
+    expect(button(w,'下一页').attributes('disabled')).toBeDefined();
+    pending[1]!.resolve({...payload,total:7,items:[{...creator,name:'Newest'}]});await flushPromises();
+    expect(w.get('tbody').text()).toContain('Newest');expect(w.get('.roster-paging').text()).toContain('筛选结果 7 位');
+    await w.get('.roster-filters select').setValue('kept');
+    await w.get('.roster-filters select').setValue('unset');
+    pending[3]!.resolve({...payload,total:2,items:[{...creator,name:'Final'}]});await flushPromises();
+    pending[2]!.reject(new Error('stale error'));await flushPromises();
+    expect(w.get('tbody').text()).toContain('Final');expect(w.get('.roster-paging').text()).toContain('筛选结果 2 位');
+    expect(w.text()).not.toContain('stale error');expect(button(w,'下一页').attributes('disabled')).toBeUndefined();
   });
   it('creates a nullable creator only on explicit save and prevents duplicate submissions',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'新增博主').trigger('click');
@@ -49,6 +127,17 @@ describe('managed roster UI',()=>{
     await w.get('.roster-edit').trigger('submit');await w.get('.roster-edit').trigger('submit');
     expect(api.createManagedCreator).toHaveBeenCalledTimes(1);expect(api.createManagedCreator).toHaveBeenCalledWith({name:'New',preference:null,rating:null,confirmDistinct:false});
     resolve(structuredClone(creator));await flushPromises();expect(w.emitted('changed')).toHaveLength(1);
+  });
+  it('keeps dialog edits pending until explicit save',async()=>{
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    await button(w,'管理').trigger('click');await flushPromises();
+    const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
+    await w.get('.roster-edit input').setValue('Renamed');
+    await w.get('.roster-edit select').setValue('kept');await flushPromises();
+    expect(api.updateManagedCreator).not.toHaveBeenCalled();
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
+    await w.get('.roster-edit').trigger('submit');await flushPromises();
+    expect(api.updateManagedCreator).toHaveBeenCalledWith(1,expect.objectContaining({name:'Renamed',preference:'kept'}));
   });
   it('shows collision candidates and requires a separate confirmation before retry',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'新增博主').trigger('click');

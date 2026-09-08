@@ -33,11 +33,10 @@
           </p>
         </div>
         <div v-if="metadataTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
-          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.total }}</strong>来源检查任务</span>
-          <span class="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800"><strong class="block text-base">{{ metadataTasks.summary.actionable }}</strong>待采集</span>
-          <span class="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700"><strong class="block text-base">{{ metadataTasks.summary.claimed }}</strong>采集中</span>
-          <span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700"><strong class="block text-base">{{ metadataTasks.summary.completed }}</strong>本轮已完成</span>
-          <span class="rounded-xl bg-surface-alt px-3 py-2 text-xs text-muted"><strong class="block text-base">{{ metadataTasks.summary.not_found }}</strong>本次未找到</span>
+          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.sourceCreators }}</strong>有来源的博主</span>
+          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.sourceCollections }}</strong>来源合集</span>
+          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.taskTotal }}</strong>来源检查任务</span>
+          <span v-for="status in metadataStatuses" :key="status" class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.tasks[status] }}</strong>{{ metadataStatusLabel(status) }}</span>
         </div>
       </div>
 
@@ -48,21 +47,27 @@
       </div>
       <p v-if="metadataNotice" data-test="metadata-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ metadataNotice }}</p>
 
-      <div v-if="metadataTasks?.items.length" class="mt-4 overflow-x-auto rounded-xl border border-border">
+      <p v-if="metadataLoading" role="status" class="mt-3 text-sm text-muted">正在读取来源与检查任务…</p>
+      <p v-if="metadataError" role="alert" class="mt-3 text-sm text-red-700">{{ metadataError }}</p>
+      <div v-if="metadataTasks?.items.length" class="mt-4 overflow-x-auto rounded-xl border border-border" data-test="metadata-creators">
         <table class="w-full min-w-[42rem] border-collapse text-left text-sm">
           <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主</th><th class="p-3">偏好</th><th class="p-3">本地作品</th><th class="p-3">来源</th><th class="p-3">采集状态</th></tr></thead>
           <tbody>
-            <tr v-for="task in metadataTasks.items.slice(0, 20)" :key="task.id" class="border-t border-border">
+            <tr v-for="task in metadataTasks.items" :key="task.creatorId" class="border-t border-border">
               <td class="p-3 font-semibold">{{ task.creatorName }}</td>
               <td class="p-3">{{ task.preference === 'liked' ? '喜欢' : task.preference === 'kept' ? '保留' : '未分类' }}</td>
               <td class="p-3">{{ task.localWorks }} 套</td>
-              <td class="p-3 uppercase">{{ task.source }}</td>
-              <td class="p-3">{{ metadataStatusLabel(task.status) }}<small class="block text-muted">{{ sourceStateLabel(task.sourceState) }}</small></td>
+              <td class="p-3">{{ sourceStateLabel(task.sourceState) }}<small class="block text-muted">{{ task.sourceCollections }} 个有效 Costuan 合集</small><small v-if="task.latestSourceAt" class="block text-muted">来源记录：{{ task.latestSourceAt }}</small></td>
+              <td class="p-3"><template v-if="task.metadataTask">{{ metadataStatusLabel(task.metadataTask.status) }}<small class="block text-muted">任务 #{{ task.metadataTask.id }} · 更新：{{ task.metadataTask.updatedAt }}</small><small v-if="task.metadataTask.lastError" class="block text-red-700">{{ task.metadataTask.lastError }}</small></template><span v-else>暂无检查任务记录</span></td>
             </tr>
           </tbody>
         </table>
-        <p v-if="metadataTasks.total > 20" class="m-0 border-t border-border p-3 text-center text-xs text-muted">管理页预览前 20 位；本次指定任务范围不受此预览分页限制，插件仅执行明确选中的任务。</p>
       </div>
+      <div v-if="metadataTasks" class="mt-3 flex items-center justify-between gap-3 text-sm" data-test="metadata-pagination">
+        <span>共 {{ metadataTasks.total }} 位 · 第 {{ metadataTasks.page }} / {{ Math.max(1, Math.ceil(metadataTasks.total / metadataTasks.limit)) }} 页</span>
+        <div class="flex gap-2"><button type="button" data-test="metadata-prev" :disabled="metadataLoading || metadataTasks.page <= 1" @click="loadMetadataTasks(metadataTasks.page - 1)">上一页</button><button type="button" data-test="metadata-next" :disabled="metadataLoading || !metadataTasks.hasMore" @click="loadMetadataTasks(metadataTasks.page + 1)">下一页</button></div>
+      </div>
+      <p v-if="metadataTasks && !metadataLoading && !metadataError && !metadataTasks.total" class="mt-3 text-sm text-muted">暂无有效 Costuan 来源或来源检查任务。</p>
     </section>
 
     <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="缺失作品下载队列">
@@ -213,7 +218,7 @@
       <div v-if="localIngestDashboard?.creators.length" data-test="local-ingest-creators" class="mt-4 grid gap-2">
         <article v-for="creator in localIngestDashboard.creators" :key="creator.creatorId" class="overflow-hidden rounded-xl border border-border bg-bg" :data-current="creator.isCurrent ? 'true' : undefined">
           <button type="button" class="grid w-full grid-cols-[minmax(10rem,1fr)_repeat(5,minmax(4rem,auto))] items-center gap-3 p-3 text-left text-xs" :aria-expanded="localIngestCreatorId === creator.creatorId" @click="toggleLocalIngestCreator(creator.creatorId)">
-            <span><strong class="block text-sm">{{ creator.creatorName }} <em v-if="creator.isCurrent" class="not-italic text-blue-700">· 当前处理</em></strong><small class="text-muted">{{ creator.ingested }} / {{ creator.total }} · {{ creator.progressPercent }}%</small></span>
+            <span><strong class="block text-sm"><span aria-hidden="true">{{ localIngestCreatorId === creator.creatorId ? '▾' : '▸' }}</span> {{ creator.creatorName }} <em v-if="creator.isCurrent" class="not-italic text-blue-700">· 当前处理</em></strong><small class="text-muted">{{ creator.ingested }} / {{ creator.total }} · {{ creator.progressPercent }}%</small></span>
             <span><strong class="block">{{ creator.pending }}</strong>待处理</span><span><strong class="block">{{ creator.running }}</strong>处理中</span><span><strong class="block">{{ creator.ingested }}</strong>已入库</span><span><strong class="block">{{ creator.awaitingReview }}</strong>待核查</span><span><strong class="block">{{ creator.failed }}</strong>失败</span>
           </button>
           <div v-if="localIngestCreatorId === creator.creatorId" class="border-t border-border bg-surface p-3">
@@ -424,7 +429,6 @@ import {
   fetchArchiveBridgeStatus,
   fetchArchiveCatalog,
   fetchArchiveCatalogCreator,
-  fetchArchiveMetadataTasks,
   planArchiveDownloadTasks,
   rotateArchiveBridgeToken,
   fetchLocalIngestInboxCreators,
@@ -446,7 +450,6 @@ import type {
   ArchiveCatalogState,
   ArchiveCatalogSummary,
   ArchiveMetadataTaskStatus,
-  ArchiveMetadataTasksPayload,
   ContentRating,
   LocalIngestInboxCreatorsResult,
   LocalIngestCreatorJobSummary,
@@ -457,6 +460,7 @@ import type {
   LocalIngestSettings
 } from '../types/api';
 import { RequestError } from '../api/http';
+import { fetchMetadataCreators, type MetadataCreatorPage } from '../api/creator-sync';
 
 const CatalogMetric = defineComponent({
   props: {
@@ -496,7 +500,11 @@ const downloadNotice = ref('');
 const bridgeConfigured = ref(false);
 const bridgeToken = ref('');
 const rotatingBridgeToken = ref(false);
-const metadataTasks = ref<ArchiveMetadataTasksPayload | null>(null);
+const metadataTasks = ref<MetadataCreatorPage | null>(null);
+const metadataLoading = ref(false);
+const metadataError = ref('');
+const metadataStatuses: ArchiveMetadataTaskStatus[] = ['pending', 'claimed', 'completed', 'not_found', 'failed', 'cancelled'];
+let metadataLoadGeneration = 0;
 const metadataNotice = ref('');
 const sourceRegionsRefreshing = ref(false);
 const localIngestSettings = ref<LocalIngestSettings | null>(null);
@@ -517,6 +525,8 @@ let stage3PollTimer: ReturnType<typeof setTimeout> | null = null;
 let stage3ClockTimer: ReturnType<typeof setInterval> | null = null;
 let lastActiveOperationKind: LocalIngestOperation['kind'] = null;
 let completionRefreshInFlight = false;
+let localIngestLoadGeneration = 0;
+let viewDisposed = false;
 
 function parseLocalIngestAllowlist(value: string): string[] {
   return [...new Set(value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))];
@@ -575,7 +585,7 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)));
 const summaryCards = computed(() => summary.value ? [
   { label: '首批博主', value: summary.value.creators, note: `喜欢 ${summary.value.liked} · 保留 ${summary.value.kept}` },
   { label: '内容分级', value: summary.value.r18, note: `R18 ${summary.value.r18} · R15 ${summary.value.r15}` },
-  { label: '已接入来源', value: summary.value.creatorsWithSources, note: `${summary.value.sourceCollections} 个资源合集` },
+  { label: '有来源的博主', value: summary.value.creatorsWithSources, note: `${summary.value.sourceCollections} 个资源合集` },
   { label: '平台作品', value: summary.value.remoteWorks, note: '当前资源平台已记录' },
   { label: '本地作品', value: summary.value.localWorks, note: `${summary.value.matchedWorks} 套已关联` },
   { label: '待收录作品', value: summary.value.missingWorks, note: `${summary.value.unresolvedLocalWorks} 套待核查` }
@@ -664,46 +674,47 @@ function jobSummaryList(job: LocalIngestJob, key: string) {
 }
 
 async function loadLocalIngestVisiblePage() {
-  if (!localIngestCreatorId.value) {
-    // Collapsed rows still need live totals; omit creatorId to avoid fetching job details.
-    localIngestDashboard.value = await fetchLocalIngestJobs({ page: 1, limit: localIngestJobLimit });
+  const generation = ++localIngestLoadGeneration;
+  const creatorId = localIngestCreatorId.value;
+  const status = localIngestJobStatus.value;
+  const page = localIngestJobPage.value;
+  const isCurrent = () => !viewDisposed && generation === localIngestLoadGeneration
+    && creatorId === localIngestCreatorId.value && status === localIngestJobStatus.value;
+  const query = creatorId === null
+    ? { page: 1, limit: localIngestJobLimit }
+    : { creatorId, status: status || undefined, page, limit: localIngestJobLimit };
+  let payload = await fetchLocalIngestJobs(query);
+  if (!isCurrent()) return;
+  if (creatorId !== null && !payload.creators.some((creator) => creator.creatorId === creatorId)) {
+    localIngestCreatorId.value = null;
+    localIngestJobPage.value = 1;
+    localIngestDashboard.value = { ...payload, items: [], total: 0, page: 1 };
     return;
   }
-  let payload = await fetchLocalIngestJobs({
-    creatorId: localIngestCreatorId.value,
-    status: localIngestJobStatus.value || undefined,
-    page: localIngestJobPage.value,
-    limit: localIngestJobLimit
-  });
   const finalPage = Math.max(1, Math.ceil(payload.total / localIngestJobLimit));
-  if (localIngestJobPage.value > finalPage) {
-    localIngestJobPage.value = finalPage;
+  if (creatorId !== null && page > finalPage) {
     payload = await fetchLocalIngestJobs({
-      creatorId: localIngestCreatorId.value,
-      status: localIngestJobStatus.value || undefined,
+      creatorId,
+      status: status || undefined,
       page: finalPage,
       limit: localIngestJobLimit
     });
+    if (!isCurrent()) return;
+    localIngestJobPage.value = finalPage;
   }
-  localIngestDashboard.value = payload;
+  localIngestDashboard.value = creatorId === null ? { ...payload, items: [] } : payload;
 }
 
-async function loadLocalIngestDashboard(options: { selectDefault?: boolean; refreshVisible?: boolean } = {}) {
-  const summaryPayload = await fetchLocalIngestJobs({ page: 1, limit: localIngestJobLimit });
-  const selectedExists = summaryPayload.creators.some((creator) => creator.creatorId === localIngestCreatorId.value);
-  if (!selectedExists) {
-    localIngestCreatorId.value = options.selectDefault === false ? null : summaryPayload.creators[0]?.creatorId ?? null;
-    localIngestJobPage.value = 1;
-  }
-  localIngestDashboard.value = summaryPayload;
-  if (localIngestCreatorId.value && options.refreshVisible !== false) await loadLocalIngestVisiblePage();
+async function loadLocalIngestDashboard() {
+  // null is an explicit all-collapsed selection, including the initial visit.
+  await loadLocalIngestVisiblePage();
 }
 
 async function loadLocalIngest() {
   const settings = await fetchLocalIngestSettings();
   localIngestSettings.value = settings;
   localIngestAllowlistText.value = settings.allowlist.join('\n');
-  await loadLocalIngestDashboard({ selectDefault: true });
+  await loadLocalIngestDashboard();
 }
 
 function optimisticLocalIngestOperation(
@@ -773,7 +784,7 @@ async function completeStage3Refresh(kind: LocalIngestOperation['kind']) {
   if (completionRefreshInFlight) return;
   completionRefreshInFlight = true;
   try {
-    await loadLocalIngestDashboard({ selectDefault: true, refreshVisible: true });
+    await loadLocalIngestDashboard();
     if (kind === 'scan') {
       await loadDownloadTasks();
     } else if (kind === 'batch' || kind === 'single-job' || kind === 'cleanup') {
@@ -819,7 +830,7 @@ async function refreshStage3State() {
     if (operation.state === 'idle') {
       stopStage3Polling();
       if (previousKind && !localIngestRequestBusy.value) await completeStage3Refresh(previousKind);
-      else await loadLocalIngestDashboard({ selectDefault: true, refreshVisible: true });
+      else await loadLocalIngestDashboard();
       lastActiveOperationKind = null;
     } else {
       lastActiveOperationKind = operation.kind;
@@ -1015,11 +1026,12 @@ async function retryLocalCleanup(id: number) {
 async function toggleLocalIngestCreator(creatorId: number) {
   if (localIngestCreatorId.value === creatorId) {
     localIngestCreatorId.value = null;
-    const summaryPayload = await fetchLocalIngestJobs({ page: 1, limit: localIngestJobLimit });
-    localIngestDashboard.value = summaryPayload;
+    if (localIngestDashboard.value) localIngestDashboard.value = { ...localIngestDashboard.value, items: [] };
+    await loadLocalIngestVisiblePage();
     return;
   }
   localIngestCreatorId.value = creatorId;
+  if (localIngestDashboard.value) localIngestDashboard.value = { ...localIngestDashboard.value, items: [] };
   localIngestJobPage.value = 1;
   localIngestJobStatus.value = '';
   await loadLocalIngestVisiblePage();
@@ -1104,8 +1116,21 @@ function metadataStatusLabel(status: ArchiveMetadataTaskStatus) {
   } as const)[status];
 }
 
-async function loadMetadataTasks() {
-  metadataTasks.value = await fetchArchiveMetadataTasks({ limit: 100 });
+async function loadMetadataTasks(requestedPage = metadataTasks.value?.page ?? 1) {
+  const generation = ++metadataLoadGeneration;
+  metadataLoading.value = true;
+  metadataError.value = '';
+  try {
+    let payload = await fetchMetadataCreators({ page: requestedPage, limit: 20, enabled: 'all' });
+    if (viewDisposed || generation !== metadataLoadGeneration) return;
+    const lastPage = Math.max(1, Math.ceil(payload.total / payload.limit));
+    if (requestedPage > lastPage) payload = await fetchMetadataCreators({ page: lastPage, limit: 20, enabled: 'all' });
+    if (!viewDisposed && generation === metadataLoadGeneration) metadataTasks.value = payload;
+  } catch (cause) {
+    if (!viewDisposed && generation === metadataLoadGeneration) metadataError.value = cause instanceof Error ? cause.message : '来源列表读取失败，请重试。';
+  } finally {
+    if (!viewDisposed && generation === metadataLoadGeneration) metadataLoading.value = false;
+  }
 }
 
 async function loadDownloadTasks() {
@@ -1263,6 +1288,9 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  metadataLoadGeneration += 1;
+  viewDisposed = true;
+  localIngestLoadGeneration++;
   document.removeEventListener('visibilitychange', handleStage3VisibilityChange);
   document.removeEventListener('visibilitychange', handleSourceVisibilityChange);
   window.removeEventListener('message', handlePluginStateMessage);

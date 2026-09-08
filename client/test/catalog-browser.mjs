@@ -1,0 +1,143 @@
+// Isolated browser regression. No backend is started: every API request is synthetic.
+import { createRequire } from 'node:module';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { createServer } from 'vite';
+
+const bundled = process.env.BROWSER_NODE_MODULES;
+if (!bundled) throw new Error('Set BROWSER_NODE_MODULES to the bundled Node packages directory.');
+const { chromium } = createRequire(path.join(bundled, 'playwright', 'package.json'))('playwright');
+const temp = mkdtempSync(path.join(tmpdir(), 'foldergram-browser-'));
+for (const key of ['DATA_ROOT', 'DB_DIR', 'THUMBNAILS_DIR', 'PREVIEWS_DIR', 'GALLERY_ROOT', 'LOCAL_INGEST_INBOX_ROOT', 'LOCAL_INGEST_PROCESSING_ROOT']) {
+  process.env[key] = path.join(temp, key.toLowerCase());
+  mkdirSync(process.env[key]);
+}
+process.env.VITEST = 'true';
+const server = await createServer({ server: { host: '127.0.0.1', port: 0, strictPort: false, open: false }, logLevel: 'error' });
+await server.listen();
+const port = server.httpServer.address().port;
+assert.notEqual(port, 4141);
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+const requests = [], errors = [], unexpected = [];
+page.on('pageerror', error => errors.push(error.message));
+const summary = Object.fromEntries(['creators','activeCreators','inactiveCreators','liked','kept','unsetPreference','r15','r18','unclassified','creatorsWithSources','creatorsWithLocalWorks','creatorsWithoutLocalWorks','unlinkedLocalFolders','sourceCollections','remoteWorks','localWorks','matchedWorks','missingWorks','unresolvedCreatorFolders','unresolvedLocalWorks'].map(key => [key, 2]));
+const folder = { id: 1, slug: 'synthetic', name: '测试目录', folderPath: 'Synthetic/Photos', description: '目录资料', breadcrumb: null, contentRating: 'R15', imageCount: 0, videoCount: 0, latestImageMtimeMs: null, avatarImageId: null, avatarUrl: null };
+const counts = { total: 1, pending: 0, running: 0, ingested: 1, awaitingReview: 0, failed: 0 };
+const row = { id: 166, name: '测试博主', preference: 'liked', rating: 'R15', isActive: true, aliasCount: 0, sourceCount: 1, localFolderCount: 1, localWorks: 1, sourceCollections: 1, remoteWorks: 1, matchedWorks: 1, missingWorks: 0, updatedAt: '2026-09-09', latestSourceObservation: null };
+const idleOperation = { state: 'idle', kind: null, startedAt: null, updatedAt: null, message: null, run: null, lastCompleted: null, elapsedMs: 0 };
+let operation = idleOperation;
+await page.route('**/*', async route => {
+  const request = route.request(), url = new URL(request.url());
+  if (url.origin !== `http://127.0.0.1:${port}`) { unexpected.push(url.origin); return route.abort(); }
+  if (!url.pathname.startsWith('/api/')) return route.continue();
+  requests.push({ method: request.method(), path: url.pathname, query: Object.fromEntries(url.searchParams) });
+  const pg = Number(url.searchParams.get('page') ?? 1);
+  let body;
+  if (url.pathname.endsWith('/166/works')) body = { creator: { ...row, key: 'creator:166', slug: 'synthetic', folderPath: 'Synthetic', contentRating: 'R15', localFolders: [{ id: 1, slug: 'synthetic', name: folder.name, path: folder.folderPath, workCount: 1 }] }, items: [], total: 0, page: 1, limit: 24, hasMore: false };
+  else if (url.pathname === '/api/folders/synthetic') {
+    if (request.method() === 'PATCH') Object.assign(folder, request.postDataJSON());
+    body = folder;
+  } else if (url.pathname.endsWith('/share-links')) body = { links: [], password: { enabled: false, updatedAt: null } };
+  else if (url.pathname.endsWith('/creator-sync/metadata-creators')) body = { items: [{ creatorId: pg, creatorName: `来源页${pg}`, preference: 'liked', localWorks: 1, sourceCollections: 1, sourceState: { metadataAccepted: true, deliveryReady: true, deliveryEvidence: 'verified', missing: [] }, metadataTask: pg === 2 ? { id: 22, status: 'completed', updatedAt: '2026-09-09' } : null }], total: 21, page: pg, limit: Number(url.searchParams.get('limit') ?? 20), hasMore: pg === 1, summary: { sourceCreators: 21, sourceCollections: 21, taskTotal: 1, tasks: { pending: 0, claimed: 0, completed: 1, not_found: 0, failed: 0, cancelled: 0, total: 1 } } };
+  else if (url.pathname === '/api/admin/archive-catalog') body = { items: [{ ...row, preference: url.searchParams.get('preference') || row.preference, name: url.searchParams.get('q') ? `匹配:${url.searchParams.get('q')}` : row.name }], summary, total: 1, page: pg, limit: 50, hasMore: false };
+  else if (url.pathname.endsWith('/download-creators')) body = { items: [], total: 0, page: 1, limit: 50, hasMore: false, summary: {}, taskTotal: 0 };
+  else if (url.pathname.endsWith('/bridge-token')) body = { configured: false };
+  else if (url.pathname.endsWith('/local-ingest/settings')) body = { libraryRoot: process.env.GALLERY_ROOT, inboxRoot: process.env.LOCAL_INGEST_INBOX_ROOT, processingRoot: process.env.LOCAL_INGEST_PROCESSING_ROOT, sevenZipPath: '', fileStableSeconds: 5, recycleAfterIngest: true, maxExtractionDepth: 2, allowlist: [], archivePasswordConfigured: false };
+  else if (url.pathname.endsWith('/local-ingest/operation')) body = operation;
+  else if (url.pathname.endsWith('/local-ingest/jobs')) body = { summary: counts, creators: [{ ...counts, creatorId: 166, creatorName: '测试博主', progressPercent: 100, isCurrent: false }], items: url.searchParams.has('creatorId') ? [{ id: 1, creatorId: 166, creatorName: '测试博主', sourceArchiveName: 'Synthetic.7z', sourceArchiveSize: 100, status: 'ingested', phase: 'done', validationStatus: 'passed', cleanupStatus: 'recycled', summary: null }] : [], total: 1, page: 1, limit: 50, hasMore: false };
+  else { unexpected.push(url.pathname); return route.fulfill({ status: 500, json: { error: 'Unhandled synthetic endpoint' } }); }
+  await route.fulfill({ status: 200, json: body });
+});
+const results = [];
+try {
+  const base = `http://127.0.0.1:${port}/test/catalog-browser.html`;
+  await page.goto(`${base}#/library/166`);
+  await page.getByRole('heading', { name: '测试博主', exact: true }).waitFor();
+  assert.equal(requests.filter(r => r.path === '/api/folders/synthetic').length, 0);
+  await page.locator('summary').click();
+  const initialUrl = page.url();
+  await page.getByRole('button', { name: '编辑目录资料：测试目录', exact: true }).click();
+  await page.getByRole('dialog').waitFor();
+  await page.locator('#profile-name').fill('更新目录');
+  await page.getByRole('dialog').getByRole('button').last().click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  assert.equal(page.url(), initialUrl);
+  assert.equal(await page.getByRole('heading', { level: 1 }).textContent(), '测试博主');
+  await page.getByRole('button', { name: '分享此目录：更新目录', exact: true }).click();
+  await page.getByRole('dialog').waitFor();
+  await page.screenshot({ path: path.join(temp, 'directory-share.png') });
+  await page.getByRole('dialog').getByRole('button').first().click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  assert.equal(page.url(), initialUrl);
+  results.push('Directory lazy loading, profile save scope, share open/close and unchanged route passed');
+  await page.goto(`${base}#/catalog`);
+  const roster = page.getByRole('region', { name: '博主库', exact: true });
+  await roster.locator('tbody tr').waitFor();
+  await roster.locator('input[type=search]').fill('即时');
+  await roster.getByText('匹配:即时', { exact: true }).waitFor();
+  const selectResponse = page.waitForResponse(response => response.url().includes('preference=kept'));
+  await roster.locator('select').first().selectOption('kept');
+  await page.waitForFunction(() => document.querySelector('.roster select')?.value === 'kept');
+  await selectResponse;
+  assert(requests.some(r => r.query.q === '即时' && r.query.preference === 'kept'));
+  await roster.screenshot({ path: path.join(temp, 'roster-filter.png') });
+  results.push('Roster search debounce and immediate select filtering passed');
+  await page.locator('[data-test=metadata-next]').click();
+  await page.getByText('来源页2', { exact: true }).waitFor();
+  await page.getByText('任务 #22', { exact: false }).waitFor();
+  await page.getByRole('region', { name: '博主元数据采集队列' }).screenshot({ path: path.join(temp, 'stage1-page2.png') });
+  results.push('Stage 1 source/task page 2 passed');
+  const toggle = page.locator('[data-test=local-ingest-creators] button[aria-expanded]');
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(requests.filter(r => r.path.endsWith('/local-ingest/jobs') && r.query.creatorId).length, 0);
+  await toggle.click();
+  await page.getByText('Synthetic.7z', { exact: false }).waitFor();
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+  assert(requests.some(r => r.path.endsWith('/local-ingest/jobs') && r.query.creatorId === '166'));
+  await page.locator('[data-test=local-ingest-creators]').screenshot({ path: path.join(temp, 'stage3-expanded.png') });
+  await toggle.click();
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  results.push('Stage 3 initially collapsed, explicit detail read/expand and collapse passed');
+  const detailReadCount = () => requests.filter(r => r.path.endsWith('/local-ingest/jobs') && r.query.creatorId).length;
+  const readsAfterCollapse = detailReadCount();
+  const manualRefresh = page.waitForResponse(response => response.url().includes('/local-ingest/jobs?'));
+  await page.locator('[data-test=refresh-stage3]').click();
+  await manualRefresh;
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(detailReadCount(), readsAfterCollapse);
+  results.push('Stage 3 manual refresh after collapse does not reopen or request creator details');
+
+  await page.clock.install();
+  operation = { ...idleOperation, state: 'running', kind: 'batch', startedAt: new Date().toISOString(), message: 'Synthetic batch running' };
+  const runningRefresh = page.waitForResponse(response => response.url().includes('/local-ingest/jobs?'));
+  await page.locator('[data-test=refresh-stage3]').click();
+  await runningRefresh;
+  await page.waitForFunction(() => !document.querySelector('[data-test=refresh-stage3]')?.disabled);
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  const runningPoll = page.waitForResponse(response => response.url().includes('/local-ingest/jobs?'));
+  await page.clock.fastForward(10_000);
+  await runningPoll;
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(detailReadCount(), readsAfterCollapse);
+  // Allow the response body continuation to schedule the following 10-second poll.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve(true))));
+  operation = idleOperation;
+  const completedPoll = page.waitForResponse(response => response.url().includes('/local-ingest/jobs?'));
+  await page.clock.fastForward(10_000);
+  await completedPoll;
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(detailReadCount(), readsAfterCollapse);
+  await page.locator('[data-test=local-ingest-creators]').screenshot({ path: path.join(temp, 'stage3-collapsed-after-poll.png') });
+  results.push('Stage 3 running poll at 10 seconds and completion poll at 20 seconds both preserve collapsed rows without detail reads');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(unexpected, []);
+  assert.equal(requests.filter(r => r.method !== 'GET').length, 1);
+  console.log(JSON.stringify({ temp, port, results, errors, unexpected, requests }, null, 2));
+} finally {
+  writeFileSync(path.join(temp, 'results.json'), JSON.stringify({ results, errors, unexpected, requests }, null, 2));
+  await browser.close();
+  await server.close();
+}

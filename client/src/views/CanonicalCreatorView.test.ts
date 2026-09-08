@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { enableAutoUnmount } from '@vue/test-utils';
 import InfiniteLoader from '../components/InfiniteLoader.vue';
+import CreatorFolderActions from '../components/CreatorFolderActions.vue';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 
 import { fetchCanonicalCreatorWorks } from '../api/gallery';
@@ -176,5 +177,29 @@ describe('CanonicalCreatorView', () => {
     wrapper.getComponent(InfiniteLoader).vm.$emit('load-more');
     await flushPromises();
     expect(fetchWorks).toHaveBeenLastCalledWith(166, 3, 24);
+  });
+
+  it('updates only selected directory metadata while preserving canonical profile, grid and route', async () => {
+    const localFolders = [
+      { id: 1, slug: 'first', name: 'First', path: 'Photos/First', workCount: 12 },
+      { id: 2290, slug: 'second', name: 'Second', path: 'Photos/Second', workCount: 13 }
+    ];
+    fetchWorks.mockResolvedValueOnce({ ...payload(1), creator: { ...creator(), description: 'Canonical description', localFolders } });
+    const router = galleryTestRouter();
+    await router.push('/library/166?q=lunana');
+    const wrapper = mount(CanonicalCreatorView, { props: { creatorId: '166' }, global: { plugins: [router] } });
+    await flushPromises();
+    const gridBefore = wrapper.findAll('section.grid a').map(link => link.element);
+    const routeBefore = router.currentRoute.value.fullPath;
+    wrapper.getComponent(CreatorFolderActions).vm.$emit('updated', { id: 2290, name: 'Updated directory', description: 'Directory description' });
+    await flushPromises();
+    expect(wrapper.get('h1').text()).toBe('lunana');
+    expect(wrapper.text()).toContain('Canonical description');
+    expect(wrapper.getComponent(CreatorFolderActions).props('folders')).toEqual([localFolders[0], { ...localFolders[1], name: 'Updated directory' }]);
+    expect(wrapper.findAll('section.grid a').map(link => link.element)).toEqual(gridBefore);
+    expect(router.currentRoute.value.fullPath).toBe(routeBefore);
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    expect(fetchWorks).toHaveBeenCalledTimes(1);
+    expect(useCreatorReadingStore().pages['166']?.creator.localFolders?.[1]?.name).toBe('Updated directory');
   });
 });
