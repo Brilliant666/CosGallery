@@ -11,6 +11,7 @@ import {
   type ArchiveMetadataTaskStatus
 } from '../services/archive-metadata-task-service.js';
 import { ArchiveCatalogPipelineService } from '../services/archive-catalog-pipeline-service.js';
+import { createCreatorSyncReadRouter } from './creator-sync-read-routes.js';
 
 const router = express.Router();
 const TOKEN_HEADER = 'x-cosgallery-bridge-token';
@@ -49,8 +50,9 @@ const metadataListQuerySchema = z.object({
 const metadataClaimBodySchema = z.object({
   workerId: z.string().trim().min(1).max(120),
   limit: z.coerce.number().int().min(1).max(500).default(100),
-  taskIds: z.array(z.number().int().positive()).min(1).max(500).optional()
-});
+  taskIds: z.array(z.number().int().positive()).min(1).max(500),
+  rounds: z.array(z.object({ taskId: z.number().int().positive(), checkRoundId: z.string().trim().min(1).max(120) }).strict()).min(1).max(500).optional()
+}).strict();
 const metadataResultBodySchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('completed'),
@@ -94,7 +96,14 @@ router.use((request, response, next) => {
 });
 
 router.get('/ping', (_request, response) => {
-  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 3, capabilities:{rosterFirstCollectionV1:true} });
+  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 4, capabilities:{rosterFirstCollectionV1:true, unifiedCreatorSyncV1:true} });
+});
+
+router.use(createCreatorSyncReadRouter());
+router.post('/creator-sync/checks', (request, response) => {
+  const body = z.object({ creatorIds: z.array(z.number().int().positive()).min(1).max(500),
+    requestId: z.string().trim().min(1).max(120), retry: z.boolean().optional() }).strict().parse(request.body);
+  response.json(new ArchiveMetadataTaskService().planSelected(body));
 });
 
 router.get('/metadata-tasks', (request, response) => {
@@ -142,18 +151,24 @@ router.post('/metadata-tasks/:id/validate-source', (request,response) => {
   response.json({ok:true,task:new ArchiveMetadataTaskService().validateSource({id,...body})});
 });
 
+router.post('/metadata-tasks/:id/validate-directory', (request, response) => {
+  const { id } = idSchema.parse(request.params);
+  const body = z.object({ workerId:z.string().trim().min(1).max(120), canonicalCreatorId:z.number().int().positive(),
+    expectedAttempt:z.number().int().positive(), record:z.record(z.unknown()) }).strict().parse(request.body);
+  response.json({ ok:true, ...new ArchiveMetadataTaskService().validateDirectory({id,...body}) });
+});
+
 router.post('/metadata-tasks/finalize-selected', async (request, response) => {
     const body=z.object({workerId:z.string().trim().min(1).max(120),creatorIds:z.array(z.number().int().positive()).min(1).max(500),
-      taskIds:z.array(z.number().int().positive()).min(1).max(500)}).strict().parse(request.body);
-    const creatorIds=new ArchiveMetadataTaskService().validateFinalize(body);
-    const catalog=await new ArchiveCatalogPipelineService().refreshAfterMetadataTasks({creatorIds});
+      taskIds:z.array(z.number().int().positive()).min(1).max(500),
+      attempts:z.array(z.object({taskId:z.number().int().positive(),expectedAttempt:z.number().int().positive()}).strict()).min(1).max(500).optional()}).strict().parse(request.body);
+    const catalog=await new ArchiveMetadataTaskService().finalizeSelected(body,
+      creatorIds=>new ArchiveCatalogPipelineService().refreshAfterMetadataTasks({creatorIds}));
     response.json({ok:true,catalog});
 });
 
-router.post('/metadata-tasks/finalize', async (_request, response) => {
-  const catalog = await new ArchiveCatalogPipelineService().refreshAfterGalleryScan();
-  const metadata = new ArchiveMetadataTaskService().planLocalOnly({ source: 'costuan' });
-  response.json({ ok: true, catalog, metadata });
+router.post('/metadata-tasks/finalize', (_request, response) => {
+  response.status(410).json({ message: 'Unscoped finalization is retired. Use finalize-selected with explicit tasks and accepted attempts.' });
 });
 
 router.get('/download-tasks', (request, response) => {

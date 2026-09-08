@@ -759,6 +759,7 @@ export interface ArchiveMetadataTaskSummary {
 }
 
 export interface ArchiveMetadataTask {
+  checkRoundId?: string | null;
   id: number;
   creatorId: number;
   creatorName: string;

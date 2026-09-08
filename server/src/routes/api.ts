@@ -13,6 +13,7 @@ import { ManagedCreatorError, ManagedCreatorService, managedFolderRatingSchema }
 import { ArchiveBridgeService } from '../services/archive-bridge-service.js';
 import { ArchiveDownloadTaskService } from '../services/archive-download-task-service.js';
 import { ArchiveMetadataTaskService } from '../services/archive-metadata-task-service.js';
+import { createCreatorSyncReadRouter } from './creator-sync-read-routes.js';
 import {
   localIngestService,
   type LocalIngestJob,
@@ -59,6 +60,7 @@ function managedResponse(response: express.Response, action: () => unknown, stat
 }
 
 const managedAccess = requireCapability('canManageLibrary', 'Admin access is required.');
+router.use('/admin/archive-catalog', requireCapability('canAccessSettings', 'Admin access is required.'), createCreatorSyncReadRouter());
 router.post('/admin/archive-catalog/creators', managedAccess, (request, response) => {
   managedResponse(response, () => new ManagedCreatorService().create(request.body), 201);
 });
@@ -313,9 +315,6 @@ const archiveMetadataTaskQuerySchema = z.object({
   status: z.enum(['pending', 'claimed', 'completed', 'not_found', 'failed', 'cancelled']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   page:z.coerce.number().int().positive().default(1)
-});
-const archiveMetadataPlanBodySchema = z.object({
-  retryNotFound: z.boolean().default(false)
 });
 const localIngestStatusSchema = z.enum(['pending', 'running', 'awaiting_review', 'failed', 'completed']);
 const localIngestJobQuerySchema = z.object({
@@ -1509,7 +1508,7 @@ router.post(
   '/admin/archive-catalog/metadata-tasks/plan-selected',
   requireCapability('canManageLibrary', 'Admin access is required.'),
   (request,response) => {
-    const body=z.object({creatorIds:z.array(z.number().int().positive()).min(1).max(500),retry:z.boolean().default(false)}).strict().parse(request.body);
+    const body=z.object({creatorIds:z.array(z.number().int().positive()).min(1).max(500),requestId:z.string().trim().min(1).max(120),retry:z.boolean().default(false)}).strict().parse(request.body);
     response.json(new ArchiveMetadataTaskService().planSelected(body));
   }
 );
@@ -1527,10 +1526,8 @@ router.get(
 router.post(
   '/admin/archive-catalog/metadata-tasks/plan',
   requireCapability('canManageLibrary', 'Admin access is required.'),
-  (request, response) => {
-    const body = archiveMetadataPlanBodySchema.parse(request.body ?? {});
-    const service = new ArchiveMetadataTaskService();
-    response.json(service.planLocalOnly({ source: 'costuan', retryNotFound: body.retryNotFound }));
+  (_request, response) => {
+    response.status(410).json({ message: 'Select canonical creators and use plan-selected with an explicit requestId.' });
   }
 );
 

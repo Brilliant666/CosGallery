@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 enableAutoUnmount(afterEach);
 
 import ArchiveCatalogView from './ArchiveCatalogView.vue';
+import { fetchDownloadCreators, fetchDownloadTaskPage } from '../api/creator-sync';
+vi.mock('../api/creator-sync', () => ({ fetchDownloadCreators: vi.fn(), fetchDownloadTaskPage: vi.fn() }));
 import type { LocalIngestJob } from '../types/api';
 import { RequestError } from '../api/http';
 import {
@@ -430,6 +432,25 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(rotateArchiveBridgeToken).mockResolvedValue({ token: 'test-token' });
   });
 
+  beforeEach(() => {
+    // Shared read model fixtures retain the existing view-level refresh assertions.
+    vi.mocked(fetchDownloadCreators).mockImplementation(async () => {
+      const old = await fetchArchiveDownloadTasks();
+      const groups = new Map<number, typeof old.items>();
+      for (const task of old.items) groups.set(task.creatorId, [...(groups.get(task.creatorId) ?? []), task]);
+      return { summary: old.summary, taskTotal: old.total, total: groups.size, page: 1, limit: 20, hasMore: false, readAt: 'now',
+        items: [...groups.entries()].map(([creatorId, tasks]) => ({ creatorId, creatorName: tasks[0]!.creatorName, preference: tasks[0]!.preference, rating: tasks[0]!.rating, isActive: true, total: tasks.length,
+          summary: { total: tasks.length, pending: tasks.filter(t=>t.status==='pending').length, claimed:0, staged:tasks.filter(t=>t.status==='staged').length, downloading:0, downloaded:tasks.filter(t=>t.status==='downloaded').length, ingested:tasks.filter(t=>t.status==='ingested').length, failed:0, cancelled:0 }
+        }))
+      };
+    });
+    vi.mocked(fetchDownloadTaskPage).mockImplementation(async ({ creatorId }) => {
+      const old = await fetchArchiveDownloadTasks();
+      const items = old.items.filter(task => task.creatorId === creatorId);
+      return { items, total: items.length, page: 1, limit: 50, hasMore: false, readAt: 'now', summary: old.summary };
+    });
+  });
+
   it('shows ledger totals and loads missing works when a creator is expanded', async () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
@@ -452,7 +473,7 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
 
-    const selects = wrapper.get('form').findAll('select');
+    const selects = wrapper.get('[data-test="catalog-filters"]').findAll('select');
     await selects[0].setValue('liked');
     await flushPromises();
     await selects[1].setValue('R18');
@@ -474,19 +495,18 @@ describe('ArchiveCatalogView', () => {
 
     expect(planArchiveDownloadTasks).toHaveBeenCalledWith('G:\\cos待入库', undefined);
     expect(wrapper.get('[data-test="download-notice"]').text()).toContain('已新增 1 条任务');
+    await wrapper.get('[data-test="toggle-stage2-creator"]').trigger('click');
+    await flushPromises();
     expect(wrapper.text()).toContain('rua阮阮\\014.7z');
   });
 
-  it('generates Costuan metadata tasks for creators that only exist locally', async () => {
-    const wrapper = mount(ArchiveCatalogView);
-    await flushPromises();
-
-    expect(wrapper.text()).toContain('Costuan 来源收录');
-    await wrapper.get('[data-test="plan-metadata"]').trigger('click');
-    await flushPromises();
-
-    expect(planArchiveMetadataTasks).toHaveBeenCalledWith(false);
-    expect(wrapper.get('[data-test="metadata-notice"]').text()).toContain('检测到 17 位本地待关联博主');
+  it('retires the unscoped metadata planner while retaining the explicit selector and read-only refresh', async () => {
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    expect(wrapper.text()).toContain('检查来源与补齐缺失');
+    expect(wrapper.find('[data-test="plan-metadata"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="first-collection-slot"]').exists()).toBe(true);
+    await wrapper.get('[data-test="refresh-stage1"]').trigger('click'); await flushPromises();
+    expect(planArchiveMetadataTasks).not.toHaveBeenCalled();
   });
 
   it('shows a redacted full ingest preview and can run the allowlisted batch', async () => {
@@ -799,6 +819,8 @@ describe('ArchiveCatalogView', () => {
     await flushPromises();
     const stage2 = wrapper.get('[aria-label="缺失作品下载队列"]');
 
+    await stage2.get('[data-test="toggle-stage2-creator"]').trigger('click');
+    await flushPromises();
     expect(stage2.text()).toContain('网盘已暂存，待本地确认');
     expect(stage2.text()).toContain('本地已下载，待入库');
     expect(stage2.text()).toContain('已入库');
@@ -916,13 +938,61 @@ describe('ArchiveCatalogView', () => {
     wrapper.unmount();
   });
 
+  it.each(['poll', 'manual'] as const)('refreshes collapsed Stage 3 totals and creators through %s without expanding rows', async (refresh) => {
+    vi.useFakeTimers();
+    vi.mocked(fetchLocalIngestOperation).mockResolvedValue({
+      ...idleLocalIngestOperation,
+      state: 'running',
+      kind: 'batch'
+    });
+    let job: LocalIngestJob = { ...localIngestJob, status: 'queued' };
+    vi.mocked(fetchLocalIngestJobs).mockImplementation(async (options = {}) => ({
+      ...localIngestDashboard(job),
+      items: options.creatorId ? [job] : [],
+      total: options.creatorId ? 1 : 0
+    }));
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('false');
+    expect(wrapper.get('[data-test="local-ingest-creators"]').text()).toContain('0 / 1');
+    const jobReads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
+    const stage1Reads = vi.mocked(fetchArchiveMetadataTasks).mock.calls.length;
+    const stage2Reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
+    const catalogReads = vi.mocked(fetchArchiveCatalog).mock.calls.length;
+    job = localIngestJob;
+
+    if (refresh === 'poll') await vi.advanceTimersByTimeAsync(10_000);
+    else await wrapper.get('[data-test="refresh-stage3"]').trigger('click');
+    await flushPromises();
+
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(jobReads + 1);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith({ page: 1, limit: 50 });
+    expect(wrapper.get('[data-test="local-ingest-creators"]').text()).toContain('1 / 1');
+    const totals = wrapper.get('[data-test="local-ingest-creators"]').element.previousElementSibling!.textContent!.replace(/\s/g, '');
+    expect(totals).toContain('0待处理');
+    expect(totals).toContain('1已入库');
+    expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('false');
+    expect(wrapper.find('[data-test="run-local-ingest-job"]').exists()).toBe(false);
+    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1Reads);
+    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads);
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+    expect(runLocalIngestJob).not.toHaveBeenCalled();
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it('does not poll while idle', async () => {
     vi.useFakeTimers();
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
     const reads = vi.mocked(fetchLocalIngestOperation).mock.calls.length;
+    const jobReads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(reads);
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(jobReads);
     wrapper.unmount();
   });
 
@@ -952,6 +1022,12 @@ describe('ArchiveCatalogView', () => {
   });
 
   it('renders no more than one creator page while all 558 jobs remain pageable', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchLocalIngestOperation).mockResolvedValue({
+      ...idleLocalIngestOperation,
+      state: 'running',
+      kind: 'batch'
+    });
     const jobs = Array.from({ length: 50 }, (_, index): LocalIngestJob => ({
       ...localIngestJob,
       id: index + 1,
@@ -983,6 +1059,13 @@ describe('ArchiveCatalogView', () => {
     await wrapper.get('[data-test="local-ingest-next"]').trigger('click');
     await flushPromises();
     expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith(expect.objectContaining({ creatorId: 192, page: 2, limit: 50 }));
+    expect(wrapper.findAll('[data-test="run-local-ingest-job"]')).toHaveLength(50);
+    const jobReads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(jobReads + 1);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith(expect.objectContaining({ creatorId: 192, page: 2, limit: 50 }));
+    expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('true');
     expect(wrapper.findAll('[data-test="run-local-ingest-job"]')).toHaveLength(50);
     wrapper.unmount();
   });

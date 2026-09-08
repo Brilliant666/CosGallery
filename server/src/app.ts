@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import express from 'express';
+import { ArchiveMetadataTaskError } from './services/archive-metadata-task-service.js';
 
 import { appConfig, repositoryRoot } from './config/env.js';
 import { requireApiAuthentication, requireMediaAuthentication } from './middleware/auth-protection.js';
@@ -57,7 +58,7 @@ export function createApp() {
     }
 
     const message = error instanceof Error ? error.message : 'Unexpected server error';
-    response.status(400).json({ message });
+    response.status(error instanceof ArchiveMetadataTaskError ? error.status : 400).json({ message });
   });
 
   return app;

@@ -27,27 +27,24 @@
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 1</p>
-          <h2 class="mt-1 mb-0 text-lg font-semibold">Costuan 来源收录</h2>
+          <h2 class="mt-1 mb-0 text-lg font-semibold">检查来源与补齐缺失</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            从博主库明确选择首次收录对象，无需先建立本地目录。复制本次任务范围到插件 Stage 1，采集完整来源并核验网盘来源目录；仅为本批博主规划 Stage 2 缺失文件。下载仍由你通过百度客户端完成，再进入 Stage 3。
+            从规范博主库明确选择首次收录或增量检查对象，已有来源也可再次检查。复制固定范围到插件，由原执行器检查最新来源及本轮所需网盘文件，仅为真实缺失作品复用或创建任务。刷新账本只读取，不执行来源检查。
           </p>
         </div>
         <div v-if="metadataTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
-          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.total }}</strong>全部</span>
+          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.total }}</strong>来源检查任务</span>
           <span class="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800"><strong class="block text-base">{{ metadataTasks.summary.actionable }}</strong>待采集</span>
           <span class="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700"><strong class="block text-base">{{ metadataTasks.summary.claimed }}</strong>采集中</span>
-          <span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700"><strong class="block text-base">{{ metadataTasks.summary.completed }}</strong>已接入</span>
-          <span class="rounded-xl bg-surface-alt px-3 py-2 text-xs text-muted"><strong class="block text-base">{{ metadataTasks.summary.not_found }}</strong>未收录</span>
+          <span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700"><strong class="block text-base">{{ metadataTasks.summary.completed }}</strong>本轮已完成</span>
+          <span class="rounded-xl bg-surface-alt px-3 py-2 text-xs text-muted"><strong class="block text-base">{{ metadataTasks.summary.not_found }}</strong>本次未找到</span>
         </div>
       </div>
 
       <div class="mt-4 flex flex-wrap items-center gap-3">
         <FirstCollectionSelector @planned="refreshSourceRegions" />
-        <button type="button" data-test="refresh-stage1" class="h-11 rounded-xl border border-border bg-bg px-4 text-sm disabled:opacity-50" :disabled="sourceRegionsRefreshing" @click="refreshSourceRegions()">刷新来源状态</button>
-        <button type="button" data-test="plan-metadata" class="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-white disabled:opacity-50" :disabled="planningMetadata" @click="planMetadata">
-          {{ planningMetadata ? '正在生成…' : '生成/刷新待关联博主任务' }}
-        </button>
-        <p class="m-0 text-sm text-muted">旧“待关联”入口只处理已有本地作品的博主；不会自动选择整个博主库。刷新状态只读取，不领取或执行任务。</p>
+        <button type="button" data-test="refresh-stage1" class="h-11 rounded-xl border border-border bg-bg px-4 text-sm disabled:opacity-50" :disabled="sourceRegionsRefreshing" @click="refreshSourceRegions()">刷新账本状态（只读）</button>
+        <p class="m-0 text-sm text-muted">筛选不等于选中；本地已有但尚无来源的博主也使用同一选择器。旧无范围来源规划入口已退役。</p>
       </div>
       <p v-if="metadataNotice" data-test="metadata-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ metadataNotice }}</p>
 
@@ -76,15 +73,6 @@
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
             来源收录完成后，仅为该批博主规划已具备网盘来源、但本地缺失的 Costuan 作品，首次收录无需先有本地目录。插件精确复制缺失压缩包到“我的网盘/cos待入库/博主 ID”，再由你手动下载；旧全量规划入口保留原有本地博主范围。
           </p>
-        </div>
-        <div v-if="downloadTasks" class="grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-7">
-          <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ downloadTasks.summary.total }}</strong>全部</span>
-          <span class="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800"><strong class="block text-base">{{ downloadTasks.summary.pending }}</strong>待转存</span>
-          <span class="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700"><strong class="block text-base">{{ downloadTasks.summary.downloading + downloadTasks.summary.claimed }}</strong>插件处理中</span>
-          <span class="rounded-xl bg-violet-50 px-3 py-2 text-xs text-violet-700"><strong class="block text-base">{{ downloadTasks.summary.staged }}</strong>网盘已暂存</span>
-          <span class="rounded-xl bg-cyan-50 px-3 py-2 text-xs text-cyan-700"><strong class="block text-base">{{ downloadTasks.summary.downloaded }}</strong>本地待入库</span>
-          <span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700"><strong class="block text-base">{{ downloadTasks.summary.ingested }}</strong>已入库</span>
-          <span class="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700"><strong class="block text-base">{{ downloadTasks.summary.failed }}</strong>失败</span>
         </div>
       </div>
 
@@ -117,21 +105,7 @@
         </div>
       </div>
 
-      <div v-if="downloadTasks?.items.length" class="mt-4 overflow-x-auto rounded-xl border border-border">
-        <table class="w-full min-w-[52rem] border-collapse text-left text-sm">
-          <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主</th><th class="p-3">作品</th><th class="p-3">网盘目录</th><th class="p-3">本地目标</th><th class="p-3">状态</th></tr></thead>
-          <tbody>
-            <tr v-for="task in downloadTasks.items.slice(0, 20)" :key="task.id" class="border-t border-border">
-              <td class="p-3 font-semibold">{{ task.creatorName }}</td>
-              <td class="p-3"><span class="font-semibold">{{ task.sourceOrderLabel ?? task.targetFilename }}</span><small class="mt-0.5 block text-muted">{{ task.title }}</small></td>
-              <td class="p-3 font-mono text-xs">{{ task.destinationPath }}/{{ task.sourceFolderName }}</td>
-              <td class="p-3 font-mono text-xs">{{ task.targetRelativeDirectory }}\{{ task.targetFilename }}</td>
-              <td class="p-3">{{ downloadStatusLabel(task.status) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-if="downloadTasks.total > 20" class="m-0 border-t border-border p-3 text-center text-xs text-muted">管理页预览前 20 条；插件按完整队列领取。</p>
-      </div>
+      <Stage2CreatorQueue ref="stage2Queue" />
     </section>
 
     <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="本地入库">
@@ -279,7 +253,7 @@
       <p v-else class="mt-4 mb-0 rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">尚无本地入库任务。请先明确点击“扫描待入库”。</p>
     </section>
 
-    <form class="mb-5 grid gap-3 rounded-2xl border border-border bg-surface p-4 shadow-sm lg:grid-cols-[minmax(14rem,1fr)_repeat(3,minmax(9rem,0.22fr))_auto]" @submit.prevent="applyFilters">
+    <form data-test="catalog-filters" class="mb-5 grid gap-3 rounded-2xl border border-border bg-surface p-4 shadow-sm lg:grid-cols-[minmax(14rem,1fr)_repeat(3,minmax(9rem,0.22fr))_auto]" @submit.prevent="applyFilters">
       <label class="grid gap-1.5 text-xs font-semibold text-muted">
         搜索博主
         <input
@@ -442,6 +416,7 @@
 <script setup lang="ts">
 import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
 import FirstCollectionSelector from '../components/FirstCollectionSelector.vue';
+import Stage2CreatorQueue from '../components/Stage2CreatorQueue.vue';
 import { sourceStateLabel } from '../api/first-collection';
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue';
 
@@ -449,10 +424,8 @@ import {
   fetchArchiveBridgeStatus,
   fetchArchiveCatalog,
   fetchArchiveCatalogCreator,
-  fetchArchiveDownloadTasks,
   fetchArchiveMetadataTasks,
   planArchiveDownloadTasks,
-  planArchiveMetadataTasks,
   rotateArchiveBridgeToken,
   fetchLocalIngestInboxCreators,
   fetchLocalIngestJobs,
@@ -472,8 +445,6 @@ import type {
   ArchiveCatalogPreference,
   ArchiveCatalogState,
   ArchiveCatalogSummary,
-  ArchiveDownloadTaskStatus,
-  ArchiveDownloadTasksPayload,
   ArchiveMetadataTaskStatus,
   ArchiveMetadataTasksPayload,
   ContentRating,
@@ -518,7 +489,7 @@ const detailLoadingId = ref<number | null>(null);
 const details = ref<Record<number, ArchiveCatalogCreatorDetail>>({});
 const detailErrors = ref<Record<number, string>>({});
 const inboxRoot = ref('G:\\cos待入库');
-const downloadTasks = ref<ArchiveDownloadTasksPayload | null>(null);
+const stage2Queue = ref<InstanceType<typeof Stage2CreatorQueue> | null>(null);
 const planningDownloads = ref(false);
 const stage2Refreshing = ref(false);
 const downloadNotice = ref('');
@@ -526,7 +497,6 @@ const bridgeConfigured = ref(false);
 const bridgeToken = ref('');
 const rotatingBridgeToken = ref(false);
 const metadataTasks = ref<ArchiveMetadataTasksPayload | null>(null);
-const planningMetadata = ref(false);
 const metadataNotice = ref('');
 const sourceRegionsRefreshing = ref(false);
 const localIngestSettings = ref<LocalIngestSettings | null>(null);
@@ -694,7 +664,11 @@ function jobSummaryList(job: LocalIngestJob, key: string) {
 }
 
 async function loadLocalIngestVisiblePage() {
-  if (!localIngestCreatorId.value) return;
+  if (!localIngestCreatorId.value) {
+    // Collapsed rows still need live totals; omit creatorId to avoid fetching job details.
+    localIngestDashboard.value = await fetchLocalIngestJobs({ page: 1, limit: localIngestJobLimit });
+    return;
+  }
   let payload = await fetchLocalIngestJobs({
     creatorId: localIngestCreatorId.value,
     status: localIngestJobStatus.value || undefined,
@@ -820,7 +794,7 @@ async function pollStage3Operation() {
     localIngestOperationLastChecked.value = formatClockTime(new Date());
     if (operation.state !== 'idle') {
       lastActiveOperationKind = operation.kind;
-      if (operation.state === 'running' && localIngestCreatorId.value) await loadLocalIngestVisiblePage();
+      if (operation.state === 'running') await loadLocalIngestVisiblePage();
       scheduleStage3Poll();
       return;
     }
@@ -849,7 +823,7 @@ async function refreshStage3State() {
       lastActiveOperationKind = null;
     } else {
       lastActiveOperationKind = operation.kind;
-      if (operation.state === 'running' && localIngestCreatorId.value) await loadLocalIngestVisiblePage();
+      if (operation.state === 'running') await loadLocalIngestVisiblePage();
       scheduleStage3Poll();
     }
   } catch (reason) {
@@ -1119,25 +1093,12 @@ function deliveryLabel(delivery: ArchiveCatalogCreatorDetail['collections'][numb
   return delivery.status ? `${provider}：${delivery.status}` : provider;
 }
 
-function downloadStatusLabel(status: ArchiveDownloadTaskStatus) {
-  return ({
-    pending: '待转存',
-    claimed: '插件已领取',
-    staged: '网盘已暂存，待本地确认',
-    downloading: '插件处理中',
-    downloaded: '本地已下载，待入库',
-    ingested: '已入库',
-    failed: '失败',
-    cancelled: '已取消'
-  } as const)[status];
-}
-
 function metadataStatusLabel(status: ArchiveMetadataTaskStatus) {
   return ({
     pending: '待采集',
     claimed: '插件已领取',
     completed: '元数据已接入',
-    not_found: 'Costuan 未收录',
+    not_found: '本次未找到合集',
     failed: '失败待重试',
     cancelled: '已取消'
   } as const)[status];
@@ -1147,22 +1108,8 @@ async function loadMetadataTasks() {
   metadataTasks.value = await fetchArchiveMetadataTasks({ limit: 100 });
 }
 
-async function planMetadata() {
-  planningMetadata.value = true;
-  metadataNotice.value = '';
-  try {
-    const result = await planArchiveMetadataTasks(false);
-    metadataNotice.value = `检测到 ${result.candidates} 位本地待关联博主；新增 ${result.created} 条、重新排队 ${result.requeued} 条、自动确认 ${result.reconciled} 条。请在 CostuanArchiveManager 中点击“采集待关联博主”。`;
-    await loadMetadataTasks();
-  } catch (reason) {
-    metadataNotice.value = reason instanceof Error ? reason.message : '无法生成博主元数据采集任务';
-  } finally {
-    planningMetadata.value = false;
-  }
-}
-
 async function loadDownloadTasks() {
-  downloadTasks.value = await fetchArchiveDownloadTasks({ limit: 100 });
+  await stage2Queue.value?.refresh();
 }
 
 async function refreshStage2Only() {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { accessSync, constants, lstatSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 
@@ -393,17 +394,138 @@ export class ArchiveCatalogService {
 
   importCostuanRecord(
     recordInput: unknown,
-    options: { observedAt?: string; sourcePath?: string; expectedCreatorId?: number } = {}
+    options: { observedAt?: string; sourcePath?: string; expectedCreatorId?: number; completeCheckRoundId?:string } = {}
   ): CostuanCatalogImportResult {
-    const record = costuanRecordSchema.parse(recordInput);
+    if (options.completeCheckRoundId && options.expectedCreatorId===undefined) throw new Error('完整来源检查缺少规范博主身份。');
+    const record = options.completeCheckRoundId
+      ? this.validateCompleteCostuanCheck(recordInput,options.expectedCreatorId!,options.completeCheckRoundId)
+      : costuanRecordSchema.parse(recordInput);
     const serialized = Buffer.from(JSON.stringify(record));
     return this.importCostuanRecords([record], {
       observedAt: options.observedAt ?? record.costuan.checkedAt ?? new Date().toISOString(),
       sourcePath: options.sourcePath ?? `bridge:costuan:${record.costuan.postId}`,
       sourceVersion: 'bridge-v1',
       checksum: sha256(serialized),
-      expectedCreatorId: options.expectedCreatorId
+      expectedCreatorId: options.expectedCreatorId,
+      validatedCompleteCheck:!!options.completeCheckRoundId
     });
+  }
+
+  validateCompleteCostuanDirectory(recordInput:unknown, creatorId:number): {record:CostuanArchiveRecord;requiredFilenames:string[];sourceFilenames:string[]} {
+    const record=costuanRecordSchema.parse(recordInput);
+    this.validateCostuanIdentity(creatorId,record.costuan.postId,record.costuan.title);
+    const proof=z.object({complete:z.literal(true),checkedAt:z.string().datetime({offset:true}),parsedWorkCount:z.number().int().positive()})
+      .safeParse(record.costuan.directoryVerification);
+    const works=mergeCostuanDirectoryWorks(record.costuan.works,record.costuan.resourceDirectoryText);
+    const titleCount=record.costuan.title.match(/[\[【](\d+)\s*套[^\]】]*[\]】]/u);
+    const declared=record.costuan.collectionCount ?? (titleCount ? Number(titleCount[1]) : null);
+    if (!proof.success || !works.length || declared===null || declared!==works.length || proof.data.parsedWorkCount!==works.length
+      || (titleCount && Number(titleCount[1])!==declared)) {
+      throw new Error('本轮 Costuan 来源目录未完整核验或声明数量不符；保留上次有效来源，需人工检查。');
+    }
+    const keyOf=(work:{sourceOrder:string;sourceOrderKey?:string})=>parseCostuanNumbering(work.sourceOrder)?.key ?? null;
+    const rawKeys=record.costuan.works.map(keyOf);
+    if (rawKeys.some(key=>!key) || new Set(rawKeys).size!==rawKeys.length) throw new Error('本轮来源编号重复或不能明确解析；未覆盖历史来源。');
+    const byKey=new Map<string,typeof works[number]>();
+    const filenames=new Set<string>();
+    for (const work of works) {
+      const numbering=parseCostuanNumbering(work.sourceOrder);
+      if (!numbering || numbering.order===null || (work.sourceOrderKey && work.sourceOrderKey!==numbering.key)
+        || (work.order!==undefined && work.order!==numbering.order) || byKey.has(numbering.key)) {
+        throw new Error('本轮来源编号身份不明确或重复；未覆盖历史来源。');
+      }
+      const filename=`${String(numbering.order).padStart(3,'0')}.7z`;
+      if (filenames.has(filename)) throw new Error('NO/VOL 等不同编号身份对应相同网盘文件名，待人工确认，不能自动暂存。');
+      filenames.add(filename); byKey.set(numbering.key,work);
+    }
+    const previous=this.database.prepare(`SELECT sw.work_id,sw.source_work_id,sw.source_order_label,sw.source_title,sw.media_summary
+      FROM archive_catalog_source_works sw JOIN archive_catalog_collections c ON c.id=sw.collection_id
+      WHERE c.source='costuan' AND c.source_collection_id=? AND c.creator_id=? AND sw.is_active=1`)
+      .all(record.costuan.postId,creatorId) as Array<{work_id:number;source_work_id:string;source_order_label:string|null;source_title:string;media_summary:string|null}>;
+    // Source refresh is not fuzzy local-title matching. Even a bracketed title
+    // suffix can identify different content and must not be silently discarded.
+    const stableSourceTitle=(value:string)=>value.normalize('NFKC').replace(/\s+/g,' ').trim();
+    const confirmedLocalWorks=this.confirmedLocalWorksForSourceCheck(creatorId);
+    const localFilenames=new Set<string>();
+    for (const old of previous) {
+      const key=parseCostuanNumbering(old.source_order_label ?? old.source_work_id)?.key;
+      const work=key ? byKey.get(key) : null;
+      if (!work || stableSourceTitle(old.source_title)!==stableSourceTitle(work.label)
+        || (old.media_summary && work.mediaSummary && old.media_summary.replace(/\s/g,'')!==work.mediaSummary.replace(/\s/g,''))) {
+        throw new Error('已有来源编号缺失、重排或内容声明发生变化；保留原收录并等待人工确认。');
+      }
+      // Equivalent label formatting must reuse the existing Source Work ID.
+      work.sourceOrder=old.source_work_id;
+      if (confirmedLocalWorks.has(old.work_id)) {
+        const order=parseCostuanNumbering(old.source_order_label ?? old.source_work_id)?.order;
+        if (order!==null && order!==undefined) localFilenames.add(`${String(order).padStart(3,'0')}.7z`);
+      }
+    }
+    // Validate the complete source above, but only replenish cloud packages needed
+    // by the local difference. Never restore missing cloud archives for ingested works.
+    return {record:{...record,costuan:{...record.costuan,works}},sourceFilenames:[...filenames],
+      requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename))};
+  }
+
+  private confirmedLocalWorksForSourceCheck(creatorId:number):Set<number> {
+    const bridges=this.database.prepare(`SELECT id,root_path,relative_path,absolute_path,is_active,match_status
+      FROM archive_catalog_local_creator_folders WHERE creator_id=?`).all(creatorId) as Array<{
+      id:number;root_path:string;relative_path:string;absolute_path:string;is_active:number;match_status:string}>;
+    const roots=new Set(bridges.map(bridge=>path.resolve(bridge.root_path).toLocaleLowerCase()));
+    if (roots.size>1 || bridges.some(bridge=>!bridge.is_active || bridge.match_status!=='matched')) {
+      throw new Error('本地目录关系失效或未确认，不能按零本地作品补充云端文件。');
+    }
+    const ensureReadableDirectory=(directory:string)=>{
+      const stat=lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('不是安全的本地目录');
+      accessSync(directory,constants.R_OK);readdirSync(directory);
+    };
+    const confirmed=new Set<number>();
+    try {
+      for (const bridge of bridges) {
+        const root=path.resolve(bridge.root_path),directory=path.resolve(root,bridge.relative_path);
+        if (path.dirname(directory)!==root || directory.toLocaleLowerCase()!==path.resolve(bridge.absolute_path).toLocaleLowerCase()) {
+          throw new Error('本地博主目录路径与桥接不一致');
+        }
+        ensureReadableDirectory(root);ensureReadableDirectory(directory);
+        const rows=this.database.prepare(`SELECT l.work_id,l.relative_path,l.absolute_path,l.match_status,w.creator_id
+          FROM archive_catalog_local_works l LEFT JOIN archive_catalog_works w ON w.id=l.work_id
+          WHERE l.local_creator_folder_id=? AND l.is_active=1`).all(bridge.id) as Array<{
+          work_id:number|null;relative_path:string;absolute_path:string;match_status:string;creator_id:number|null}>;
+        for (const row of rows) {
+          // An unresolved registered local work is unknown, not permission to
+          // assume an empty local set or infer its source from title/NO alone.
+          if (row.work_id===null || row.match_status!=='matched') throw new Error('已登记本地作品的来源身份尚未确认');
+          const absolute=path.resolve(directory,row.relative_path),relative=path.relative(directory,absolute);
+          if (!relative || relative==='..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+            || absolute.toLocaleLowerCase()!==path.resolve(row.absolute_path).toLocaleLowerCase()
+            || row.creator_id!==creatorId || confirmed.has(row.work_id)) throw new Error('本地作品身份、唯一关系或安全路径不明确');
+          let current=directory;
+          for (const segment of relative.split(path.sep)) {current=path.join(current,segment);ensureReadableDirectory(current);}
+          if (!readdirSync(absolute).length) throw new Error('已关联作品目录为空，当前本地状态需重新确认');
+          confirmed.add(row.work_id);
+        }
+      }
+    } catch (cause) {
+      throw new Error('本地目录离线、不可读或关系有歧义；保留来源，不把未知状态当成本地缺失。',{cause});
+    }
+    return confirmed;
+  }
+
+  validateCompleteCostuanCheck(recordInput:unknown, creatorId:number, checkRoundId:string): CostuanArchiveRecord {
+    const {record,requiredFilenames}=this.validateCompleteCostuanDirectory(recordInput,creatorId);
+    const verification=z.object({method:z.enum(['saved','reused']),checkedAt:z.string().datetime({offset:true}),
+      sourceDirectory:z.string().min(1),checkRoundId:z.literal(checkRoundId),files:z.array(z.string().min(1))})
+      .safeParse(record.baidu?.verification);
+    const expectedDirectory=`${record.baidu?.destinationPath?.replace(/[\\/]+$/u,'')}/${record.baidu?.sourceFolderName}`;
+    if (!record.baidu || !['saved','already-saved'].includes(record.baidu.status ?? '') || !record.baidu.sourceFolderName?.trim()
+      || !record.baidu.destinationPath?.trim() || !verification.success
+      || verification.data.sourceDirectory.replace(/\\/g,'/').replace(/\/+$/u,'')!==expectedDirectory.replace(/\\/g,'/')) {
+      throw new Error('缺少本轮自有网盘来源目录核验凭据；历史 alreadySaved 不能代表新增文件可用。');
+    }
+    const files=new Set(verification.data.files);
+    if (requiredFilenames.some(filename=>!files.has(filename))) throw new Error('本轮网盘来源文件尚未全部确认可用；保留上次有效来源，不规划未核验文件。');
+    return record;
   }
 
   validateCostuanIdentity(expectedCreatorId: number, postId: string, title: string): void {
@@ -427,6 +549,7 @@ export class ArchiveCatalogService {
       sourceVersion: string;
       checksum: string;
       expectedCreatorId?: number;
+      validatedCompleteCheck?: boolean;
     }
   ): CostuanCatalogImportResult {
     const observedAt = importMetadata.observedAt;
@@ -485,7 +608,7 @@ export class ArchiveCatalogService {
           metadata: { identityKind: 'collection-derived', creatorId: record.creatorId ?? null }
         });
 
-        const mergedCostuanWorks = mergeCostuanDirectoryWorks(
+        const mergedCostuanWorks = importMetadata.validatedCompleteCheck ? record.costuan.works : mergeCostuanDirectoryWorks(
           record.costuan.works,
           record.costuan.resourceDirectoryText
         );
