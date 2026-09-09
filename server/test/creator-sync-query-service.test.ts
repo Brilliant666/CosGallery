@@ -63,6 +63,22 @@ describe('shared creator sync read model', () => {
     expect(service.stats()).toMatchObject({ creators: { total: 3, withLocal: 1, withSource: 2 }, works: { local: 2, source: 3, missing: 1 }, execution: { metadata: { total: 1, not_found: 1 } } });
   });
 
+  it('keeps pending supplemental evidence separate from numbered work and task totals', () => {
+    const a = creator('A'), col = collection(a), retired = collection(a), other = creator('B');
+    source(a, col, 1);
+    const pending = { sourceOrderKey: 'SPECIAL:微博图', label: '微博图', rawTitle: 'A 微博图[354P-1.8GB]', status: 'awaiting_review' };
+    db.prepare('UPDATE archive_catalog_collections SET metadata_json=? WHERE id=?').run(JSON.stringify({ supplementalContents: [pending, pending,
+      { label: '已处理内容', status: 'completed' }, 'invalid entry', 1, null] }), col);
+    db.prepare('UPDATE archive_catalog_collections SET metadata_json=?,is_active=0 WHERE id=?').run(JSON.stringify({ supplementalContents: [{ ...pending, label: '旧附加内容' }] }), retired);
+    db.prepare('UPDATE archive_catalog_collections SET metadata_json=? WHERE id=?').run('not json', collection(other));
+    const before = snapshot();
+    expect(service.roster({ q: 'A' }).items[0]).toMatchObject({ pendingSupplementalTitles: ['微博图'], sourceWorks: 1, missingWorks: 1 });
+    expect(service.metadataCreators().items[0].pendingSupplementalTitles).toEqual(['微博图']);
+    expect(service.roster({ q: 'B' }).items[0].pendingSupplementalTitles).toEqual([]);
+    expect(service.stats()).toMatchObject({ works: { source: 1, missing: 1 }, execution: { download: { total: 0 } } });
+    expect(snapshot()).toBe(before);
+  });
+
   it('keeps source, local works, download tasks and ingest jobs distinct rather than subtracting job totals', () => {
     const a = creator('A'), col = collection(a), f = folder(a, 'A');
     const sources = [1, 2, 3, 4].map(n => source(a, col, n));

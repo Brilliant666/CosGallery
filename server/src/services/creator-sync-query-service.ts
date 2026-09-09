@@ -49,6 +49,7 @@ export type CreatorSyncRosterItem = {
   sourceCollections: number;
   missingWorks: number;
   latestSourceAt: string | null;
+  pendingSupplementalTitles: string[];
   sourceState: ArchiveSourceState;
   metadataTask: CreatorSyncMetadataTask | null;
 };
@@ -105,6 +106,21 @@ const COHORT_CTES = `
         THEN work_id END) AS missing_works
     FROM source_rows GROUP BY creator_id
   ),
+  supplemental_counts AS (
+    SELECT creator_id, json_group_array(label) AS titles_json FROM (
+      SELECT DISTINCT collections.creator_id, json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.label') AS label
+      FROM archive_catalog_collections collections,
+        json_each(CASE WHEN json_valid(collections.metadata_json)
+          THEN CASE WHEN json_type(collections.metadata_json,'$.supplementalContents')='array'
+            THEN json_extract(collections.metadata_json,'$.supplementalContents') ELSE '[]' END
+          ELSE '[]' END) item
+      WHERE collections.source='costuan' AND collections.is_active=1 AND item.type='object'
+        AND json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.status')='awaiting_review'
+        AND json_type(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.label')='text'
+        AND TRIM(json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.label'))<>''
+      ORDER BY collections.creator_id,label
+    ) GROUP BY creator_id
+  ),
   delivery_counts AS (
     SELECT collections.creator_id, COUNT(*) AS usable,
       MAX(CASE WHEN json_valid(deliveries.metadata_json) THEN
@@ -133,6 +149,7 @@ const COHORT_CTES = `
       COALESCE(source_counts.source_works,0) AS source_works,
       COALESCE(source_counts.source_collections,0) AS source_collections,
       COALESCE(source_counts.missing_works,0) AS missing_works, source_counts.latest_source_at,
+      COALESCE(supplemental_counts.titles_json,'[]') AS supplemental_titles_json,
       COALESCE(delivery_counts.usable,0) AS usable_delivery, COALESCE(delivery_counts.verified,0) AS verified_delivery,
       tasks.id AS metadata_task_id, tasks.status AS metadata_status, tasks.attempt_count AS metadata_attempt_count,
       tasks.claimed_by AS metadata_claimed_by, tasks.claimed_at AS metadata_claimed_at,
@@ -140,6 +157,7 @@ const COHORT_CTES = `
     FROM archive_catalog_creators creators
     LEFT JOIN local_counts ON local_counts.creator_id=creators.id
     LEFT JOIN source_counts ON source_counts.creator_id=creators.id
+    LEFT JOIN supplemental_counts ON supplemental_counts.creator_id=creators.id
     LEFT JOIN delivery_counts ON delivery_counts.creator_id=creators.id
     LEFT JOIN aliases ON aliases.creator_id=creators.id
     LEFT JOIN archive_catalog_metadata_tasks tasks ON tasks.creator_id=creators.id AND tasks.source='costuan'
@@ -149,6 +167,7 @@ type RosterRow = {
   creator_id: number; creator_name: string; preference: 'liked' | 'kept' | null; rating: 'R15' | 'R18' | null;
   is_active: number; aliases_json: string; local_works: number; matched_local_works: number;
   source_works: number; source_collections: number; missing_works: number; latest_source_at: string | null;
+  supplemental_titles_json: string;
   usable_delivery: number; verified_delivery: number; metadata_task_id: number | null;
   metadata_status: ArchiveMetadataTaskStatus | null; metadata_attempt_count: number | null;
   metadata_claimed_by: string | null; metadata_claimed_at: string | null; metadata_completed_at: string | null;
@@ -203,6 +222,7 @@ function rosterItem(row: RosterRow): CreatorSyncRosterItem {
     localWorks: row.local_works, matchedLocalWorks: row.matched_local_works, unresolvedLocalWorks: row.local_works - row.matched_local_works,
     sourceWorks: row.source_works, sourceCollections: row.source_collections, missingWorks: row.missing_works,
     latestSourceAt: row.latest_source_at,
+    pendingSupplementalTitles: JSON.parse(row.supplemental_titles_json) as string[],
     sourceState: { metadataAccepted: row.source_works > 0, deliveryReady: row.usable_delivery > 0,
       deliveryEvidence: row.verified_delivery ? 'verified' : row.usable_delivery ? 'historical' : 'missing',
       missing: !row.source_works ? ['尚无有效 Costuan 作品来源'] : row.usable_delivery ? [] : ['完整百度来源目录尚未转存或确认，缺少可用来源路径'] },

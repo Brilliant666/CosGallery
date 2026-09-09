@@ -61,7 +61,8 @@
                 {{ task.sourceState.metadataAccepted ? '已记录 Costuan 来源' : '尚未取得有效来源' }}
                 <template v-if="task.sourceState.metadataAccepted">
                   <small class="block text-muted">{{ task.sourceCollections }} 个有效 Costuan 合集</small>
-                  <small class="block text-muted">{{ task.sourceState.deliveryReady ? (task.sourceState.deliveryEvidence === 'verified' ? '网盘来源已核验' : '网盘状态待重新核验') : '网盘来源待确认' }}</small>
+                  <small class="block text-muted">{{ task.sourceState.deliveryReady ? (task.sourceState.deliveryEvidence === 'verified' ? (task.pendingSupplementalTitles?.length ? '编号作品网盘来源已核验' : '网盘来源已核验') : '网盘状态待重新核验') : '网盘来源待确认' }}</small>
+                  <small v-if="task.pendingSupplementalTitles?.length" class="block text-muted">{{ task.pendingSupplementalTitles.join('、') }}：附加内容待人工处理，不参与自动下载/入库</small>
                   <details v-if="task.latestSourceAt" class="mt-1 text-xs text-muted"><summary class="cursor-pointer">来源详情</summary><span>来源记录时间：{{ formatSourceTime(task.latestSourceAt) }}</span></details>
                 </template>
               </td>

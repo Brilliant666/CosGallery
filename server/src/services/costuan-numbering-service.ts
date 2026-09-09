@@ -263,6 +263,41 @@ export function mergeCostuanDirectoryWorks(
   return [...merged.values()];
 }
 
+export type PendingCostuanSupplement = ParsedCostuanDirectoryWork & {status:'awaiting_review'};
+
+/** Split only an explicitly advertised, unnumbered appendix; never relax numbered validation. */
+export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWork[], text:string|undefined) {
+  const merged=mergeCostuanDirectoryWorks(works,text);
+  const supplementalContents:PendingCostuanSupplement[]=[];
+  const numbered=merged.filter(work=>{
+    const numbering=parseCostuanNumbering(work.sourceOrder);
+    return numbering && numbering.order!==null;
+  });
+  const extras=merged.filter(work=>!numbered.includes(work));
+  const declaration=title.normalize('NFKC').match(/\[\d+\s*套\s*\+\s*微博图\s*\]/u);
+  if (!extras.length && !declaration) return {works:merged,supplementalContents};
+  const creator=title.split(/\s*COS/iu)[0];
+  const lines=String(text??'').split(/\r?\n/u).flatMap(line=>parseCostuanDirectoryText(line));
+  const keys=lines.map(work=>work.sourceOrderKey);
+  // The ordinary merge retains historical last-entry behavior. The new appendix
+  // exception requires complete, unique raw evidence instead of trusting that merge.
+  if (!declaration || extras.length!==1 || new Set(keys).size!==keys.length || lines.length!==merged.length
+    || works.length!==numbered.length || works.some(work=>{
+      const key=parseCostuanNumbering(work.sourceOrder)?.key;
+      return !key || !numbered.some(item=>item.sourceOrderKey===key);
+    })) {
+    throw new Error('来源附加内容或编号目录尚未明确核验；保留原来源，需人工检查。');
+  }
+  const extra=extras[0];
+  const raw=lines.find(work=>work.sourceOrderKey===extra.sourceOrderKey);
+  if (!raw || raw.order!==undefined || normalizeCostuanTitle(raw.label)!==normalizeCostuanTitle(`${creator} 微博图`)
+    || !raw.mediaSummary || numbered.some(work=>!keys.includes(work.sourceOrderKey!))) {
+    throw new Error('来源附加内容身份不明确；未覆盖历史来源。');
+  }
+  supplementalContents.push({...raw,status:'awaiting_review'});
+  return {works:numbered,supplementalContents};
+}
+
 export function normalizeCostuanTitle(value: string): string {
   const normalized = String(value ?? '')
     .normalize('NFKC')

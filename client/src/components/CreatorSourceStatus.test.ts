@@ -9,6 +9,13 @@ const row = (status?: string, source = false) => ({
   metadataTask: status ? { id: 32, status, updatedAt: '2026-09-08T01:18:21.983Z', lastError: '原始原因', claimedBy: null } : null,
 }) as CreatorSyncRow;
 describe('creator source evidence presentation', () => {
+  it('shows pending supplemental contents separately even when the numbered check completed', () => {
+    const item = { ...row('completed', true), pendingSupplementalTitles: ['微博图'] };
+    const view = mount(CreatorSourceStatus, { props: { item } });
+    expect(view.text()).toContain('微博图：附加内容待人工处理，不参与自动下载/入库');
+    expect(view.text()).toContain('编号作品网盘来源已核验');
+    expect(view.text()).toContain('来源 13 套 · 已知缺失 0 套');
+  });
   it('distinguishes unchecked from a completed search with no match and hides misleading zero counts', () => {
     const unchecked = mount(CreatorSourceStatus, { props: { item: row() } });
     expect(unchecked.text()).toContain('尚未检查来源');

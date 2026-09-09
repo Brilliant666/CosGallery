@@ -532,6 +532,7 @@ describe('ArchiveCatalogView', () => {
 
   it('labels completed checks independently of verified delivery and does not invent a verification time', async () => {
     vi.mocked(fetchMetadataCreators).mockResolvedValue(metadataPage([metadataRow({
+      pendingSupplementalTitles: ['微博图'],
       metadataTask: { id: 32, status: 'completed', attemptCount: 1, claimedBy: null, claimedAt: null, completedAt: null, lastError: null, updatedAt: '2026-09-08T12:00:00.000Z' },
       sourceState: { metadataAccepted: true, deliveryReady: true, deliveryEvidence: 'verified', missing: [] }
     })]));
@@ -539,6 +540,8 @@ describe('ArchiveCatalogView', () => {
     const row = wrapper.get('[data-test="metadata-creators"] tbody tr');
     expect(row.text()).toContain('检查已完成');
     expect(row.text()).toContain('网盘来源已核验');
+    expect(row.text()).toContain('微博图：附加内容待人工处理，不参与自动下载/入库');
+    expect(row.text()).toContain('编号作品网盘来源已核验');
     expect(row.text()).not.toContain('核验时间');
     expect(row.text()).not.toContain('元数据已接入');
   });

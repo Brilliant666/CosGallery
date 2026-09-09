@@ -35,6 +35,58 @@ describe('explicit creator source check rounds',()=>{
   });
   afterEach(async()=>{db.close();await fs.rm(root,{recursive:true,force:true});});
 
+  const withSupplement=(task:ArchiveMetadataTask,count=182)=>{
+    const payload=record(task,count);
+    return {...payload,costuan:{...payload.costuan,title:`Fixture COS写真图片包合集[${count}套+微博图][持续更新]`,
+      resourceDirectoryText:['资源目录','Fixture 微博图[354P-1.8GB]',...payload.costuan.works.map(work=>
+        `Fixture ${work.order===100?'NO.0100':work.sourceOrder} ${work.label}[1P]`)].join('\n')}};
+  };
+
+  it('keeps 182 numbered works automatic and persists the appendix as pending manual evidence, without a download task',()=>{
+    const task=claim('appendix'),payload=withSupplement(task);
+    const options={id:task.id,workerId:'worker',expectedAttempt:task.attemptCount,canonicalCreatorId:creatorId,record:payload};
+    const before=snapshot(),proof=service.validateDirectory(options);
+    expect(snapshot()).toBe(before);
+    expect(proof.requiredFilenames).toHaveLength(182);
+    expect(proof.requiredFilenames).toContain('100.7z');
+    expect(proof.supplementalContents).toMatchObject([{label:'Fixture 微博图',rawTitle:'Fixture 微博图[354P-1.8GB]',status:'awaiting_review'}]);
+    const completion={...request(task,182),record:payload};
+    service.complete(completion);
+    const saved=JSON.parse((db.prepare('SELECT metadata_json FROM archive_catalog_collections').get() as {metadata_json:string}).metadata_json);
+    expect(saved.supplementalContents).toEqual(proof.supplementalContents);
+    expect(saved.resourceDirectoryText).toBe(payload.costuan.resourceDirectoryText);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_source_works WHERE is_active=1').get()?.n).toBe(182);
+    new ArchiveDownloadTaskService(db).planMissing({creatorIds:[creatorId],targetRoot:path.join(root,'inbox')});
+    expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_download_tasks').get()?.n).toBe(182);
+    const accepted=snapshot();service.complete(completion);expect(snapshot()).toBe(accepted);
+    const next=claim('appendix-next'),missing=record(next,182),unchanged=snapshot();
+    expect(()=>service.complete({...request(next,182),record:missing})).toThrow(/附加内容缺失/);
+    expect(snapshot()).toBe(unchanged);
+  });
+
+  it.each(['missing-number','duplicate-number','unadvertised','foreign-appendix','unknown-appendix','duplicate-appendix','missing-appendix'])
+    ('does not use supplemental separation to bypass %s validation',mode=>{
+      const task=claim('appendix-invalid'),payload=withSupplement(task,3);
+      if(mode==='missing-number') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace(/\nFixture NO.003[^\n]*/u,'');
+      if(mode==='duplicate-number') payload.costuan.resourceDirectoryText+='\nFixture NO.001 Work 1[1P]';
+      if(mode==='unadvertised') payload.costuan.title=payload.costuan.title.replace('+微博图','');
+      if(mode==='foreign-appendix') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('Fixture 微博图','Other 微博图');
+      if(mode==='unknown-appendix') payload.costuan.resourceDirectoryText+='\nFixture 花絮[2P]';
+      if(mode==='duplicate-appendix') payload.costuan.resourceDirectoryText+='\nFixture 微博图[354P-1.8GB]';
+      if(mode==='missing-appendix') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('Fixture 微博图[354P-1.8GB]','');
+      const before=snapshot();
+      expect(()=>service.validateDirectory({id:task.id,workerId:'worker',expectedAttempt:task.attemptCount,canonicalCreatorId:creatorId,record:payload})).toThrow(/附加内容|编号目录/);
+      expect(snapshot()).toBe(before);
+    });
+
+  it('does not silently deactivate an appendix already recorded as an active historical Source Work',()=>{
+    const first=claim('historical-special');service.complete(request(first));
+    db.prepare("UPDATE archive_catalog_source_works SET source_order_label='SPECIAL:fixture微博图',source_work_id='SPECIAL:fixture微博图',source_title='Fixture 微博图' WHERE source_work_id='NO.001'").run();
+    const next=claim('historical-special-next'),before=snapshot();
+    expect(()=>service.complete({...request(next),record:withSupplement(next,3)})).toThrow(/已有来源编号缺失/);
+    expect(snapshot()).toBe(before);
+  });
+
   it('network retries reuse one round; a later explicit request really opens a new check; receipts stay auditable',()=>{
     const first=claim('one'),accepted=service.complete(request(first));const before=snapshot();
     expect(plan('one')).toMatchObject({replayed:true,taskIds:[],items:[{task:{status:'completed',attemptCount:1}}]});

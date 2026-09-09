@@ -15,6 +15,8 @@ export interface CreatorSyncRow {
   preference: 'liked' | 'kept' | null; rating: 'R15' | 'R18' | null;
   localWorks: number; sourceWorks: number; missingWorks: number; sourceCollections: number;
   latestSourceAt: string | null; sourceState: ArchiveSourceState;
+  /** Optional while a new client is served by an older backend. */
+  pendingSupplementalTitles?: string[];
   metadataTask: Pick<ArchiveMetadataTask, 'id' | 'status' | 'attemptCount' | 'claimedBy' | 'claimedAt' | 'completedAt' | 'lastError' | 'updatedAt'> | null;
 }
 export interface CreatorSyncStats {

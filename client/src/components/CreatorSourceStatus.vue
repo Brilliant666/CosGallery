@@ -3,8 +3,9 @@
     <strong>{{ headline }}</strong>
     <small v-if="hasSource">来源 {{ item.sourceWorks }} 套 · 已知缺失 {{ item.missingWorks }} 套</small>
     <small v-else>来源套数、缺失数量待确认</small>
-    <small v-if="hasSource">{{ item.sourceState.deliveryReady ? (item.sourceState.deliveryEvidence === 'verified' ? '网盘来源已核验' : '历史网盘记录可用，尚未实时核验') : '网盘来源待确认' }}</small>
+    <small v-if="hasSource">{{ item.sourceState.deliveryReady ? (item.sourceState.deliveryEvidence === 'verified' ? (item.pendingSupplementalTitles?.length ? '编号作品网盘来源已核验' : '网盘来源已核验') : '历史网盘记录可用，尚未实时核验') : '网盘来源待确认' }}</small>
     <small v-if="hasSource">最近有效来源：{{ formatTime(item.latestSourceAt) }}</small>
+    <small v-if="item.pendingSupplementalTitles?.length">{{ item.pendingSupplementalTitles.join('、') }}：附加内容待人工处理，不参与自动下载/入库</small>
     <small v-if="item.metadataTask">最近检查：{{ attemptLabel }} · {{ formatTime(item.metadataTask.updatedAt) }}</small>
     <details v-if="item.metadataTask">
       <summary>检查详情</summary>

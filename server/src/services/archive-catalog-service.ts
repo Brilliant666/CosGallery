@@ -13,6 +13,8 @@ import {
   areCostuanTitlesCompatible,
   mergeCostuanDirectoryWorks,
   normalizeCostuanTitle,
+  splitCostuanCheckDirectory,
+  type PendingCostuanSupplement,
   parseCostuanNumbering
 } from './costuan-numbering-service.js';
 
@@ -411,12 +413,12 @@ export class ArchiveCatalogService {
     });
   }
 
-  validateCompleteCostuanDirectory(recordInput:unknown, creatorId:number): {record:CostuanArchiveRecord;requiredFilenames:string[];sourceFilenames:string[]} {
+  validateCompleteCostuanDirectory(recordInput:unknown, creatorId:number): {record:CostuanArchiveRecord;requiredFilenames:string[];sourceFilenames:string[];supplementalContents:PendingCostuanSupplement[]} {
     const record=costuanRecordSchema.parse(recordInput);
     this.validateCostuanIdentity(creatorId,record.costuan.postId,record.costuan.title);
     const proof=z.object({complete:z.literal(true),checkedAt:z.string().datetime({offset:true}),parsedWorkCount:z.number().int().positive()})
       .safeParse(record.costuan.directoryVerification);
-    const works=mergeCostuanDirectoryWorks(record.costuan.works,record.costuan.resourceDirectoryText);
+    const {works,supplementalContents}=splitCostuanCheckDirectory(record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText);
     const titleCount=record.costuan.title.match(/[\[【](\d+)\s*套[^\]】]*[\]】]/u);
     const declared=record.costuan.collectionCount ?? (titleCount ? Number(titleCount[1]) : null);
     if (!proof.success || !works.length || declared===null || declared!==works.length || proof.data.parsedWorkCount!==works.length
@@ -442,6 +444,13 @@ export class ArchiveCatalogService {
       FROM archive_catalog_source_works sw JOIN archive_catalog_collections c ON c.id=sw.collection_id
       WHERE c.source='costuan' AND c.source_collection_id=? AND c.creator_id=? AND sw.is_active=1`)
       .all(record.costuan.postId,creatorId) as Array<{work_id:number;source_work_id:string;source_order_label:string|null;source_title:string;media_summary:string|null}>;
+    const previousCollection=this.database.prepare(`SELECT metadata_json FROM archive_catalog_collections
+      WHERE source='costuan' AND source_collection_id=? AND creator_id=?`).get(record.costuan.postId,creatorId) as {metadata_json:string|null}|undefined;
+    const oldSupplements=previousCollection?.metadata_json ? JSON.parse(previousCollection.metadata_json).supplementalContents : [];
+    if (Array.isArray(oldSupplements) && oldSupplements.some(old=>!supplementalContents.some(current=>
+      current.sourceOrderKey===old.sourceOrderKey && current.rawTitle===old.rawTitle))) {
+      throw new Error('此前待人工处理的附加内容缺失或发生变化；保留原记录，需人工确认。');
+    }
     // Source refresh is not fuzzy local-title matching. Even a bracketed title
     // suffix can identify different content and must not be silently discarded.
     const stableSourceTitle=(value:string)=>value.normalize('NFKC').replace(/\s+/g,' ').trim();
@@ -463,7 +472,7 @@ export class ArchiveCatalogService {
     }
     // Validate the complete source above, but only replenish cloud packages needed
     // by the local difference. Never restore missing cloud archives for ingested works.
-    return {record:{...record,costuan:{...record.costuan,works}},sourceFilenames:[...filenames],
+    return {record:{...record,costuan:{...record.costuan,works,supplementalContents}},supplementalContents,sourceFilenames:[...filenames],
       requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename))};
   }
 
