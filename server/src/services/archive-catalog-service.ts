@@ -9,13 +9,13 @@ import { z } from 'zod';
 import { databaseManager } from '../db/database.js';
 import { LocalCreatorFolderBridgeService, normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
+import {applyCostuanDirectoryReview,costuanDirectoryReviewSchema,directoryReviewKey} from './costuan-directory-review.js';
 import {
   areCostuanTitlesCompatible,
   mergeCostuanDirectoryWorks,
   normalizeCostuanTitle,
   parseCostuanCollectionCreator,
   splitCostuanCheckDirectory,
-  type PendingCostuanSupplement,
   parseCostuanNumbering
 } from './costuan-numbering-service.js';
 
@@ -413,20 +413,34 @@ export class ArchiveCatalogService {
     });
   }
 
-  validateCompleteCostuanDirectory(recordInput:unknown, creatorId:number): {record:CostuanArchiveRecord;requiredFilenames:string[];sourceFilenames:string[];supplementalContents:PendingCostuanSupplement[]} {
+  saveCostuanDirectoryReview(creatorId:number,input:unknown):void {
+    const review=costuanDirectoryReviewSchema.parse(input);
+    const alias=collectionCreatorAlias(review.collectionTitle),matches=alias?this.findCreatorIdsByAliases([alias]):[];
+    if(matches.length!==1 || matches[0]!==creatorId)throw new Error('人工审核记录的规范博主身份不唯一。');
+    const key=directoryReviewKey(creatorId),value=JSON.stringify(review);
+    const old=this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(key) as {value:string}|undefined;
+    if(old && old.value!==value)throw new Error('已有不同人工审核记录，不能自动覆盖。');
+    if(!old)this.database.prepare('INSERT INTO app_settings(key,value) VALUES (?,?)').run(key,value);
+  }
+
+  validateCompleteCostuanDirectory(recordInput:unknown, creatorId:number) {
     const record=costuanRecordSchema.parse(recordInput);
     this.validateCostuanIdentity(creatorId,record.costuan.postId,record.costuan.title);
-    const proof=z.object({complete:z.literal(true),checkedAt:z.string().datetime({offset:true}),parsedWorkCount:z.number().int().positive()})
+    const savedReview=this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(directoryReviewKey(creatorId)) as {value:string}|undefined;
+    const reviewed=savedReview?applyCostuanDirectoryReview(costuanDirectoryReviewSchema.parse(JSON.parse(savedReview.value)),
+      record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText):null;
+    const proof=z.object({complete:z.boolean(),checkedAt:z.string().datetime({offset:true}),parsedWorkCount:z.number().int().positive()})
       .safeParse(record.costuan.directoryVerification);
-    const {works,supplementalContents}=splitCostuanCheckDirectory(record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText);
+    const {works,supplementalContents}=reviewed??splitCostuanCheckDirectory(record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText);
     const titleCount=record.costuan.title.match(/[\[【](\d+)\s*套[^\]】]*[\]】]/u);
     const declared=record.costuan.collectionCount ?? (titleCount ? Number(titleCount[1]) : null);
-    if (!proof.success || !works.length || declared===null || declared!==works.length || proof.data.parsedWorkCount!==works.length
+    if (!proof.success || (!reviewed && !proof.data.complete) || !works.length || declared===null || declared!==works.length
+      || proof.data.parsedWorkCount!==(reviewed?record.costuan.works.length:works.length)
       || (titleCount && Number(titleCount[1])!==declared)) {
       throw new Error('本轮 Costuan 来源目录未完整核验或声明数量不符；保留上次有效来源，需人工检查。');
     }
     const keyOf=(work:{sourceOrder:string;sourceOrderKey?:string})=>parseCostuanNumbering(work.sourceOrder)?.key ?? null;
-    const rawKeys=record.costuan.works.map(keyOf);
+    const rawKeys=(reviewed?works:record.costuan.works).map(keyOf);
     if (rawKeys.some(key=>!key) || new Set(rawKeys).size!==rawKeys.length) throw new Error('本轮来源编号重复或不能明确解析；未覆盖历史来源。');
     const byKey=new Map<string,typeof works[number]>();
     const filenames=new Set<string>();
@@ -472,7 +486,10 @@ export class ArchiveCatalogService {
     }
     // Validate the complete source above, but only replenish cloud packages needed
     // by the local difference. Never restore missing cloud archives for ingested works.
-    return {record:{...record,costuan:{...record.costuan,works,supplementalContents}},supplementalContents,sourceFilenames:[...filenames],
+    const acceptedDirectoryRevisions=reviewed?.acceptedDirectoryRevisions??[];
+    const canonicalDirectoryVerification={complete:true,checkedAt:proof.data.checkedAt,parsedWorkCount:works.length};
+    return {record:{...record,costuan:{...record.costuan,works,supplementalContents,acceptedDirectoryRevisions,directoryVerification:canonicalDirectoryVerification}},
+      supplementalContents,acceptedDirectoryRevisions,canonicalWorks:works,canonicalDirectoryVerification,sourceFilenames:[...filenames],
       requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename))};
   }
 

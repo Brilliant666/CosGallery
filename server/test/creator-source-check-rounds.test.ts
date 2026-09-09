@@ -8,6 +8,7 @@ import {ManagedCreatorService} from '../src/services/managed-creator-service.js'
 import {ArchiveMetadataTaskService,type ArchiveMetadataTask} from '../src/services/archive-metadata-task-service.js';
 import {ArchiveCatalogService} from '../src/services/archive-catalog-service.js';
 import {ArchiveDownloadTaskService} from '../src/services/archive-download-task-service.js';
+import {parseCostuanDirectoryText} from '../src/services/costuan-numbering-service.js';
 
 describe('explicit creator source check rounds',()=>{
   let db:DatabaseSync,service:ArchiveMetadataTaskService,root:string,creatorId:number;
@@ -34,6 +35,56 @@ describe('explicit creator source check rounds',()=>{
     creatorId=new ManagedCreatorService(db,path.join(root,'gallery')).create({name:'Fixture',preference:'liked'}).id;
   });
   afterEach(async()=>{db.close();await fs.rm(root,{recursive:true,force:true});});
+
+  const reviewedFixture=(task:ArchiveMetadataTask)=>{
+    const original='Fixture NO.002 Old [94P-442M]',selected='Fixture NO.002 New [96P10V-1.58GB]',supplement='Fixture 推图集 [1034P5V-133MB]';
+    const raw=['资源目录',supplement,'Fixture NO.001 First [1P]',original,selected,'Fixture NO.003 Last [1P]'].join('\n');
+    const payload={...record(task),costuan:{...record(task).costuan,resourceDirectoryText:raw,
+      works:raw.split('\n').flatMap(line=>parseCostuanDirectoryText(line)).filter(work=>work.order!==undefined),
+      directoryVerification:{complete:false,checkedAt:'2026-09-08T01:00:00Z',parsedWorkCount:4}}};
+    const review={collectionTitle:payload.costuan.title,numberingKey:'NO:002',originalRawTitle:original,selectedRawTitle:selected,
+      supplementalRawTitles:[supplement],approvedAt:'2026-09-10T01:00:00Z'};
+    return {payload,review};
+  };
+
+  it('uses only a persisted exact human decision and keeps raw revisions without creating an appendix task',()=>{
+    const task=claim('human-review'),{payload,review}=reviewedFixture(task),catalog=new ArchiveCatalogService(db);
+    const options={id:task.id,workerId:'worker',expectedAttempt:task.attemptCount,canonicalCreatorId:creatorId,record:payload};
+    const initial=snapshot();expect(()=>service.validateDirectory(options)).toThrow();expect(snapshot()).toBe(initial);
+    catalog.saveCostuanDirectoryReview(creatorId,review);
+    const before=snapshot();catalog.saveCostuanDirectoryReview(creatorId,review);expect(snapshot()).toBe(before);
+    expect(()=>catalog.saveCostuanDirectoryReview(creatorId,{...review,selectedRawTitle:'different'})).toThrow(/覆盖/);
+    expect(()=>catalog.saveCostuanDirectoryReview(creatorId+1,review)).toThrow(/身份/);
+    const proof=service.validateDirectory(options);expect(snapshot()).toBe(before);
+    expect(proof.canonicalWorks).toHaveLength(3);
+    expect(proof.canonicalWorks[1].rawTitle).toBe(review.selectedRawTitle);
+    expect(proof.supplementalContents).toMatchObject([{rawTitle:review.supplementalRawTitles[0],status:'awaiting_review'}]);
+    expect(proof.acceptedDirectoryRevisions).toMatchObject([{originalRawTitle:review.originalRawTitle,selectedRawTitle:review.selectedRawTitle}]);
+    const completion={...request(task),record:{...payload,costuan:{...payload.costuan,works:proof.canonicalWorks,directoryVerification:proof.canonicalDirectoryVerification}}};
+    service.complete(completion);
+    const saved=JSON.parse(String(db.prepare('SELECT metadata_json FROM archive_catalog_collections').get()?.metadata_json));
+    expect(saved.resourceDirectoryText).toBe(payload.costuan.resourceDirectoryText);
+    expect(saved.acceptedDirectoryRevisions).toEqual(proof.acceptedDirectoryRevisions);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_source_works WHERE is_active=1').get()?.n).toBe(3);
+    new ArchiveDownloadTaskService(db).planMissing({creatorIds:[creatorId],targetRoot:path.join(root,'inbox')});
+    expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_download_tasks').get()?.n).toBe(3);
+    const accepted=snapshot();service.complete(completion);expect(snapshot()).toBe(accepted);
+  });
+
+  it.each(['original','selected','appendix','extra-duplicate','title','missing-old','incomplete-input'])
+    ('does not broaden the human approval to changed %s evidence',mode=>{
+      const task=claim('invalid-human-review'),{payload,review}=reviewedFixture(task);
+      new ArchiveCatalogService(db).saveCostuanDirectoryReview(creatorId,review);
+      if(mode==='original')payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('94P','95P');
+      if(mode==='selected')payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('96P','97P');
+      if(mode==='appendix')payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('1034P','1035P');
+      if(mode==='extra-duplicate')payload.costuan.resourceDirectoryText+='\nFixture NO.001 Another [1P]';
+      if(mode==='title')payload.costuan.title=payload.costuan.title.replace('[3套]','[4套]');
+      if(mode==='missing-old')payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace(review.originalRawTitle,'');
+      if(mode==='incomplete-input')payload.costuan.works.pop();
+      const before=snapshot();expect(()=>service.validateDirectory({id:task.id,workerId:'worker',expectedAttempt:task.attemptCount,canonicalCreatorId:creatorId,record:payload})).toThrow(/审核记录/);
+      expect(snapshot()).toBe(before);
+    });
 
   it('accepts postposed Cosplay category through preflight and completion without widening creator ownership',()=>{
     const task=claim('postfix-title'),payload=request(task);
