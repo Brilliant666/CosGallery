@@ -29,6 +29,11 @@ export function createCreatorSyncReadRouter() {
   router.get('/creator-sync/stats', (request, response) => {
     response.json(new CreatorSyncQueryService().stats(filters.parse(request.query)));
   });
+  router.get('/creator-sync/metadata-creators', (request, response) => {
+    response.json(new CreatorSyncQueryService().metadataCreators(filters.extend({
+      status: z.enum(['pending', 'claimed', 'completed', 'not_found', 'failed', 'cancelled', 'no_task']).optional()
+    }).parse(request.query)));
+  });
   router.get('/download-creators', (request, response) => {
     response.json(new CreatorSyncQueryService().downloadCreators(downloads.parse(request.query)));
   });

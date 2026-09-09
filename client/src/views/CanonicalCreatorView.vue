@@ -19,10 +19,7 @@
               <span v-if="updatedDate">更新于 {{ updatedDate }}</span>
             </div>
             <p v-if="creator.description" class="m-0 whitespace-pre-wrap break-words text-[0.95rem]">{{ creator.description }}</p>
-            <details v-if="creator.localFolders?.length && authStore.canManageLibrary" class="text-sm text-muted">
-              <summary class="cursor-pointer">本地目录 · 编辑或分享指定目录</summary>
-              <ul class="grid gap-2 pl-5 text-left"><li v-for="folder in creator.localFolders" :key="folder.id"><RouterLink :to="{ name: 'folder', params: { slug: folder.slug }, query: { physical: '1' } }">{{ folder.name }} · {{ folder.workCount }} 套</RouterLink></li></ul>
-            </details>
+            <CreatorFolderActions :key="creator.id" :folders="creator.localFolders ?? []" @updated="updateLocalFolder" />
           </div>
         </header>
         <section class="mx-auto w-[min(100%,66.5625rem)]">
@@ -44,17 +41,16 @@ import { fetchCanonicalCreatorWorks } from '../api/gallery';
 import Avatar from '../components/Avatar.vue';
 import FolderGrid from '../components/FolderGrid.vue';
 import InfiniteLoader from '../components/InfiniteLoader.vue';
+import CreatorFolderActions from '../components/CreatorFolderActions.vue';
 import { useAppStore } from '../stores/app';
-import { useAuthStore } from '../stores/auth';
 import { useCreatorReadingStore } from '../stores/creator-reading';
-import type { CosGalleryCreator, FeedItem } from '../types/api';
+import type { CosGalleryCreator, FeedItem, FolderSummary } from '../types/api';
 import { parsePositiveId, libraryReturnRoute } from '../utils/work-gallery';
 
 const props = defineProps<{ creatorId: string }>();
 const route = useRoute();
 const router = useRouter();
 const appStore = useAppStore();
-const authStore = useAuthStore();
 const reading = useCreatorReadingStore();
 const creator = shallowRef<CosGalleryCreator | null>(null);
 const items = ref<FeedItem[]>([]);
@@ -74,6 +70,12 @@ const updatedDate = computed(() => {
 
 function save() {
   if (creator.value && activeKey && generation === reading.generation) reading.save(activeKey, { creator: creator.value, items: [...items.value], total: total.value, nextPage: nextPage.value, hasMore: hasMore.value, scrollY: window.scrollY });
+}
+
+function updateLocalFolder(folder: FolderSummary) {
+  if (!creator.value) return;
+  creator.value = { ...creator.value, localFolders: creator.value.localFolders?.map(item => item.id === folder.id ? { ...item, name: folder.name } : item) };
+  save();
 }
 
 async function loadMore() {

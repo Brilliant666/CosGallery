@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 enableAutoUnmount(afterEach);
 
 import ArchiveCatalogView from './ArchiveCatalogView.vue';
-import { fetchDownloadCreators, fetchDownloadTaskPage } from '../api/creator-sync';
-vi.mock('../api/creator-sync', () => ({ fetchDownloadCreators: vi.fn(), fetchDownloadTaskPage: vi.fn() }));
+import { fetchDownloadCreators, fetchDownloadTaskPage, fetchMetadataCreators } from '../api/creator-sync';
+import type { CreatorSyncRow, MetadataCreatorPage } from '../api/creator-sync';
+vi.mock('../api/creator-sync', () => ({ fetchDownloadCreators: vi.fn(), fetchDownloadTaskPage: vi.fn(), fetchMetadataCreators: vi.fn() }));
 import type { LocalIngestJob } from '../types/api';
 import { RequestError } from '../api/http';
 import {
@@ -14,7 +15,6 @@ import {
   fetchArchiveCatalog,
   fetchArchiveCatalogCreator,
   fetchArchiveDownloadTasks,
-  fetchArchiveMetadataTasks,
   fetchLocalIngestInboxCreators,
   fetchLocalIngestJobs,
   fetchLocalIngestOperation,
@@ -35,7 +35,6 @@ vi.mock('../api/gallery', () => ({
   fetchArchiveCatalog: vi.fn(),
   fetchArchiveCatalogCreator: vi.fn(),
   fetchArchiveDownloadTasks: vi.fn(),
-  fetchArchiveMetadataTasks: vi.fn(),
   planArchiveDownloadTasks: vi.fn(),
   planArchiveMetadataTasks: vi.fn(),
   fetchArchiveBridgeStatus: vi.fn(),
@@ -145,6 +144,21 @@ const idleLocalIngestOperation = {
   lastCompleted: null
 };
 
+function metadataRow(overrides: Partial<CreatorSyncRow> = {}): CreatorSyncRow {
+  return { creatorId: 115, creatorName: 'Historical source', aliases: [], isActive: true,
+    preference: 'liked', rating: 'R18', localWorks: 13, sourceWorks: 17, missingWorks: 4,
+    sourceCollections: 1, latestSourceAt: '2026-08-31T00:00:00.000Z',
+    sourceState: { metadataAccepted: true, deliveryReady: true, deliveryEvidence: 'historical', missing: [] },
+    metadataTask: null, ...overrides };
+}
+
+function metadataPage(items: CreatorSyncRow[], overrides: Partial<MetadataCreatorPage> = {}): MetadataCreatorPage {
+  return { items, total: items.length, page: 1, limit: 20, hasMore: false, readAt: '2026-09-09T00:00:00.000Z',
+    summary: { sourceCreators: 2, sourceCollections: 2, taskTotal: 2,
+      tasks: { total: 2, pending: 0, claimed: 0, completed: 0, failed: 1, not_found: 1, cancelled: 0 } },
+    ...overrides };
+}
+
 function localIngestDashboard(job: LocalIngestJob = localIngestJob) {
   const counts = {
     total: 1,
@@ -231,7 +245,7 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(fetchArchiveCatalog).mockReset();
     vi.mocked(fetchArchiveCatalogCreator).mockReset();
     vi.mocked(fetchArchiveDownloadTasks).mockReset();
-    vi.mocked(fetchArchiveMetadataTasks).mockReset();
+    vi.mocked(fetchMetadataCreators).mockReset();
     vi.mocked(planArchiveDownloadTasks).mockReset();
     vi.mocked(planArchiveMetadataTasks).mockReset();
     vi.mocked(fetchArchiveBridgeStatus).mockReset();
@@ -373,35 +387,10 @@ describe('ArchiveCatalogView', () => {
       sameVolume: true,
       errors: []
     });
-    vi.mocked(fetchArchiveMetadataTasks).mockResolvedValue({
-      summary: {
-        total: 1,
-        actionable: 1,
-        pending: 1,
-        claimed: 0,
-        completed: 0,
-        not_found: 0,
-        failed: 0,
-        cancelled: 0
-      },
-      items: [{
-        id: 7,
-        creatorId: 115,
-        creatorName: 'rua阮阮',
-        preference: 'liked',
-        rating: 'R18',
-        source: 'costuan',
-        localWorks: 13,
-        status: 'pending',
-        claimedBy: null,
-        claimedAt: null,
-        completedAt: null,
-        attemptCount: 0,
-        lastError: null,
-        createdAt: '2026-08-31T00:00:00.000Z',
-        updatedAt: '2026-08-31T00:00:00.000Z'
-      }],
-      total: 1
+    vi.mocked(fetchMetadataCreators).mockResolvedValue({
+      items: [], total: 0, page: 1, limit: 20, hasMore: false, readAt: '',
+      summary: { sourceCreators: 0, sourceCollections: 0, taskTotal: 0,
+        tasks: { total: 0, pending: 0, claimed: 0, completed: 0, failed: 0, not_found: 0, cancelled: 0 } }
     });
     vi.mocked(planArchiveMetadataTasks).mockResolvedValue({
       source: 'costuan',
@@ -434,6 +423,8 @@ describe('ArchiveCatalogView', () => {
 
   beforeEach(() => {
     // Shared read model fixtures retain the existing view-level refresh assertions.
+    vi.mocked(fetchDownloadCreators).mockReset();
+    vi.mocked(fetchDownloadTaskPage).mockReset();
     vi.mocked(fetchDownloadCreators).mockImplementation(async () => {
       const old = await fetchArchiveDownloadTasks();
       const groups = new Map<number, typeof old.items>();
@@ -509,6 +500,87 @@ describe('ArchiveCatalogView', () => {
     expect(planArchiveMetadataTasks).not.toHaveBeenCalled();
   });
 
+  it('shows source evidence independently from absent, not-found, and failed check tasks', async () => {
+    const task = { id: 42, status: 'not_found' as const, attemptCount: 1, claimedBy: null,
+      claimedAt: null, completedAt: null, lastError: null, updatedAt: '2026-09-08T12:00:00.000Z' };
+    vi.mocked(fetchMetadataCreators).mockResolvedValue(metadataPage([
+      metadataRow(),
+      metadataRow({ creatorId: 116, creatorName: 'Task only', sourceCollections: 0, latestSourceAt: null,
+        sourceState: { metadataAccepted: false, deliveryReady: false, deliveryEvidence: 'missing', missing: [] }, metadataTask: task }),
+      metadataRow({ creatorId: 117, creatorName: 'Source and failed task', metadataTask: { ...task, id: 43, status: 'failed', lastError: 'fixture source check failed' } })
+    ]));
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const rows = wrapper.get('[data-test="metadata-creators"]').findAll('tbody tr');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.text()).toContain('历史转存记录可用');
+    expect(rows[0]!.text()).toContain('来源记录：2026-08-31T00:00:00.000Z');
+    expect(rows[0]!.text()).toContain('暂无检查任务记录');
+    expect(rows[0]!.text()).not.toMatch(/任务 #|更新：|2026-09-09/);
+    expect(rows[1]!.text()).toContain('尚无 Costuan 来源');
+    expect(rows[1]!.text()).toContain('本次未找到合集');
+    expect(rows[1]!.text()).toContain('任务 #42');
+    expect(rows[1]!.text()).not.toContain('来源记录：');
+    expect(rows[2]!.text()).toContain('历史转存记录可用');
+    expect(rows[2]!.text()).toContain('失败待重试');
+    expect(rows[2]!.text()).toContain('fixture source check failed');
+    expect(planArchiveMetadataTasks).not.toHaveBeenCalled();
+  });
+
+  it('fetches Stage 1 page two from the server and retains all enabled states', async () => {
+    vi.mocked(fetchMetadataCreators).mockResolvedValueOnce(metadataPage([metadataRow()], { total: 21, hasMore: true }))
+      .mockResolvedValueOnce(metadataPage([metadataRow({ creatorId: 116, creatorName: 'Page two', isActive: false })], { total: 21, page: 2 }));
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    expect(wrapper.get('[data-test="metadata-next"]').attributes('disabled')).toBeUndefined();
+    await wrapper.get('[data-test="metadata-next"]').trigger('click'); await flushPromises();
+    expect(fetchMetadataCreators).toHaveBeenLastCalledWith({ page: 2, limit: 20, enabled: 'all' });
+    expect(wrapper.get('[data-test="metadata-creators"]').text()).toContain('Page two');
+    expect(wrapper.get('[data-test="metadata-creators"]').text()).not.toContain('Historical source');
+    expect(wrapper.get('[data-test="metadata-pagination"]').text()).toContain('第 2 / 2 页');
+    expect(wrapper.get('[data-test="metadata-next"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="metadata-prev"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('shows a Stage 1 read error instead of an empty successful result', async () => {
+    vi.mocked(fetchMetadataCreators).mockRejectedValueOnce(new Error('来源账本读取失败'));
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const stage1 = wrapper.get('[aria-label="博主元数据采集队列"]');
+    expect(stage1.get('[role="alert"]').text()).toContain('来源账本读取失败');
+    expect(stage1.text()).not.toContain('暂无有效 Costuan 来源或来源检查任务');
+    expect(stage1.find('[data-test="metadata-pagination"]').exists()).toBe(false);
+    await wrapper.get('[data-test="refresh-stage1"]').trigger('click'); await flushPromises();
+    expect(stage1.find('[role="alert"]').exists()).toBe(false);
+    expect(stage1.text()).toContain('暂无有效 Costuan 来源或来源检查任务');
+  });
+
+  it.each(['old-first', 'new-first', 'old-error'] as const)('protects Stage 1 refresh rows and loading from late pagination (%s)', async (order) => {
+    let resolveOld!: (value: MetadataCreatorPage) => void;
+    let rejectOld!: (error: Error) => void;
+    let resolveNew!: (value: MetadataCreatorPage) => void;
+    vi.mocked(fetchMetadataCreators).mockResolvedValueOnce(metadataPage([metadataRow()], { total: 21, hasMore: true }))
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve; }));
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    await wrapper.get('[data-test="metadata-next"]').trigger('click');
+    await wrapper.get('[data-test="refresh-stage1"]').trigger('click');
+    expect(fetchMetadataCreators).toHaveBeenLastCalledWith({ page: 1, limit: 20, enabled: 'all' });
+    const oldPage = metadataPage([metadataRow({ creatorName: 'Stale page two' })], { page: 2, total: 21 });
+    const stage1 = wrapper.get('[aria-label="博主元数据采集队列"]');
+    if (order === 'old-first') {
+      resolveOld(oldPage); await flushPromises();
+      expect(stage1.get('[role="status"]').text()).toContain('正在读取');
+      expect(wrapper.get('[data-test="metadata-next"]').attributes('disabled')).toBeDefined();
+    }
+    resolveNew(metadataPage([metadataRow({ creatorName: 'Latest refresh' })])); await flushPromises();
+    if (order === 'new-first') resolveOld(oldPage);
+    if (order === 'old-error') rejectOld(new Error('stale pagination error'));
+    await flushPromises();
+    expect(stage1.text()).toContain('Latest refresh');
+    expect(stage1.text()).not.toMatch(/Stale page two|stale pagination error/);
+    expect(stage1.find('[role="status"]').exists()).toBe(false);
+    expect(stage1.find('[role="alert"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="metadata-pagination"]').text()).toContain('第 1 / 1 页');
+  });
+
   it('shows a redacted full ingest preview and can run the allowlisted batch', async () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
@@ -519,6 +591,8 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.text()).not.toContain('隔离目录');
     const libraryInput = wrapper.findAll('input').find((input) => input.element.value === localIngestSettings.libraryRoot);
     expect(libraryInput?.attributes()).toHaveProperty('readonly');
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
     expect(wrapper.text()).toContain('007.7zz');
     expect(wrapper.text()).toContain(localIngestJob.sourceArchiveSha256);
     expect(wrapper.text()).not.toContain('fixture-password');
@@ -554,6 +628,8 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
 
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
     await wrapper.get('[data-test="run-local-ingest-creator"]').trigger('click');
     await flushPromises();
 
@@ -583,6 +659,8 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
 
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
     const evidence = wrapper.get('[data-test="local-ingest-review-evidence"]');
     expect(evidence.text()).toContain('portrait.jfif');
     expect(evidence.text()).toContain(reviewJob.processingPath!);
@@ -642,6 +720,8 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
 
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
     expect(wrapper.text()).toContain('上次进程中断，可继续');
     expect(wrapper.text()).not.toContain('internal English fallback');
   });
@@ -696,6 +776,8 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
 
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
     for (const selector of [
       '[data-test="local-ingest-inbox-root"]',
       '[data-test="local-ingest-processing-root"]',
@@ -758,7 +840,7 @@ describe('ArchiveCatalogView', () => {
     });
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
-    const stage1Reads = vi.mocked(fetchArchiveMetadataTasks).mock.calls.length;
+    const stage1Reads = vi.mocked(fetchMetadataCreators).mock.calls.length;
     const stage2Reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
 
     await wrapper.get('[data-test="scan-local-ingest"]').trigger('click');
@@ -767,7 +849,7 @@ describe('ArchiveCatalogView', () => {
     expect(scanLocalIngestInbox).toHaveBeenCalledWith();
     expect(saveLocalIngestSettings).not.toHaveBeenCalled();
     expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads + 1);
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1Reads);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads);
     expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('已确认 6 个本地下载');
     wrapper.unmount();
   });
@@ -776,7 +858,7 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
     const stage2Reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
-    const stage1Reads = vi.mocked(fetchArchiveMetadataTasks).mock.calls.length;
+    const stage1Reads = vi.mocked(fetchMetadataCreators).mock.calls.length;
     const stage3Reads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
     const catalogReads = vi.mocked(fetchArchiveCatalog).mock.calls.length;
 
@@ -784,7 +866,7 @@ describe('ArchiveCatalogView', () => {
     await flushPromises();
 
     expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads + 1);
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1Reads);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads);
     expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(stage3Reads);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads);
     expect(wrapper.get('[data-test="download-notice"]').text()).toContain('未执行任务规划或本地扫描');
@@ -907,7 +989,7 @@ describe('ArchiveCatalogView', () => {
       });
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
-    const stage1Reads = vi.mocked(fetchArchiveMetadataTasks).mock.calls.length;
+    const stage1Reads = vi.mocked(fetchMetadataCreators).mock.calls.length;
     const stage2Reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
     const catalogReads = vi.mocked(fetchArchiveCatalog).mock.calls.length;
     const initialOperationReads = vi.mocked(fetchLocalIngestOperation).mock.calls.length;
@@ -915,7 +997,7 @@ describe('ArchiveCatalogView', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     await flushPromises();
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(initialOperationReads + 1);
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1Reads);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads);
     expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads);
 
@@ -931,7 +1013,7 @@ describe('ArchiveCatalogView', () => {
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(initialOperationReads + 2);
     expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads + 2);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads + 1);
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1Reads + 1);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads + 1);
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(initialOperationReads + 2);
@@ -955,10 +1037,12 @@ describe('ArchiveCatalogView', () => {
     await flushPromises();
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
     await flushPromises();
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
     expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('false');
     expect(wrapper.get('[data-test="local-ingest-creators"]').text()).toContain('0 / 1');
     const jobReads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
-    const stage1Reads = vi.mocked(fetchArchiveMetadataTasks).mock.calls.length;
+    const stage1Reads = vi.mocked(fetchMetadataCreators).mock.calls.length;
     const stage2Reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
     const catalogReads = vi.mocked(fetchArchiveCatalog).mock.calls.length;
     job = localIngestJob;
@@ -975,13 +1059,75 @@ describe('ArchiveCatalogView', () => {
     expect(totals).toContain('1已入库');
     expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('false');
     expect(wrapper.find('[data-test="run-local-ingest-job"]').exists()).toBe(false);
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1Reads);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads);
     expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads);
     expect(runLocalIngestBatch).not.toHaveBeenCalled();
     expect(runLocalIngestJob).not.toHaveBeenCalled();
     expect(scanLocalIngestInbox).not.toHaveBeenCalled();
     wrapper.unmount();
+  });
+
+  it('initially reads Stage 3 summaries without selecting a creator or exposing job rows', async () => {
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(1);
+    expect(fetchLocalIngestJobs).toHaveBeenCalledWith({ page: 1, limit: 50 });
+    expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('false');
+    expect(wrapper.text()).not.toContain(localIngestJob.sourceArchiveSha256);
+    expect(wrapper.find('[data-test="local-ingest-status-filter"]').exists()).toBe(false);
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+    expect(runLocalIngestJob).not.toHaveBeenCalled();
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+  });
+
+  it('collapses all Stage 3 creators when the expanded creator disappears instead of selecting the first remaining creator', async () => {
+    const remainingJob: LocalIngestJob = { ...localIngestJob, id: 2, creatorId: 193, creatorName: 'Remaining creator', sourceArchiveName: 'remaining-only.7z' };
+    const original = { ...localIngestDashboard(), creators: [...localIngestDashboard().creators, ...localIngestDashboard(remainingJob).creators] };
+    vi.mocked(fetchLocalIngestJobs).mockResolvedValueOnce(original).mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(localIngestDashboard(remainingJob));
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click'); await flushPromises();
+    expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('true');
+    const reads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
+    await wrapper.get('[data-test="refresh-stage3"]').trigger('click'); await flushPromises();
+    const toggles = wrapper.findAll('[data-test="local-ingest-creators"] button[aria-expanded]');
+    expect(toggles).toHaveLength(1);
+    expect(toggles[0]!.text()).toContain('Remaining creator');
+    expect(toggles[0]!.attributes('aria-expanded')).toBe('false');
+    expect(wrapper.find('[data-test="local-ingest-status-filter"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('remaining-only.7z');
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(reads + 1);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith(expect.objectContaining({ creatorId: localIngestJob.creatorId }));
+    expect(runLocalIngestJob).not.toHaveBeenCalled();
+  });
+
+  it.each(['collapse', 'switch'] as const)('ignores a late creator detail response after a Stage 3 %s', async (action) => {
+    const secondJob: LocalIngestJob = { ...localIngestJob, id: 2, creatorId: 193, creatorName: 'Second', sourceArchiveName: 'second-only.7z' };
+    const firstJob: LocalIngestJob = { ...localIngestJob, sourceArchiveName: 'stale-only.7z' };
+    const creators = [...localIngestDashboard(firstJob).creators, ...localIngestDashboard(secondJob).creators];
+    const dashboard = (job: LocalIngestJob) => ({ ...localIngestDashboard(job), creators });
+    let resolveFirst!: (value: ReturnType<typeof dashboard>) => void;
+    vi.mocked(fetchLocalIngestJobs).mockImplementation(async (options = {}) => {
+      if (options.creatorId === firstJob.creatorId) return new Promise(resolve => { resolveFirst = resolve; });
+      return dashboard(secondJob);
+    });
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+    const toggles = () => wrapper.findAll('[data-test="local-ingest-creators"] button[aria-expanded]');
+    await toggles()[0]!.trigger('click');
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith(expect.objectContaining({ creatorId: firstJob.creatorId, page: 1 }));
+    await toggles()[action === 'collapse' ? 0 : 1]!.trigger('click');
+    await flushPromises();
+    resolveFirst(dashboard(firstJob));
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('stale-only.7z');
+    expect(toggles()[0]!.attributes('aria-expanded')).toBe('false');
+    expect(toggles()[1]!.attributes('aria-expanded')).toBe(action === 'switch' ? 'true' : 'false');
+    if (action === 'switch') expect(wrapper.text()).toContain('second-only.7z');
+    else expect(wrapper.find('[data-test="local-ingest-status-filter"]').exists()).toBe(false);
+    expect(runLocalIngestJob).not.toHaveBeenCalled();
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
   });
 
   it('does not poll while idle', async () => {
@@ -999,24 +1145,24 @@ describe('ArchiveCatalogView', () => {
   it('refreshes only Stage 1/2 on selected submission, visible return and confirmed plugin state events without automation or polling',async()=>{
     vi.useFakeTimers();
     const wrapper=mount(ArchiveCatalogView);await flushPromises();
-    const stage1=vi.mocked(fetchArchiveMetadataTasks).mock.calls.length;
+    const stage1=vi.mocked(fetchMetadataCreators).mock.calls.length;
     const stage2=vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
     const catalog=vi.mocked(fetchArchiveCatalog).mock.calls.length;
     await wrapper.get('[data-test=first-collection-slot]').trigger('click');await flushPromises();
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+1);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1+1);
     expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2+1);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalog);
     window.dispatchEvent(new MessageEvent('message',{source:window,origin:window.location.origin,data:{source:'costuan-archive-manager',type:'cosgallery:archive-state-changed'}}));
     await flushPromises();
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+2);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1+2);
     window.dispatchEvent(new MessageEvent('message',{source:window,origin:'https://untrusted.invalid',data:{source:'costuan-archive-manager',type:'cosgallery:archive-state-changed'}}));
     await flushPromises();
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+2);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1+2);
     Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));
     Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'));await flushPromises();
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+3);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1+3);
     await vi.advanceTimersByTimeAsync(30_000);await flushPromises();
-    expect(fetchArchiveMetadataTasks).toHaveBeenCalledTimes(stage1+3);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1+3);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalog);
     expect(planArchiveMetadataTasks).not.toHaveBeenCalled();expect(planArchiveDownloadTasks).not.toHaveBeenCalled();expect(scanLocalIngestInbox).not.toHaveBeenCalled();expect(runLocalIngestBatch).not.toHaveBeenCalled();
   });
@@ -1053,6 +1199,10 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();
 
+    expect(wrapper.findAll('[data-test="run-local-ingest-job"]')).toHaveLength(0);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith({ page: 1, limit: 50 });
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
     expect(wrapper.findAll('[data-test="run-local-ingest-job"]')).toHaveLength(50);
     expect(wrapper.text()).toContain('0 / 558');
     expect(wrapper.get('[data-test="local-ingest-creators"]').text()).toContain('558待处理');

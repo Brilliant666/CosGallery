@@ -15,6 +15,15 @@ export type CreatorSyncFilters = {
 };
 export type CreatorSyncPageOptions = CreatorSyncFilters & { page?: number; limit?: number };
 export type CreatorSyncDownloadOptions = CreatorSyncPageOptions & { status?: ArchiveDownloadTaskStatus };
+export type CreatorSyncMetadataOptions = CreatorSyncPageOptions & { status?: ArchiveMetadataTaskStatus | 'no_task' };
+export type CreatorSyncMetadataPage = CreatorSyncPage<CreatorSyncRosterItem> & {
+  summary: {
+    sourceCreators: number;
+    sourceCollections: number;
+    taskTotal: number;
+    tasks: Record<ArchiveMetadataTaskStatus, number> & { total: number };
+  };
+};
 export type CreatorSyncPage<T> = { items: T[]; total: number; page: number; limit: number; hasMore: boolean; readAt: string };
 export type CreatorSyncMetadataTask = {
   id: number;
@@ -265,6 +274,34 @@ export class CreatorSyncQueryService {
           unresolvedLocal: counts.local - counts.matchedLocal, missing: counts.missing },
         execution: { metadata: summary(METADATA_STATUSES, metadata), download: summary(DOWNLOAD_STATUSES, download), ingest: summary(INGEST_STATUSES, ingest) },
         unlinkedLocalFolders: { ...unlinked, scope: 'all-unlinked' } };
+    });
+  }
+
+  /** Stage 1 is the canonical source/task union; a historical source never creates a task. */
+  metadataCreators(options: CreatorSyncMetadataOptions = {}): CreatorSyncMetadataPage {
+    const { page, limit } = pageOptions(options), cohort = this.cohort(options);
+    if (options.status !== undefined && options.status !== 'no_task' && !METADATA_STATUSES.includes(options.status)) {
+      throw new Error('来源检查任务状态无效。');
+    }
+    const statusClause = options.status === 'no_task' ? ' AND metadata_task_id IS NULL'
+      : options.status ? ' AND metadata_status=?' : '';
+    const values = options.status && options.status !== 'no_task' ? [...cohort.values, options.status] : cohort.values;
+    const scope = `${cohort.sql}, metadata_scope AS (SELECT * FROM cohort
+      WHERE (source_works>0 OR metadata_task_id IS NOT NULL)${statusClause})`;
+    return this.read(() => {
+      const counts = this.database.prepare(`${scope} SELECT COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN source_works>0 THEN 1 ELSE 0 END),0) AS sourceCreators,
+        COALESCE(SUM(source_collections),0) AS sourceCollections FROM metadata_scope`)
+        .get(...values) as { total: number; sourceCreators: number; sourceCollections: number };
+      const tasks = summary(METADATA_STATUSES, this.database.prepare(`${scope}
+        SELECT metadata_status AS status,COUNT(*) AS count FROM metadata_scope
+        WHERE metadata_task_id IS NOT NULL GROUP BY metadata_status`).all(...values) as Array<{ status: string; count: number }>);
+      const rows = this.database.prepare(`${scope} SELECT * FROM metadata_scope
+        ORDER BY CASE preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,creator_name COLLATE NOCASE,creator_id LIMIT ? OFFSET ?`)
+        .all(...values, limit, (page - 1) * limit) as RosterRow[];
+      return { items: rows.map(rosterItem), total: counts.total, page, limit, hasMore: page * limit < counts.total,
+        readAt: new Date().toISOString(), summary: { sourceCreators: counts.sourceCreators,
+          sourceCollections: counts.sourceCollections, taskTotal: tasks.total, tasks } };
     });
   }
 

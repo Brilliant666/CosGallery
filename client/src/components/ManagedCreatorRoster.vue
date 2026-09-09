@@ -5,20 +5,20 @@
       <button type="button" class="primary" @click="openNew">新增博主</button>
     </header>
     <div v-if="payload" class="roster-counts" aria-label="博主库统计">
-      <span>总数 <b>{{ payload.summary.creators }}</b></span>
+      <span>全库总数 <b>{{ payload.summary.creators }}</b></span>
       <span>启用 {{ payload.summary.activeCreators }} / 停用 {{ payload.summary.inactiveCreators }}</span>
       <span>喜欢 {{ payload.summary.liked }} / 保留 {{ payload.summary.kept }} / 未设置 {{ payload.summary.unsetPreference }}</span>
       <span>R15 {{ payload.summary.r15 }} / R18 {{ payload.summary.r18 }} / 待分类 {{ payload.summary.unclassified }}</span>
       <span>有本地作品 {{ payload.summary.creatorsWithLocalWorks }} / 无本地作品 {{ payload.summary.creatorsWithoutLocalWorks }} / 未关联本地目录 {{ payload.summary.unlinkedLocalFolders }}</span>
     </div>
-    <form class="roster-filters" @submit.prevent="search">
-      <label class="search">搜索名称或别名<input v-model="filters.query" type="search" placeholder="名称或别名" /></label>
+    <form class="roster-filters" @submit.prevent="search" @change="onFilterChange">
+      <label class="search">搜索名称或别名<input :value="filters.query" type="search" placeholder="名称或别名" @input="onQueryInput" @compositionstart="startComposition" @compositionend="endComposition" @keydown.enter="onEnter" /></label>
       <label>偏好<select v-model="filters.preference"><option value="">全部偏好</option><option value="liked">喜欢</option><option value="kept">保留</option><option value="unset">未设置</option></select></label>
       <label>分级<select v-model="filters.rating"><option value="">全部分级</option><option>R15</option><option>R18</option><option value="unclassified">待分类</option></select></label>
       <label>状态<select v-model="filters.active"><option value="active">启用</option><option value="inactive">停用</option><option value="all">全部状态</option></select></label>
       <label>本地作品<select v-model="filters.hasLocal"><option value="">全部</option><option value="yes">有本地作品</option><option value="no">无本地作品</option></select></label>
       <label>来源记录<select v-model="filters.hasSource"><option value="">全部</option><option value="yes">有来源记录</option><option value="no">无来源记录</option></select></label>
-      <button type="submit" :disabled="loading">筛选</button>
+      <button type="button" @click="resetFilters">重置筛选</button>
     </form>
     <p v-if="error && !dialogOpen" role="alert" class="error">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
@@ -36,7 +36,7 @@
     <p v-if="payload && !payload.items.length">没有符合条件的博主。</p>
     <footer class="roster-paging">
       <button :disabled="page <= 1 || loading" @click="goPage(page - 1)">上一页</button>
-      <span>第 {{ page }} 页 · {{ payload?.total ?? 0 }} 位 · 每页 50 位</span>
+      <span>第 {{ page }} 页 · 筛选结果 {{ payload?.total ?? 0 }} 位 · 每页 50 位</span>
       <button :disabled="!payload?.hasMore || loading" @click="goPage(page + 1)">下一页</button>
     </footer>
 
@@ -104,7 +104,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, onBeforeUnmount, reactive, ref } from 'vue';
 import FirstCollectionSelector from './FirstCollectionSelector.vue';
 import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
 import { RequestError } from '../api/http';
@@ -124,6 +124,11 @@ const preferredFolderDraft = ref<number | null>(null);
 const candidates = ref<Array<{id:number;name:string}>>([]);
 const pendingAction = ref<{kind:'state'}|{kind:'unlink';folderId:number}|null>(null);
 let loadGeneration = 0;
+let queryTimer: ReturnType<typeof setTimeout> | undefined;
+let composing = false;
+let disposed = false;
+let requestKey: string | null = null;
+let appliedFilterKey: string | null = null;
 const preferenceLabel = (value:ArchiveCatalogPreference|null) => value === 'liked' ? '喜欢' : value === 'kept' ? '保留' : '未设置';
 const sourceLabel = (source:string) => ({hentaiclub:'历史种子（已退役）',costuan:'作品来源 · Costuan',manual:'手工', 'manual-history':'历史名称'}[source] ?? source);
 const safeSourceUrl = (value:string|null) => !!value && /^https?:\/\//iu.test(value);
@@ -132,22 +137,68 @@ function showError(reason:unknown) {
   const data = reason instanceof RequestError ? reason.payload as {candidates?:Array<{id:number;name:string}>}|undefined : undefined;
   candidates.value = data?.candidates ?? [];
 }
-async function load() {
+async function load(force = true) {
+  if (disposed) return;
+  const filterKey = JSON.stringify(filters);
+  const params = {page:page.value,limit:50,query:filters.query,active:filters.active,
+    preference:filters.preference||undefined,rating:filters.rating||undefined,hasLocal:filters.hasLocal||undefined,hasSource:filters.hasSource||undefined};
+  const key = JSON.stringify(params);
+  if (!force && requestKey === key) return;
+  requestKey = key;
   const generation = ++loadGeneration;
   loading.value = true;
   try {
-    const result = await fetchArchiveCatalog({page:page.value,limit:50,query:filters.query,active:filters.active,
-      preference:filters.preference||undefined,rating:filters.rating||undefined,hasLocal:filters.hasLocal||undefined,hasSource:filters.hasSource||undefined});
-    if (generation === loadGeneration) payload.value = result;
-  } catch (reason) { if (generation === loadGeneration) showError(reason); }
+    const result = await fetchArchiveCatalog(params);
+    if (generation === loadGeneration) { payload.value = result; appliedFilterKey = filterKey; }
+  } catch (reason) { if (generation === loadGeneration) { requestKey = null; showError(reason); } }
   finally { if (generation === loadGeneration) loading.value = false; }
 }
-async function search() { page.value = 1; error.value = ''; await load(); }
+function clearQueryTimer() { clearTimeout(queryTimer); queryTimer = undefined; }
+function onFilterChange(event: Event) {
+  if (event.target instanceof HTMLSelectElement) void search();
+}
+function invalidateLoad() { ++loadGeneration; requestKey = null; loading.value = false; }
+async function search() {
+  clearQueryTimer();
+  if (composing) return;
+  page.value = 1; error.value = ''; await load(false);
+}
+function scheduleQuery() {
+  clearQueryTimer();
+  invalidateLoad();
+  if (composing) return;
+  if (!filters.query) { void search(); return; }
+  queryTimer = setTimeout(() => { void search(); }, 300);
+}
+function onQueryInput(event: Event) {
+  const value = (event.target as HTMLInputElement).value;
+  if (value === filters.query) return;
+  filters.query = value;
+  scheduleQuery();
+}
+function startComposition() { composing = true; clearQueryTimer(); invalidateLoad(); }
+function endComposition(event: CompositionEvent) {
+  composing = false;
+  filters.query = (event.target as HTMLInputElement).value;
+  scheduleQuery();
+}
+function onEnter(event: KeyboardEvent) {
+  event.preventDefault();
+  if (!event.isComposing && !composing) void search();
+}
+function resetFilters() {
+  composing = false;
+  Object.assign(filters, {query:'',preference:'',rating:'',active:'active',hasLocal:'',hasSource:''});
+  void search();
+}
 async function handleSourcePlanned(creatorIds: number[]) {
   emit('sourcePlanned', creatorIds);
   await load();
 }
-async function goPage(value:number) { page.value = value; await load(); }
+async function goPage(value:number) {
+  if (JSON.stringify(filters) !== appliedFilterKey) { await search(); return; }
+  clearQueryTimer(); page.value = value; await load(false);
+}
 function showDialog() { if (!dialog.value?.open) dialog.value?.showModal(); dialogOpen.value = true; }
 function closeDialog() { if (!busy.value) { dialog.value?.close(); dialogOpen.value = false; } }
 function cancelDialog(event:Event) { if (busy.value) event.preventDefault(); }
@@ -218,7 +269,8 @@ async function confirmAction() {
     return fetchArchiveCatalogCreator(detail.value!.id);
   });
 }
-onMounted(load);
+onMounted(() => { void load(); });
+onBeforeUnmount(() => { disposed = true; clearQueryTimer(); invalidateLoad(); });
 </script>
 
 <style scoped>

@@ -3,6 +3,7 @@
     <section class="w-[min(100%,32rem)] p-[1.4rem] bg-surface border border-border rounded-[1.2rem] shadow-[var(--shadow)]" role="dialog" aria-modal="true" :aria-labelledby="titleId">
       <div class="grid gap-[1.2rem]">
         <h2 :id="titleId" class="m-0 text-[1.25rem] font-semibold">{{ t('folder.profileModal.title') }}</h2>
+        <p v-if="scope" class="m-0 break-all text-sm text-muted">{{ scope }}</p>
 
         <form @submit.prevent="submit" class="grid gap-[1.1rem]">
           <div class="grid gap-[0.4rem]">
@@ -60,6 +61,7 @@ import { useI18n } from 'vue-i18n';
 const props = defineProps<{
   initialName: string;
   initialDescription: string | null;
+  scope?: string;
   error?: string | null;
   loading?: boolean;
 }>();
