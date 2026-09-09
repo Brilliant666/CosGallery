@@ -57,7 +57,7 @@ try {
   await page.goto(`${base}#/library/166`);
   await page.getByRole('heading', { name: '测试博主', exact: true }).waitFor();
   assert.equal(requests.filter(r => r.path === '/api/folders/synthetic').length, 0);
-  await page.locator('summary').click();
+  assert.equal(await page.locator('[data-test=creator-folder-actions] details').count(), 0);
   const initialUrl = page.url();
   await page.getByRole('button', { name: '编辑目录资料：测试目录', exact: true }).click();
   await page.getByRole('dialog').waitFor();

@@ -32,7 +32,9 @@ describe('CreatorFolderActions', () => {
   it.each([1, 2])('shows %i folder scopes without links or initial detail requests', count => {
     const wrapper = render(count);
     expect(wrapper.findAll('li')).toHaveLength(count);
-    expect(wrapper.text()).toContain('Photos/First');
+    expect(wrapper.text()).toContain('第一目录');
+    expect(wrapper.find('details').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('范围：');
     expect(wrapper.text()).toContain('12 套');
     expect(wrapper.find('a').exists()).toBe(false);
     expect(fetchFolder).not.toHaveBeenCalled();
@@ -87,7 +89,7 @@ describe('CreatorFolderActions', () => {
     await flushPromises();
     resolve(detail());
     await flushPromises();
-    expect(wrapper.find('details').exists()).toBe(false);
+    expect(wrapper.find('[data-test="creator-folder-actions"]').exists()).toBe(false);
     expect(wrapper.findComponent(FolderProfileModal).exists()).toBe(false);
     expect(updateFolderProfile).not.toHaveBeenCalled();
   });

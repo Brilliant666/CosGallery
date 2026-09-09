@@ -1,11 +1,8 @@
 <template>
-  <details v-if="folders.length && authStore.canManageLibrary" class="text-sm text-muted">
-    <summary class="cursor-pointer">本地目录 · 编辑或分享指定目录</summary>
-    <p>资料编辑和分享仅作用于所选目录。</p>
-    <ul class="grid gap-3 pl-5 text-left">
-      <li v-for="folder in folders" :key="folder.id" class="grid gap-1">
+  <div v-if="folders.length && authStore.canManageLibrary" class="text-sm text-muted" data-test="creator-folder-actions">
+    <ul class="m-0 grid list-none gap-3 p-0 text-left">
+      <li v-for="folder in folders" :key="folder.id" class="flex flex-wrap items-center gap-x-4 gap-y-2">
         <span class="break-words text-text">{{ folder.name }} · {{ folder.workCount }} 套</span>
-        <span class="break-all">范围：{{ folder.path }}</span>
         <div class="flex flex-wrap gap-3">
           <button type="button" :disabled="busy" :aria-label="`编辑目录资料：${folder.name}`" @click="open(folder, 'profile')">编辑目录资料</button>
           <button type="button" :disabled="busy" :aria-label="`分享此目录：${folder.name}`" @click="open(folder, 'share')">分享此目录</button>
@@ -16,7 +13,7 @@
     <p v-if="error && !selected" role="alert">{{ error }}</p>
     <FolderProfileModal v-if="selected && mode === 'profile'" :key="selected.id" :initial-name="selected.name" :initial-description="selected.description" :scope="`仅修改目录资料：${selected.folderPath}`" :loading="saving" :error="error" @cancel="close" @save="saveProfile" />
     <FolderShareModal v-if="selected && mode === 'share'" :key="selected.id" :folder="selected" @cancel="close" />
-  </details>
+  </div>
 </template>
 
 <script setup lang="ts">
