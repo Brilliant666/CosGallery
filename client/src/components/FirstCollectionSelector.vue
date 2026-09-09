@@ -24,7 +24,7 @@
             <td>{{ item.creatorName }}<small>{{ item.aliases.join(' / ') }}</small></td>
             <td>{{ preferenceLabel(item.preference) }} / {{ item.rating ?? '待分类' }}<small v-if="!item.isActive">已停用，不能创建</small></td>
             <td>{{ item.localWorks }} 套</td>
-            <td>{{ sourceStateLabel(item.sourceState) }}<small>来源 {{ item.sourceWorks }} 套 · 已知缺失 {{ item.missingWorks }} 套</small><small>最近有效来源：{{ item.latestSourceAt ?? '尚未取得' }}</small><small v-if="item.metadataTask">最近尝试 #{{ item.metadataTask.id }} · {{ statusLabel(item.metadataTask.status) }} · {{ item.metadataTask.updatedAt }}{{ item.metadataTask.claimedBy ? ` · ${item.metadataTask.claimedBy}` : '' }}<span v-if="item.metadataTask.lastError"> · {{ item.metadataTask.lastError }}</span></small><small v-else>尚未检查</small></td>
+            <td><CreatorSourceStatus :item="item" /></td>
           </tr></tbody>
         </table>
         <p v-if="payload && !payload.items.length">没有符合条件的博主。</p>
@@ -50,6 +50,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from 'vue';
+import CreatorSourceStatus from './CreatorSourceStatus.vue';
 import { planFirstCollection, sourceStateLabel } from '../api/first-collection';
 import type { FirstCollectionResult } from '../api/first-collection';
 import { fetchCreatorSyncRoster, fetchCreatorSyncStats } from '../api/creator-sync';
