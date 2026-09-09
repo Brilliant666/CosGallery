@@ -3,11 +3,31 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeCostuanDirectoryWorks,
   normalizeCostuanTitle,
+  parseCostuanCollectionCreator,
+  splitCostuanCheckDirectory,
   parseCostuanDirectoryText,
   parseCostuanNumbering
 } from '../src/services/costuan-numbering-service.js';
 
 describe('Costuan numbering parser', () => {
+  it.each([
+    ['白银81写真图片包合集[189套][Cosplay][持续更新]','白银81'],
+    ['小仓千代w COSPLAY写真图片包合集[182套+微博图][持续更新]','小仓千代w'],
+    ['soso_嗖嗖COSPLAY写真图片包合集[26套][持续更新]','soso_嗖嗖'],
+    ['Fixture COS 合集[3套]','Fixture'],
+    ['白银81写真图片包合集【189套】【COSPLAY】【持续更新】','白银81'],
+    ['其他标题[189套][Cosplay][持续更新]',null],
+    ['白银81写真图片包合集[189套][Cosplay][持续更新] 广告',null],
+  ])('extracts collection creator without reading category tags as identity: %s',(title,expected)=>{
+    expect(parseCostuanCollectionCreator(title)).toBe(expected);
+  });
+
+  it('uses the same identity parser for a postposed-category supplemental directory',()=>{
+    const result=splitCostuanCheckDirectory('Fixture写真图片包合集[1套+微博图][Cosplay][持续更新]',
+      [{sourceOrder:'NO.001',order:1,label:'Work'}],'Fixture 微博图[2P]\nFixture NO.001 Work[1P]');
+    expect(result.works).toHaveLength(1);
+    expect(result.supplementalContents[0]).toMatchObject({label:'Fixture 微博图',status:'awaiting_review'});
+  });
   it('keeps NO and VOL as distinct parts of work identity', () => {
     expect(parseCostuanNumbering('博主 NO.013 黑护士')).toMatchObject({
       scheme: 'NO',

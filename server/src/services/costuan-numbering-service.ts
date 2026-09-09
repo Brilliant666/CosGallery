@@ -265,6 +265,17 @@ export function mergeCostuanDirectoryWorks(
 
 export type PendingCostuanSupplement = ParsedCostuanDirectoryWork & {status:'awaiting_review'};
 
+export function parseCostuanCollectionCreator(title:string):string|null {
+  const normalized=String(title??'').normalize('NFKC').trim();
+  // Some collections put the category after the count, not after the creator.
+  // Match that complete shape before the legacy prefix; never consume [Cosplay]
+  // and everything before it as a creator identity.
+  const postfix=normalized.match(/^([^\[\]【】]+?)\s*写真图片包合集\s*[\[【]\d+\s*套[^\]】]*[\]】]\s*[\[【]COS(?:PLAY)?[\]】]\s*[\[【]持续更新[\]】]$/iu);
+  if(postfix) return postfix[1].trim();
+  const prefix=normalized.match(/^([^\[\]【】]+?)\s*COS(?:PLAY)?(?=\s|写真)/iu);
+  return prefix?.[1]?.trim() || null;
+}
+
 /** Split only an explicitly advertised, unnumbered appendix; never relax numbered validation. */
 export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWork[], text:string|undefined) {
   const merged=mergeCostuanDirectoryWorks(works,text);
@@ -276,7 +287,7 @@ export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWo
   const extras=merged.filter(work=>!numbered.includes(work));
   const declaration=title.normalize('NFKC').match(/\[\d+\s*套\s*\+\s*微博图\s*\]/u);
   if (!extras.length && !declaration) return {works:merged,supplementalContents};
-  const creator=title.split(/\s*COS/iu)[0];
+  const creator=parseCostuanCollectionCreator(title);
   const lines=String(text??'').split(/\r?\n/u).flatMap(line=>parseCostuanDirectoryText(line));
   const keys=lines.map(work=>work.sourceOrderKey);
   // The ordinary merge retains historical last-entry behavior. The new appendix
@@ -290,7 +301,7 @@ export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWo
   }
   const extra=extras[0];
   const raw=lines.find(work=>work.sourceOrderKey===extra.sourceOrderKey);
-  if (!raw || raw.order!==undefined || normalizeCostuanTitle(raw.label)!==normalizeCostuanTitle(`${creator} 微博图`)
+  if (!creator || !raw || raw.order!==undefined || normalizeCostuanTitle(raw.label)!==normalizeCostuanTitle(`${creator} 微博图`)
     || !raw.mediaSummary || numbered.some(work=>!keys.includes(work.sourceOrderKey!))) {
     throw new Error('来源附加内容身份不明确；未覆盖历史来源。');
   }

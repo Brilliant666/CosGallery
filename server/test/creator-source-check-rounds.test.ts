@@ -35,6 +35,26 @@ describe('explicit creator source check rounds',()=>{
   });
   afterEach(async()=>{db.close();await fs.rm(root,{recursive:true,force:true});});
 
+  it('accepts postposed Cosplay category through preflight and completion without widening creator ownership',()=>{
+    const task=claim('postfix-title'),payload=request(task);
+    payload.record.costuan.title='Fixture写真图片包合集[3套][Cosplay][持续更新]';
+    const options={id:task.id,workerId:'worker',expectedAttempt:task.attemptCount,canonicalCreatorId:creatorId,
+      postId:payload.record.costuan.postId,title:payload.record.costuan.title};
+    const before=snapshot();expect(service.validateSource(options).id).toBe(task.id);expect(snapshot()).toBe(before);
+    expect(service.validateDirectory({...options,record:payload.record}).sourceFilenames).toHaveLength(3);
+    service.complete(payload);
+    expect(db.prepare('SELECT creator_id FROM archive_catalog_collections').get()?.creator_id).toBe(creatorId);
+    const other=new ManagedCreatorService(db,path.join(root,'gallery')).create({name:'Other'}).id;
+    const catalog=new ArchiveCatalogService(db),accepted=snapshot();
+    expect(()=>catalog.validateCostuanIdentity(other,payload.record.costuan.postId,'Other写真图片包合集[3套][Cosplay][持续更新]')).toThrow(/身份/);
+    expect(()=>catalog.validateCostuanIdentity(creatorId,'new-post','Other写真图片包合集[3套][Cosplay][持续更新]')).toThrow(/身份/);
+    expect(snapshot()).toBe(accepted);
+    db.prepare("INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES (?,?,?,'manual')").run(other,'Fixture','fixture');
+    const ambiguous=snapshot();
+    expect(()=>catalog.validateCostuanIdentity(creatorId,'unowned-post',payload.record.costuan.title)).toThrow(/歧义/);
+    expect(snapshot()).toBe(ambiguous);
+  });
+
   const withSupplement=(task:ArchiveMetadataTask,count=182)=>{
     const payload=record(task,count);
     return {...payload,costuan:{...payload.costuan,title:`Fixture COS写真图片包合集[${count}套+微博图][持续更新]`,

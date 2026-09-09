@@ -13,6 +13,7 @@ import {
   areCostuanTitlesCompatible,
   mergeCostuanDirectoryWorks,
   normalizeCostuanTitle,
+  parseCostuanCollectionCreator,
   splitCostuanCheckDirectory,
   type PendingCostuanSupplement,
   parseCostuanNumbering
@@ -206,8 +207,7 @@ function toPosixRelative(value: string): string {
 }
 
 function collectionCreatorAlias(title: string): string | null {
-  const match = title.match(/^(.+?)\s*COS(?:PLAY)?/i);
-  return match?.[1]?.trim() || null;
+  return parseCostuanCollectionCreator(title);
 }
 
 function sha256(buffer: Buffer): string {
