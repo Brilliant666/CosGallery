@@ -2,7 +2,7 @@
   <div v-if="folders.length && authStore.canManageLibrary" class="text-sm text-muted" data-test="creator-folder-actions">
     <ul class="m-0 grid list-none gap-3 p-0 text-left">
       <li v-for="folder in folders" :key="folder.id" class="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span class="break-words text-text">{{ folder.name }} · {{ folder.workCount }} 套</span>
+        <span v-if="folders.length > 1" class="break-words text-text">{{ folder.name }}</span>
         <div class="flex flex-wrap gap-3">
           <button type="button" :disabled="busy" :aria-label="`编辑目录资料：${folder.name}`" @click="open(folder, 'profile')">编辑目录资料</button>
           <button type="button" :disabled="busy" :aria-label="`分享此目录：${folder.name}`" @click="open(folder, 'share')">分享此目录</button>
