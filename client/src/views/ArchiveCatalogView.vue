@@ -51,14 +51,27 @@
       <p v-if="metadataError" role="alert" class="mt-3 text-sm text-red-700">{{ metadataError }}</p>
       <div v-if="metadataTasks?.items.length" class="mt-4 overflow-x-auto rounded-xl border border-border" data-test="metadata-creators">
         <table class="w-full min-w-[42rem] border-collapse text-left text-sm">
-          <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主</th><th class="p-3">偏好</th><th class="p-3">本地作品</th><th class="p-3">来源</th><th class="p-3">采集状态</th></tr></thead>
+          <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主</th><th class="p-3">偏好</th><th class="p-3">本地作品</th><th class="p-3">来源</th><th class="p-3">最近检查</th></tr></thead>
           <tbody>
             <tr v-for="task in metadataTasks.items" :key="task.creatorId" class="border-t border-border">
               <td class="p-3 font-semibold">{{ task.creatorName }}</td>
               <td class="p-3">{{ task.preference === 'liked' ? '喜欢' : task.preference === 'kept' ? '保留' : '未分类' }}</td>
               <td class="p-3">{{ task.localWorks }} 套</td>
-              <td class="p-3">{{ sourceStateLabel(task.sourceState) }}<small class="block text-muted">{{ task.sourceCollections }} 个有效 Costuan 合集</small><small v-if="task.latestSourceAt" class="block text-muted">来源记录：{{ task.latestSourceAt }}</small></td>
-              <td class="p-3"><template v-if="task.metadataTask">{{ metadataStatusLabel(task.metadataTask.status) }}<small class="block text-muted">任务 #{{ task.metadataTask.id }} · 更新：{{ task.metadataTask.updatedAt }}</small><small v-if="task.metadataTask.lastError" class="block text-red-700">{{ task.metadataTask.lastError }}</small></template><span v-else>暂无检查任务记录</span></td>
+              <td class="p-3">
+                {{ task.sourceState.metadataAccepted ? '已记录 Costuan 来源' : '尚未取得有效来源' }}
+                <template v-if="task.sourceState.metadataAccepted">
+                  <small class="block text-muted">{{ task.sourceCollections }} 个有效 Costuan 合集</small>
+                  <small class="block text-muted">{{ task.sourceState.deliveryReady ? (task.sourceState.deliveryEvidence === 'verified' ? '网盘来源已核验' : '网盘状态待重新核验') : '网盘来源待确认' }}</small>
+                  <details v-if="task.latestSourceAt" class="mt-1 text-xs text-muted"><summary class="cursor-pointer">来源详情</summary><span>来源记录时间：{{ formatSourceTime(task.latestSourceAt) }}</span></details>
+                </template>
+              </td>
+              <td class="p-3"><template v-if="task.metadataTask">
+                {{ metadataStatusLabel(task.metadataTask.status) }}
+                <details class="mt-1 text-xs text-muted"><summary class="cursor-pointer">检查详情</summary>
+                  <span class="block">任务 #{{ task.metadataTask.id }} · 更新：{{ formatSourceTime(task.metadataTask.updatedAt) }}</span>
+                  <span v-if="task.metadataTask.lastError" class="block text-red-700">{{ task.metadataTask.lastError }}</span>
+                </details>
+              </template><span v-else>无检查记录</span></td>
             </tr>
           </tbody>
         </table>
@@ -422,7 +435,6 @@
 import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
 import FirstCollectionSelector from '../components/FirstCollectionSelector.vue';
 import Stage2CreatorQueue from '../components/Stage2CreatorQueue.vue';
-import { sourceStateLabel } from '../api/first-collection';
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import {
@@ -1105,12 +1117,17 @@ function deliveryLabel(delivery: ArchiveCatalogCreatorDetail['collections'][numb
   return delivery.status ? `${provider}：${delivery.status}` : provider;
 }
 
+function formatSourceTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '时间待确认' : date.toLocaleString('zh-CN', { hour12: false });
+}
+
 function metadataStatusLabel(status: ArchiveMetadataTaskStatus) {
   return ({
     pending: '待采集',
     claimed: '插件已领取',
-    completed: '元数据已接入',
-    not_found: '本次未找到合集',
+    completed: '检查已完成',
+    not_found: '上次检查未找到合集',
     failed: '失败待重试',
     cancelled: '已取消'
   } as const)[status];

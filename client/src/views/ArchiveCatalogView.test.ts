@@ -512,18 +512,35 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView); await flushPromises();
     const rows = wrapper.get('[data-test="metadata-creators"]').findAll('tbody tr');
     expect(rows).toHaveLength(3);
-    expect(rows[0]!.text()).toContain('历史转存记录可用');
-    expect(rows[0]!.text()).toContain('来源记录：2026-08-31T00:00:00.000Z');
-    expect(rows[0]!.text()).toContain('暂无检查任务记录');
+    expect(rows[0]!.text()).toContain('已记录 Costuan 来源');
+    expect(rows[0]!.text()).toContain('网盘状态待重新核验');
+    expect(rows[0]!.text()).toContain('来源记录时间：');
+    expect(rows[0]!.text()).not.toContain('2026-08-31T');
+    expect(rows[0]!.text()).toContain('无检查记录');
     expect(rows[0]!.text()).not.toMatch(/任务 #|更新：|2026-09-09/);
-    expect(rows[1]!.text()).toContain('尚无 Costuan 来源');
-    expect(rows[1]!.text()).toContain('本次未找到合集');
+    expect(rows[1]!.text()).toContain('尚未取得有效来源');
+    expect(rows[1]!.text()).toContain('上次检查未找到合集');
     expect(rows[1]!.text()).toContain('任务 #42');
     expect(rows[1]!.text()).not.toContain('来源记录：');
-    expect(rows[2]!.text()).toContain('历史转存记录可用');
+    expect(rows[2]!.text()).toContain('已记录 Costuan 来源');
     expect(rows[2]!.text()).toContain('失败待重试');
     expect(rows[2]!.text()).toContain('fixture source check failed');
+    expect(rows[2]!.findAll('details').every(detail => detail.attributes('open') === undefined)).toBe(true);
+    expect(wrapper.get('[data-test="metadata-creators"]').text()).toContain('最近检查');
     expect(planArchiveMetadataTasks).not.toHaveBeenCalled();
+  });
+
+  it('labels completed checks independently of verified delivery and does not invent a verification time', async () => {
+    vi.mocked(fetchMetadataCreators).mockResolvedValue(metadataPage([metadataRow({
+      metadataTask: { id: 32, status: 'completed', attemptCount: 1, claimedBy: null, claimedAt: null, completedAt: null, lastError: null, updatedAt: '2026-09-08T12:00:00.000Z' },
+      sourceState: { metadataAccepted: true, deliveryReady: true, deliveryEvidence: 'verified', missing: [] }
+    })]));
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const row = wrapper.get('[data-test="metadata-creators"] tbody tr');
+    expect(row.text()).toContain('检查已完成');
+    expect(row.text()).toContain('网盘来源已核验');
+    expect(row.text()).not.toContain('核验时间');
+    expect(row.text()).not.toContain('元数据已接入');
   });
 
   it('fetches Stage 1 page two from the server and retains all enabled states', async () => {
