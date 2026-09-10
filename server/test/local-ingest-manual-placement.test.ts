@@ -245,6 +245,28 @@ describe.sequential('LocalIngestService manual placement adoption', () => {
     fixture = null;
   });
 
+  it.each(['.tiff', '.heic'])('retains originals and records missing %s images only with explicit retention', async (extension) => {
+    fixture = await createManualFixture({ declaredMedia: '2P-1MB' });
+    const excluded = `excluded${extension}`;
+    fixture.database.prepare('UPDATE local_ingest_jobs SET error_detail = ? WHERE id = 1')
+      .run(`Unknown files require review: ${excluded}`);
+    const original = path.join(fixture.processingRoot, '1', excluded);
+    await fs.writeFile(original, 'preserved-original');
+    const input = { ...fixture.input, removedUnknownFiles: [excluded] };
+    await expect(fixture.service.adoptManualPlacement(input)).rejects.toThrow('require original retention');
+    const result = await fixture.service.adoptManualPlacement({ ...input, retainOriginals: true });
+    expect(result).toMatchObject({ status: 'ingested', phase: 'done', validationStatus: 'warning', cleanupStatus: 'not_ready', attemptCount: 1 });
+    expect(result.summary?.manualPlacement).toMatchObject({ retainOriginals: true, removedUnknownFileCount: 1 });
+    expect((result.summary?.warnings as string[]).join('\n')).toContain('Declared 2 images; retained 1');
+    expect(await fs.readFile(original, 'utf8')).toBe('preserved-original');
+    await expect(fs.access(fixture.sourcePath)).resolves.toBeUndefined();
+    await expect(fixture.service.retryCleanup(1)).rejects.toThrow('cleanup is disabled');
+    const repeated = await fixture.service.adoptManualPlacement({ ...input, retainOriginals: true });
+    expect(repeated).toMatchObject({ status: 'ingested', phase: 'done', attemptCount: 1 });
+    expect(fixture.recycleCalls).toHaveLength(0);
+    expect(fixture.sideEffects).toEqual({ command: 0, rescan: 1 });
+  });
+
   it('validates, reconciles, and recycles an exact manual placement without extraction or target writes', async () => {
     fixture = await createManualFixture({ declaredMedia: '2P1V-1MB' });
     const targetBefore = await fs.readFile(path.join(fixture.targetPath, 'cover.jpg'));

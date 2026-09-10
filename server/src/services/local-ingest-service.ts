@@ -206,6 +206,7 @@ export type LocalIngestManualPlacementInput = {
   expectedDownloadTaskId: number;
   expectedTargetPath: string;
   removedUnknownFiles: string[];
+  retainOriginals?: boolean;
   note: string;
 };
 
@@ -353,6 +354,7 @@ type ValidationSummary = {
     note: string;
     removedUnknownFiles: string[];
     removedUnknownFileCount: number;
+    retainOriginals?: boolean;
     previousErrorCode: string;
     previousErrorDetail: string;
     extractionReused: false;
@@ -1887,10 +1889,11 @@ export class LocalIngestService {
       const normalized = removedPath.replace(/\\/g, '/');
       if (!removedPath || path.isAbsolute(removedPath) || path.win32.isAbsolute(removedPath)
         || normalized.split('/').some((segment) => segment === '..')
-        || path.extname(removedPath).toLocaleLowerCase() !== '.jfif') {
+        || !(path.extname(removedPath).toLocaleLowerCase() === '.jfif'
+          || (input.retainOriginals === true && ['.tiff', '.tif', '.heic'].includes(path.extname(removedPath).toLocaleLowerCase())))) {
         throw new LocalIngestFailure(
           'MANUAL_PLACEMENT_SCOPE_INVALID',
-          `Removed-file evidence is not a safe relative JFIF path: ${removedPath}`,
+          `Removed-file evidence is not a safe supported exclusion path (TIFF/HEIC require original retention): ${removedPath}`,
           true
         );
       }
@@ -1918,6 +1921,7 @@ export class LocalIngestService {
         || current.archive_download_task_id !== input.expectedDownloadTaskId
         || !sameCompletedTarget
         || !sameStringSet(priorRemoved, input.removedUnknownFiles)
+        || (priorAdoption.retainOriginals === true) !== (input.retainOriginals === true)
       ) {
         throw new LocalIngestFailure(
           'MANUAL_PLACEMENT_SCOPE_MISMATCH',
@@ -2144,8 +2148,9 @@ export class LocalIngestService {
     const warnings = Array.isArray(previousSummary.warnings)
       ? previousSummary.warnings.filter((value): value is string => typeof value === 'string')
       : [];
-    warnings.push('Adopted a work directory manually placed by the user; extraction and target commit were not rerun');
-    warnings.push(`The user intentionally removed ${input.removedUnknownFiles.length} unsupported JFIF files before adoption: ${input.removedUnknownFiles.join(', ')}`);
+    warnings.push('Adopted an explicitly approved manual placement; extraction and target commit were not rerun');
+    warnings.push(`User-approved exclusion of ${input.removedUnknownFiles.length} unsupported images from the library: ${input.removedUnknownFiles.join(', ')}`);
+    if (input.retainOriginals === true) warnings.push('Missing images intentionally excluded; original archive and processing files retained, automatic recycling disabled for this job');
     if (declaredImageCount !== undefined && declaredImageCount !== imageCount) {
       warnings.push(`Declared ${declaredImageCount} images; retained ${imageCount} after manual removal`);
     }
@@ -2188,6 +2193,7 @@ export class LocalIngestService {
         note: input.note.trim(),
         removedUnknownFiles: [...input.removedUnknownFiles],
         removedUnknownFileCount: input.removedUnknownFiles.length,
+        retainOriginals: input.retainOriginals === true,
         previousErrorCode: job.error_code,
         previousErrorDetail: job.error_detail ?? '',
         extractionReused: false,
@@ -2335,16 +2341,17 @@ export class LocalIngestService {
       sourceReconciled: true,
       missingDifferenceCleared: task?.status === 'ingested'
     });
+    const retainOriginals = manualPlacementSummary(summary)?.retainOriginals === true;
     this.updateJob(jobId, {
       status: 'ingested',
-      phase: 'cleanup',
-      cleanupStatus: settings.recycleAfterIngest ? 'pending' : 'not_ready',
+      phase: retainOriginals ? 'done' : 'cleanup',
+      cleanupStatus: settings.recycleAfterIngest && !retainOriginals ? 'pending' : 'not_ready',
       summaryJson: JSON.stringify(summary),
       errorCode: null,
       errorDetail: null,
       completedAt: nowIso()
     });
-    if (settings.recycleAfterIngest) return this.retryCleanupClaimed(jobId);
+    if (settings.recycleAfterIngest && !retainOriginals) return this.retryCleanupClaimed(jobId);
     return this.getJob(jobId);
   }
 
@@ -2532,6 +2539,9 @@ export class LocalIngestService {
   async retryCleanup(id: number): Promise<LocalIngestJob> {
     const job = this.getJobRow(id);
     if (job.status !== 'ingested') throw new Error('Cleanup is only available after ingest has been confirmed');
+    if (manualPlacementSummary(safeJsonParse(job.summary_json))?.retainOriginals === true) {
+      throw new Error('Original retention was explicitly requested for this job; cleanup is disabled');
+    }
     if (job.cleanup_status === 'recycled') return this.getJob(id);
     return this.runWithClaim(id, () => this.retryCleanupClaimed(id));
   }

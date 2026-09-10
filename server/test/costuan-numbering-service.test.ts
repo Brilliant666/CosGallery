@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   mergeCostuanDirectoryWorks,
+  areCostuanTitlesCompatible,
   normalizeCostuanTitle,
   parseCostuanCollectionCreator,
   splitCostuanCheckDirectory,
@@ -10,6 +11,14 @@ import {
 } from '../src/services/costuan-numbering-service.js';
 
 describe('Costuan numbering parser', () => {
+  it('preserves embedded volume labels when comparing source titles',()=>{
+    for(const title of ['自分撮りvol.47','自撮Vol.76','自撮り VOL.63','自摄Vol.102']){
+      expect(areCostuanTitlesCompatible(`白银81 NO.065 ${title}[121P3V-789MB]`,title,['白银81'])).toBe(true);
+    }
+    expect(areCostuanTitlesCompatible('白银81 NO.065 自分撮りvol.47','自分撮りvol.48',['白银81'])).toBe(false);
+    expect(areCostuanTitlesCompatible('博主 VOL.013 白蕾丝姐姐','博主 VOL.013 白蕾丝姐姐',['博主'])).toBe(true);
+    expect(areCostuanTitlesCompatible('博主 VOL.013 白蕾丝姐姐','VOL.013 白蕾丝姐姐',['博主'])).toBe(true);
+  });
   it.each([
     ['白银81写真图片包合集[189套][Cosplay][持续更新]','白银81'],
     ['小仓千代w COSPLAY写真图片包合集[182套+微博图][持续更新]','小仓千代w'],

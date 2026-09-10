@@ -309,7 +309,7 @@ export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWo
   return {works:numbered,supplementalContents};
 }
 
-export function normalizeCostuanTitle(value: string): string {
+export function normalizeCostuanTitle(value: string, stripNumbering = true): string {
   const normalized = String(value ?? '')
     .normalize('NFKC')
     .replace(/\u00a0/gu, ' ')
@@ -322,7 +322,7 @@ export function normalizeCostuanTitle(value: string): string {
     .replace(/\s*[\[【][^\]】]+[\]】]\s*$/u, '')
     .trim();
   const numbering = parseCostuanNumbering(normalized);
-  const title = numbering ? normalized.slice(numbering.end) : normalized;
+  const title = numbering && stripNumbering ? normalized.slice(numbering.end) : normalized;
   return title
     .toLocaleLowerCase()
     .replace(/^[\s_\-–—:：]+/u, '')
@@ -331,7 +331,7 @@ export function normalizeCostuanTitle(value: string): string {
 
 function stripCreatorPrefix(value: string, creatorNames: string[]): string {
   const names = creatorNames
-    .map(normalizeCostuanTitle)
+    .map(name => normalizeCostuanTitle(name))
     .filter(Boolean)
     .sort((left, right) => right.length - left.length);
   for (const name of names) {
@@ -346,7 +346,12 @@ export function areCostuanTitlesCompatible(
   creatorNames: string[] = []
 ): boolean {
   const local = stripCreatorPrefix(normalizeCostuanTitle(localTitle), creatorNames);
-  const remote = stripCreatorPrefix(normalizeCostuanTitle(remoteTitle), creatorNames);
+  // Source titles are usually already labels: an embedded Vol.47 is content,
+  // not a second collection number. Still accept explicit numbered headers.
+  const remoteNumbering = parseCostuanNumbering(remoteTitle.normalize('NFKC'));
+  const prefix = remoteNumbering ? remoteTitle.normalize('NFKC').slice(0, remoteNumbering.start).trim().replace(/[\s_\-–—]+$/u, '') : '';
+  const numberedHeader = !prefix || creatorNames.some(name => name.normalize('NFKC').trim().toLocaleLowerCase() === prefix.toLocaleLowerCase());
+  const remote = stripCreatorPrefix(normalizeCostuanTitle(remoteTitle, numberedHeader), creatorNames);
   if (!local || !remote) return false;
   return local === remote || local.includes(remote) || remote.includes(local);
 }
