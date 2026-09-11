@@ -37,6 +37,22 @@ describe('Costuan numbering parser', () => {
     expect(result.works).toHaveLength(1);
     expect(result.supplementalContents[0]).toMatchObject({label:'Fixture 微博图',status:'awaiting_review'});
   });
+
+  const weiboLabels=['微博图','微博散图','微博配图'];
+  it.each(weiboLabels.flatMap(titleLabel=>weiboLabels.map(directoryLabel=>[titleLabel,directoryLabel])))
+    ('separates the limited Weibo appendix aliases %s / %s without rewriting raw evidence',(titleLabel,directoryLabel)=>{
+      const rawTitle=`rioko凉凉子 ${directoryLabel}[12P-20MB]`;
+      const result=splitCostuanCheckDirectory(`rioko凉凉子COSPLAY写真图片包合集[2套+${titleLabel}][持续更新]`,
+        [{sourceOrder:'NO.001',order:1,label:'First'},{sourceOrder:'NO.002',order:2,label:'Second'}],
+        `${rawTitle}\nrioko凉凉子 NO.001 First[1P]\nrioko凉凉子 NO.002 Second[1P]`);
+      expect(result.works.map(work=>work.sourceOrderKey)).toEqual(['NO:001','NO:002']);
+      expect(result.supplementalContents).toHaveLength(1);
+      expect(result.supplementalContents[0]).toMatchObject({
+        label:`rioko凉凉子 ${directoryLabel}`,rawTitle,status:'awaiting_review',
+        sourceOrderKey:parseCostuanDirectoryText(rawTitle)[0].sourceOrderKey
+      });
+    });
+
   it('keeps NO and VOL as distinct parts of work identity', () => {
     expect(parseCostuanNumbering('博主 NO.013 黑护士')).toMatchObject({
       scheme: 'NO',

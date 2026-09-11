@@ -212,12 +212,56 @@ describe('explicit creator source check rounds',()=>{
     expect(snapshot()).toBe(ambiguous);
   });
 
-  const withSupplement=(task:ArchiveMetadataTask,count=182)=>{
+  const withSupplement=(task:ArchiveMetadataTask,count=182,titleLabel='微博图',directoryLabel='微博图')=>{
     const payload=record(task,count);
-    return {...payload,costuan:{...payload.costuan,title:`Fixture COS写真图片包合集[${count}套+微博图][持续更新]`,
-      resourceDirectoryText:['资源目录','Fixture 微博图[354P-1.8GB]',...payload.costuan.works.map(work=>
+    return {...payload,costuan:{...payload.costuan,title:`Fixture COS写真图片包合集[${count}套+${titleLabel}][持续更新]`,
+      resourceDirectoryText:['资源目录',`Fixture ${directoryLabel}[354P-1.8GB]`,...payload.costuan.works.map(work=>
         `Fixture ${work.order===100?'NO.0100':work.sourceOrder} ${work.label}[1P]`)].join('\n')}};
   };
+
+  it('accepts a synthetic 161-work direct-share fixture with mismatched Weibo aliases but never plans its appendix',()=>{
+    // Synthetic numbered records exercise the reported title/directory shape;
+    // they are not a capture or assertion of the current live 938.html catalog.
+    const task=claim('weibo-alias-direct'),direct=directRequest(task,161);
+    const payload={...direct,record:{...withSupplement(task,161,'微博散图','微博配图'),baidu:direct.record.baidu}};
+    payload.record.baidu.verification.files.push('微博配图.7z');
+    const before=snapshot(),proof=service.validateDirectory(payload);
+    expect(snapshot()).toBe(before);
+    expect(proof.requiredFilenames).toHaveLength(161);
+    expect(proof.requiredFilenames[160]).toBe('161.7z');
+    expect(proof.requiredFilenames.every(filename=>/^\d{3}\.7z$/u.test(filename))).toBe(true);
+    expect(proof.supplementalContents).toMatchObject([{label:'Fixture 微博配图',rawTitle:'Fixture 微博配图[354P-1.8GB]',status:'awaiting_review'}]);
+    service.complete(payload);
+    const saved=JSON.parse(String(db.prepare('SELECT metadata_json FROM archive_catalog_collections').get()?.metadata_json));
+    expect(saved.supplementalContents).toEqual(proof.supplementalContents);
+    expect(saved.resourceDirectoryText).toBe(payload.record.costuan.resourceDirectoryText);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_source_works WHERE is_active=1').get()?.n).toBe(161);
+    const downloads=new ArchiveDownloadTaskService(db);
+    expect(downloads.planMissing({creatorIds:[creatorId],targetRoot:path.join(root,'inbox')}).created).toBe(161);
+    expect(downloads.list({limit:500}).items).toHaveLength(161);
+    expect(downloads.list({limit:500}).items.every(item=>/^\d{3}\.7z$/u.test(item.targetFilename))).toBe(true);
+    expect(new CreatorSyncQueryService(db).roster().items[0].pendingSupplementalTitles).toEqual(['Fixture 微博配图']);
+    const accepted=snapshot();service.complete(payload);expect(snapshot()).toBe(accepted);
+  });
+
+  it.each(['unknown-title-alias','unknown-directory-alias','foreign-creator','duplicate-aliases','duplicate-number','missing-appendix','missing-number','incomplete-input'])
+    ('keeps source data unchanged for %s even when Weibo aliases are recognized',mode=>{
+      const original=claim('before-alias-invalid');service.complete(request(original));
+      const task=claim('alias-invalid'),payload=withSupplement(task,3,'微博散图','微博配图');
+      if(mode==='unknown-title-alias') payload.costuan.title=payload.costuan.title.replace('+微博散图','+微博合集');
+      if(mode==='unknown-directory-alias') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('Fixture 微博配图','Fixture 微博写真');
+      if(mode==='foreign-creator') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('Fixture 微博配图','Other 微博配图');
+      if(mode==='duplicate-aliases') payload.costuan.resourceDirectoryText+='\nFixture 微博散图[2P-1MB]';
+      if(mode==='duplicate-number') payload.costuan.resourceDirectoryText+='\nFixture NO.001 Work 1[1P]';
+      if(mode==='missing-appendix') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('Fixture 微博配图[354P-1.8GB]','');
+      if(mode==='missing-number') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace(/\nFixture NO.003[^\n]*/u,'');
+      if(mode==='incomplete-input') payload.costuan.works.pop();
+      const options={...request(task),record:payload},before=snapshot();
+      expect(()=>service.validateDirectory(options)).toThrow(/附加内容|编号目录/);
+      expect(snapshot()).toBe(before);
+      expect(()=>service.complete(options)).toThrow(/附加内容|编号目录/);
+      expect(snapshot()).toBe(before);
+    });
 
   it('keeps 182 numbered works automatic and persists the appendix as pending manual evidence, without a download task',()=>{
     const task=claim('appendix'),payload=withSupplement(task);

@@ -276,6 +276,11 @@ export function parseCostuanCollectionCreator(title:string):string|null {
   return prefix?.[1]?.trim() || null;
 }
 
+// Costuan uses these names for the same unnumbered Weibo appendix, including
+// different names in the collection title and resource directory. Keep the raw
+// label/key for review; this does not authorize staging the appendix itself.
+const WEIBO_SUPPLEMENT_LABELS = ['微博图', '微博散图', '微博配图'] as const;
+
 /** Split only an explicitly advertised, unnumbered appendix; never relax numbered validation. */
 export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWork[], text:string|undefined) {
   const merged=mergeCostuanDirectoryWorks(works,text);
@@ -285,7 +290,7 @@ export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWo
     return numbering && numbering.order!==null;
   });
   const extras=merged.filter(work=>!numbered.includes(work));
-  const declaration=title.normalize('NFKC').match(/\[\d+\s*套\s*\+\s*微博图\s*\]/u);
+  const declaration=title.normalize('NFKC').match(/\[\d+\s*套\s*\+\s*(?:微博图|微博散图|微博配图)\s*\]/u);
   if (!extras.length && !declaration) return {works:merged,supplementalContents};
   const creator=parseCostuanCollectionCreator(title);
   const lines=String(text??'').split(/\r?\n/u).flatMap(line=>parseCostuanDirectoryText(line));
@@ -301,7 +306,8 @@ export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWo
   }
   const extra=extras[0];
   const raw=lines.find(work=>work.sourceOrderKey===extra.sourceOrderKey);
-  if (!creator || !raw || raw.order!==undefined || normalizeCostuanTitle(raw.label)!==normalizeCostuanTitle(`${creator} 微博图`)
+  if (!creator || !raw || raw.order!==undefined
+    || !WEIBO_SUPPLEMENT_LABELS.some(label=>normalizeCostuanTitle(raw.label)===normalizeCostuanTitle(`${creator} ${label}`))
     || !raw.mediaSummary || numbered.some(work=>!keys.includes(work.sourceOrderKey!))) {
     throw new Error('来源附加内容身份不明确；未覆盖历史来源。');
   }
