@@ -37,6 +37,7 @@ async function createManualFixture(options: {
   declaredMedia?: string;
   retainedJfif?: boolean;
   existingLocalRelation?: boolean;
+  allowlist?: string[];
 } = {}): Promise<ManualFixture> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foldergram-manual-placement-'));
   const libraryRoot = path.join(root, 'library');
@@ -163,7 +164,7 @@ async function createManualFixture(options: {
       fileStableSeconds: 1,
       recycleAfterIngest: true,
       maxExtractionDepth: 2 as const,
-      allowlist: [creatorName],
+      allowlist: options.allowlist ?? [creatorName],
       archivePasswordConfigured: true
     }),
     getArchivePassword: () => 'unused-password'
@@ -268,8 +269,8 @@ describe.sequential('LocalIngestService manual placement adoption', () => {
     expect(fixture.sideEffects).toEqual({ command: 0, rescan: 1 });
   });
 
-  async function retentionFixture(): Promise<{ input: LocalIngestManualPlacementInput; source: string; destination: string }> {
-    fixture = await createManualFixture({ declaredMedia: '2P-1MB' });
+  async function retentionFixture(allowlist?: string[]): Promise<{ input: LocalIngestManualPlacementInput; source: string; destination: string }> {
+    fixture = await createManualFixture({ declaredMedia: '2P-1MB', allowlist });
     const input = { ...fixture.input, removedUnknownFiles: ['nested/original.heic'], retainOriginals: true };
     fixture.database.prepare('UPDATE local_ingest_jobs SET error_detail = ? WHERE id = 1').run('Unknown files require review: nested/original.heic');
     await fixture.service.adoptManualPlacement(input);
@@ -295,6 +296,22 @@ describe.sequential('LocalIngestService manual placement adoption', () => {
     expect(fixture!.sideEffects).toEqual({ command: 0, rescan: 1 });
     expect(fixture!.recycleCalls).toEqual([]);
     await expect(fs.access(fixture!.sourcePath)).resolves.toBeUndefined();
+  });
+
+  it('retains an explicitly scoped completed job outside the current batch allowlist without changing settings', async () => {
+    const allowlist = ['Creator Alpha'];
+    const { input, destination } = await retentionFixture(allowlist);
+    allowlist.splice(0, 1, 'Another Creator');
+    const result = await fixture!.service.retainOriginals(input);
+    expect(result.summary?.retainedOriginalCount).toBe(1);
+    expect(await fs.readFile(destination, 'utf8')).toBe('synthetic heic original');
+    expect(allowlist).toEqual(['Another Creator']);
+  });
+
+  it('still requires the current allowlist for manual placement adoption', async () => {
+    fixture = await createManualFixture({ allowlist: ['Another Creator'] });
+    await expect(fixture.service.adoptManualPlacement(fixture.input)).rejects.toThrow('not in the local ingest allowlist');
+    expect(fixture.sideEffects).toEqual({ command: 0, rescan: 0 });
   });
 
   it('rejects corrupt existing copies without overwriting or claiming completion', async () => {
@@ -371,7 +388,8 @@ describe.sequential('LocalIngestService manual placement adoption', () => {
       ...summary, warnings: [...summary.warnings as string[], 'Declared 20 images; retained 1 after manual removal', 'An unrelated scan warning']
     }));
     const result = await fixture!.service.retainOriginals(input);
-    expect(result.summary?.warnings).toContain('Declared 20 images; retained 1 after manual removal');
+    expect(result.summary?.warnings).toContain('来源声明20张；可展示1张，另保留1张未支持原件，数量与声明不符');
+    expect(result.summary?.retainedOriginals).toMatchObject({ previousWarnings: expect.arrayContaining(['Declared 20 images; retained 1 after manual removal']) });
     expect(result.summary?.warnings).toContain('An unrelated scan warning');
   });
 

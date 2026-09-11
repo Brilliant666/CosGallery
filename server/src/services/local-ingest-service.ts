@@ -1140,7 +1140,8 @@ export class LocalIngestService {
   private async assertSourcePath(
     job: LocalIngestJobRow,
     mapping: MappingRow,
-    settings: LocalIngestSettingsView
+    settings: LocalIngestSettingsView,
+    requireAllowlist = true
   ): Promise<void> {
     const checked = await this.assertInside(
       settings.inboxRoot,
@@ -1156,7 +1157,7 @@ export class LocalIngestService {
     if (creatorMatches.length !== 1 || creatorMatches[0].id !== mapping.creator_id) {
       throw new LocalIngestFailure('SOURCE_PATH_CREATOR_MISMATCH', 'The source directory no longer maps to this job creator', true);
     }
-    if (!this.resolveAllowedCreatorIds(settings.allowlist).has(mapping.creator_id)) {
+    if (requireAllowlist && !this.resolveAllowedCreatorIds(settings.allowlist).has(mapping.creator_id)) {
       throw new LocalIngestFailure('CREATOR_NOT_ALLOWED', 'The mapped creator is not in the local ingest allowlist', true);
     }
     const stats = await fs.lstat(job.source_archive_path);
@@ -1908,7 +1909,9 @@ export class LocalIngestService {
       await this.assertInside(settings.libraryRoot, input.expectedTargetPath, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Retention target');
       if (!job.processing_path || !samePath(await canonicalizeLocalIngestPath(job.processing_path), await canonicalizeLocalIngestPath(path.join(settings.processingRoot, String(job.id))))) fail('Processing path does not match job');
       await this.assertInside(settings.processingRoot, job.processing_path!, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Retention source', { directChild: true });
-      await this.assertSourcePath(job, mapping, settings);
+      // Explicit retention repairs a completed historical job; the current
+      // new-ingest batch allowlist is not its authorization scope.
+      await this.assertSourcePath(job, mapping, settings, false);
       // Check every ancestor explicitly: canonicalization alone would hide symlinks.
       const checkPath = async (candidate: string, missing = false): Promise<void> => {
         const absolute = path.resolve(candidate);
@@ -1961,7 +1964,11 @@ export class LocalIngestService {
       const previousWarnings = oldRetention?.previousWarnings ?? (Array.isArray(summary.warnings) ? summary.warnings.filter((w): w is string => typeof w === 'string') : []);
       const warnings = previousWarnings.filter((warning) => !/^User-approved exclusion of |^Missing images intentionally excluded/.test(warning)
         && !(/^Declared \d+ images; (?:retained|extracted) \d+/.test(warning)
-          && Number(warning.match(/^Declared (\d+)/)?.[1]) === Number(summary.imageCount) + files.length));
+          && Number(warning.match(/^Declared (\d+)/)?.[1]) === Number(summary.imageCount) + files.length))
+        .map((warning) => {
+          const declared = warning.match(/^Declared (\d+) images; (?:retained|extracted) \d+/);
+          return declared ? `来源声明${declared[1]}张；可展示${summary.imageCount}张，另保留${files.length}张未支持原件，数量与声明不符` : warning;
+        });
       warnings.push(`原件已完整保留，${files.length}张 TIFF/HEIC 暂不支持展示；原包和处理中目录保留，禁止自动回收`);
       this.updateJob(job.id, {
         validationStatus: 'warning', cleanupStatus: 'not_ready',
