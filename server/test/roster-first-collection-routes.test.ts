@@ -67,6 +67,17 @@ describe.sequential('roster first-collection HTTP contract',()=>{
   it('preflight is read only, complete requires canonical identity and replay receipt; finalize empty explicit body is rejected',async()=>{
     const validation={workerId:'new',expectedAttempt:1,canonicalCreatorId:id,postId:'fixture-http',title:'HttpFirst COS写真图片包合集[1套][持续更新]'};
     expect((await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-source`,bridgeHeaders,validation)).body.ok).toBe(true);
+    const evidenceRequest={...validation,postId:'463',resourceDirectoryText:'HttpFirst NO.001 One [1P-1MB]',
+      identityEvidence:{version:1,pageUrl:'https://www.costuan.com/463.html',creatorTags:[{name:'HttpFirst',url:'https://www.costuan.com/tag/87'}]}};
+    const beforeEvidence=snapshot();
+    const evidenceResult=await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-source`,bridgeHeaders,evidenceRequest);
+    expect(evidenceResult.status).toBe(200);
+    expect(evidenceResult.body.task.identityVerification).toMatchObject({method:'exact-name',creatorId:id,postId:'463'});
+    const wrongPage=await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-source`,bridgeHeaders,
+      {...evidenceRequest,identityEvidence:{...evidenceRequest.identityEvidence,pageUrl:'https://www.costuan.com/999.html'}});
+    expect(wrongPage.status).toBe(400);expect(wrongPage.body.message).toContain('身份页面证据无效');
+    expect((await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-source`,bridgeHeaders,{...evidenceRequest,approved:true})).status).toBe(400);
+    expect(snapshot()).toBe(beforeEvidence);
     expect(db.connection.prepare('SELECT COUNT(*) AS n FROM archive_catalog_collections').get()).toEqual({n:0});
     const record={creatorName:'HttpFirst',costuan:{postId:'fixture-http',title:validation.title,works:[{order:1,sourceOrder:'NO.001',label:'One'}],
       directoryVerification:{complete:true,checkedAt:'2026-09-08T00:00:00Z',parsedWorkCount:1}},

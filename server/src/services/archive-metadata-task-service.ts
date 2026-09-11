@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { databaseManager } from '../db/database.js';
 import {directShareMetadata,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
+import type { CostuanIdentityInput } from './costuan-identity-evidence.js';
 import {
   ArchiveCatalogService,
   type CostuanCatalogImportResult
@@ -573,11 +574,11 @@ export class ArchiveMetadataTaskService {
     });
   }
 
-  validateSource(options: {id:number;workerId:string;canonicalCreatorId:number;postId:string;title:string;expectedAttempt?:number}) {
+  validateSource(options: {id:number;workerId:string;canonicalCreatorId:number;postId:string;title:string;expectedAttempt?:number} & CostuanIdentityInput) {
     const task=this.requireClaim(options.id,options.workerId,options.expectedAttempt);
     if (task.creatorId!==options.canonicalCreatorId) throw new ArchiveMetadataTaskError('规范博主身份与任务不一致。');
-    new ArchiveCatalogService(this.database).validateCostuanIdentity(task.creatorId,options.postId,options.title);
-    return task;
+    const identityVerification=new ArchiveCatalogService(this.database).validateCostuanIdentity(task.creatorId,options.postId,options.title,options);
+    return {...task,identityVerification};
   }
 
   validateDirectory(options:{id:number;workerId:string;expectedAttempt?:number;canonicalCreatorId:number;record:unknown}) {
