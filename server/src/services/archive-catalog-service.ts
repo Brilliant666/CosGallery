@@ -19,6 +19,7 @@ import {
   normalizeCostuanTitle,
   parseCostuanCollectionCreator,
   splitCostuanCheckDirectory,
+  parseCostuanDirectoryText,
   parseCostuanNumbering
 } from './costuan-numbering-service.js';
 
@@ -432,6 +433,18 @@ export class ArchiveCatalogService {
     const savedReview=this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(directoryReviewKey(creatorId)) as {value:string}|undefined;
     const reviewed=savedReview?applyCostuanDirectoryReview(costuanDirectoryReviewSchema.parse(JSON.parse(savedReview.value)),
       record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText):null;
+    // The effective directory must remain unique even if a caller supplied a
+    // deduplicated works array. Retraction evidence is audit data, not authority
+    // to erase an active line. Explicit server-owned revision reviews stay scoped.
+    if (!reviewed) {
+      const seen=new Set<string>(),duplicates=new Set<string>();
+      for (const work of (record.costuan.resourceDirectoryText??'').split(/\r?\n/u).flatMap(line=>parseCostuanDirectoryText(line))) {
+        if (work.order===undefined) continue;
+        if (seen.has(work.sourceOrderKey)) duplicates.add(work.sourceOrder);
+        seen.add(work.sourceOrderKey);
+      }
+      if (duplicates.size) throw new Error(`来源目录有效条目编号重复：${[...duplicates].join('、')}；未自动选择版本，需人工检查。`);
+    }
     const proof=z.object({complete:z.boolean(),checkedAt:z.string().datetime({offset:true}),parsedWorkCount:z.number().int().positive()})
       .safeParse(record.costuan.directoryVerification);
     const {works,supplementalContents}=reviewed??splitCostuanCheckDirectory(record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText);

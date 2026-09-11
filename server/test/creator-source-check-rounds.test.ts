@@ -257,9 +257,10 @@ describe('explicit creator source check rounds',()=>{
       if(mode==='missing-number') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace(/\nFixture NO.003[^\n]*/u,'');
       if(mode==='incomplete-input') payload.costuan.works.pop();
       const options={...request(task),record:payload},before=snapshot();
-      expect(()=>service.validateDirectory(options)).toThrow(/附加内容|编号目录/);
+      const expectedError=mode==='duplicate-number'?/编号重复：NO\.001/:/附加内容|编号目录/;
+      expect(()=>service.validateDirectory(options)).toThrow(expectedError);
       expect(snapshot()).toBe(before);
-      expect(()=>service.complete(options)).toThrow(/附加内容|编号目录/);
+      expect(()=>service.complete(options)).toThrow(expectedError);
       expect(snapshot()).toBe(before);
     });
 
@@ -296,7 +297,7 @@ describe('explicit creator source check rounds',()=>{
       if(mode==='duplicate-appendix') payload.costuan.resourceDirectoryText+='\nFixture 微博图[354P-1.8GB]';
       if(mode==='missing-appendix') payload.costuan.resourceDirectoryText=payload.costuan.resourceDirectoryText.replace('Fixture 微博图[354P-1.8GB]','');
       const before=snapshot();
-      expect(()=>service.validateDirectory({id:task.id,workerId:'worker',expectedAttempt:task.attemptCount,canonicalCreatorId:creatorId,record:payload})).toThrow(/附加内容|编号目录/);
+      expect(()=>service.validateDirectory({id:task.id,workerId:'worker',expectedAttempt:task.attemptCount,canonicalCreatorId:creatorId,record:payload})).toThrow(mode==='duplicate-number'?/编号重复：NO\.001/:/附加内容|编号目录/);
       expect(snapshot()).toBe(before);
     });
 
