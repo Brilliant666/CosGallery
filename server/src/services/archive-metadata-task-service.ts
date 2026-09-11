@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { databaseManager } from '../db/database.js';
+import {directShareMetadata,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
 import {
   ArchiveCatalogService,
   type CostuanCatalogImportResult
@@ -31,7 +32,8 @@ export type ArchiveMetadataTask = {
   aliases: string[];
   legacyIdentity?: { source: 'hentaiclub'; sourceCreatorId: string } | null;
   checkRoundId?: string | null;
-  lastSuccessfulSource?: { postId:string; url:string|null; sourceFolderName:string|null; destinationPath:string|null; observedAt:string } | null;
+  lastSuccessfulSource?: { postId:string; url:string|null; sourceFolderName:string|null; destinationPath:string|null; observedAt:string;
+    sourceMode?:'owned-folder'|'direct-share';sourceShareUrl?:string|null } | null;
   explicitSelection: boolean;
   sourceState: ArchiveSourceState;
   preference: 'liked' | 'kept' | null;
@@ -60,6 +62,7 @@ export type ArchiveSourceState = {
   metadataAccepted: boolean;
   deliveryReady: boolean;
   deliveryEvidence: 'verified' | 'historical' | 'missing';
+  deliveryMode?: 'owned-folder' | 'direct-share' | 'missing';
   missing: string[];
 };
 
@@ -172,17 +175,20 @@ export class ArchiveMetadataTaskService {
     const rows = this.database.prepare(`SELECT deliveries.status, deliveries.source_folder_name, deliveries.destination_path,
         deliveries.metadata_json FROM archive_catalog_collections collections
       LEFT JOIN archive_catalog_deliveries deliveries ON deliveries.collection_id=collections.id AND deliveries.provider='baidu'
+        AND deliveries.id=(SELECT latest.id FROM archive_catalog_deliveries latest WHERE latest.collection_id=collections.id AND latest.provider='baidu' ORDER BY latest.last_seen_at DESC,latest.id DESC LIMIT 1)
       WHERE collections.creator_id=? AND collections.source='costuan' AND collections.is_active=1
         AND EXISTS (SELECT 1 FROM archive_catalog_source_works sw WHERE sw.collection_id=collections.id AND sw.is_active=1)`)
       .all(creatorId) as Array<{status:string|null;source_folder_name:string|null;destination_path:string|null;metadata_json:string|null}>;
-    const usable = rows.filter(row => ['saved','already-saved'].includes(row.status ?? '') && row.source_folder_name?.trim() && row.destination_path?.trim());
+    const usable = rows.filter(row => directShareMetadata(row.metadata_json) || (['saved','already-saved'].includes(row.status ?? '') && row.source_folder_name?.trim() && row.destination_path?.trim()));
     const verified = usable.some(row => {
+      if(directShareMetadata(row.metadata_json))return true;
       try { const v = JSON.parse(row.metadata_json ?? '{}').verification; return !!v?.checkedAt && ['saved','reused'].includes(v.method) && !!v.sourceDirectory; }
       catch { return false; }
     });
     return { metadataAccepted: rows.length > 0, deliveryReady: usable.length > 0,
       deliveryEvidence: verified ? 'verified' : usable.length ? 'historical' : 'missing',
-      missing: rows.length === 0 ? ['尚无有效 Costuan 作品来源'] : usable.length ? [] : ['完整百度来源目录尚未转存或确认，缺少可用来源路径'] };
+      deliveryMode:usable.some(row=>directShareMetadata(row.metadata_json))?'direct-share':usable.length?'owned-folder':'missing',
+      missing: rows.length === 0 ? ['尚无有效 Costuan 作品来源'] : usable.length ? [] : ['百度原分享或已有网盘来源尚未核验，缺少可用来源'] };
   }
 
   private aliases(creatorId: number): string[] {
@@ -205,14 +211,17 @@ export class ArchiveMetadataTaskService {
   }
 
   private lastSuccessfulSource(creatorId:number): ArchiveMetadataTask['lastSuccessfulSource'] {
-    return this.database.prepare(`SELECT c.source_collection_id AS postId,c.source_url AS url,
-      d.source_folder_name AS sourceFolderName,d.destination_path AS destinationPath,c.observed_at AS observedAt
+    const row=this.database.prepare(`SELECT c.source_collection_id AS postId,c.source_url AS url,
+      d.source_folder_name AS sourceFolderName,d.destination_path AS destinationPath,c.observed_at AS observedAt,d.metadata_json AS metadata
       FROM archive_catalog_collections c LEFT JOIN archive_catalog_deliveries d ON d.id=(
-        SELECT id FROM archive_catalog_deliveries WHERE collection_id=c.id AND provider='baidu'
-          AND status IN ('saved','already-saved') ORDER BY last_seen_at DESC,id DESC LIMIT 1)
+        SELECT candidate.id FROM archive_catalog_deliveries candidate WHERE candidate.collection_id=c.id AND candidate.provider='baidu'
+          AND ${currentBaiduDeliverySql('candidate')} ORDER BY candidate.last_seen_at DESC,candidate.id DESC LIMIT 1)
       WHERE c.creator_id=? AND c.source='costuan' AND c.is_active=1
         AND EXISTS(SELECT 1 FROM archive_catalog_source_works sw WHERE sw.collection_id=c.id AND sw.is_active=1)
-      ORDER BY c.observed_at DESC,c.id DESC LIMIT 1`).get(creatorId) as NonNullable<ArchiveMetadataTask['lastSuccessfulSource']> | undefined ?? null;
+      ORDER BY c.observed_at DESC,c.id DESC LIMIT 1`).get(creatorId) as (NonNullable<ArchiveMetadataTask['lastSuccessfulSource']>&{metadata:string|null}) | undefined;
+    if(!row)return null;
+    const {metadata,...source}=row,direct=directShareMetadata(metadata);
+    return {...source,sourceMode:direct?'direct-share':'owned-folder',sourceShareUrl:direct?.shareUrl??null};
   }
 
   private enrich(row: TaskRow, identities = this.legacyIdentityMap()): ArchiveMetadataTask {

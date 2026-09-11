@@ -8,6 +8,7 @@ import {ManagedCreatorService} from '../src/services/managed-creator-service.js'
 import {ArchiveMetadataTaskService,type ArchiveMetadataTask} from '../src/services/archive-metadata-task-service.js';
 import {ArchiveCatalogService} from '../src/services/archive-catalog-service.js';
 import {ArchiveDownloadTaskService} from '../src/services/archive-download-task-service.js';
+import {CreatorSyncQueryService} from '../src/services/creator-sync-query-service.js';
 import {parseCostuanDirectoryText} from '../src/services/costuan-numbering-service.js';
 
 describe('explicit creator source check rounds',()=>{
@@ -29,12 +30,117 @@ describe('explicit creator source check rounds',()=>{
       sourceDirectory:'我的网盘/cos图集/fixture',checkRoundId:task.checkRoundId,files:Array.from({length:count},(_,index)=>`${String(index+1).padStart(3,'0')}.7z`)}}});
   const request=(task:ArchiveMetadataTask,count=3,receiptId=`receipt-${task.attemptCount}`)=>({id:task.id,workerId:'worker',canonicalCreatorId:creatorId,
     expectedAttempt:task.attemptCount,receiptId,record:record(task,count)});
+  const directRequest=(task:ArchiveMetadataTask,count=3)=>({...request(task,count),record:{...record(task,count),baidu:{
+    transport:'direct-share',status:'share-verified',shareUrl:'https://pan.baidu.com/s/1fixture',sourceFolderName:'467',
+    verification:{method:'share-read',complete:true,checkedAt:'2026-09-08T01:00:00Z',checkRoundId:task.checkRoundId,
+      files:Array.from({length:count},(_,index)=>`${String(index+1).padStart(3,'0')}.7z`)}}}});
   beforeEach(async()=>{
     root=await fs.mkdtemp(path.join(os.tmpdir(),'creator-check-rounds-'));
     db=new DatabaseSync(':memory:');db.exec(schemaSql);service=new ArchiveMetadataTaskService(db);
     creatorId=new ManagedCreatorService(db,path.join(root,'gallery')).create({name:'Fixture',preference:'liked'}).id;
   });
   afterEach(async()=>{db.close();await fs.rm(root,{recursive:true,force:true});});
+
+  it('hands a read-only original share to Stage2 without inventing an owned intermediate directory or staging early',()=>{
+    const task=claim('direct'),payload=directRequest(task);
+    service.complete(payload);
+    const accepted=snapshot();service.complete(payload);expect(snapshot()).toBe(accepted);
+    const delivery=db.prepare('SELECT * FROM archive_catalog_deliveries').get()!;
+    expect(delivery).toMatchObject({status:'share-verified',destination_path:null,transferred_at:null,source_folder_name:'467'});
+    expect(service.sourceState(creatorId)).toMatchObject({deliveryReady:true,deliveryEvidence:'verified',deliveryMode:'direct-share'});
+    const query=new CreatorSyncQueryService(db);
+    expect(query.roster().items[0].sourceState).toMatchObject({deliveryReady:true,deliveryEvidence:'verified',deliveryMode:'direct-share'});
+    const downloads=new ArchiveDownloadTaskService(db);
+    expect(downloads.planMissing({creatorIds:[creatorId],targetRoot:path.join(root,'inbox')}).created).toBe(3);
+    const seed=downloads.list().items[0];
+    expect(seed).toMatchObject({sourceMode:'direct-share',sourceShareUrl:payload.record.baidu.shareUrl,
+      destinationPath:'',sourceFolderName:'467',status:'pending',targetRelativeDirectory:'Fixture'});
+    expect(query.downloadTaskPage({creatorId}).items[0]).toMatchObject({sourceMode:'direct-share',sourceShareUrl:payload.record.baidu.shareUrl});
+    const claimed=downloads.claim({seedTaskId:seed.id,workerId:'worker',limit:500});
+    expect(claimed).toHaveLength(3);expect(claimed.every(item=>item.status==='claimed')).toBe(true);
+    downloads.update(seed.id,{status:'staged',workerId:'worker'});
+    expect(downloads.get(seed.id)?.status).toBe('staged');
+    const next=plan('next').items[0].task!;
+    expect(next.lastSuccessfulSource).toMatchObject({sourceMode:'direct-share',sourceShareUrl:payload.record.baidu.shareUrl,destinationPath:null});
+  });
+
+  it.each(['incomplete','old-round','missing-file','duplicate-file','owned-url','init-url','foreign-host','saved-lie','intermediate-lie'])
+    ('rejects %s direct share evidence without changing previous accepted source or task state',mode=>{
+      const first=claim('before-direct');service.complete(request(first));
+      const task=claim('direct-invalid'),payload=directRequest(task);
+      if(mode==='incomplete')payload.record.baidu.verification.complete=false;
+      if(mode==='old-round')payload.record.baidu.verification.checkRoundId=first.checkRoundId;
+      if(mode==='missing-file')payload.record.baidu.verification.files.pop();
+      if(mode==='duplicate-file')payload.record.baidu.verification.files.push('001.7Z');
+      if(mode==='owned-url')payload.record.baidu.shareUrl='https://pan.baidu.com/disk/main#/index?path=/cos图集/467';
+      if(mode==='init-url')payload.record.baidu.shareUrl='https://pan.baidu.com/share/init?surl=fixture';
+      if(mode==='foreign-host')payload.record.baidu.shareUrl='https://pan.baidu.com.example.org/s/fixture';
+      if(mode==='saved-lie')payload.record.baidu.status='saved';
+      if(mode==='intermediate-lie')Object.assign(payload.record.baidu,{destinationPath:'我的网盘/cos图集'});
+      const before=snapshot();expect(()=>service.complete(payload)).toThrow(/原分享|原分享中的/);expect(snapshot()).toBe(before);
+    });
+
+  it('retains the complete raw share manifest without creating tasks for non-numbered appendices',()=>{
+    const task=claim('full-manifest'),payload=directRequest(task);
+    payload.record.baidu.verification.files=['001.7Z','002.7z','003.7z','微博图.7z','说明.txt'];
+    service.complete(payload);
+    const saved=JSON.parse(String(db.prepare('SELECT metadata_json FROM archive_catalog_deliveries').get()?.metadata_json));
+    expect(saved.verification.files).toEqual(payload.record.baidu.verification.files);
+    const downloads=new ArchiveDownloadTaskService(db);
+    expect(downloads.planMissing({creatorIds:[creatorId],targetRoot:path.join(root,'inbox')}).created).toBe(3);
+    expect(downloads.claim({seedTaskId:downloads.list().items[0].id,workerId:'worker',limit:500})).toHaveLength(3);
+  });
+
+  it('resumes the same metadata claim, replaces old intermediate delivery and preserves pending/claimed download identities',()=>{
+    const first=claim('old-owned'),legacy=request(first);
+    // An older source uses a different key; it must not win because it has a
+    // transferred_at value while a read-only share deliberately has none.
+    service.complete(legacy);
+    const downloads=new ArchiveDownloadTaskService(db),targetRoot=path.join(root,'inbox');
+    downloads.planMissing({creatorIds:[creatorId],targetRoot});
+    const original=downloads.list().items;
+    downloads.claim({seedTaskId:original[0].id,workerId:'worker',limit:1});
+    const task=claim('resume-direct');
+    expect(claim('resume-direct')).toMatchObject({id:task.id,checkRoundId:task.checkRoundId,attemptCount:task.attemptCount});
+    const payload=directRequest(task);service.complete(payload);
+    expect(downloads.planMissing({creatorIds:[creatorId],targetRoot})).toMatchObject({created:0,existing:3,removedOutOfScope:0});
+    const current=downloads.list().items;
+    expect(current.map(item=>item.id).sort()).toEqual(original.map(item=>item.id).sort());
+    expect(current.every(item=>item.sourceMode==='direct-share' && item.sourceFolderName==='467' && item.destinationPath==='')).toBe(true);
+    expect(downloads.get(original[0].id)).toMatchObject({status:'claimed',claimedBy:'worker',attemptCount:1});
+    const originalSourceIds=db.prepare('SELECT id FROM archive_catalog_source_works ORDER BY id').all();
+    const collection=JSON.parse(String(db.prepare('SELECT metadata_json FROM archive_catalog_collections').get()?.metadata_json));
+    expect(collection.works).toHaveLength(3);
+    expect(originalSourceIds).toHaveLength(3);
+    // A corrupted/missing current file proof cannot fall back to an old saved
+    // intermediate directory, and existing task identities are not deleted.
+    const delivery=db.prepare("SELECT id,metadata_json FROM archive_catalog_deliveries WHERE source_folder_name='467'").get()!;
+    const proof=JSON.parse(String(delivery.metadata_json));proof.verification.files=[];
+    db.prepare('UPDATE archive_catalog_deliveries SET metadata_json=? WHERE id=?').run(JSON.stringify(proof),Number(delivery.id));
+    expect(downloads.planMissing({creatorIds:[creatorId],targetRoot})).toMatchObject({created:0,removedOutOfScope:0,skippedWithoutDelivery:3});
+    expect(()=>downloads.claim({seedTaskId:original[1].id,workerId:'worker',limit:500})).toThrow(/来源目录不可用/);
+    expect(downloads.list().total).toBe(3);
+  });
+
+  it('only plans newly missing verified files from direct shares when historical packages are already local',async()=>{
+    const first=claim('direct-first');service.complete(directRequest(first));
+    const gallery=path.join(root,'gallery');
+    for(let order=1;order<=3;order++) {
+      const directory=path.join(gallery,'Fixture',`Fixture NO.${String(order).padStart(3,'0')} Work ${order}`);
+      await fs.mkdir(directory,{recursive:true});await fs.writeFile(path.join(directory,'1.jpg'),'synthetic scan fixture');
+    }
+    await new ArchiveCatalogService(db).reconcileLocalRoot(gallery);
+    const second=claim('direct-incremental'),payload=directRequest(second,4);payload.record.baidu.verification.files=['004.7z'];
+    expect(service.validateDirectory(payload).requiredFilenames).toEqual(['004.7z']);
+    service.complete(payload);
+    const downloads=new ArchiveDownloadTaskService(db);
+    expect(downloads.planMissing({creatorIds:[creatorId],targetRoot:path.join(root,'inbox')}).created).toBe(1);
+    expect(downloads.list().items.map(item=>item.targetFilename)).toEqual(['004.7z']);
+    // A later local-state change must not turn an unverified old filename into
+    // a claimable download just because another file in the share was proven.
+    db.prepare('UPDATE archive_catalog_local_works SET is_active=0').run();
+    expect(downloads.planMissing({creatorIds:[creatorId],targetRoot:path.join(root,'inbox')})).toMatchObject({created:0,skippedWithoutDelivery:3});
+  });
 
   const reviewedFixture=(task:ArchiveMetadataTask)=>{
     const original='Fixture NO.002 Old [94P-442M]',selected='Fixture NO.002 New [96P10V-1.58GB]',supplement='Fixture 推图集 [1034P5V-133MB]';

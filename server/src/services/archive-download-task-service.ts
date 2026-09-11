@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
 import { databaseManager } from '../db/database.js';
+import {directShareMetadata,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
 
 export type ArchiveDownloadTaskStatus =
   | 'pending'
@@ -29,6 +30,8 @@ export type ArchiveDownloadTask = {
   provider: string;
   sourceFolderName: string;
   destinationPath: string;
+  sourceMode?: 'owned-folder' | 'direct-share';
+  sourceShareUrl?: string | null;
   targetRoot: string;
   targetRelativeDirectory: string;
   targetFilename: string;
@@ -103,6 +106,7 @@ type TaskRow = {
   provider: string;
   source_folder_name: string;
   destination_path: string;
+  delivery_metadata: string|null;
   target_root: string;
   target_relative_directory: string;
   target_filename: string;
@@ -150,6 +154,7 @@ function buildTargetFilename(sourceOrder: number): string {
 }
 
 function mapTask(row: TaskRow): ArchiveDownloadTask {
+  const direct=directShareMetadata(row.delivery_metadata);
   return {
     id: row.id,
     creatorId: row.creator_id,
@@ -167,6 +172,8 @@ function mapTask(row: TaskRow): ArchiveDownloadTask {
     provider: row.provider,
     sourceFolderName: row.source_folder_name,
     destinationPath: row.destination_path,
+    sourceMode:direct?'direct-share':'owned-folder',
+    sourceShareUrl:direct?.shareUrl??null,
     targetRoot: row.target_root,
     targetRelativeDirectory: row.target_relative_directory,
     targetFilename: row.target_filename,
@@ -250,10 +257,8 @@ export class ArchiveDownloadTaskService {
              FROM archive_catalog_deliveries candidate
              WHERE candidate.collection_id = collections.id
                AND candidate.provider = ?
-               AND candidate.status IN ('saved', 'already-saved')
-               AND TRIM(COALESCE(candidate.source_folder_name,''))<>''
-               AND TRIM(COALESCE(candidate.destination_path,''))<>''
-             ORDER BY candidate.transferred_at DESC, candidate.id DESC
+               AND ${currentBaiduDeliverySql('candidate',"printf('%03d.7z',source_works.source_order)")}
+             ORDER BY candidate.last_seen_at DESC, candidate.id DESC
              LIMIT 1
            )
          WHERE source_works.source = 'costuan'
@@ -378,7 +383,7 @@ export class ArchiveDownloadTaskService {
                FROM archive_catalog_deliveries deliveries
                WHERE deliveries.collection_id = collections.id
                  AND deliveries.provider = archive_catalog_download_tasks.provider
-                 AND deliveries.status IN ('saved', 'already-saved')
+                 AND ${currentBaiduDeliverySql('deliveries')}
              )
          )`
     ).run(provider, ...(creatorIds ?? []));
@@ -440,8 +445,7 @@ export class ArchiveDownloadTaskService {
       const target = this.database.prepare(`SELECT works.creator_id, tasks.provider,
           creators.is_active AS creator_active, source_works.is_active AS source_active, collections.is_active AS collection_active,
           EXISTS (SELECT 1 FROM archive_catalog_deliveries deliveries WHERE deliveries.collection_id=collections.id
-            AND deliveries.provider=tasks.provider AND deliveries.status IN ('saved','already-saved')
-            AND TRIM(COALESCE(deliveries.source_folder_name,''))<>'' AND TRIM(COALESCE(deliveries.destination_path,''))<>'') AS delivery_ready
+            AND deliveries.provider=tasks.provider AND ${currentBaiduDeliverySql('deliveries','tasks.target_filename')}) AS delivery_ready
         FROM archive_catalog_download_tasks tasks
         JOIN archive_catalog_source_works source_works ON source_works.id=tasks.source_work_id
         JOIN archive_catalog_works works ON works.id=source_works.work_id
@@ -483,6 +487,10 @@ export class ArchiveDownloadTaskService {
            JOIN archive_catalog_works works ON works.id = source_works.work_id
            JOIN archive_catalog_creators creators ON creators.id = works.creator_id
            WHERE tasks.status IN ('pending', 'failed')
+             AND creators.is_active=1 AND source_works.is_active=1
+             AND EXISTS (SELECT 1 FROM archive_catalog_collections c JOIN archive_catalog_deliveries d ON d.collection_id=c.id
+               WHERE c.id=source_works.collection_id AND c.is_active=1 AND d.provider=tasks.provider
+               AND ${currentBaiduDeliverySql('d','tasks.target_filename')})
            ORDER BY CASE creators.preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,
                     creators.id, source_works.source_order, tasks.id
            LIMIT 1`
@@ -514,6 +522,10 @@ export class ArchiveDownloadTaskService {
          WHERE works.creator_id = ?
            AND source_works.collection_id = ?
            AND tasks.provider = ?
+           AND source_works.is_active=1
+           AND EXISTS (SELECT 1 FROM archive_catalog_collections c JOIN archive_catalog_deliveries d ON d.collection_id=c.id
+             WHERE c.id=source_works.collection_id AND c.is_active=1 AND d.provider=tasks.provider
+             AND ${currentBaiduDeliverySql('d','tasks.target_filename')})
            AND (
              tasks.status IN ('pending', 'failed')
              OR (tasks.status = 'claimed' AND tasks.claimed_by = ?)
@@ -621,6 +633,7 @@ export class ArchiveDownloadTaskService {
                    tasks.provider,
                    COALESCE(deliveries.source_folder_name, '') AS source_folder_name,
                    COALESCE(deliveries.destination_path, '') AS destination_path,
+                   deliveries.metadata_json AS delivery_metadata,
                    tasks.target_root,
                    tasks.target_relative_directory,
                    tasks.target_filename,
@@ -645,7 +658,7 @@ export class ArchiveDownloadTaskService {
                 FROM archive_catalog_deliveries candidate
                 WHERE candidate.collection_id = collections.id
                   AND candidate.provider = tasks.provider
-                ORDER BY candidate.transferred_at DESC, candidate.id DESC
+                ORDER BY candidate.last_seen_at DESC, candidate.id DESC
                 LIMIT 1
               )`;
   }

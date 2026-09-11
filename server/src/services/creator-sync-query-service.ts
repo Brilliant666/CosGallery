@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 import { databaseManager } from '../db/database.js';
+import {directShareDeliverySql,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
 import type { ArchiveDownloadTask, ArchiveDownloadTaskStatus, ArchiveDownloadTaskSummary } from './archive-download-task-service.js';
 import type { ArchiveMetadataTaskStatus, ArchiveSourceState } from './archive-metadata-task-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
@@ -123,16 +124,17 @@ const COHORT_CTES = `
   ),
   delivery_counts AS (
     SELECT collections.creator_id, COUNT(*) AS usable,
+      MAX(CASE WHEN ${directShareDeliverySql('deliveries')} THEN 1 ELSE 0 END) AS direct_share,
       MAX(CASE WHEN json_valid(deliveries.metadata_json) THEN
-        CASE WHEN json_extract(deliveries.metadata_json,'$.verification.checkedAt') IS NOT NULL
+        CASE WHEN ${directShareDeliverySql('deliveries')} THEN 1
+          WHEN json_extract(deliveries.metadata_json,'$.verification.checkedAt') IS NOT NULL
           AND json_extract(deliveries.metadata_json,'$.verification.method') IN ('saved','reused')
           AND LENGTH(COALESCE(json_extract(deliveries.metadata_json,'$.verification.sourceDirectory'),''))>0 THEN 1 ELSE 0 END
         ELSE 0 END) AS verified
     FROM archive_catalog_collections collections
     JOIN archive_catalog_deliveries deliveries ON deliveries.collection_id=collections.id
     WHERE collections.id IN (SELECT collection_id FROM source_rows) AND deliveries.provider='baidu'
-      AND deliveries.status IN ('saved','already-saved')
-      AND TRIM(COALESCE(deliveries.source_folder_name,''))<>'' AND TRIM(COALESCE(deliveries.destination_path,''))<>''
+      AND ${currentBaiduDeliverySql('deliveries')}
     GROUP BY collections.creator_id
   ),
   aliases AS (
@@ -151,6 +153,7 @@ const COHORT_CTES = `
       COALESCE(source_counts.missing_works,0) AS missing_works, source_counts.latest_source_at,
       COALESCE(supplemental_counts.titles_json,'[]') AS supplemental_titles_json,
       COALESCE(delivery_counts.usable,0) AS usable_delivery, COALESCE(delivery_counts.verified,0) AS verified_delivery,
+      COALESCE(delivery_counts.direct_share,0) AS direct_share,
       tasks.id AS metadata_task_id, tasks.status AS metadata_status, tasks.attempt_count AS metadata_attempt_count,
       tasks.claimed_by AS metadata_claimed_by, tasks.claimed_at AS metadata_claimed_at,
       tasks.completed_at AS metadata_completed_at, tasks.last_error AS metadata_last_error, tasks.updated_at AS metadata_updated_at
@@ -168,7 +171,7 @@ type RosterRow = {
   is_active: number; aliases_json: string; local_works: number; matched_local_works: number;
   source_works: number; source_collections: number; missing_works: number; latest_source_at: string | null;
   supplemental_titles_json: string;
-  usable_delivery: number; verified_delivery: number; metadata_task_id: number | null;
+  usable_delivery: number; verified_delivery: number; direct_share:number; metadata_task_id: number | null;
   metadata_status: ArchiveMetadataTaskStatus | null; metadata_attempt_count: number | null;
   metadata_claimed_by: string | null; metadata_claimed_at: string | null; metadata_completed_at: string | null;
   metadata_last_error: string | null; metadata_updated_at: string | null;
@@ -225,7 +228,8 @@ function rosterItem(row: RosterRow): CreatorSyncRosterItem {
     pendingSupplementalTitles: JSON.parse(row.supplemental_titles_json) as string[],
     sourceState: { metadataAccepted: row.source_works > 0, deliveryReady: row.usable_delivery > 0,
       deliveryEvidence: row.verified_delivery ? 'verified' : row.usable_delivery ? 'historical' : 'missing',
-      missing: !row.source_works ? ['尚无有效 Costuan 作品来源'] : row.usable_delivery ? [] : ['完整百度来源目录尚未转存或确认，缺少可用来源路径'] },
+      deliveryMode:row.direct_share?'direct-share':row.usable_delivery?'owned-folder':'missing',
+      missing: !row.source_works ? ['尚无有效 Costuan 作品来源'] : row.usable_delivery ? [] : ['百度原分享或已有网盘来源尚未核验，缺少可用来源'] },
     metadataTask: row.metadata_task_id === null ? null : { id: row.metadata_task_id, status: row.metadata_status!,
       attemptCount: row.metadata_attempt_count!, claimedBy: row.metadata_claimed_by, claimedAt: row.metadata_claimed_at,
       completedAt: row.metadata_completed_at, lastError: row.metadata_last_error, updatedAt: row.metadata_updated_at! } };
@@ -376,7 +380,7 @@ export class CreatorSyncQueryService {
       const counts = summary(DOWNLOAD_STATUSES, this.database.prepare(`${scope.sql} SELECT status,COUNT(*) AS count FROM task_scope GROUP BY status`)
         .all(...scope.values) as Array<{ status: string; count: number }>);
       const items = this.database.prepare(`${scope.sql}, deliveries_ranked AS (
-        SELECT deliveries.*,ROW_NUMBER() OVER (PARTITION BY collection_id,provider ORDER BY transferred_at DESC,id DESC) AS ranking
+        SELECT deliveries.*,ROW_NUMBER() OVER (PARTITION BY collection_id,provider ORDER BY last_seen_at DESC,id DESC) AS ranking
         FROM archive_catalog_deliveries deliveries
         WHERE collection_id IN (SELECT source.collection_id FROM task_scope tasks JOIN archive_catalog_source_works source ON source.id=tasks.source_work_id)
       ) SELECT tasks.id,tasks.creator_id AS creatorId,creators.canonical_name AS creatorName,creators.preference,creators.effective_rating AS rating,
@@ -384,6 +388,8 @@ export class CreatorSyncQueryService {
         collections.source_collection_id AS sourceCollectionId,source.source_order AS sourceOrder,source.source_order_label AS sourceOrderLabel,
         source.source_title AS title,tasks.provider,COALESCE(deliveries.source_folder_name,'') AS sourceFolderName,
         COALESCE(deliveries.destination_path,'') AS destinationPath,tasks.target_root AS targetRoot,
+        CASE WHEN ${directShareDeliverySql('deliveries')} THEN 'direct-share' ELSE 'owned-folder' END AS sourceMode,
+        CASE WHEN ${directShareDeliverySql('deliveries')} THEN json_extract(deliveries.metadata_json,'$.shareUrl') ELSE NULL END AS sourceShareUrl,
         tasks.target_relative_directory AS targetRelativeDirectory,tasks.target_filename AS targetFilename,tasks.status,
         tasks.claimed_by AS claimedBy,tasks.claimed_at AS claimedAt,tasks.started_at AS startedAt,tasks.completed_at AS completedAt,
         tasks.download_id AS downloadId,tasks.attempt_count AS attemptCount,tasks.last_error AS lastError,

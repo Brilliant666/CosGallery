@@ -9,6 +9,14 @@ const row = (status?: string, source = false) => ({
   metadataTask: status ? { id: 32, status, updatedAt: '2026-09-08T01:18:21.983Z', lastError: '原始原因', claimedBy: null } : null,
 }) as CreatorSyncRow;
 describe('creator source evidence presentation', () => {
+  it('does not equate a verified original share with a staged copy', () => {
+    const item = row('completed', true);
+    item.sourceState.deliveryMode = 'direct-share';
+    const view = mount(CreatorSourceStatus, { props: { item } });
+    expect(view.text()).toContain('原分享已核验，暂存进度见 Stage2');
+    expect(view.text()).not.toContain('网盘来源已核验');
+    expect(view.text()).not.toContain('已暂存');
+  });
   it('shows pending supplemental contents separately even when the numbered check completed', () => {
     const item = { ...row('completed', true), pendingSupplementalTitles: ['微博图'] };
     const view = mount(CreatorSourceStatus, { props: { item } });

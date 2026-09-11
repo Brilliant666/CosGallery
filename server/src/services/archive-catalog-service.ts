@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { databaseManager } from '../db/database.js';
 import { LocalCreatorFolderBridgeService, normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
+import {directShareDeliverySchema} from './archive-baidu-delivery.js';
 import {applyCostuanDirectoryReview,costuanDirectoryReviewSchema,directoryReviewKey} from './costuan-directory-review.js';
 import {
   areCostuanTitlesCompatible,
@@ -540,6 +541,15 @@ export class ArchiveCatalogService {
 
   validateCompleteCostuanCheck(recordInput:unknown, creatorId:number, checkRoundId:string): CostuanArchiveRecord {
     const {record,requiredFilenames}=this.validateCompleteCostuanDirectory(recordInput,creatorId);
+    if(record.baidu?.transport==='direct-share') {
+      const proof=directShareDeliverySchema.safeParse(record.baidu);
+      if(!proof.success || proof.data.verification.checkRoundId!==checkRoundId) {
+        throw new Error('缺少本轮百度原分享只读核验凭据；不得将原分享核验写成已转存。');
+      }
+      const files=proof.data.verification.files.map(filename=>filename.toLowerCase());
+      if(requiredFilenames.some(filename=>files.filter(file=>file===filename.toLowerCase()).length!==1)) throw new Error('本轮原分享中的缺失作品文件尚未全部唯一核验可用；不规划未核验文件。');
+      return record;
+    }
     const verification=z.object({method:z.enum(['saved','reused']),checkedAt:z.string().datetime({offset:true}),
       sourceDirectory:z.string().min(1),checkRoundId:z.literal(checkRoundId),files:z.array(z.string().min(1))})
       .safeParse(record.baidu?.verification);

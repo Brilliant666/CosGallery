@@ -96,7 +96,7 @@ router.use((request, response, next) => {
 });
 
 router.get('/ping', (_request, response) => {
-  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 4, capabilities:{rosterFirstCollectionV1:true, unifiedCreatorSyncV1:true} });
+  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 4, capabilities:{rosterFirstCollectionV1:true, unifiedCreatorSyncV1:true, baiduDirectStageV1:true} });
 });
 
 router.use(createCreatorSyncReadRouter());

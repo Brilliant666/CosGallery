@@ -29,7 +29,7 @@
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 1</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">检查来源与补齐缺失</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            从规范博主库明确选择首次收录或增量检查对象，已有来源也可再次检查。复制固定范围到插件，由原执行器检查最新来源及本轮所需网盘文件，仅为真实缺失作品复用或创建任务。刷新账本只读取，不执行来源检查。
+            从规范博主库明确选择首次收录或增量检查对象，已有来源也可再次检查。复制固定范围到新版插件，读取 Costuan 与百度原分享，仅为本地缺失作品复用或创建任务；不整份转存至 cos图集。刷新账本只读取，不执行来源检查。
           </p>
         </div>
         <div v-if="metadataTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
@@ -61,7 +61,7 @@
                 {{ task.sourceState.metadataAccepted ? '已记录 Costuan 来源' : '尚未取得有效来源' }}
                 <template v-if="task.sourceState.metadataAccepted">
                   <small class="block text-muted">{{ task.sourceCollections }} 个有效 Costuan 合集</small>
-                  <small class="block text-muted">{{ task.sourceState.deliveryReady ? (task.sourceState.deliveryEvidence === 'verified' ? (task.pendingSupplementalTitles?.length ? '编号作品网盘来源已核验' : '网盘来源已核验') : '网盘状态待重新核验') : '网盘来源待确认' }}</small>
+                  <small class="block text-muted">{{ task.sourceState.deliveryMode === 'direct-share' ? '原分享已核验，暂存进度见 Stage2' : task.sourceState.deliveryReady ? (task.sourceState.deliveryEvidence === 'verified' ? (task.pendingSupplementalTitles?.length ? '编号作品网盘来源已核验' : '网盘来源已核验') : '网盘状态待重新核验') : '网盘来源待确认' }}</small>
                   <small v-if="task.pendingSupplementalTitles?.length" class="block text-muted">{{ task.pendingSupplementalTitles.join('、') }}：附加内容待人工处理，不参与自动下载/入库</small>
                   <details v-if="task.latestSourceAt" class="mt-1 text-xs text-muted"><summary class="cursor-pointer">来源详情</summary><span>来源记录时间：{{ formatSourceTime(task.latestSourceAt) }}</span></details>
                 </template>
@@ -90,7 +90,7 @@
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 2</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">缺失作品下载队列</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            来源收录完成后，仅为该批博主规划已具备网盘来源、但本地缺失的 Costuan 作品，首次收录无需先有本地目录。插件精确复制缺失压缩包到“我的网盘/cos待入库/博主 ID”，再由你手动下载；旧全量规划入口保留原有本地博主范围。
+            来源检查后，仅为本地缺失的编号作品规划任务。新版插件从原分享精确保存到“我的网盘/cos待入库/规范博主名”，已存在的目标文件复用，再由你手动下载。历史中转任务仍保留；重新检查该博主可取得原分享方式，cos图集 不再是新流程的必需目录。
           </p>
         </div>
       </div>

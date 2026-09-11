@@ -48,7 +48,7 @@ describe.sequential('roster first-collection HTTP contract',()=>{
 
   it('advertises capabilities, old claim cannot take explicit tasks, GET refresh has no side effects',async()=>{
     expect((await requestTestApp(app,'GET',bridge+'/ping')).status).toBe(401);
-    expect((await requestTestApp(app,'GET',bridge+'/ping',bridgeHeaders)).body).toMatchObject({version:4,capabilities:{rosterFirstCollectionV1:true,unifiedCreatorSyncV1:true}});
+    expect((await requestTestApp(app,'GET',bridge+'/ping',bridgeHeaders)).body).toMatchObject({version:4,capabilities:{rosterFirstCollectionV1:true,unifiedCreatorSyncV1:true,baiduDirectStageV1:true}});
     expect((await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'old'})).status).toBe(400);
     expect((await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'new',taskIds:[]})).status).toBe(400);
     for(const rounds of [undefined,[{taskId,checkRoundId:'wrong-round'}]]) {

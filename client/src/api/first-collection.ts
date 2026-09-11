@@ -40,6 +40,7 @@ export function planFirstCollection(creatorIds: number[], requestId: string) {
 export function sourceStateLabel(state?: ArchiveSourceState) {
   if (!state) return '历史记录，尚未核验';
   if (!state.metadataAccepted) return '尚无 Costuan 来源';
+  if (state.deliveryMode === 'direct-share') return '原分享已核验，暂存进度见 Stage2';
   if (!state.deliveryReady) return `元数据已接入，网盘来源待确认${state.missing.length ? `：${state.missing.join('；')}` : ''}`;
   return state.deliveryEvidence === 'verified' ? '元数据已接入，网盘来源已核验' : '元数据已接入，历史转存记录可用（尚未实时核验）';
 }
