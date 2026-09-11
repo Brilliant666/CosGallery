@@ -96,6 +96,7 @@ function makeSettings(libraryRoot: string, inboxRoot: string, processingRoot: st
 
 async function createFixture(options: {
   hashFile?: LocalIngestRuntimeDependencies['hashFile'];
+  wait?: LocalIngestRuntimeDependencies['wait'];
   runCommand?: LocalIngestRuntimeDependencies['runCommand'];
   recycleAfterIngest?: boolean;
   recycle?: (targetPath: string) => Promise<{ targetPath: string; recycled: boolean }>;
@@ -179,6 +180,7 @@ async function createFixture(options: {
   };
   const service = new LocalIngestService(database, settings, recycle, rescan, {
     now: () => new Date(clock),
+    wait: options.wait,
     hashFile: options.hashFile,
     runCommand: syntheticCommand,
     expectedGalleryRoot: libraryRoot,
@@ -216,6 +218,75 @@ afterEach(async () => {
 });
 
 describe.sequential('LocalIngest cross-platform hardening', () => {
+  it('reads a creator directory once while observing a batch of new archives', async () => {
+    const hashFile = vi.fn(async () => 'unused');
+    const fixture = await createFixture({ hashFile });
+    const creatorDirectory = path.dirname(fixture.sourcePath);
+    await Promise.all(Array.from({ length: 19 }, (_, index) =>
+      fs.writeFile(path.join(creatorDirectory, `batch-${index}.7z`), 'synthetic archive')
+    ));
+    const readdir = vi.spyOn(fs, 'readdir');
+
+    expect(await fixture.service.scanInbox()).toMatchObject({ discoveredArchives: 20, waitingStable: 20, createdJobs: 0 });
+    expect(readdir.mock.calls.filter(([directory]) => String(directory) === creatorDirectory)).toHaveLength(1);
+    expect(hashFile).not.toHaveBeenCalled();
+    fixture.database.close();
+  });
+
+  it('keeps the five-second wait and skips unrelated creator directory IO on the stable recheck', async () => {
+    let fixture: CommonFixture;
+    const wait = vi.fn(async (milliseconds: number) => {
+      fixture.advance(milliseconds);
+      readdir.mockClear();
+      lstat.mockClear();
+      realpath.mockClear();
+      access.mockClear();
+    });
+    fixture = await createFixture({ wait });
+    const previousGet = fixture.settings.get.bind(fixture.settings);
+    fixture.settings.get = () => ({ ...previousGet(), fileStableSeconds: 5 });
+    const unrelatedDirectory = path.join(fixture.inboxRoot, 'Alpha Alias');
+    await fs.mkdir(unrelatedDirectory);
+    const timestamp = new Date().toISOString();
+    fixture.database.prepare(
+      `INSERT INTO archive_catalog_creator_aliases (creator_id, alias, normalized_alias, source, created_at, updated_at)
+       VALUES (1, 'Alpha Alias', 'alphaalias', 'test', ?, ?)`
+    ).run(timestamp, timestamp);
+    const readdir = vi.spyOn(fs, 'readdir');
+    const lstat = vi.spyOn(fs, 'lstat');
+    const realpath = vi.spyOn(fs, 'realpath');
+    const access = vi.spyOn(fs, 'access');
+
+    expect(await fixture.service.scanInboxWithStableRecheck()).toMatchObject({ createdJobs: 1, waitingStable: 0 });
+    expect(wait).toHaveBeenCalledExactlyOnceWith(5_000);
+    for (const operation of [readdir, lstat, realpath, access]) {
+      expect(operation.mock.calls.filter(([target]) => String(target) === unrelatedDirectory)).toHaveLength(0);
+    }
+    expect(readdir.mock.calls.filter(([directory]) => String(directory) === path.dirname(fixture.sourcePath))).toHaveLength(3);
+    fixture.database.close();
+  });
+
+  it('checks for newly arrived temporary files after the directory snapshot and before hashing', async () => {
+    const hashFile = vi.fn(async () => 'unused');
+    const fixture = await createFixture({ hashFile });
+    await fixture.service.scanInbox();
+    fixture.advance(1_100);
+    const originalReaddir = fs.readdir.bind(fs);
+    let insertedTemporary = false;
+    vi.spyOn(fs, 'readdir').mockImplementation((async (...args: Parameters<typeof fs.readdir>) => {
+      const entries = await originalReaddir(...args);
+      if (String(args[0]) === path.dirname(fixture.sourcePath) && !insertedTemporary) {
+        insertedTemporary = true;
+        await fs.writeFile(`${fixture.sourcePath}.crdownload`, 'arrived after snapshot');
+      }
+      return entries;
+    }) as typeof fs.readdir);
+
+    expect(await fixture.service.scanInbox()).toMatchObject({ waitingStable: 1, createdJobs: 0 });
+    expect(hashFile).not.toHaveBeenCalled();
+    fixture.database.close();
+  });
+
   it('does not hash until two unchanged observations span the stability window', async () => {
     let hashCalls = 0;
     const fixture = await createFixture({

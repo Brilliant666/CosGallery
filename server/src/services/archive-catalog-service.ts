@@ -352,7 +352,7 @@ async function resolveDirectCreatorFolder(rootPath: string, folderName: string):
   return matches[0].name;
 }
 
-async function scanLocalCreatorDirectory(rootPath: string, folderName: string): Promise<LocalCreatorSnapshot> {
+async function scanLocalCreatorDirectory(rootPath: string, folderName: string, workFolderName?: string): Promise<LocalCreatorSnapshot> {
   const resolvedRoot = path.resolve(rootPath);
   const creatorPath = path.join(resolvedRoot, folderName);
   const relativeCreatorPath = path.relative(resolvedRoot, creatorPath);
@@ -368,12 +368,33 @@ async function scanLocalCreatorDirectory(rootPath: string, folderName: string): 
   if (!creatorStat.isDirectory() || creatorStat.isSymbolicLink()) {
     throw new Error(`博主路径不是可扫描的直接文件夹：${folderName}`);
   }
-  const workEntries = (await fs.readdir(creatorPath, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }));
+  let workNames: string[];
+  if (workFolderName !== undefined) {
+    if (!workFolderName.trim() || workFolderName !== workFolderName.trim()
+      || workFolderName === '.' || workFolderName === '..' || /[\\/:]/u.test(workFolderName)
+      || workFolderName.endsWith('.')
+      || path.basename(workFolderName) !== workFolderName || path.isAbsolute(workFolderName)) {
+      throw new Error('作品文件夹必须是博主目录下的单个直接子目录。');
+    }
+    const workPath = path.join(creatorPath, workFolderName);
+    const workStat = await fs.lstat(workPath);
+    const [realRoot, realCreator, realWork] = await Promise.all([
+      fs.realpath(resolvedRoot), fs.realpath(creatorPath), fs.realpath(workPath)
+    ]);
+    if (!workStat.isDirectory() || workStat.isSymbolicLink()
+      || path.dirname(realCreator) !== realRoot || path.dirname(realWork) !== realCreator) {
+      throw new Error('作品路径不是博主目录内可扫描的直接文件夹。');
+    }
+    workNames = [path.basename(realWork)];
+  } else {
+    workNames = (await fs.readdir(creatorPath, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }))
+      .map((entry) => entry.name);
+  }
   const works: LocalWorkSnapshot[] = [];
-  for (const workEntry of workEntries) {
-    works.push(await inspectWorkDirectory(resolvedRoot, path.join(creatorPath, workEntry.name)));
+  for (const workName of workNames) {
+    works.push(await inspectWorkDirectory(resolvedRoot, path.join(creatorPath, workName)));
   }
   return {
     relativePath: toPosixRelative(relativeCreatorPath),
@@ -834,6 +855,7 @@ export class ArchiveCatalogService {
   async reconcileLocalCreators(options: {
     rootPath: string;
     creators: LocalCreatorReconciliationScope[];
+    workFolderName?: string;
     onProgress?: (message: string) => void;
   }): Promise<LocalReconciliationResult> {
     const resolvedRoot = path.resolve(options.rootPath);
@@ -841,6 +863,9 @@ export class ArchiveCatalogService {
     if (!rootStat.isDirectory()) throw new Error(`图库根目录不是文件夹：${resolvedRoot}`);
     if (options.creators.length === 0) {
       throw new Error('博主定向对账至少需要一个明确的博主范围。');
+    }
+    if (options.workFolderName !== undefined && options.creators.length !== 1) {
+      throw new Error('作品定向对账必须且只能指定一个博主。');
     }
 
     const explicitCreatorIds = new Map<string, number>();
@@ -864,7 +889,7 @@ export class ArchiveCatalogService {
         throw new Error(`博主 ID ${scope.creatorId} 与文件夹“${actualFolderName}”无法唯一对应。`);
       }
       options.onProgress?.(`[${index + 1}/${options.creators.length}] 只读扫描 ${actualFolderName}`);
-      const snapshot = await scanLocalCreatorDirectory(resolvedRoot, actualFolderName);
+      const snapshot = await scanLocalCreatorDirectory(resolvedRoot, actualFolderName, options.workFolderName);
       if (explicitCreatorIds.has(snapshot.relativePath)) {
         throw new Error(`博主定向对账中出现重复文件夹：${actualFolderName}`);
       }
@@ -876,7 +901,8 @@ export class ArchiveCatalogService {
       resolvedRoot,
       snapshots,
       explicitCreatorIds,
-      deactivateMissingCreatorFolders: false
+      deactivateMissingCreatorFolders: false,
+      partialWorks: options.workFolderName !== undefined
     });
   }
 
@@ -885,6 +911,7 @@ export class ArchiveCatalogService {
     snapshots: LocalCreatorSnapshot[];
     explicitCreatorIds: Map<string, number> | null;
     deactivateMissingCreatorFolders: boolean;
+    partialWorks?: boolean;
   }): LocalReconciliationResult {
     const scannedAt = new Date().toISOString();
     const result: LocalReconciliationResult = {
@@ -969,6 +996,14 @@ export class ArchiveCatalogService {
         const existingByRelativePath = new Map(existingLinks.map((row) => [row.relative_path, row]));
         const preservedByRelativePath = new Map<string, ExistingLocalWorkLink>();
         const claimedWorkIds = new Set<number>();
+        if (input.partialWorks) {
+          const selectedPaths = new Set(creatorSnapshot.works.map((work) => this.localWorkRelativePath(work)));
+          // Unvisited links remain authoritative, even if their directories are currently absent.
+          for (const existing of existingLinks) {
+            if (!selectedPaths.has(existing.relative_path) && existing.match_status === 'matched'
+              && existing.work_id !== null) claimedWorkIds.add(existing.work_id);
+          }
+        }
         if (creatorId !== null) {
           for (const workSnapshot of creatorSnapshot.works) {
             const relativePath = this.localWorkRelativePath(workSnapshot);
@@ -1073,7 +1108,7 @@ export class ArchiveCatalogService {
           });
         }
 
-        this.deactivateMissingLocalWorks(localFolderId, activeWorkPaths);
+        if (!input.partialWorks) this.deactivateMissingLocalWorks(localFolderId, activeWorkPaths);
       }
 
       if (input.deactivateMissingCreatorFolders) {

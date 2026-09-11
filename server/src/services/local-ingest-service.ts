@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, type Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -136,7 +136,8 @@ export async function runCreatorScopedLocalIngestReconciliation(
   database: DatabaseSync,
   libraryRoot: string,
   creatorId: number,
-  creatorFolderName: string
+  creatorFolderName: string,
+  workFolderName?: string
 ): Promise<LocalIngestRescanResult> {
   // ScannerService reads the database when its singleton is constructed.
   // Load it only for a real reconciliation run so importing LocalIngest in
@@ -145,13 +146,14 @@ export async function runCreatorScopedLocalIngestReconciliation(
   const scan = await scannerService.scanCosCreators(
     [creatorFolderName],
     'local-ingest',
-    { repairUnchangedDerivatives: false, allowDerivativeMigration: false }
+    { repairUnchangedDerivatives: false, allowDerivativeMigration: false, ...(workFolderName ? { workFolderName } : {}) }
   );
   if (!scan) throw new LocalIngestFailure('COSGALLERY_SCAN_FAILED', 'CosGallery did not return a scan result');
   await new ArchiveCatalogPipelineService(database).refreshAfterCreatorGalleryScan({
     galleryRoot: libraryRoot,
     creatorId,
-    creatorFolderName
+    creatorFolderName,
+    ...(workFolderName ? { workFolderName } : {})
   });
   return {
     scanRunId: scan.id,
@@ -607,7 +609,8 @@ export class LocalIngestService {
       database: DatabaseSync,
       libraryRoot: string,
       creatorId: number,
-      creatorFolderName: string
+      creatorFolderName: string,
+      workFolderName?: string
     ) => Promise<LocalIngestRescanResult | void> = runCreatorScopedLocalIngestReconciliation,
     dependencies: LocalIngestRuntimeDependencies = {}
   ) {
@@ -986,9 +989,13 @@ export class LocalIngestService {
     }
   }
 
-  private async hasRelatedTemporaryFile(creatorDirectory: string, archiveName: string): Promise<boolean> {
+  private async hasRelatedTemporaryFile(
+    creatorDirectory: string,
+    archiveName: string,
+    observedEntries?: Dirent[]
+  ): Promise<boolean> {
     const stem = archiveName.slice(0, -path.extname(archiveName).length).toLocaleLowerCase();
-    const entries = await fs.readdir(creatorDirectory, { withFileTypes: true });
+    const entries = observedEntries ?? await fs.readdir(creatorDirectory, { withFileTypes: true });
     return entries.some((entry) => entry.isFile() && isTemporaryName(entry.name) && entry.name.toLocaleLowerCase().startsWith(stem));
   }
 
@@ -1362,6 +1369,9 @@ export class LocalIngestService {
       jobs: []
     };
     const waitingPaths: string[] = [];
+    const onlyCreatorDirectories = onlySourcePaths
+      ? new Set([...onlySourcePaths].map((sourcePath) => filesystemPathKey(path.dirname(sourcePath))))
+      : undefined;
 
     const allowedCreatorIds = this.resolveAllowedCreatorIds(allowlist);
     const creatorDirectories: Array<{ creatorDirectory: string; creator: CreatorRow }> = [];
@@ -1369,9 +1379,10 @@ export class LocalIngestService {
       .sort((left, right) => naturalNameCompare(left.name, right.name));
     for (const inboxEntry of inboxEntries) {
       if (!inboxEntry.isDirectory() || inboxEntry.isSymbolicLink()) continue;
+      const creatorDirectory = path.join(settings.inboxRoot, inboxEntry.name);
+      if (onlyCreatorDirectories && !onlyCreatorDirectories.has(filesystemPathKey(creatorDirectory))) continue;
       const creatorMatches = this.findCreatorByFolder(inboxEntry.name);
       if (creatorMatches.length !== 1 || !allowedCreatorIds.has(creatorMatches[0].id)) continue;
-      const creatorDirectory = path.join(settings.inboxRoot, inboxEntry.name);
       await this.assertInside(
         settings.inboxRoot,
         creatorDirectory,
@@ -1437,7 +1448,7 @@ export class LocalIngestService {
           result.jobs.push(this.getJob(unchangedExisting.id));
           continue;
         }
-        const relatedTemporary = await this.hasRelatedTemporaryFile(creatorDirectory, entry.name);
+        const relatedTemporary = await this.hasRelatedTemporaryFile(creatorDirectory, entry.name, entries);
         const observation = this.observationFor(sourcePath);
         const unchanged = Boolean(
           observation
@@ -2229,7 +2240,7 @@ export class LocalIngestService {
     }
   }
 
-  private async reconcile(jobId: number): Promise<LocalIngestJob> {
+  private async reconcile(jobId: number, newlyCommitted = false): Promise<LocalIngestJob> {
     const job = this.getJobRow(jobId);
     const mapping = this.mappingForJob(job);
     const settings = await this.checkedSettings();
@@ -2243,7 +2254,8 @@ export class LocalIngestService {
       this.database,
       settings.libraryRoot,
       mapping.creator_id,
-      creatorFolderName
+      creatorFolderName,
+      ...(newlyCommitted ? [path.basename(job.target_path)] : [])
     );
     this.updateJob(jobId, { status: 'reconciling', phase: 'reconciling' });
     const summary = safeJsonParse(job.summary_json) ?? {};
@@ -2515,7 +2527,7 @@ export class LocalIngestService {
       this.updateJob(id, { phase: 'committing' });
       await fs.rename(summary.readyPath, summary.plannedTargetPath);
       this.updateJob(id, { status: 'reconciling', phase: 'rescanning', targetPath: summary.plannedTargetPath });
-      return await this.reconcile(id);
+      return await this.reconcile(id, true);
     } catch (error) {
       const secret = process.env.LOCAL_INGEST_ARCHIVE_PASSWORD ?? '';
       const failure = error instanceof LocalIngestFailure

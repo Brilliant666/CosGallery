@@ -53,7 +53,7 @@ type Fixture = {
   service: LocalIngestService;
   recycleCalls: string[];
   rescanCalls: number;
-  rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string }>;
+  rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string; workFolderName?: string }>;
   advanceTime: (milliseconds: number) => void;
 };
 
@@ -268,16 +268,17 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     smokeTest: async () => ({ targetPath: '', recycled: true })
   } as unknown as RecycleBinAdapter;
   let rescanCalls = 0;
-  const rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string }> = [];
+  const rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string; workFolderName?: string }> = [];
   let remainingReconciliationFailures = options.reconciliationFailures ?? 0;
   const rescan = async (
     db: DatabaseSync,
     scopedLibraryRoot: string,
     creatorId: number,
-    creatorFolderName: string
+    creatorFolderName: string,
+    workFolderName?: string
   ) => {
     rescanCalls += 1;
-    rescanScopes.push({ libraryRoot: scopedLibraryRoot, creatorId, creatorFolderName });
+    rescanScopes.push({ libraryRoot: scopedLibraryRoot, creatorId, creatorFolderName, workFolderName });
     if (remainingReconciliationFailures > 0) {
       remainingReconciliationFailures -= 1;
       return;
@@ -476,7 +477,8 @@ describe.sequential('LocalIngestService', () => {
     expect(fixture.rescanScopes).toEqual([{
       libraryRoot: fixture.libraryRoot,
       creatorId: 1,
-      creatorFolderName: fixture.creatorName
+      creatorFolderName: fixture.creatorName,
+      workFolderName: path.basename(result.targetPath!)
     }]);
     expect(result.summary).toMatchObject({
       imageCount: 1,
@@ -589,7 +591,8 @@ describe.sequential('LocalIngestService', () => {
     expect(fixture.rescanScopes).toEqual([{
       libraryRoot: fixture.libraryRoot,
       creatorId: 1,
-      creatorFolderName: 'preferred-root'
+      creatorFolderName: 'preferred-root',
+      workFolderName: path.basename(completed.targetPath!)
     }]);
     await expect(fs.access(completed.targetPath!)).resolves.toBeUndefined();
     await expect(fs.access(path.join(fixture.libraryRoot, 'Creator Renamed'))).rejects.toThrow();
@@ -802,6 +805,8 @@ describe.sequential('LocalIngestService', () => {
     const recovered = await fixture.service.runJob(first.id);
     expect(recovered).toMatchObject({ status: 'ingested', phase: 'done', cleanupStatus: 'recycled', attemptCount: 1 });
     expect(fixture.rescanCalls).toBe(2);
+    expect(fixture.rescanScopes[0].workFolderName).toBe(path.basename(first.targetPath!));
+    expect(fixture.rescanScopes[1].workFolderName).toBeUndefined();
     expect((await fs.readdir(path.join(fixture.libraryRoot, fixture.creatorName))).filter((name) => name.includes('NO.007'))).toHaveLength(1);
   }, 60_000);
 
