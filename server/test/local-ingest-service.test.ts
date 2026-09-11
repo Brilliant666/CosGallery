@@ -24,6 +24,7 @@ type FixtureOptions = {
   password?: string;
   innerCount?: number;
   includeUnknown?: boolean;
+  includeUrlAdvertisement?: boolean;
   includeImage?: boolean;
   includeVideo?: boolean;
   includeNestedArchive?: boolean;
@@ -191,6 +192,10 @@ async function makeNestedArchive(
     ]);
   }
   await fs.writeFile(path.join(payload, 'advertisement.txt'), 'not part of the final gallery');
+  if (options.includeUrlAdvertisement) {
+    await fs.mkdir(path.join(payload, 'subfolder'), { recursive: true });
+    await fs.writeFile(path.join(payload, 'subfolder', '孔雀海.URL'), '[InternetShortcut]\nURL=https://example.invalid/ad');
+  }
   if (options.includeUnknown) await fs.writeFile(path.join(payload, 'unknown.exe'), 'fixture');
   if (options.includeNestedArchive) {
     const nestedSource = path.join(root, 'nested-source');
@@ -459,7 +464,7 @@ describe.sequential('LocalIngestService', () => {
   });
 
   it.runIf(process.platform === 'win32')('discovers, maps, extracts twice, commits, reconciles, recycles, and reruns idempotently', async () => {
-    fixture = await createFixture();
+    fixture = await createFixture({ includeUrlAdvertisement: true });
     const discovery = await discoverStable(fixture);
     expect(discovery.createdJobs).toBe(1);
     expect(discovery.jobs[0]).toMatchObject({ sourceWorkId: 1, archiveDownloadTaskId: 1, status: 'queued' });
@@ -476,7 +481,7 @@ describe.sequential('LocalIngestService', () => {
     expect(result.summary).toMatchObject({
       imageCount: 1,
       videoCount: 0,
-      advertisementFileCount: 1,
+      advertisementFileCount: 2,
       levelOneOutput: ['007.7zz', 'outer-note.html'],
       innerOriginalName: '007.7zz',
       innerWorkingName: '007.7z',

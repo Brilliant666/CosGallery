@@ -33,7 +33,7 @@ const SOURCE_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip']);
 const NESTED_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip', '.rar', '.tar', '.gz', '.bz2', '.xz']);
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv']);
-const ADVERTISEMENT_EXTENSIONS = new Set(['.txt', '.html', '.htm']);
+const ADVERTISEMENT_EXTENSIONS = new Set(['.txt', '.html', '.htm', '.url']);
 const TEMPORARY_SUFFIXES = ['.crdownload', '.tmp', '.downloading', '.part'];
 const EXTRACTION_TIMEOUT_MS = 30 * 60 * 1000;
 

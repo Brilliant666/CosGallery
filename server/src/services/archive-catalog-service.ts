@@ -68,7 +68,7 @@ export type CostuanArchiveRecord = z.infer<typeof costuanRecordSchema>;
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
-const ADVERTISEMENT_EXTENSIONS = new Set(['.html', '.htm', '.txt']);
+const ADVERTISEMENT_EXTENSIONS = new Set(['.html', '.htm', '.txt', '.url']);
 
 type MatchStatus = 'matched' | 'unmatched' | 'ambiguous';
 
