@@ -1329,9 +1329,9 @@ onBeforeUnmount(() => {
 }
 
 .metadata-details {
-  /* Summary plus one reserved detail line; longer content remains unconstrained. */
+  /* Summary plus two reserved detail lines; longer content remains unconstrained. */
   line-height: 1rem;
-  min-height: 2rem;
+  min-height: 3rem;
 }
 
 .catalog-row {
