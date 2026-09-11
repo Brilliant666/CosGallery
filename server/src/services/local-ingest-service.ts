@@ -119,6 +119,7 @@ type SevenZipResult = { code: number | null; stdout: string; stderr: string };
 
 export type LocalIngestRuntimeDependencies = {
   now?: () => Date;
+  monotonicNow?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
   hashFile?: (filePath: string) => Promise<string>;
   runCommand?: (command: string, args: string[], timeoutMs: number) => Promise<SevenZipResult>;
@@ -131,6 +132,19 @@ type LocalIngestRescanResult = {
   scanRunId: number;
   scanStatus: string;
   scanError: string | null;
+  galleryIndexMs?: number;
+  ledgerReconciliationMs?: number;
+};
+
+type PerformanceSample = {
+  operation: 'run' | 'reconcile' | 'cleanup' | 'manual_placement';
+  attemptCount: number;
+  status: LocalIngestStatus;
+  startedAt: string;
+  errorCode: string | null;
+  cleanupStatus: LocalIngestCleanupStatus;
+  durationMs: number;
+  phases: Record<string, number>;
 };
 
 export async function runCreatorScopedLocalIngestReconciliation(
@@ -144,12 +158,15 @@ export async function runCreatorScopedLocalIngestReconciliation(
   // Load it only for a real reconciliation run so importing LocalIngest in
   // tests or build tooling cannot open the configured production database.
   const { scannerService } = await import('./scanner-service.js');
+  const indexStarted = performance.now();
   const scan = await scannerService.scanCosCreators(
     [creatorFolderName],
     'local-ingest',
     { repairUnchangedDerivatives: false, allowDerivativeMigration: false, ...(workFolderName ? { workFolderName } : {}) }
   );
+  const galleryIndexMs = performance.now() - indexStarted;
   if (!scan) throw new LocalIngestFailure('COSGALLERY_SCAN_FAILED', 'CosGallery did not return a scan result');
+  const ledgerStarted = performance.now();
   await new ArchiveCatalogPipelineService(database).refreshAfterCreatorGalleryScan({
     galleryRoot: libraryRoot,
     creatorId,
@@ -159,7 +176,9 @@ export async function runCreatorScopedLocalIngestReconciliation(
   return {
     scanRunId: scan.id,
     scanStatus: scan.status,
-    scanError: scan.error_text
+    scanError: scan.error_text,
+    galleryIndexMs,
+    ledgerReconciliationMs: performance.now() - ledgerStarted
   };
 }
 
@@ -601,6 +620,8 @@ export class LocalIngestService {
   private readonly claimLeaseMs: number;
   private readonly expectedGalleryRoot: string;
   private readonly inFlightJobs = new Map<number, Promise<LocalIngestJob>>();
+  private readonly monotonicNow: () => number;
+  private readonly performanceRuns = new Map<number, { phases: Record<string, number>; stop?: () => void }>();
 
   constructor(
     database: DatabaseSync | undefined = undefined,
@@ -617,6 +638,7 @@ export class LocalIngestService {
   ) {
     this.databaseOverride = database;
     this.now = dependencies.now ?? (() => new Date());
+    this.monotonicNow = dependencies.monotonicNow ?? (() => performance.now());
     this.wait = dependencies.wait ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.hashFile = dependencies.hashFile ?? sha256File;
     this.commandRunner = dependencies.runCommand ?? runCommand;
@@ -630,6 +652,55 @@ export class LocalIngestService {
     // tests and build tooling: merely importing the service must never open or
     // migrate the configured production database.
     return this.databaseOverride ?? databaseManager.connection;
+  }
+
+  // One in-memory timer per claimed operation. Persist only once, after all
+  // summary writers have finished, including failures and automatic cleanup.
+  private async withPerformance(id: number, operation: PerformanceSample['operation'], execute: () => Promise<LocalIngestJob>): Promise<LocalIngestJob> {
+    const started = this.monotonicNow();
+    const startedAt = this.now().toISOString();
+    const previous = safeJsonParse(this.getJobRow(id).summary_json)?.performance as { history?: unknown[] } | undefined;
+    const run: { phases: Record<string, number>; stop?: () => void } = { phases: {} };
+    this.performanceRuns.set(id, run);
+    try {
+      await execute();
+    } finally {
+      run.stop?.();
+      this.performanceRuns.delete(id);
+      const job = this.getJobRow(id);
+      const sample: PerformanceSample = {
+        operation, attemptCount: job.attempt_count, status: job.status, startedAt,
+        errorCode: job.error_code, cleanupStatus: job.cleanup_status,
+        durationMs: Math.max(0, this.monotonicNow() - started), phases: run.phases
+      };
+      const history = [...(Array.isArray(previous?.history) ? previous.history.slice(-4) : []), sample];
+      this.updateJob(id, { summaryJson: JSON.stringify({
+        ...(safeJsonParse(job.summary_json) ?? {}),
+        performance: { version: 1, latest: sample, history }
+      }) });
+    }
+    return this.getJob(id);
+  }
+
+  private startTiming(id: number, phase: string): () => void {
+    const run = this.performanceRuns.get(id);
+    if (!run) return () => {};
+    run.stop?.();
+    const started = this.monotonicNow();
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      run.phases[phase] = (run.phases[phase] ?? 0) + Math.max(0, this.monotonicNow() - started);
+      run.stop = undefined;
+    };
+    run.stop = stop;
+    return stop;
+  }
+
+  private async timed<T>(id: number, phase: string, execute: () => Promise<T>): Promise<T> {
+    const stop = this.startTiming(id, phase);
+    try { return await execute(); } finally { stop(); }
   }
 
   private jobSelect(): string {
@@ -1752,6 +1823,7 @@ export class LocalIngestService {
     innerOriginalName: string,
     innerWorkingName: string
   ): Promise<ValidationSummary> {
+    const stopValidation = this.startTiming(job.id, 'media_validation');
     this.updateJob(job.id, { phase: 'validating' });
     const settings = await this.checkedSettings();
     await this.assertInside(settings.processingRoot, processingPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Job processing directory', { directChild: true });
@@ -1797,6 +1869,7 @@ export class LocalIngestService {
       throw new LocalIngestFailure('UNKNOWN_FILE_TYPE', `Unknown files require review: ${unknown.map((entry) => entry.relativePath).join(', ')}`, true);
     }
     if (media.length === 0) throw new LocalIngestFailure('NO_VALID_MEDIA', 'No valid image or video was found', true);
+    stopValidation();
 
     const targetPlan = await this.validatePersistedTarget(job, mapping, settings);
     const targetPath = targetPlan.targetPath;
@@ -1806,6 +1879,7 @@ export class LocalIngestService {
     await this.assertInside(processingPath, readyBuildPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready build directory', { directChild: true });
     await this.assertInside(processingPath, readyPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready directory', { directChild: true });
     if (!(await pathExists(readyPath))) {
+      const stopStaging = this.startTiming(job.id, 'staging_copy');
       await fs.mkdir(readyBuildPath, { recursive: true });
       for (const entry of media) {
         const relativePath = path.relative(contentRoot, entry.absolutePath);
@@ -1815,9 +1889,12 @@ export class LocalIngestService {
         await fs.copyFile(entry.absolutePath, destination, fs.constants.COPYFILE_EXCL);
       }
       await fs.rename(readyBuildPath, readyPath);
+      stopStaging();
     }
 
-    const warnings: string[] = [];
+    const existingSummary = safeJsonParse(this.getJobRow(job.id).summary_json) ?? {};
+    const warnings: string[] = Array.isArray(existingSummary.warnings)
+      ? existingSummary.warnings.filter((value): value is string => typeof value === 'string') : [];
     const declared = mapping.media_summary ?? '';
     const declaredImages = /(?<!\d)(\d+)P(?=\d+V\b|\b)/i.exec(declared);
     const declaredVideos = /(?<!\d)(\d+)V\b/i.exec(declared);
@@ -1833,6 +1910,7 @@ export class LocalIngestService {
       ? Math.round(Number(declaredSize[1]) * declaredSizeMultiplier)
       : undefined;
     const summary: ValidationSummary = {
+      ...existingSummary,
       creator: mapping.creator_name,
       sourceWorkId: mapping.source_work_id,
       archiveDownloadTaskId: mapping.archive_download_task_id,
@@ -2055,7 +2133,7 @@ export class LocalIngestService {
 
     const claimed = await this.runWithClaimOutcome(
       input.jobId,
-      () => this.adoptManualPlacementClaimed(input)
+      () => this.withPerformance(input.jobId, 'manual_placement', () => this.adoptManualPlacementClaimed(input))
     );
     if (claimed.ownership === 'unavailable') {
       throw new LocalIngestFailure(
@@ -2360,13 +2438,21 @@ export class LocalIngestService {
     const targetPlan = await this.validatePersistedTarget(job, mapping, settings, true);
     this.updateJob(jobId, { status: 'reconciling', phase: 'rescanning' });
     const creatorFolderName = path.basename(targetPlan.creatorDirectory);
-    const rescanResult = await this.rescanAndReconcile(
+    const rescanResult = await this.timed(jobId, 'index_ledger_reconciliation', () => this.rescanAndReconcile(
       this.database,
       settings.libraryRoot,
       mapping.creator_id,
       creatorFolderName,
-      ...(newlyCommitted ? [path.basename(job.target_path)] : [])
-    );
+      ...(newlyCommitted ? [path.basename(job.target_path!)] : [])
+    ));
+    if (rescanResult && Number.isFinite(rescanResult.galleryIndexMs) && Number.isFinite(rescanResult.ledgerReconciliationMs)) {
+      const run = this.performanceRuns.get(jobId);
+      if (run) {
+        delete run.phases.index_ledger_reconciliation;
+        run.phases.gallery_index = Math.max(0, rescanResult.galleryIndexMs!);
+        run.phases.ledger_reconciliation = Math.max(0, rescanResult.ledgerReconciliationMs!);
+      }
+    }
     this.updateJob(jobId, { status: 'reconciling', phase: 'reconciling' });
     const summary = safeJsonParse(job.summary_json) ?? {};
     if (rescanResult) {
@@ -2491,7 +2577,8 @@ export class LocalIngestService {
     if (job.status === 'ingested' && !['pending', 'failed', 'recycling'].includes(job.cleanup_status)) {
       return { job: this.getJob(id), ownership: 'not_required' };
     }
-    return this.runWithClaimOutcome(id, () => this.runClaimedJob(id));
+    const operation = job.status === 'ingested' ? 'cleanup' : job.status === 'reconciling' ? 'reconcile' : 'run';
+    return this.runWithClaimOutcome(id, () => this.withPerformance(id, operation, () => this.runClaimedJob(id)));
   }
 
   private async runClaimedJob(id: number): Promise<LocalIngestJob> {
@@ -2530,7 +2617,7 @@ export class LocalIngestService {
       if (currentStats.size !== job.source_archive_size || currentStats.mtimeMs !== job.source_archive_mtime) {
         throw new LocalIngestFailure('SOURCE_ARCHIVE_CHANGED', 'The source archive changed after discovery', true);
       }
-      const currentHash = await this.hashFile(job.source_archive_path);
+      const currentHash = await this.timed(id, 'source_hash', () => this.hashFile(job.source_archive_path));
       const afterHashStats = await fs.stat(job.source_archive_path);
       if (afterHashStats.size !== currentStats.size || afterHashStats.mtimeMs !== currentStats.mtimeMs) {
         throw new LocalIngestFailure('SOURCE_ARCHIVE_CHANGED', 'The source archive changed while its checksum was being verified', true);
@@ -2567,11 +2654,11 @@ export class LocalIngestService {
         errorCode: null,
         errorDetail: null
       });
-      await this.assertArchiveSafe(id, job.source_archive_path);
-      await this.runSevenZip(id, 'test', job.source_archive_path);
+      await this.timed(id, 'outer_list', () => this.assertArchiveSafe(id, job.source_archive_path));
+      await this.timed(id, 'outer_test', () => this.runSevenZip(id, 'test', job.source_archive_path));
       this.updateJob(id, { phase: 'extracting_outer' });
       if (!(await pathExists(levelOneCompleteMarker))) {
-        await this.runSevenZip(id, 'extract', job.source_archive_path, levelOneRoot);
+        await this.timed(id, 'outer_extract', () => this.runSevenZip(id, 'extract', job.source_archive_path, levelOneRoot));
         await fs.writeFile(levelOneCompleteMarker, nowIso(), { flag: 'w' });
       }
       await this.assertExtractedTreeSafe(levelOneRoot);
@@ -2611,11 +2698,11 @@ export class LocalIngestService {
         ? previousSummary.innerWorkingName
         : path.relative(levelOneRoot, innerWorkingPath);
       this.updateJob(id, { phase: 'testing_inner' });
-      await this.assertArchiveSafe(id, innerWorkingPath);
-      await this.runSevenZip(id, 'test', innerWorkingPath);
+      await this.timed(id, 'inner_list', () => this.assertArchiveSafe(id, innerWorkingPath));
+      await this.timed(id, 'inner_test', () => this.runSevenZip(id, 'test', innerWorkingPath));
       this.updateJob(id, { phase: 'extracting_inner' });
       if (!(await pathExists(levelTwoCompleteMarker))) {
-        await this.runSevenZip(id, 'extract', innerWorkingPath, levelTwoRoot);
+        await this.timed(id, 'inner_extract', () => this.runSevenZip(id, 'extract', innerWorkingPath, levelTwoRoot));
         await fs.writeFile(levelTwoCompleteMarker, nowIso(), { flag: 'w' });
       }
       await this.assertExtractedTreeSafe(levelTwoRoot);
@@ -2635,7 +2722,7 @@ export class LocalIngestService {
       if (await pathExists(summary.plannedTargetPath)) throw new LocalIngestFailure('TARGET_EXISTS', 'The planned target directory already exists', true);
       await fs.mkdir(commitPlan.creatorDirectory, { recursive: true });
       this.updateJob(id, { phase: 'committing' });
-      await fs.rename(summary.readyPath, summary.plannedTargetPath);
+      await this.timed(id, 'final_commit', () => fs.rename(summary.readyPath, summary.plannedTargetPath));
       this.updateJob(id, { status: 'reconciling', phase: 'rescanning', targetPath: summary.plannedTargetPath });
       return await this.reconcile(id, true);
     } catch (error) {
@@ -2665,13 +2752,14 @@ export class LocalIngestService {
       throw new Error('Original retention was explicitly requested for this job; cleanup is disabled');
     }
     if (job.cleanup_status === 'recycled') return this.getJob(id);
-    return this.runWithClaim(id, () => this.retryCleanupClaimed(id));
+    return this.runWithClaim(id, () => this.withPerformance(id, 'cleanup', () => this.retryCleanupClaimed(id)));
   }
 
   private async retryCleanupClaimed(id: number): Promise<LocalIngestJob> {
     const job = this.getJobRow(id);
     if (job.status !== 'ingested') throw new Error('Cleanup is only available after ingest has been confirmed');
     if (job.cleanup_status === 'recycled') return this.getJob(id);
+    const stopCleanup = this.startTiming(id, 'cleanup');
     this.updateJob(id, { phase: 'cleanup', cleanupStatus: 'recycling', errorCode: null, errorDetail: null });
     const summary = safeJsonParse(job.summary_json) ?? {};
     try {
@@ -2755,6 +2843,7 @@ export class LocalIngestService {
         errorDetail: error instanceof Error ? error.message : 'Recycle operation failed'
       });
     }
+    stopCleanup();
     return this.getJob(id);
   }
 

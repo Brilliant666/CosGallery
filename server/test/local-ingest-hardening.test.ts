@@ -95,6 +95,8 @@ function makeSettings(libraryRoot: string, inboxRoot: string, processingRoot: st
 }
 
 async function createFixture(options: {
+  monotonicNow?: LocalIngestRuntimeDependencies['monotonicNow'];
+  rescanResult?: { scanRunId: number; scanStatus: string; scanError: string | null; galleryIndexMs?: number; ledgerReconciliationMs?: number };
   hashFile?: LocalIngestRuntimeDependencies['hashFile'];
   wait?: LocalIngestRuntimeDependencies['wait'];
   runCommand?: LocalIngestRuntimeDependencies['runCommand'];
@@ -177,9 +179,11 @@ async function createFixture(options: {
        ) VALUES (1, 1, 1, ?, ?, ?, 7, 1, 0, 0, 0, 1, 'matched', 'synthetic', 1, ?, ?, ?)`
     ).run(path.relative(libraryRoot, target.target_path), target.target_path, path.basename(target.target_path), now, now, now);
     db.prepare("UPDATE archive_catalog_download_tasks SET status = 'ingested' WHERE id = 1").run();
+    return options.rescanResult;
   };
   const service = new LocalIngestService(database, settings, recycle, rescan, {
     now: () => new Date(clock),
+    monotonicNow: options.monotonicNow,
     wait: options.wait,
     hashFile: options.hashFile,
     runCommand: syntheticCommand,
@@ -218,6 +222,98 @@ afterEach(async () => {
 });
 
 describe.sequential('LocalIngest cross-platform hardening', () => {
+  it('persists independent monotonic phase samples while retaining summaries and bounded retry history', async () => {
+    let tick = 0;
+    const fixture = await createFixture({ monotonicNow: () => { tick += 10; return tick; } });
+    const discovery = await discoverStable(fixture);
+    const id = discovery.jobs[0].id;
+    fixture.database.prepare('UPDATE local_ingest_jobs SET summary_json = ? WHERE id = ?')
+      .run(JSON.stringify({ warnings: ['existing warning'], customEvidence: 'keep' }), id);
+    const first = await fixture.service.runJob(id);
+    const firstPerformance = first.summary!.performance as { latest: { phases: Record<string, number>; durationMs: number }; history: unknown[] };
+    expect(firstPerformance.latest.phases).toEqual({
+      source_hash: 10, outer_list: 10, outer_test: 10, outer_extract: 10,
+      inner_list: 10, inner_test: 10, inner_extract: 10, media_validation: 10,
+      staging_copy: 10, final_commit: 10, index_ledger_reconciliation: 10
+    });
+    expect(firstPerformance.latest.durationMs).toBe(230);
+    expect(firstPerformance.history).toHaveLength(1);
+    expect(first.summary).toMatchObject({ customEvidence: 'keep', warnings: expect.arrayContaining(['existing warning']) });
+    for (let index = 0; index < 6; index += 1) {
+      fixture.database.prepare("UPDATE local_ingest_jobs SET status = 'reconciling' WHERE id = ?").run(id);
+      const retried = await fixture.service.runJob(id);
+      expect(retried.attemptCount).toBe(1);
+      expect(retried.summary!.performance).toMatchObject({ latest: {
+        operation: 'reconcile', durationMs: 30, phases: { index_ledger_reconciliation: 10 }
+      } });
+    }
+    const final = fixture.service.getJob(id);
+    expect((final.summary!.performance as { history: unknown[] }).history).toHaveLength(5);
+    expect(final.summary).toMatchObject({ customEvidence: 'keep', warnings: expect.arrayContaining(['existing warning']) });
+    fixture.database.close();
+  });
+
+  it('records a failed phase and excludes extraction and staging reused on retry', async () => {
+    let tick = 0;
+    const fixture = await createFixture({ monotonicNow: () => { tick += 10; return tick; } });
+    const discovery = await discoverStable(fixture);
+    const id = discovery.jobs[0].id;
+    const rename = fs.rename.bind(fs);
+    const failure = vi.spyOn(fs, 'rename').mockImplementation(async (source, destination) => {
+      if (String(source).endsWith(`${path.sep}ready`)) throw new Error('synthetic commit failure');
+      return rename(source, destination);
+    });
+    const first = await fixture.service.runJob(id);
+    expect(first.status).toBe('failed');
+    expect(first.summary!.performance).toMatchObject({ latest: { status: 'failed', phases: { final_commit: 10 } } });
+    failure.mockRestore();
+    const second = await fixture.service.runJob(id);
+    const performance = second.summary!.performance as { latest: { phases: Record<string, number> }; history: unknown[] };
+    expect(second.status).toBe('ingested');
+    expect(second.attemptCount).toBe(2);
+    expect(performance.latest.phases).not.toHaveProperty('outer_extract');
+    expect(performance.latest.phases).not.toHaveProperty('inner_extract');
+    expect(performance.latest.phases).not.toHaveProperty('staging_copy');
+    expect(performance.latest.phases.final_commit).toBe(10);
+    expect(performance.history).toHaveLength(2);
+    expect(fixture.commandCounts).toEqual({ list: 4, test: 4, outer: 1, inner: 1 });
+    fixture.database.close();
+  });
+
+  it('uses split index and ledger metrics without also counting the combined phase', async () => {
+    const fixture = await createFixture({ rescanResult: {
+      scanRunId: 1, scanStatus: 'completed', scanError: null, galleryIndexMs: 7, ledgerReconciliationMs: 2
+    } });
+    const discovery = await discoverStable(fixture);
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result.errorCode).toBe('GALLERY_INDEX_INCOMPLETE');
+    const performance = result.summary!.performance as { latest: { phases: Record<string, number> } };
+    expect(performance.latest.phases).toMatchObject({ gallery_index: 7, ledger_reconciliation: 2 });
+    expect(performance.latest.phases).not.toHaveProperty('index_ledger_reconciliation');
+    expect(result.summary).toHaveProperty('imageCount', 1);
+    fixture.database.close();
+  });
+
+  it('keeps hashing failures timed before the existing attempt counter increments', async () => {
+    let failing = false;
+    let tick = 0;
+    const fixture = await createFixture({
+      monotonicNow: () => { tick += 10; return tick; },
+      hashFile: async (filePath) => {
+        if (failing) throw new Error('synthetic hash failure');
+        return digest(await fs.readFile(filePath));
+      }
+    });
+    const discovery = await discoverStable(fixture);
+    failing = true;
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result.attemptCount).toBe(0);
+    expect(result.summary!.performance).toMatchObject({ latest: {
+      status: 'failed', durationMs: 30, phases: { source_hash: 10 }
+    } });
+    fixture.database.close();
+  });
+
   it('reads a creator directory once while observing a batch of new archives', async () => {
     const hashFile = vi.fn(async () => 'unused');
     const fixture = await createFixture({ hashFile });
@@ -601,6 +697,10 @@ describe.sequential('LocalIngest cross-platform hardening', () => {
     ).run(discovery.jobs[0].id);
     const result = await fixture.service.retryCleanup(discovery.jobs[0].id);
     expect(result).toMatchObject({ cleanupStatus: 'failed', errorCode: 'RECYCLE_FAILED' });
+    expect(result.summary!.performance).toMatchObject({ latest: {
+      operation: 'cleanup', status: 'ingested', cleanupStatus: 'failed', errorCode: 'RECYCLE_FAILED',
+      phases: { cleanup: expect.any(Number) }
+    } });
     await expect(fs.access(fixture.sourcePath)).resolves.toBeUndefined();
     fixture.database.close();
   });

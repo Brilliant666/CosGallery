@@ -62,7 +62,9 @@ describe('LocalIngest creator-scoped reconciliation boundary', () => {
       )).resolves.toEqual({
         scanRunId: 42,
         scanStatus: 'completed',
-        scanError: null
+        scanError: null,
+        galleryIndexMs: expect.any(Number),
+        ledgerReconciliationMs: expect.any(Number)
       });
       expect(scanCosCreatorsMock).toHaveBeenCalledWith(
         ['五更百鬼'],
