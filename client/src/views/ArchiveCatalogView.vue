@@ -64,7 +64,7 @@
                   <small class="block text-muted">{{ task.sourceCollections }} 个有效 Costuan 合集</small>
                   <small class="block text-muted">{{ task.sourceState.deliveryMode === 'direct-share' ? '原分享已核验，暂存进度见 Stage2' : task.sourceState.deliveryReady ? (task.sourceState.deliveryEvidence === 'verified' ? (task.pendingSupplementalTitles?.length ? '编号作品网盘来源已核验' : '网盘来源已核验') : '网盘状态待重新核验') : '网盘来源待确认' }}</small>
                   <small v-if="task.pendingSupplementalTitles?.length" class="block text-muted">{{ task.pendingSupplementalTitles.join('、') }}：附加内容待人工处理，不参与自动下载/入库</small>
-                  <details v-if="task.latestSourceAt" class="metadata-details mt-1 text-xs text-muted"><summary class="cursor-pointer">来源详情</summary><span>来源记录时间：{{ formatSourceTime(task.latestSourceAt) }}</span></details>
+                  <details v-if="task.latestSourceAt" class="metadata-details source-details mt-1 text-xs text-muted"><summary class="cursor-pointer">来源详情</summary><span>来源记录时间：{{ formatSourceTime(task.latestSourceAt) }}</span></details>
                 </template>
               </td>
               <td class="p-3"><template v-if="task.metadataTask">
@@ -1332,6 +1332,11 @@ onBeforeUnmount(() => {
   /* Summary plus two reserved detail lines; longer content remains unconstrained. */
   line-height: 1rem;
   min-height: 3rem;
+}
+
+.source-details {
+  /* Source details reserve one line below the summary instead of two. */
+  min-height: 2rem;
 }
 
 .catalog-row {
