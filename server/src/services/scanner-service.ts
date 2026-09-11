@@ -17,6 +17,7 @@ import {
   TREAT_CAROUSELS_AS_FOLDERS_SETTING_KEY
 } from '../constants/app-setting-keys.js';
 import { appConfig } from '../config/env.js';
+import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import {
   appSettingsRepository,
   folderRepository,
@@ -1350,7 +1351,8 @@ class ScannerService {
   private async collectRecursiveMediaFiles(
     currentAbsolutePath: string,
     currentRelativePath: string,
-    excludedFolderRules: string[]
+    excludedFolderRules: string[],
+    isWorkRoot = false
   ): Promise<IndexedFileReference[]> {
     if (matchesExcludedFolder(currentRelativePath, excludedFolderRules)) {
       return [];
@@ -1380,6 +1382,7 @@ class ScannerService {
       }
 
       if (entry.isDirectory()) {
+        if (isWorkRoot && entry.name === RETAINED_ORIGINALS_DIRECTORY) continue;
         if (this.isManagedGalleryPath(relativeEntryPath) || matchesExcludedFolder(relativeEntryPath, excludedFolderRules)) {
           continue;
         }
@@ -1635,7 +1638,8 @@ class ScannerService {
       const recursiveFiles = await this.collectRecursiveMediaFiles(
         workAbsolutePath,
         workRelativePath,
-        excludedFolderRules
+        excludedFolderRules,
+        true
       );
       recursiveFiles.sort((a, b) => compareNaturalFilename(a.relativePath, b.relativePath));
       if (recursiveFiles.length === 0) continue;

@@ -690,6 +690,21 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.find('[data-test="run-local-ingest-creator"]').exists()).toBe(false);
   });
 
+  it('shows retained unsupported originals separately from indexed media', async () => {
+    const job: LocalIngestJob = { ...localIngestJob, validationStatus: 'warning', cleanupStatus: 'not_ready',
+      summary: { ...localIngestJob.summary, retainedOriginalCount: 2,
+        retainedOriginalDirectory: 'G:/gallery/work/_未支持格式原件' } };
+    vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard(job));
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
+    const evidence = wrapper.get('[data-test="retained-originals-summary"]');
+    expect(evidence.text()).toContain('另保留 2 张原件，暂不支持展示');
+    expect(evidence.text()).toContain('G:/gallery/work/_未支持格式原件');
+    expect(wrapper.text()).toContain('图片 24');
+  });
+
   it('reads inbox creators without saving and appends unique canonical names to the draft', async () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();

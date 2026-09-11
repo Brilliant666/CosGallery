@@ -5,7 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import sharp from 'sharp';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { schemaSql } from '../src/db/schema.js';
 import {
@@ -240,6 +240,7 @@ describe.sequential('LocalIngestService manual placement adoption', () => {
   let fixture: ManualFixture | null = null;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     fixture?.database.close();
     if (fixture) await fs.rm(fixture.root, { recursive: true, force: true });
     fixture = null;
@@ -265,6 +266,113 @@ describe.sequential('LocalIngestService manual placement adoption', () => {
     expect(repeated).toMatchObject({ status: 'ingested', phase: 'done', attemptCount: 1 });
     expect(fixture.recycleCalls).toHaveLength(0);
     expect(fixture.sideEffects).toEqual({ command: 0, rescan: 1 });
+  });
+
+  async function retentionFixture(): Promise<{ input: LocalIngestManualPlacementInput; source: string; destination: string }> {
+    fixture = await createManualFixture({ declaredMedia: '2P-1MB' });
+    const input = { ...fixture.input, removedUnknownFiles: ['nested/original.heic'], retainOriginals: true };
+    fixture.database.prepare('UPDATE local_ingest_jobs SET error_detail = ? WHERE id = 1').run('Unknown files require review: nested/original.heic');
+    await fixture.service.adoptManualPlacement(input);
+    const source = path.join(fixture.processingRoot, '1', 'level-2', path.basename(fixture.targetPath), 'nested', 'original.heic');
+    const destination = path.join(fixture.targetPath, '_未支持格式原件', 'nested', 'original.heic');
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, 'synthetic heic original');
+    return { input, source, destination };
+  }
+
+  it('copies exact originals idempotently with audit hashes and no scan or cleanup', async () => {
+    const { input, source, destination } = await retentionFixture();
+    const result = await fixture!.service.retainOriginals(input);
+    expect(result).toMatchObject({ status: 'ingested', phase: 'done', validationStatus: 'warning', cleanupStatus: 'not_ready', attemptCount: 1 });
+    expect(result.summary).toMatchObject({ imageCount: 1, retainedOriginalCount: 1,
+      retainedOriginals: { count: 1, files: [{ relativePath: 'nested/original.heic', size: 23 }] } });
+    expect(await fs.readFile(destination)).toEqual(await fs.readFile(source));
+    expect((result.summary?.warnings as string[]).join('\n')).toContain('原件已完整保留');
+    expect((result.summary?.warnings as string[]).join('\n')).not.toContain('Declared 2 images');
+    const repeat = await fixture!.service.retainOriginals(input);
+    expect(repeat.summary?.retainedOriginals).toMatchObject({ count: 1 });
+    await expect(fixture!.service.retryCleanup(1)).rejects.toThrow('cleanup is disabled');
+    expect(fixture!.sideEffects).toEqual({ command: 0, rescan: 1 });
+    expect(fixture!.recycleCalls).toEqual([]);
+    await expect(fs.access(fixture!.sourcePath)).resolves.toBeUndefined();
+  });
+
+  it('rejects corrupt existing copies without overwriting or claiming completion', async () => {
+    const { input, destination } = await retentionFixture();
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.writeFile(destination, 'corrupt');
+    await expect(fixture!.service.retainOriginals(input)).rejects.toThrow('checksum mismatch');
+    expect(await fs.readFile(destination, 'utf8')).toBe('corrupt');
+    expect(fixture!.service.getJob(1).summary?.retainedOriginals).toBeUndefined();
+    expect(fixture!.service.getJob(1).attemptCount).toBe(1);
+  });
+
+  it('rejects altered scope, traversal, retention permission and changed archive', async () => {
+    const { input } = await retentionFixture();
+    for (const altered of [{ expectedCreatorId: 2 }, { expectedSourceWorkId: 2 }, { expectedDownloadTaskId: 2 },
+      { retainOriginals: false }, { removedUnknownFiles: ['../original.heic'] },
+      { removedUnknownFiles: ['different.heic'] }, { expectedTargetPath: path.dirname(input.expectedTargetPath) }]) {
+      await expect(fixture!.service.retainOriginals({ ...input, ...altered })).rejects.toThrow();
+    }
+    await fs.writeFile(fixture!.sourcePath, 'changed archive');
+    await expect(fixture!.service.retainOriginals(input)).rejects.toThrow('Source archive changed');
+    expect(fixture!.service.getJob(1).attemptCount).toBe(1);
+  });
+
+  it('rejects symbolic link destination ancestors', async () => {
+    const { input } = await retentionFixture();
+    const linked = path.join(fixture!.targetPath, '_未支持格式原件');
+    await fs.symlink(fixture!.processingRoot, linked, 'junction');
+    await expect(fixture!.service.retainOriginals(input)).rejects.toThrow('Unsafe path');
+  });
+
+  it('rejects a symbolic link source ancestor without copying', async () => {
+    const { input, source, destination } = await retentionFixture();
+    const actualDirectory = path.join(fixture!.root, 'linked-originals');
+    await fs.rename(path.dirname(source), actualDirectory);
+    await fs.symlink(actualDirectory, path.dirname(source), 'junction');
+    await expect(fixture!.service.retainOriginals(input)).rejects.toThrow('Unsafe path');
+    await expect(fs.access(destination)).rejects.toThrow();
+  });
+
+  it('refuses an active claim and jobs outside the completed retention state', async () => {
+    const { input, destination } = await retentionFixture();
+    fixture!.database.prepare("UPDATE local_ingest_jobs SET claim_token = 'external', claimed_at = ?, claim_heartbeat_at = ? WHERE id = 1")
+      .run(new Date().toISOString(), new Date().toISOString());
+    await expect(fixture!.service.retainOriginals(input)).rejects.toThrow('claim unavailable');
+    fixture!.database.prepare("UPDATE local_ingest_jobs SET claim_token = NULL, phase = 'cleanup' WHERE id = 1").run();
+    await expect(fixture!.service.retainOriginals(input)).rejects.toThrow('Job state');
+    await expect(fs.access(destination)).rejects.toThrow();
+  });
+
+  it('rejects simultaneous source and destination corruption against the saved ledger', async () => {
+    const { input, source, destination } = await retentionFixture();
+    const first = await fixture!.service.retainOriginals(input);
+    await fs.writeFile(source, 'same changed content');
+    await fs.writeFile(destination, 'same changed content');
+    await expect(fixture!.service.retainOriginals(input)).rejects.toThrow('prior retention evidence');
+    expect(fixture!.service.getJob(1).summary?.retainedOriginals).toEqual(first.summary?.retainedOriginals);
+  });
+
+  it('leaves original files and job state intact after permission failure', async () => {
+    const { input, source } = await retentionFixture();
+    vi.spyOn(fs, 'copyFile').mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    await expect(fixture!.service.retainOriginals(input)).rejects.toThrow('permission denied');
+    expect(await fs.readFile(source, 'utf8')).toBe('synthetic heic original');
+    expect(fixture!.service.getJob(1)).toMatchObject({ status: 'ingested', phase: 'done', attemptCount: 1, cleanupStatus: 'not_ready' });
+    expect(fixture!.service.getJob(1).summary?.retainedOriginals).toBeUndefined();
+    expect(fixture!.recycleCalls).toEqual([]);
+  });
+
+  it('preserves actual count discrepancies and unrelated warnings', async () => {
+    const { input } = await retentionFixture();
+    const summary = fixture!.service.getJob(1).summary!;
+    fixture!.database.prepare('UPDATE local_ingest_jobs SET summary_json = ? WHERE id = 1').run(JSON.stringify({
+      ...summary, warnings: [...summary.warnings as string[], 'Declared 20 images; retained 1 after manual removal', 'An unrelated scan warning']
+    }));
+    const result = await fixture!.service.retainOriginals(input);
+    expect(result.summary?.warnings).toContain('Declared 20 images; retained 1 after manual removal');
+    expect(result.summary?.warnings).toContain('An unrelated scan warning');
   });
 
   it('validates, reconciles, and recycles an exact manual placement without extraction or target writes', async () => {

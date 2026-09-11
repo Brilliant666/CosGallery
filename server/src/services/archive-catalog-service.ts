@@ -7,6 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 
 import { databaseManager } from '../db/database.js';
+import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import { LocalCreatorFolderBridgeService, normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { checkedIdentityEvidence, completeIdentityDirectory, directoryCreatorNames, isCostuanNameVariant,
@@ -275,6 +276,7 @@ async function inspectWorkDirectory(rootPath: string, workPath: string): Promise
       if (entry.isSymbolicLink()) continue;
       const absolutePath = path.join(current, entry.name);
       if (entry.isDirectory()) {
+        if (current === workPath && entry.name === RETAINED_ORIGINALS_DIRECTORY) continue;
         pending.push(absolutePath);
         continue;
       }

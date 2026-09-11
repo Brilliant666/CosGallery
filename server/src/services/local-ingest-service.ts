@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, type Dirent } from 'node:fs';
+import { constants, createReadStream, type Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -7,6 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import sharp from 'sharp';
 
 import { appConfig } from '../config/env.js';
+import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import { databaseManager } from '../db/database.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogPipelineService } from './archive-catalog-pipeline-service.js';
@@ -1869,6 +1870,108 @@ export class LocalIngestService {
       errorDetail: null
     });
     return summary;
+  }
+
+  async retainOriginals(input: LocalIngestManualPlacementInput): Promise<LocalIngestJob> {
+    const fail = (detail: string): never => { throw new LocalIngestFailure('RETAINED_ORIGINALS_INVALID', detail, true); };
+    if (![input.jobId, input.expectedCreatorId, input.expectedSourceWorkId, input.expectedDownloadTaskId]
+      .every((id) => Number.isSafeInteger(id) && id > 0)
+      || input.retainOriginals !== true || typeof input.note !== 'string' || !input.note.trim() || input.note.length > 2_000
+      || typeof input.expectedTargetPath !== 'string' || !path.isAbsolute(input.expectedTargetPath)
+      || !Array.isArray(input.removedUnknownFiles) || !input.removedUnknownFiles.length) fail('Explicit retention scope and note are required');
+    for (const relative of input.removedUnknownFiles) {
+      if (typeof relative !== 'string' || path.isAbsolute(relative) || path.win32.isAbsolute(relative)
+        || relative.replace(/\\/g, '/').split('/').some((part) => !part || part === '.' || part === '..' || /[:\x00]/.test(part))
+        || !['.tiff', '.tif', '.heic'].includes(path.extname(relative).toLowerCase())) fail('Only safe explicit TIFF/TIF/HEIC paths can be retained');
+    }
+    if (new Set(input.removedUnknownFiles.map(comparableRelativePath)).size !== input.removedUnknownFiles.length) fail('Duplicate retained paths');
+    // Do not join another operation and accidentally return its unrelated result.
+    if (this.inFlightJobs.has(input.jobId)) fail('Job already has an active operation');
+    const result = await this.runWithClaimOutcome(input.jobId, async () => {
+      const job = this.getJobRow(input.jobId);
+      const summary = safeJsonParse(job.summary_json) ?? {};
+      const manual = manualPlacementSummary(summary);
+      if (job.status !== 'ingested' || job.phase !== 'done' || manual?.retainOriginals !== true
+        || job.creator_id !== input.expectedCreatorId || job.source_work_id !== input.expectedSourceWorkId
+        || job.archive_download_task_id !== input.expectedDownloadTaskId
+        || !Array.isArray(manual.removedUnknownFiles)
+        || !sameStringSet(manual.removedUnknownFiles as string[], input.removedUnknownFiles)) fail('Job state, IDs or stored exclusion evidence do not match');
+      const settings = await this.checkedSettings();
+      const mapping = this.mappingForJob(job);
+      const plan = await this.validatePersistedTarget(job, mapping, settings, true);
+      const samePath = (a: string, b: string) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+      if (!job.target_path || typeof manual?.targetPath !== 'string') fail('Exact target path does not match');
+      const expectedTarget = await canonicalizeLocalIngestPath(input.expectedTargetPath);
+      for (const candidate of [job.target_path!, manual!.targetPath as string, plan.targetPath]) {
+        if (!samePath(await canonicalizeLocalIngestPath(candidate), expectedTarget)) fail('Exact target path does not match');
+      }
+      await this.assertInside(settings.libraryRoot, input.expectedTargetPath, 'TARGET_PATH_OUTSIDE_LIBRARY', 'Retention target');
+      if (!job.processing_path || !samePath(await canonicalizeLocalIngestPath(job.processing_path), await canonicalizeLocalIngestPath(path.join(settings.processingRoot, String(job.id))))) fail('Processing path does not match job');
+      await this.assertInside(settings.processingRoot, job.processing_path!, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Retention source', { directChild: true });
+      await this.assertSourcePath(job, mapping, settings);
+      // Check every ancestor explicitly: canonicalization alone would hide symlinks.
+      const checkPath = async (candidate: string, missing = false): Promise<void> => {
+        const absolute = path.resolve(candidate);
+        let cursor = path.parse(absolute).root;
+        const segments = path.relative(cursor, absolute).split(path.sep);
+        for (let index = 0; index < segments.length; index += 1) {
+          cursor = path.join(cursor, segments[index]);
+          let stat;
+          try { stat = await fs.lstat(cursor); } catch (error) {
+            if (missing && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
+            throw error;
+          }
+          if (stat.isSymbolicLink() || (index < segments.length - 1 && !stat.isDirectory())) fail(`Unsafe path: ${cursor}`);
+        }
+      };
+      await checkPath(job.source_archive_path);
+      const archiveStat = await fs.lstat(job.source_archive_path);
+      if (!archiveStat.isFile() || archiveStat.size !== job.source_archive_size
+        || (await this.hashFile(job.source_archive_path)).toUpperCase() !== job.source_archive_sha256.toUpperCase()) fail('Source archive changed');
+      const directory = path.join(input.expectedTargetPath, RETAINED_ORIGINALS_DIRECTORY);
+      await checkPath(input.expectedTargetPath);
+      if (!(await fs.lstat(input.expectedTargetPath)).isDirectory()) fail('Target must be a directory');
+      const files: Array<{ relativePath: string; sha256: string; size: number }> = [];
+      const recorded = summary.retainedOriginals as { files?: Array<{ relativePath: string; sha256: string; size: number }> } | undefined;
+      if (recorded && (!Array.isArray(recorded.files) || !sameStringSet(recorded.files.map((file) => file.relativePath), input.removedUnknownFiles))) fail('Prior retention evidence does not match');
+      for (const relative of input.removedUnknownFiles) {
+        const relativePath = relative.replace(/\\/g, '/');
+        const source = path.join(job.processing_path!, 'level-2', path.basename(input.expectedTargetPath), ...relativePath.split('/'));
+        const destination = path.join(directory, ...relativePath.split('/'));
+        await checkPath(source);
+        const stat = await fs.lstat(source);
+        if (!stat.isFile()) fail(`Original is not a regular file: ${relativePath}`);
+        const sha256 = (await this.hashFile(source)).toUpperCase();
+        const priorFile = recorded?.files?.find((file) => comparableRelativePath(file.relativePath) === comparableRelativePath(relativePath));
+        if (recorded && (!priorFile || priorFile.sha256.toUpperCase() !== sha256 || priorFile.size !== stat.size)) fail(`Original differs from prior retention evidence: ${relativePath}`);
+        await checkPath(destination, true);
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await checkPath(destination, true);
+        try { await fs.copyFile(source, destination, constants.COPYFILE_EXCL); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+        await checkPath(destination);
+        const retained = await fs.lstat(destination);
+        if (!retained.isFile() || retained.size !== stat.size || (await this.hashFile(destination)).toUpperCase() !== sha256
+          || (await this.hashFile(source)).toUpperCase() !== sha256) fail(`Retained original checksum mismatch: ${relativePath}`);
+        files.push({ relativePath, sha256, size: stat.size });
+      }
+      if ((await this.hashFile(job.source_archive_path)).toUpperCase() !== job.source_archive_sha256.toUpperCase()) fail('Source archive changed during retention');
+      const oldRetention = summary.retainedOriginals as { previousWarnings?: string[] } | undefined;
+      const previousWarnings = oldRetention?.previousWarnings ?? (Array.isArray(summary.warnings) ? summary.warnings.filter((w): w is string => typeof w === 'string') : []);
+      const warnings = previousWarnings.filter((warning) => !/^User-approved exclusion of |^Missing images intentionally excluded/.test(warning)
+        && !(/^Declared \d+ images; (?:retained|extracted) \d+/.test(warning)
+          && Number(warning.match(/^Declared (\d+)/)?.[1]) === Number(summary.imageCount) + files.length));
+      warnings.push(`原件已完整保留，${files.length}张 TIFF/HEIC 暂不支持展示；原包和处理中目录保留，禁止自动回收`);
+      this.updateJob(job.id, {
+        validationStatus: 'warning', cleanupStatus: 'not_ready',
+        summaryJson: JSON.stringify({ ...summary, warnings, retainedOriginalCount: files.length, retainedOriginalDirectory: directory,
+          retainedOriginals: { directory, count: files.length, files, verifiedAt: this.timestamp(), previousWarnings, note: input.note.trim() } })
+      });
+      return this.getJob(job.id);
+    });
+    if (result.ownership !== 'acquired') fail('Job claim unavailable');
+    return result.job;
   }
 
   async adoptManualPlacement(input: LocalIngestManualPlacementInput): Promise<LocalIngestJob> {

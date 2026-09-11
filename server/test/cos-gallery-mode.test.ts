@@ -13,6 +13,7 @@ import {
 } from '../src/utils/image-utils.js';
 import { getRelativeGalleryPath } from '../src/utils/path-utils.js';
 import { requestTestApp } from './http-test-utils.js';
+import { RETAINED_ORIGINALS_DIRECTORY } from '../src/constants/retained-originals.js';
 
 const generateDerivativesMock = vi.fn();
 const generateThumbnailDerivativeMock = vi.fn();
@@ -147,6 +148,42 @@ describe.sequential('COS gallery mode', () => {
       })
     ]);
     expect(detail?.mediaItems.some((item) => item.imageId === creators[0].coverImageId)).toBe(true);
+  });
+
+  it('excludes retained originals only at the work root from media and catalog counts', async () => {
+    const workPath = path.join(appConfig.galleryRoot, 'Creator A', 'NO.001 Work');
+    const retainedPath = path.join(workPath, RETAINED_ORIGINALS_DIRECTORY);
+    const ordinaryNestedPath = path.join(workPath, 'nested', RETAINED_ORIGINALS_DIRECTORY);
+    const siblingPath = path.join(appConfig.galleryRoot, 'Creator A', 'NO.002 Sibling');
+    for (const directory of [retainedPath, ordinaryNestedPath, siblingPath]) {
+      await fs.mkdir(directory, { recursive: true });
+    }
+    for (const name of ['source.heic', 'source.tiff', 'masquerading.jpg', 'unknown.bin']) {
+      await fs.writeFile(path.join(retainedPath, name), 'retained');
+    }
+    await fs.writeFile(path.join(workPath, '01.jpg'), 'image');
+    await fs.writeFile(path.join(ordinaryNestedPath, '02.jpg'), 'nested');
+    await fs.writeFile(path.join(ordinaryNestedPath, 'unknown.bin'), 'unknown');
+    await fs.writeFile(path.join(siblingPath, '01.jpg'), 'sibling');
+
+    const summary = await scannerService.scanAll('retained-originals-test');
+    expect(summary).toMatchObject({ status: 'completed', scanned_files: 3 });
+    const indexed = databaseManager.connection.prepare('SELECT relative_path FROM images ORDER BY relative_path').all();
+    expect(indexed).toEqual([
+      { relative_path: 'Creator A/NO.001 Work/01.jpg' },
+      { relative_path: `Creator A/NO.001 Work/nested/${RETAINED_ORIGINALS_DIRECTORY}/02.jpg` },
+      { relative_path: 'Creator A/NO.002 Sibling/01.jpg' }
+    ]);
+
+    const { ArchiveCatalogService } = await import('../src/services/archive-catalog-service.js');
+    await new ArchiveCatalogService(databaseManager.connection).reconcileLocalRoot(appConfig.galleryRoot);
+    const counts = databaseManager.connection.prepare(
+      'SELECT folder_name, image_count, other_file_count, total_bytes FROM archive_catalog_local_works ORDER BY folder_name'
+    ).all();
+    expect(counts).toEqual([
+      { folder_name: 'NO.001 Work', image_count: 2, other_file_count: 1, total_bytes: 18 },
+      { folder_name: 'NO.002 Sibling', image_count: 1, other_file_count: 0, total_bytes: 7 }
+    ]);
   });
 
   it('aggregates linked physical folders by canonical creator before filtering and paging', async () => {
