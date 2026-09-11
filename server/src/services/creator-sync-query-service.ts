@@ -16,6 +16,7 @@ export type CreatorSyncFilters = {
 };
 export type CreatorSyncPageOptions = CreatorSyncFilters & { page?: number; limit?: number };
 export type CreatorSyncDownloadOptions = CreatorSyncPageOptions & { status?: ArchiveDownloadTaskStatus };
+export type CreatorSyncDownloadCreatorOptions = CreatorSyncDownloadOptions & { sort?: 'recent' | 'name' };
 export type CreatorSyncMetadataOptions = CreatorSyncPageOptions & { status?: ArchiveMetadataTaskStatus | 'no_task' };
 export type CreatorSyncMetadataPage = CreatorSyncPage<CreatorSyncRosterItem> & {
   summary: {
@@ -345,7 +346,8 @@ export class CreatorSyncQueryService {
       ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''})`, values };
   }
 
-  downloadCreators(options: CreatorSyncDownloadOptions = {}): CreatorSyncPage<CreatorSyncDownloadCreator> & { summary: ArchiveDownloadTaskSummary; taskTotal: number } {
+  downloadCreators(options: CreatorSyncDownloadCreatorOptions = {}): CreatorSyncPage<CreatorSyncDownloadCreator> & { summary: ArchiveDownloadTaskSummary; taskTotal: number } {
+    if (options.sort !== undefined && options.sort !== 'recent' && options.sort !== 'name') throw new Error('博主排序无效。');
     const { page, limit } = pageOptions(options), scope = this.taskScope(options);
     return this.read(() => {
       const grouped = this.database.prepare(`${scope.sql} SELECT creator_id, status,COUNT(*) AS count FROM task_scope GROUP BY creator_id,status`)
@@ -357,9 +359,54 @@ export class CreatorSyncQueryService {
         totals.set(row.status, (totals.get(row.status) ?? 0) + row.count);
       }
       const completeSummary = summary(DOWNLOAD_STATUSES, [...totals].map(([status, count]) => ({ status, count })));
-      const rows = this.database.prepare(`${scope.sql} SELECT creator_id,creator_name,preference,rating,is_active FROM cohort
-        WHERE creator_id IN (SELECT creator_id FROM task_scope)
-        ORDER BY CASE preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,creator_name COLLATE NOCASE,creator_id LIMIT ? OFFSET ?`)
+      // These are read-side evidence, not new execution timestamps. Stage3 may
+      // overwrite download updated/completed_at and clear claimed_at, so never
+      // interpret those later states as a new staging event. Older ingested rows
+      // without retained events fall back to their source observation time.
+      // Activity is creator-wide even when the displayed tasks are status-filtered.
+      const activitySql = `${scope.sql}, activity_tasks AS (
+        SELECT tasks.*,work.creator_id FROM archive_catalog_download_tasks tasks
+        JOIN archive_catalog_source_works source ON source.id=tasks.source_work_id
+        JOIN archive_catalog_works work ON work.id=source.work_id
+        WHERE work.creator_id IN (SELECT creator_id FROM task_scope)
+      ), check_context AS (
+        SELECT cohort.*,CASE WHEN json_valid(context.value) THEN context.value ELSE '{}' END AS context_json
+        FROM cohort LEFT JOIN app_settings context ON context.key='archive.metadata-task.context.'||cohort.metadata_task_id
+        WHERE cohort.creator_id IN (SELECT creator_id FROM task_scope)
+      ), check_history AS (
+        SELECT checks.creator_id,CASE WHEN history.type='object' THEN history.value ELSE '{}' END AS entry
+        FROM check_context checks,json_each(CASE WHEN json_type(checks.context_json,'$.history')='array'
+          THEN json_extract(checks.context_json,'$.history') ELSE '[]' END) history
+      ), activity_events AS (
+        SELECT creator_id,julianday(metadata_claimed_at) AS event_time FROM check_context
+          WHERE metadata_status='claimed'
+        UNION ALL
+        SELECT creator_id,julianday(CASE WHEN metadata_status='failed' THEN metadata_updated_at ELSE metadata_completed_at END) FROM check_context
+          WHERE metadata_attempt_count>0 AND (metadata_status IN ('failed','not_found')
+            OR (metadata_status='completed' AND json_type(context_json,'$.receipt')='object'))
+        UNION ALL
+        SELECT creator_id,julianday(json_extract(entry,'$.completedAt')) FROM check_history
+          WHERE json_extract(entry,'$.attemptCount')>0
+            AND (json_extract(entry,'$.status') IN ('failed','not_found')
+              OR (json_extract(entry,'$.status')='completed' AND json_type(entry,'$.receipt')='object'))
+        UNION ALL
+        SELECT creator_id,julianday(claimed_at) FROM activity_tasks
+        UNION ALL
+        SELECT creator_id,julianday(updated_at) FROM activity_tasks WHERE status='staged'
+      ), activity_times AS (
+        SELECT creator_id,MAX(event_time) AS latest_event FROM activity_events GROUP BY creator_id
+      ), ordered_creators AS (
+        SELECT cohort.*,COALESCE(activity_times.latest_event,julianday(cohort.latest_source_at)) AS last_activity,
+          CASE WHEN cohort.metadata_status='claimed' OR EXISTS (SELECT 1 FROM activity_tasks tasks
+            WHERE tasks.creator_id=cohort.creator_id AND tasks.status IN ('claimed','downloading')) THEN 1 ELSE 0 END AS active
+        FROM cohort LEFT JOIN activity_times ON activity_times.creator_id=cohort.creator_id
+        WHERE cohort.creator_id IN (SELECT creator_id FROM task_scope)
+      )`;
+      const order = options.sort === 'name'
+        ? "CASE preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,creator_name COLLATE NOCASE,creator_id"
+        : 'active DESC,last_activity DESC,creator_name COLLATE NOCASE,creator_id';
+      const rows = this.database.prepare(`${activitySql} SELECT creator_id,creator_name,preference,rating,is_active FROM ordered_creators
+        ORDER BY ${order} LIMIT ? OFFSET ?`)
         .all(...scope.values, limit, (page - 1) * limit) as Array<Pick<RosterRow, 'creator_id' | 'creator_name' | 'preference' | 'rating' | 'is_active'>>;
       const items = rows.map(row => {
         const counts = summary(DOWNLOAD_STATUSES, byCreator.get(row.creator_id)!);
