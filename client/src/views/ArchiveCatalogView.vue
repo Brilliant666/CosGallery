@@ -50,7 +50,8 @@
       <p v-if="metadataLoading" role="status" class="mt-3 text-sm text-muted">正在读取来源与检查任务…</p>
       <p v-if="metadataError" role="alert" class="mt-3 text-sm text-red-700">{{ metadataError }}</p>
       <div v-if="metadataTasks?.items.length" class="mt-4 overflow-x-auto rounded-xl border border-border" data-test="metadata-creators">
-        <table class="w-full min-w-[42rem] border-collapse text-left text-sm">
+        <table class="metadata-table w-full min-w-[42rem] border-collapse text-left text-sm">
+          <colgroup><col style="width: 18%" /><col style="width: 9%" /><col style="width: 12%" /><col style="width: 36%" /><col style="width: 25%" /></colgroup>
           <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主</th><th class="p-3">偏好</th><th class="p-3">本地作品</th><th class="p-3">来源</th><th class="p-3">最近检查</th></tr></thead>
           <tbody>
             <tr v-for="task in metadataTasks.items" :key="task.creatorId" class="border-t border-border">
@@ -1317,6 +1318,16 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.metadata-table {
+  table-layout: fixed;
+}
+
+.metadata-table th,
+.metadata-table td {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
 .catalog-row {
   grid-template-columns: minmax(13rem, 2fr) repeat(4, minmax(4.6rem, 0.55fr)) auto;
 }
