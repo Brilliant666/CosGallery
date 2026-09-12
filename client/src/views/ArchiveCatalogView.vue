@@ -5,17 +5,17 @@
         <p class="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-muted">CosGallery Catalog</p>
         <h1 class="m-0 text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">图库账本</h1>
         <p class="mt-2 mb-0 max-w-2xl text-sm leading-6 text-muted">
-          汇总博主名单、资源平台收录和本地归档差异。在此管理博主元数据，不会修改图库文件。
+          按工作区管理身份、来源、网盘暂存与本地入库。切换和查询只读；执行操作需要明确点击。
         </p>
       </div>
-      <span class="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-muted">
-        {{ total }} 位符合条件
-      </span>
     </header>
 
-    <ManagedCreatorRoster @changed="loadCatalog({ refreshExpanded: true })" @source-planned="refreshSourceRegions" />
+    <nav aria-label="账本工作区" class="mb-5 flex flex-wrap gap-2">
+      <button v-for="tab in workspaces" :key="tab.id" type="button" :data-test="'workspace-'+tab.id" :aria-pressed="workspace === tab.id" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="workspace === tab.id ? 'bg-accent text-white border-accent' : 'bg-surface border-border'" @click="workspace = tab.id">{{ tab.label }}</button>
+    </nav>
+    <div v-show="workspace === 'roster'"><ManagedCreatorRoster @changed="loadCatalog()" @source-planned="refreshSourceRegions" @plan-downloads="planCreatorDownloads" /></div>
 
-    <div v-if="summary" class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6" aria-label="账本概览">
+    <div v-if="summary" v-show="workspace === 'roster'" class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6" aria-label="账本概览">
       <article v-for="card in summaryCards" :key="card.label" class="rounded-2xl border border-border bg-surface p-4 shadow-sm">
         <p class="m-0 text-xs font-semibold text-muted">{{ card.label }}</p>
         <strong class="mt-2 block text-2xl tracking-[-0.04em]">{{ formatCount(card.value) }}</strong>
@@ -23,11 +23,11 @@
       </article>
     </div>
 
-    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="博主元数据采集队列">
+    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="博主元数据采集队列" v-show="workspace === 'source'">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 1</p>
-          <h2 class="mt-1 mb-0 text-lg font-semibold">检查来源与补齐缺失</h2>
+          <h2 class="mt-1 mb-0 text-lg font-semibold">来源检查记录</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
             从规范博主库明确选择首次收录或增量检查对象，已有来源也可再次检查。复制固定范围到新版插件，读取 Costuan 与百度原分享，仅为本地缺失作品复用或创建任务；不整份转存至 cos图集。刷新账本只读取，不执行来源检查。
           </p>
@@ -43,7 +43,7 @@
       <div class="mt-4 flex flex-wrap items-center gap-3">
         <FirstCollectionSelector @planned="refreshSourceRegions" />
         <button type="button" data-test="refresh-stage1" class="h-11 rounded-xl border border-border bg-bg px-4 text-sm disabled:opacity-50" :disabled="sourceRegionsRefreshing" @click="refreshSourceRegions()">刷新账本状态（只读）</button>
-        <p class="m-0 text-sm text-muted">筛选不等于选中；本地已有但尚无来源的博主也使用同一选择器。旧无范围来源规划入口已退役。</p>
+        <p class="m-0 text-sm text-muted">此处列出有来源或检查记录的博主，不是全部博主名单。选择与检查需明确操作。</p>
       </div>
       <p v-if="metadataNotice" data-test="metadata-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ metadataNotice }}</p>
 
@@ -85,7 +85,7 @@
       <p v-if="metadataTasks && !metadataLoading && !metadataError && !metadataTasks.total" class="mt-3 text-sm text-muted">暂无有效 Costuan 来源或来源检查任务。</p>
     </section>
 
-    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="缺失作品下载队列">
+    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="缺失作品下载队列" v-show="workspace === 'staging'">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 2</p>
@@ -96,6 +96,7 @@
         </div>
       </div>
 
+      <details class="mt-4"><summary class="cursor-pointer font-semibold">暂存设置与高级任务操作</summary>
       <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto_auto]">
         <label class="grid gap-1.5 text-xs font-semibold text-muted">
           本地待入库根目录（账本）
@@ -109,6 +110,7 @@
         </button>
       </div>
 
+      </details>
       <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
         <p class="m-0">百度客户端完成下载 → 点击 Stage 3“扫描待入库” → 稳定文件确认后显示“本地已下载，待入库”。</p>
         <button type="button" data-test="refresh-stage2" class="h-9 rounded-xl border border-border bg-bg px-3.5 text-xs font-semibold text-text disabled:opacity-50" :disabled="stage2Refreshing" @click="refreshStage2Only">
@@ -128,7 +130,7 @@
       <Stage2CreatorQueue ref="stage2Queue" />
     </section>
 
-    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="本地入库">
+    <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="本地入库" v-show="workspace === 'ingest'">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 3</p>
@@ -171,6 +173,7 @@
         <p v-if="localIngestOperationLastChecked" class="mt-2 mb-0 text-[0.68rem] text-muted">状态读取：{{ localIngestOperationLastChecked }}</p>
       </div>
 
+      <details class="mt-4" data-test="ingest-settings"><summary class="cursor-pointer font-semibold">入库设置与环境工具</summary>
       <div v-if="localIngestSettings" class="mt-4 grid gap-3 lg:grid-cols-2">
         <label class="grid gap-1.5 text-xs font-semibold text-muted">正式图库
           <input v-model="localIngestSettings.libraryRoot" readonly aria-readonly="true" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-muted" />
@@ -185,7 +188,22 @@
         <label class="grid gap-1.5 text-xs font-semibold text-muted">7-Zip 路径
           <input v-model="localIngestSettings.sevenZipPath" data-test="local-ingest-sevenzip" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
         </label>
-        <div class="grid gap-2">
+        <label class="grid gap-1.5 text-xs font-semibold text-muted">文件稳定秒数
+          <input v-model.number="localIngestSettings.fileStableSeconds" data-test="local-ingest-stable-seconds" :disabled="stage3WriteLocked" :title="stage3LockReason" type="number" min="1" max="3600" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
+        </label>
+        <div class="flex items-end gap-3 pb-2 text-sm">
+          <label class="flex items-center gap-2"><input v-model="localIngestSettings.recycleAfterIngest" data-test="local-ingest-recycle" :disabled="stage3WriteLocked" :title="stage3LockReason" type="checkbox" />确认入库后移入回收站</label>
+          <span class="text-muted">最大解压深度固定为 2</span>
+        </div>
+      </div>
+
+      <div class="mt-4 flex flex-wrap gap-2">
+        <button type="button" data-test="save-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="saveLocalIngestConfig">保存配置</button>
+        <button type="button" data-test="validate-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="validateLocalIngestConfig">验证环境</button>
+        <button type="button" data-test="smoke-local-ingest-recycle" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="smokeTestRecycleBin">回收站测试</button>
+      </div>
+      </details>
+      <div class="mt-4" v-if="localIngestSettings">        <div class="grid gap-2">
           <label class="grid gap-1.5 text-xs font-semibold text-muted">允许处理的博主（每行一位）
             <textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" :disabled="stage3WriteLocked" :title="stage3LockReason" rows="3" class="rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
           </label>
@@ -203,19 +221,8 @@
             <details v-if="localIngestInboxCreators.unmapped.length" class="mt-2"><summary class="cursor-pointer font-semibold">查看详情</summary><ul class="mt-1 mb-0 grid gap-1 pl-5"><li v-for="entry in localIngestInboxCreators.unmapped" :key="entry.folderName">{{ entry.folderName }} · {{ entry.archiveCount }} 个压缩包 · {{ entry.mappingReason }}</li></ul></details>
           </div>
         </div>
-        <label class="grid gap-1.5 text-xs font-semibold text-muted">文件稳定秒数
-          <input v-model.number="localIngestSettings.fileStableSeconds" data-test="local-ingest-stable-seconds" :disabled="stage3WriteLocked" :title="stage3LockReason" type="number" min="1" max="3600" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
-        </label>
-        <div class="flex items-end gap-3 pb-2 text-sm">
-          <label class="flex items-center gap-2"><input v-model="localIngestSettings.recycleAfterIngest" data-test="local-ingest-recycle" :disabled="stage3WriteLocked" :title="stage3LockReason" type="checkbox" />确认入库后移入回收站</label>
-          <span class="text-muted">最大解压深度固定为 2</span>
-        </div>
-      </div>
-
+</div>
       <div class="mt-4 flex flex-wrap gap-2">
-        <button type="button" data-test="save-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="saveLocalIngestConfig">保存配置</button>
-        <button type="button" data-test="validate-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="validateLocalIngestConfig">验证环境</button>
-        <button type="button" data-test="smoke-local-ingest-recycle" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="smokeTestRecycleBin">回收站测试</button>
         <button type="button" data-test="scan-local-ingest" class="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="scanLocalInbox">扫描待入库</button>
         <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch()">运行可处理任务</button>
       </div>
@@ -273,177 +280,22 @@
       <p v-else class="mt-4 mb-0 rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">尚无本地入库任务。请先明确点击“扫描待入库”。</p>
     </section>
 
-    <form data-test="catalog-filters" class="mb-5 grid gap-3 rounded-2xl border border-border bg-surface p-4 shadow-sm lg:grid-cols-[minmax(14rem,1fr)_repeat(3,minmax(9rem,0.22fr))_auto]" @submit.prevent="applyFilters">
-      <label class="grid gap-1.5 text-xs font-semibold text-muted">
-        搜索博主
-        <input
-          v-model="query"
-          type="search"
-          placeholder="输入博主 ID 或名称"
-          class="h-11 min-w-0 rounded-xl border border-border bg-bg px-3.5 text-sm text-text outline-none transition focus:border-accent"
-        />
-      </label>
-      <label class="grid gap-1.5 text-xs font-semibold text-muted">
-        偏好
-        <select v-model="preference" class="h-11 rounded-xl border border-border bg-bg px-3 text-sm text-text outline-none focus:border-accent" @change="applyFilters">
-          <option value="">喜欢 + 保留</option>
-          <option value="liked">喜欢</option>
-          <option value="kept">保留</option>
-        </select>
-      </label>
-      <label class="grid gap-1.5 text-xs font-semibold text-muted">
-        分级
-        <select v-model="rating" class="h-11 rounded-xl border border-border bg-bg px-3 text-sm text-text outline-none focus:border-accent" @change="applyFilters">
-          <option value="">R15 + R18</option>
-          <option value="R15">R15</option>
-          <option value="R18">R18</option>
-        </select>
-      </label>
-      <label class="grid gap-1.5 text-xs font-semibold text-muted">
-        入库状态
-        <select v-model="state" class="h-11 rounded-xl border border-border bg-bg px-3 text-sm text-text outline-none focus:border-accent" @change="applyFilters">
-          <option value="">全部状态</option>
-          <option value="missing">有待收录作品</option>
-          <option value="no-local">尚未入库</option>
-          <option value="complete">已完整关联</option>
-          <option value="no-source">尚未接入资源</option>
-          <option value="unresolved">待核查</option>
-        </select>
-      </label>
-      <div class="flex items-end gap-2">
-        <button type="submit" class="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-white">筛选</button>
-        <button type="button" class="h-11 rounded-xl border border-border bg-bg px-4 text-sm font-semibold text-text" @click="resetFilters">重置</button>
-      </div>
-    </form>
-
-    <p v-if="error" role="alert" class="rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
-      {{ error }}
-    </p>
-
-    <div v-if="loading" class="rounded-2xl border border-dashed border-border py-20 text-center text-muted">
-      正在读取图库账本…
-    </div>
-
-    <div v-else-if="items.length" class="grid gap-3" aria-label="博主账本列表">
-      <article v-for="creator in items" :key="creator.id" data-test="catalog-creator" class="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
-        <div class="catalog-row grid items-center gap-3 p-4">
-          <div class="min-w-0">
-            <div class="flex min-w-0 flex-wrap items-center gap-2">
-              <strong class="truncate text-[0.98rem]">{{ creator.name }}</strong>
-              <span class="rounded-full px-2 py-0.5 text-[0.68rem] font-bold" :class="preferenceClass(creator.preference)">
-                {{ creator.preference === 'liked' ? '喜欢' : creator.preference === 'kept' ? '保留' : '未分类' }}
-              </span>
-              <span class="rounded-full px-2 py-0.5 text-[0.68rem] font-bold text-white" :class="ratingClass(creator.rating)">
-                {{ creator.rating ?? '未分级' }}
-              </span>
-            </div>
-            <p class="mt-1 mb-0 text-xs text-muted">{{ creator.sourceCollections }} 个资源合集 · {{ statusLabel(creator) }}</p>
-          </div>
-          <CatalogMetric label="平台作品" :value="creator.remoteWorks" />
-          <CatalogMetric label="本地作品" :value="creator.localWorks" />
-          <CatalogMetric label="已关联" :value="creator.matchedWorks" />
-          <CatalogMetric label="待收录" :value="creator.missingWorks" :alert="creator.missingWorks > 0" />
-          <button
-            type="button"
-            class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold text-text transition hover:border-accent"
-            :aria-expanded="expandedCreatorId === creator.id"
-            @click="toggleCreator(creator.id)"
-          >
-            {{ expandedCreatorId === creator.id ? '收起' : '查看' }}
-          </button>
-        </div>
-
-        <div v-if="expandedCreatorId === creator.id" data-test="catalog-detail" class="border-t border-border bg-bg/45 p-4 sm:p-5">
-          <p v-if="detailLoadingId === creator.id" class="m-0 py-6 text-center text-sm text-muted">正在读取详细账本…</p>
-          <p v-else-if="detailErrors[creator.id]" class="m-0 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {{ detailErrors[creator.id] }}
-          </p>
-          <div v-else-if="details[creator.id]" class="grid gap-5">
-            <section>
-              <div class="mb-2 flex items-center justify-between gap-3">
-                <h2 class="m-0 text-sm font-semibold">资源来源</h2>
-                <span class="text-xs text-muted">别名 {{ details[creator.id].aliases.length }} 个</span>
-              </div>
-              <div v-if="details[creator.id].collections.length" class="grid gap-2 md:grid-cols-2">
-                <article v-for="collection in details[creator.id].collections" :key="collection.id" class="rounded-xl border border-border bg-surface p-3.5">
-                  <div class="flex items-start justify-between gap-3">
-                    <div class="min-w-0">
-                      <span class="text-[0.68rem] font-bold uppercase tracking-[0.1em] text-muted">{{ collection.source }}</span>
-                      <h3 class="mt-1 mb-0 text-sm leading-5">{{ collection.title }}</h3>
-                    </div>
-                    <a v-if="collection.url" :href="collection.url" target="_blank" rel="noreferrer" class="shrink-0 text-xs font-semibold text-accent">打开来源</a>
-                  </div>
-                  <p class="mt-2 mb-0 text-xs text-muted">
-                    平台标注 {{ collection.declaredWorkCount ?? '未知' }} 套
-                    <template v-if="collection.deliveries.length"> · {{ deliveryLabel(collection.deliveries[0]) }}</template>
-                  </p>
-                </article>
-              </div>
-              <p v-else class="m-0 rounded-xl border border-dashed border-border px-4 py-5 text-sm text-muted">尚未接入资源平台合集。</p>
-            </section>
-
-            <section>
-              <div class="mb-2 flex items-center justify-between gap-3">
-                <h2 class="m-0 text-sm font-semibold">待收录作品</h2>
-                <div class="flex items-center gap-3">
-                  <button v-if="details[creator.id].missing.length" type="button" class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold" @click="planDownloads(creator.id)">只生成此博主任务</button>
-                  <span class="text-xs font-semibold" :class="details[creator.id].missing.length ? 'text-amber-600' : 'text-emerald-600'">
-                    {{ details[creator.id].missing.length }} 套
-                  </span>
-                </div>
-              </div>
-              <div v-if="details[creator.id].missing.length" class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                <article v-for="work in details[creator.id].missing" :key="work.workId" class="rounded-xl border border-border bg-surface px-3.5 py-3">
-                  <div class="flex items-start gap-3">
-                    <span class="shrink-0 rounded-md bg-amber-100 px-2 py-1 text-[0.68rem] font-bold text-amber-800">
-                      {{ work.sourceOrderLabel ?? (work.sourceOrder === null ? '无序号' : `NO.${String(work.sourceOrder).padStart(3, '0')}`) }}
-                    </span>
-                    <div class="min-w-0">
-                      <p class="m-0 text-sm font-medium leading-5">{{ work.title }}</p>
-                      <small class="mt-1 block text-[0.68rem] uppercase text-muted">{{ work.source }}</small>
-                    </div>
-                  </div>
-                </article>
-              </div>
-              <p v-else class="m-0 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-700">平台作品已全部关联到本地图库。</p>
-            </section>
-
-            <section v-if="details[creator.id].unresolved.length">
-              <h2 class="mb-2 text-sm font-semibold text-amber-700">待核查的本地目录</h2>
-              <ul class="m-0 grid gap-2 p-0 list-none">
-                <li v-for="work in details[creator.id].unresolved" :key="work.relativePath" class="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
-                  {{ work.folderName }} · {{ work.status === 'ambiguous' ? '存在多个可能匹配' : '未找到匹配作品' }}
-                </li>
-              </ul>
-            </section>
-          </div>
-        </div>
-      </article>
-    </div>
-
-    <div v-else-if="!error" class="rounded-2xl border border-dashed border-border py-16 text-center text-muted">
-      没有符合当前条件的博主。
-    </div>
-
-    <footer v-if="total > limit" class="mt-5 flex items-center justify-center gap-3">
-      <button type="button" class="h-10 rounded-xl border border-border bg-surface px-4 text-sm font-semibold disabled:opacity-40" :disabled="page <= 1" @click="goToPage(page - 1)">上一页</button>
-      <span class="text-sm text-muted">第 {{ page }} / {{ totalPages }} 页</span>
-      <button type="button" class="h-10 rounded-xl border border-border bg-surface px-4 text-sm font-semibold disabled:opacity-40" :disabled="!hasMore" @click="goToPage(page + 1)">下一页</button>
-    </footer>
   </section>
 </template>
 
 <script setup lang="ts">
+const workspaces = [{id:'roster',label:'博主库'},{id:'source',label:'来源检查'},{id:'staging',label:'网盘暂存'},{id:'ingest',label:'本地入库'}] as const;
+const workspace = ref<'roster'|'source'|'staging'|'ingest'>('roster');
+async function planCreatorDownloads(id:number) { workspace.value='staging'; await planDownloads(id); }
 import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
 import IngestPerformance from '../components/IngestPerformance.vue';
 import FirstCollectionSelector from '../components/FirstCollectionSelector.vue';
 import Stage2CreatorQueue from '../components/Stage2CreatorQueue.vue';
-import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import {
   fetchArchiveBridgeStatus,
   fetchArchiveCatalog,
-  fetchArchiveCatalogCreator,
   planArchiveDownloadTasks,
   rotateArchiveBridgeToken,
   fetchLocalIngestInboxCreators,
@@ -459,13 +311,8 @@ import {
   validateLocalIngestSettings
 } from '../api/gallery';
 import type {
-  ArchiveCatalogCreator,
-  ArchiveCatalogCreatorDetail,
-  ArchiveCatalogPreference,
-  ArchiveCatalogState,
   ArchiveCatalogSummary,
   ArchiveMetadataTaskStatus,
-  ContentRating,
   LocalIngestInboxCreatorsResult,
   LocalIngestCreatorJobSummary,
   LocalIngestJob,
@@ -477,36 +324,7 @@ import type {
 import { RequestError } from '../api/http';
 import { fetchMetadataCreators, type MetadataCreatorPage } from '../api/creator-sync';
 
-const CatalogMetric = defineComponent({
-  props: {
-    label: { type: String, required: true },
-    value: { type: Number, required: true },
-    alert: { type: Boolean, default: false }
-  },
-  setup(props) {
-    return () => h('div', { class: 'min-w-[4.5rem]' }, [
-      h('small', { class: 'block text-[0.68rem] font-semibold text-muted' }, props.label),
-      h('strong', { class: props.alert ? 'mt-0.5 block text-base text-amber-600' : 'mt-0.5 block text-base text-text' }, String(props.value))
-    ]);
-  }
-});
-
-const limit = 50;
-const items = ref<ArchiveCatalogCreator[]>([]);
 const summary = ref<ArchiveCatalogSummary | null>(null);
-const total = ref(0);
-const page = ref(1);
-const hasMore = ref(false);
-const loading = ref(false);
-const error = ref('');
-const query = ref('');
-const preference = ref<'' | ArchiveCatalogPreference>('');
-const rating = ref<'' | ContentRating>('');
-const state = ref<'' | ArchiveCatalogState>('');
-const expandedCreatorId = ref<number | null>(null);
-const detailLoadingId = ref<number | null>(null);
-const details = ref<Record<number, ArchiveCatalogCreatorDetail>>({});
-const detailErrors = ref<Record<number, string>>({});
 const inboxRoot = ref('G:\\cos待入库');
 const stage2Queue = ref<InstanceType<typeof Stage2CreatorQueue> | null>(null);
 const planningDownloads = ref(false);
@@ -596,9 +414,8 @@ const inboxExistingJobCount = computed(() => {
     : 0;
 });
 
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)));
 const summaryCards = computed(() => summary.value ? [
-  { label: '首批博主', value: summary.value.creators, note: `喜欢 ${summary.value.liked} · 保留 ${summary.value.kept}` },
+  { label: '全库博主', value: summary.value.creators, note: '全局账本统计，不随名单筛选变化' },
   { label: '内容分级', value: summary.value.r18, note: `R18 ${summary.value.r18} · R15 ${summary.value.r15}` },
   { label: '有来源的博主', value: summary.value.creatorsWithSources, note: `${summary.value.sourceCollections} 个资源合集` },
   { label: '平台作品', value: summary.value.remoteWorks, note: '当前资源平台已记录' },
@@ -803,7 +620,7 @@ async function completeStage3Refresh(kind: LocalIngestOperation['kind']) {
     if (kind === 'scan') {
       await loadDownloadTasks();
     } else if (kind === 'batch' || kind === 'single-job' || kind === 'cleanup') {
-      await Promise.all([loadDownloadTasks(), loadCatalog({ preserveExpanded: true, refreshExpanded: true })]);
+      await Promise.all([loadDownloadTasks(), loadCatalog()]);
     }
   } finally {
     completionRefreshInFlight = false;
@@ -1095,31 +912,6 @@ async function refreshSourceRegions(_creatorIds?: number[]) {
   } finally { sourceRegionsRefreshing.value = false; }
 }
 
-function preferenceClass(value: ArchiveCatalogPreference | null) {
-  if (value === 'liked') return 'bg-red-100 text-red-700';
-  if (value === 'kept') return 'bg-amber-100 text-amber-800';
-  return 'bg-surface-alt text-muted';
-}
-
-function ratingClass(value: ContentRating | null) {
-  if (value === 'R18') return 'bg-[#b72d45]';
-  if (value === 'R15') return 'bg-[#55718f]';
-  return 'bg-[#6b7280]';
-}
-
-function statusLabel(creator: ArchiveCatalogCreator) {
-  if (creator.unresolvedLocalWorks > 0) return '待核查';
-  if (creator.remoteWorks === 0) return '尚未接入资源';
-  if (creator.localWorks === 0) return '尚未入库';
-  if (creator.missingWorks > 0) return `有 ${creator.missingWorks} 套待收录`;
-  return '已完整关联';
-}
-
-function deliveryLabel(delivery: ArchiveCatalogCreatorDetail['collections'][number]['deliveries'][number]) {
-  const provider = delivery.provider === 'baidu' ? '百度网盘' : delivery.provider;
-  return delivery.status ? `${provider}：${delivery.status}` : provider;
-}
-
 function formatSourceTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '时间待确认' : date.toLocaleString('zh-CN', { hour12: false });
@@ -1205,83 +997,9 @@ async function copyBridgeToken() {
   downloadNotice.value = '插件连接密钥已复制。';
 }
 
-async function loadCatalog(options: { preserveExpanded?: boolean; refreshExpanded?: boolean } = {}) {
-  loading.value = true;
-  error.value = '';
-  const preservedCreatorId = options.preserveExpanded ? expandedCreatorId.value : null;
-  if (!options.preserveExpanded) expandedCreatorId.value = null;
-  try {
-    const payload = await fetchArchiveCatalog({
-      page: page.value,
-      limit,
-      preference: preference.value || undefined,
-      rating: rating.value || undefined,
-      state: state.value || undefined,
-      query: query.value
-    });
-    items.value = payload.items;
-    summary.value = payload.summary;
-    total.value = payload.total;
-    hasMore.value = payload.hasMore;
-    if (preservedCreatorId && options.refreshExpanded) {
-      try {
-        const detail = await fetchArchiveCatalogCreator(preservedCreatorId);
-        details.value = { ...details.value, [preservedCreatorId]: detail };
-        delete detailErrors.value[preservedCreatorId];
-      } catch (reason) {
-        detailErrors.value = {
-          ...detailErrors.value,
-          [preservedCreatorId]: reason instanceof Error ? reason.message : '无法刷新博主账本详情'
-        };
-      }
-    }
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '无法读取图库账本';
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function applyFilters() {
-  page.value = 1;
-  await loadCatalog();
-}
-
-async function resetFilters() {
-  query.value = '';
-  preference.value = '';
-  rating.value = '';
-  state.value = '';
-  page.value = 1;
-  await loadCatalog();
-}
-
-async function goToPage(nextPage: number) {
-  page.value = nextPage;
-  await loadCatalog();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-async function toggleCreator(creatorId: number) {
-  if (expandedCreatorId.value === creatorId) {
-    expandedCreatorId.value = null;
-    return;
-  }
-  expandedCreatorId.value = creatorId;
-  if (details.value[creatorId]) return;
-  detailLoadingId.value = creatorId;
-  delete detailErrors.value[creatorId];
-  try {
-    const detail = await fetchArchiveCatalogCreator(creatorId);
-    details.value = { ...details.value, [creatorId]: detail };
-  } catch (reason) {
-    detailErrors.value = {
-      ...detailErrors.value,
-      [creatorId]: reason instanceof Error ? reason.message : '无法读取博主账本详情'
-    };
-  } finally {
-    detailLoadingId.value = null;
-  }
+async function loadCatalog() {
+  try { summary.value = (await fetchArchiveCatalog({page:1,limit:1})).summary; }
+  catch { /* The roster owns its own visible loading/error state. */ }
 }
 
 onMounted(async () => {
@@ -1340,22 +1058,4 @@ onBeforeUnmount(() => {
   min-height: 2rem;
 }
 
-.catalog-row {
-  grid-template-columns: minmax(13rem, 2fr) repeat(4, minmax(4.6rem, 0.55fr)) auto;
-}
-
-@media (max-width: 900px) {
-  .catalog-row {
-    grid-template-columns: repeat(4, minmax(4rem, 1fr));
-  }
-
-  .catalog-row > :first-child {
-    grid-column: 1 / -1;
-  }
-
-  .catalog-row > :last-child {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-}
 </style>

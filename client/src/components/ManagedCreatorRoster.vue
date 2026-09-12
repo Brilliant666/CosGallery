@@ -18,17 +18,18 @@
       <label>状态<select v-model="filters.active"><option value="active">启用</option><option value="inactive">停用</option><option value="all">全部状态</option></select></label>
       <label>本地作品<select v-model="filters.hasLocal"><option value="">全部</option><option value="yes">有本地作品</option><option value="no">无本地作品</option></select></label>
       <label>来源记录<select v-model="filters.hasSource"><option value="">全部</option><option value="yes">有来源记录</option><option value="no">无来源记录</option></select></label>
+      <label>作品对账<select v-model="filters.state"><option value="">全部</option><option value="missing">有缺失作品</option><option value="no-local">无本地作品</option><option value="complete">已完整关联</option><option value="no-source">无来源作品</option><option value="unresolved">待核查</option></select></label>
       <button type="button" @click="resetFilters">重置筛选</button>
     </form>
     <p v-if="error && !dialogOpen" role="alert" class="error">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <div class="roster-table">
-      <table><thead><tr><th>ID / 博主</th><th>偏好</th><th>分级</th><th>状态</th><th>别名 / 来源</th><th>本地作品 / 目录</th><th>更新</th><th>管理</th></tr></thead>
+      <table><thead><tr><th>ID / 博主</th><th>偏好</th><th>分级</th><th>状态</th><th>别名 / 来源记录</th><th>本地 / 来源 / 缺失作品</th><th>更新</th><th>管理</th></tr></thead>
         <tbody><tr v-for="creator in payload?.items" :key="creator.id">
           <td><small>#{{ creator.id }}</small><strong>{{ creator.name }}</strong></td>
           <td>{{ preferenceLabel(creator.preference) }}</td><td>{{ creator.rating ?? '待分类' }}</td>
           <td>{{ creator.isActive ? '启用' : '停用' }}</td><td>{{ creator.aliasCount }} / {{ creator.sourceCount }}</td>
-          <td>{{ creator.localWorks }} 套 / {{ creator.localFolderCount }}</td><td>{{ creator.updatedAt.slice(0, 10) }}</td>
+          <td>{{ creator.localWorks }} / {{ creator.remoteWorks }} / {{ creator.missingWorks }} 套<small>关联目录 {{ creator.localFolderCount }} · 待核查 {{ creator.unresolvedLocalWorks }} 套</small></td><td>{{ creator.updatedAt.slice(0, 10) }}</td>
           <td><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理</button></td>
         </tr></tbody>
       </table>
@@ -56,6 +57,28 @@
         <button class="primary" :disabled="busy">{{ busy ? '正在保存…' : detail ? '保存博主' : '创建博主' }}</button>
       </form>
       <template v-if="detail">
+        <section aria-label="作品账本"><h3>作品账本</h3>
+          <p>本地 {{ detail.localWorks }} 套 · 来源 {{ detail.remoteWorks }} 套 · 已关联 {{ detail.matchedWorks }} 套 · 已知缺失 {{ detail.missingWorks }} 套 · 待核查 {{ detail.unresolvedLocalWorks }} 套</p>
+          <p class="hint">来源与本地账本的比较结果；查看详情不会检查来源、规划任务或扫描文件。</p>
+          <details class="ledger-detail"><summary>来源合集 · {{ detail.collections.length }} 个</summary>
+            <p v-if="!detail.collections.length" class="hint">尚未接入资源平台合集。</p>
+            <ul class="source-list"><li v-for="collection in detail.collections" :key="collection.id">
+              <strong>{{ collection.title }}</strong><small>{{ sourceLabel(collection.source) }} · {{ collection.sourceCollectionId }} · 平台标注 {{ collection.declaredWorkCount ?? '未知' }} 套</small>
+              <small>来源记录：{{ formatTime(collection.observedAt) }}</small>
+              <a v-if="safeSourceUrl(collection.url)" :href="collection.url!" target="_blank" rel="noopener noreferrer">打开来源</a>
+              <p v-for="(delivery, index) in collection.deliveries" :key="index" class="hint">{{ delivery.provider === 'baidu' ? '百度网盘' : delivery.provider }} · {{ delivery.type }} · {{ delivery.status ?? '状态未知' }}<template v-if="delivery.sourceFolderName"> · 来源目录 {{ delivery.sourceFolderName }}</template><template v-if="delivery.destinationPath"> · {{ delivery.destinationPath }}</template><template v-if="delivery.transferredAt"> · {{ formatTime(delivery.transferredAt) }}</template></p>
+            </li></ul>
+          </details>
+          <details class="ledger-detail"><summary>待收录作品 · {{ detail.missing.length }} 套</summary>
+            <p v-if="!detail.missing.length" class="hint">{{ detail.remoteWorks === 0 ? '尚无来源作品可供比较，不能据此判断已收录完整。' : '当前账本没有已知缺失作品。' }}</p>
+            <template v-else><p class="hint">仅规划此博主的缺失作品任务，不执行网盘或本地入库。</p><button type="button" :disabled="busy || !detail.isActive" @click="requestDownloadPlan">只生成此博主任务</button></template>
+            <ul class="source-list"><li v-for="work in detail.missing" :key="work.workId"><strong>{{ work.sourceOrderLabel ?? (work.sourceOrder === null ? '未编号' : `NO.${work.sourceOrder}`) }} · {{ work.title }}</strong><small>{{ sourceLabel(work.source) }} · 合集 {{ work.sourceCollectionId }}</small></li></ul>
+          </details>
+          <details class="ledger-detail"><summary>待核查本地作品 · {{ detail.unresolved.length }} 套</summary>
+            <p v-if="!detail.unresolved.length" class="hint">当前没有待核查本地作品。</p>
+            <ul class="source-list"><li v-for="(folder, index) in detail.unresolved" :key="`${folder.relativePath}:${index}`"><strong>{{ folder.folderName }}</strong><small>{{ folder.relativePath }} · {{ folder.status === 'ambiguous' ? '匹配存在歧义' : '尚未匹配' }} · 解析编号 {{ folder.parsedSourceOrder ?? '未知' }}</small></li></ul>
+          </details>
+        </section>
         <section><h3>Stage 1 检查来源与补齐缺失</h3><FirstCollectionSelector :creator="detail" :disabled="busy || !detail.isActive" @planned="handleSourcePlanned" /></section>
         <section><h3>别名</h3>
           <p v-if="!visibleAliases.length" class="hint">暂无其他别名。</p>
@@ -64,7 +87,7 @@
           <form class="inline-form" @submit.prevent="addAlias"><label>新增手工别名<input v-model="aliasDraft" required maxlength="255" :disabled="busy" /></label><button :disabled="busy">添加别名</button></form>
         </section>
         <section><h3>作品来源（只读）</h3><p v-if="!visibleSources.length">暂无作品来源，可在后续显式规划时关联资源平台。</p>
-          <ul class="source-list"><li v-for="source in visibleSources" :key="`${source.source}:${source.sourceCreatorId}`">
+          <ul class="source-list current-sources"><li v-for="source in visibleSources" :key="`${source.source}:${source.sourceCreatorId}`">
             <strong>{{ sourceLabel(source.source) }}</strong> · {{ source.displayName }}<small>{{ source.sourceCreatorId }}</small>
             <a v-if="safeSourceUrl(source.url)" :href="source.url!" target="_blank" rel="noopener noreferrer">查看来源</a>
           </li></ul>
@@ -110,12 +133,12 @@ import FirstCollectionSelector from './FirstCollectionSelector.vue';
 import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
 import { RequestError } from '../api/http';
 import * as api from '../api/managed-creators';
-import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ContentRating, LocalIngestDestinationPreference } from '../types/api';
+import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ArchiveCatalogState, ContentRating, LocalIngestDestinationPreference } from '../types/api';
 
-const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]] }>();
+const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]]; 'plan-downloads': [creatorId: number] }>();
 const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
 const detail = ref<ArchiveCatalogCreatorDetail | null>(null);
-const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no' });
+const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no', state:'' as ''|ArchiveCatalogState });
 const page = ref(1), loading = ref(false), busy = ref(false), error = ref(''), notice = ref('');
 const dialog = ref<HTMLDialogElement | null>(null), dialogOpen = ref(false);
 const draft = reactive<api.ManagedCreatorInput>({ name:'', preference:null, rating:null, confirmDistinct:false });
@@ -136,6 +159,8 @@ const sourceLabel = (source:string) => ({hentaiclub:'历史名称',costuan:'作�
 const visibleAliases = computed(() => detail.value?.aliases.filter(alias => alias.editable || alias.alias !== detail.value?.name) ?? []);
 const visibleSources = computed(() => detail.value?.sources.filter(source => source.source !== 'hentaiclub' && source.source !== 'manual-history') ?? []);
 const safeSourceUrl = (value:string|null) => !!value && /^https?:\/\//iu.test(value);
+const formatTime = (value:string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', {hour12:false}); };
+function requestDownloadPlan() { if (!detail.value || busy.value || !detail.value.isActive) return; const id = detail.value.id; closeDialog(); emit('plan-downloads', id); }
 function showError(reason:unknown) {
   error.value = reason instanceof Error ? reason.message : '操作失败';
   const data = reason instanceof RequestError ? reason.payload as {candidates?:Array<{id:number;name:string}>}|undefined : undefined;
@@ -145,7 +170,7 @@ async function load(force = true) {
   if (disposed) return;
   const filterKey = JSON.stringify(filters);
   const params = {page:page.value,limit:50,query:filters.query,active:filters.active,
-    preference:filters.preference||undefined,rating:filters.rating||undefined,hasLocal:filters.hasLocal||undefined,hasSource:filters.hasSource||undefined};
+    preference:filters.preference||undefined,rating:filters.rating||undefined,hasLocal:filters.hasLocal||undefined,hasSource:filters.hasSource||undefined,state:filters.state||undefined};
   const key = JSON.stringify(params);
   if (!force && requestKey === key) return;
   requestKey = key;
@@ -192,7 +217,7 @@ function onEnter(event: KeyboardEvent) {
 }
 function resetFilters() {
   composing = false;
-  Object.assign(filters, {query:'',preference:'',rating:'',active:'active',hasLocal:'',hasSource:''});
+  Object.assign(filters, {query:'',preference:'',rating:'',active:'active',hasLocal:'',hasSource:'',state:''});
   void search();
 }
 async function handleSourcePlanned(creatorIds: number[]) {
@@ -289,5 +314,6 @@ label{display:grid;gap:.3rem;font-size:.8rem}input,select,button{font:inherit}in
 .roster-dialog{margin:auto;width:min(48rem,calc(100vw - 2rem));max-height:90vh;overflow:auto;padding:1.4rem;border:1px solid var(--border);border-radius:1rem;background:var(--surface);color:var(--text)}.roster-dialog::backdrop{background:#0007}.roster-dialog section{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)}
 .roster-edit{display:grid;grid-template-columns:2fr 1fr 1fr;gap:.8rem;margin-top:1rem;align-items:end}.roster-edit button{grid-column:1/-1}.alias-list,.source-list{list-style:none;padding:0;margin:0;display:grid;gap:.6rem}.alias-list li{display:flex;align-items:center;justify-content:space-between;gap:1rem;overflow-wrap:anywhere}.source-list small{display:block;overflow-wrap:anywhere}a{color:var(--accent)}
 .inline-form{display:flex;align-items:end;gap:.6rem;margin-top:1rem}.inline-form label{flex:1}.error{background:#fee2e2;color:#991b1b;padding:.7rem;border-radius:.5rem;margin:.7rem 0}.collision{background:var(--bg);border:1px solid var(--border);padding:1rem;margin:1rem 0;border-radius:.5rem}.collision button{margin:.4rem .4rem .4rem 0}.collision label{display:flex;align-items:center}.state-controls p{font-size:.85rem;margin-bottom:.65rem}
+.ledger-detail{margin-top:.8rem;padding:.7rem;border:1px solid var(--border);border-radius:.5rem;overflow-wrap:anywhere}.ledger-detail summary{cursor:pointer;font-weight:600}.ledger-detail .source-list{margin-top:.7rem}.ledger-detail li{padding:.5rem 0;border-bottom:1px solid var(--border)}
 @media(max-width:640px){.roster{padding:.8rem}.roster-edit{grid-template-columns:1fr}.roster-heading{align-items:start}.roster-dialog{padding:1rem}.roster-filters label{flex:1 1 8rem}.roster-filters .search{flex-basis:100%}}
 </style>

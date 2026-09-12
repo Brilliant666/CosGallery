@@ -56,8 +56,30 @@ describe('managed roster UI',()=>{
     const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
     await button(w,'重置筛选').trigger('click');await flushPromises();
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count+1);
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith({page:1,limit:50,query:'',active:'active',preference:undefined,rating:undefined,hasLocal:undefined,hasSource:undefined});
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith({page:1,limit:50,query:'',active:'active',preference:undefined,rating:undefined,hasLocal:undefined,hasSource:undefined,state:undefined});
     expect(w.text()).toContain('全库总数');expect(w.text()).toContain('筛选结果');
+  });
+  it('preserves the ledger state filters in the unified roster',async()=>{
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    const state=w.get('.roster-filters').findAll('select')[5]!;
+    for(const value of ['missing','complete','no-local','no-source','unresolved']) {
+      await state.setValue(value);await flushPromises();
+      expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({state:value,page:1}));
+    }
+    await button(w,'重置筛选').trigger('click');await flushPromises();
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({state:undefined}));
+  });
+  it('shows collection, missing and unresolved details without planning until explicitly requested',async()=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...structuredClone(creator), remoteWorks:2,missingWorks:1,unresolvedLocalWorks:1,
+      collections:[{id:20,source:'costuan',sourceCollectionId:'20',title:'Alpha collection',url:'https://www.costuan.com/20.html',declaredWorkCount:2,observedAt:'2026-09-01T00:00:00Z',deliveries:[{provider:'baidu',type:'share',status:'verified',sourceFolderName:'020',destinationPath:'/cos待入库/Alpha',transferredAt:null}]}],
+      missing:[{workId:30,source:'costuan',sourceCollectionId:'20',sourceOrder:2,sourceOrderLabel:'NO.002',title:'Second work'}],
+      unresolved:[{folderName:'Uncertain album',relativePath:'Alpha/Uncertain album',parsedSourceOrder:null,status:'ambiguous'}]});
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
+    expect(w.text()).toContain('Alpha collection');expect(w.text()).toContain('NO.002 · Second work');expect(w.text()).toContain('Alpha/Uncertain album');expect(w.text()).toContain('匹配存在歧义');
+    expect(w.get('a[href="https://www.costuan.com/20.html"]').attributes('rel')).toContain('noopener');
+    expect(w.emitted('plan-downloads')).toBeUndefined();expect(api.updateManagedCreator).not.toHaveBeenCalled();
+    await button(w,'只生成此博主任务').trigger('click');
+    expect(w.emitted('plan-downloads')).toEqual([[1]]);expect(w.get('dialog').element.open).toBe(false);
   });
   it('debounces typing, flushes Enter once, and applies clearing immediately',async()=>{
     vi.useFakeTimers();
@@ -166,9 +188,9 @@ describe('managed roster UI',()=>{
     vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(value);
     const before=JSON.stringify(value);
     const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
-    expect(w.get('.source-list').text()).toContain('Costuan');
-    expect(w.get('.source-list').text()).not.toContain('historical');
-    expect(w.get('.source-list a').attributes('href')).toBe('https://www.costuan.com/588.html');
+    expect(w.get('.current-sources').text()).toContain('Costuan');
+    expect(w.get('.current-sources').text()).not.toContain('historical');
+    expect(w.get('.current-sources a').attributes('href')).toBe('https://www.costuan.com/588.html');
     expect(w.get('.alias-list').text()).toContain('Old Alpha');
     expect(w.get('.alias-list').findAll('li')).toHaveLength(1);
     expect(JSON.stringify(value)).toBe(before);

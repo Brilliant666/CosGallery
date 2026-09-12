@@ -442,39 +442,17 @@ describe('ArchiveCatalogView', () => {
     });
   });
 
-  it('shows ledger totals and loads missing works when a creator is expanded', async () => {
-    const wrapper = mount(ArchiveCatalogView);
-    await flushPromises();
-
-    expect(wrapper.text()).toContain('图库账本');
-    expect(wrapper.text()).toContain('1,088');
-    expect(wrapper.get('[data-test="catalog-creator"]').text()).toContain('rua阮阮');
-    expect(wrapper.get('[data-test="catalog-creator"]').text()).toContain('有 4 套待收录');
-
-    await wrapper.get('[data-test="catalog-creator"] button[aria-expanded="false"]').trigger('click');
-    await flushPromises();
-
-    expect(fetchArchiveCatalogCreator).toHaveBeenCalledWith(115);
-    expect(wrapper.get('[data-test="catalog-detail"]').text()).toContain('NO.014');
-    expect(wrapper.get('[data-test="catalog-detail"]').text()).toContain('课间的阳光');
-    expect(wrapper.get('[data-test="catalog-detail"]').text()).toContain('百度网盘：saved');
-  });
-
-  it('passes preference and rating filters to the API', async () => {
-    const wrapper = mount(ArchiveCatalogView);
-    await flushPromises();
-
-    const selects = wrapper.get('[data-test="catalog-filters"]').findAll('select');
-    await selects[0].setValue('liked');
-    await flushPromises();
-    await selects[1].setValue('R18');
-    await flushPromises();
-
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({
-      page: 1,
-      preference: 'liked',
-      rating: 'R18'
-    }));
+  it('keeps one roster and switches workspaces without business writes', async () => {
+    const wrapper=mount(ArchiveCatalogView); await flushPromises();
+    expect(wrapper.find('[data-test="catalog-creator"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-test="managed-roster-slot"]')).toHaveLength(1);
+    expect(wrapper.get('[aria-label="本地入库"]').isVisible()).toBe(false);
+    for(const name of ['source','staging','ingest','roster']) await wrapper.get('[data-test="workspace-'+name+'"]').trigger('click');
+    expect(wrapper.get('[aria-label="本地入库"]').isVisible()).toBe(false);
+    expect(planArchiveDownloadTasks).not.toHaveBeenCalled();
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="ingest-settings"]').attributes('open')).toBeUndefined();
   });
 
   it('generates per-creator download tasks under the isolated inbox root', async () => {
@@ -493,7 +471,7 @@ describe('ArchiveCatalogView', () => {
 
   it('retires the unscoped metadata planner while retaining the explicit selector and read-only refresh', async () => {
     const wrapper = mount(ArchiveCatalogView); await flushPromises();
-    expect(wrapper.text()).toContain('检查来源与补齐缺失');
+    expect(wrapper.text()).toContain('来源检查记录');
     expect(wrapper.find('[data-test="plan-metadata"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="first-collection-slot"]').exists()).toBe(true);
     await wrapper.get('[data-test="refresh-stage1"]').trigger('click'); await flushPromises();
