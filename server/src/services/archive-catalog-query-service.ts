@@ -407,8 +407,8 @@ export class ArchiveCatalogQueryService {
   private buildCreatorItems(): ArchiveCatalogCreatorListItem[] {
     const creators = this.database.prepare(
        `SELECT creators.*,
-       (SELECT count(*) FROM archive_catalog_creator_aliases WHERE creator_id=creators.id) AS alias_count,
-       (SELECT count(*) FROM archive_catalog_creator_sources WHERE creator_id=creators.id) AS source_count,
+       (SELECT count(*) FROM archive_catalog_creator_aliases WHERE creator_id=creators.id AND (source='manual' OR alias<>creators.canonical_name)) AS alias_count,
+       (SELECT count(*) FROM archive_catalog_creator_sources WHERE creator_id=creators.id AND source NOT IN ('hentaiclub','manual-history')) AS source_count,
        (SELECT count(*) FROM archive_catalog_local_creator_folders WHERE creator_id=creators.id AND is_active=1 AND gallery_folder_id IS NOT NULL) AS local_folder_count
        FROM archive_catalog_creators creators`
     ).all() as CreatorRow[];

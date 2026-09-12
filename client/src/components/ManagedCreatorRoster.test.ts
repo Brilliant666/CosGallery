@@ -150,12 +150,29 @@ describe('managed roster UI',()=>{
   });
   it('keeps historical sources readonly, supports aliases and explicit directory linking',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
-    expect(w.text()).toContain('历史种子');expect(w.findAll('button').some(b=>b.text()==='删除别名')).toBe(false);
+    expect(w.text()).not.toContain('历史种子');expect(w.text()).not.toContain('已退役');
+    expect(w.text()).toContain('稳定 ID #1 · 启用');expect(w.text()).toContain('暂无其他别名');
+    expect(w.text()).toContain('暂无作品来源');expect(w.findAll('button').some(b=>b.text()==='删除别名')).toBe(false);
     const forms=w.findAll('.inline-form');await forms[0].get('input').setValue('New alias');await forms[0].trigger('submit');await flushPromises();
     expect(api.addManagedAlias).toHaveBeenCalledWith(1,'New alias',false);
     await forms[1].get('select').setValue('12');await forms[1].trigger('submit');await flushPromises();expect(api.linkManagedFolder).toHaveBeenCalledWith(12,1);
     await button(w,'解除关联').trigger('click');expect(api.unlinkManagedFolder).not.toHaveBeenCalled();
     await button(w,'确认变更').trigger('click');await flushPromises();expect(api.unlinkManagedFolder).toHaveBeenCalledWith(11);
+  });
+  it('hides legacy provenance but preserves distinct aliases and current source links without mutations',async()=>{
+    const value=structuredClone(creator);
+    value.aliases.push({id:'old-name',alias:'Old Alpha',source:'hentaiclub',editable:false});
+    value.sources.push({source:'costuan',sourceCreatorId:'collection:588',displayName:'Alpha',url:'https://www.costuan.com/588.html',firstSeenAt:'first',lastSeenAt:'last'});
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(value);
+    const before=JSON.stringify(value);
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
+    expect(w.get('.source-list').text()).toContain('Costuan');
+    expect(w.get('.source-list').text()).not.toContain('historical');
+    expect(w.get('.source-list a').attributes('href')).toBe('https://www.costuan.com/588.html');
+    expect(w.get('.alias-list').text()).toContain('Old Alpha');
+    expect(w.get('.alias-list').findAll('li')).toHaveLength(1);
+    expect(JSON.stringify(value)).toBe(before);
+    expect(api.deleteManagedAlias).not.toHaveBeenCalled();expect(api.updateManagedCreator).not.toHaveBeenCalled();
   });
   it('saves and clears an explicit bridge ID without triggering linking or task actions',async()=>{
     const multiple:LocalIngestDestinationPreference={

@@ -23,6 +23,18 @@ describe('managed creator canonical ownership', () => {
   function importSource(creatorName:string,postId='source1') {
     return new ArchiveCatalogService(db).importCostuanRecord({creatorName,aliases:[],costuan:{postId,title:`${creatorName}合集`,works:[{order:1,sourceOrder:'NO.001',label:'Test work'}]},baidu:{sourceFolderName:'1',destinationPath:'test',status:'saved'}});
   }
+  it('excludes seed provenance from displayed source counts but preserves historical identity and search', () => {
+    const creator=service.create({name:'Alpha'});
+    db.prepare(`INSERT INTO archive_catalog_creator_sources(creator_id,source,source_creator_id,source_display_name,first_seen_at,last_seen_at)
+      VALUES(?,'hentaiclub','old-id','Alpha','fixed','fixed')`).run(creator.id);
+    db.prepare(`INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,'Old Alpha','oldalpha','hentaiclub')`).run(creator.id);
+    const before=rows('archive_catalog_creator_sources')+rows('archive_catalog_creator_aliases');
+    expect(query.listCreators({page:1,limit:50,hasSource:'no'}).items.map(c=>c.id)).toContain(creator.id);
+    expect(query.listCreators({page:1,limit:50,hasSource:'yes'}).total).toBe(0);
+    expect(query.listCreators({page:1,limit:50,query:'Old Alpha'}).items[0]?.id).toBe(creator.id);
+    expect(query.getCreatorDetail(creator.id)?.sources.some(s=>s.source==='hentaiclub')).toBe(true);
+    expect(rows('archive_catalog_creator_sources')+rows('archive_catalog_creator_aliases')).toBe(before);
+  });
   it('creates stable manual IDs without files or tasks and persists nullable independent fields', () => {
     const creator=service.create({name:'  Ａlice  ',preference:'kept',rating:null});
     expect(creator).toMatchObject({name:'Alice',preference:'kept',rating:null,isActive:true,seedSource:'manual'});

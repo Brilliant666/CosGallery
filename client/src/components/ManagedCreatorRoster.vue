@@ -42,7 +42,7 @@
 
     <dialog ref="dialog" class="roster-dialog" aria-labelledby="roster-dialog-title" @close="dialogOpen = false" @cancel="cancelDialog">
       <div class="roster-heading"><h2 id="roster-dialog-title">{{ detail ? `管理 ${detail.name}` : '新增博主' }}</h2><button :disabled="busy" @click="closeDialog">关闭</button></div>
-      <p v-if="detail" class="hint">稳定 ID #{{ detail.id }} · {{ sourceLabel(detail.seedSource) }} · 改名不移动本地目录</p>
+      <p v-if="detail" class="hint">稳定 ID #{{ detail.id }} · {{ detail.isActive ? '启用' : '停用' }} · 改名不移动本地目录</p>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <aside v-if="candidates.length" class="collision">
         <p>可能是已有博主，请先核对：</p>
@@ -58,12 +58,13 @@
       <template v-if="detail">
         <section><h3>Stage 1 检查来源与补齐缺失</h3><FirstCollectionSelector :creator="detail" :disabled="busy || !detail.isActive" @planned="handleSourcePlanned" /></section>
         <section><h3>别名</h3>
-          <ul class="alias-list"><li v-for="alias in detail.aliases" :key="alias.id"><span>{{ alias.alias }} <small>{{ sourceLabel(alias.source) }}</small></span>
+          <p v-if="!visibleAliases.length" class="hint">暂无其他别名。</p>
+          <ul class="alias-list"><li v-for="alias in visibleAliases" :key="alias.id"><span>{{ alias.alias }} <small>{{ sourceLabel(alias.source) }}</small></span>
             <button v-if="alias.editable" :disabled="busy" @click="removeAlias(alias.id)">删除别名</button><small v-else>只读</small></li></ul>
           <form class="inline-form" @submit.prevent="addAlias"><label>新增手工别名<input v-model="aliasDraft" required maxlength="255" :disabled="busy" /></label><button :disabled="busy">添加别名</button></form>
         </section>
-        <section><h3>来源记录（只读）</h3><p v-if="!detail.sources.length">暂无来源记录，可在后续显式规划时关联资源平台。</p>
-          <ul class="source-list"><li v-for="source in detail.sources" :key="`${source.source}:${source.sourceCreatorId}`">
+        <section><h3>作品来源（只读）</h3><p v-if="!visibleSources.length">暂无作品来源，可在后续显式规划时关联资源平台。</p>
+          <ul class="source-list"><li v-for="source in visibleSources" :key="`${source.source}:${source.sourceCreatorId}`">
             <strong>{{ sourceLabel(source.source) }}</strong> · {{ source.displayName }}<small>{{ source.sourceCreatorId }}</small>
             <a v-if="safeSourceUrl(source.url)" :href="source.url!" target="_blank" rel="noopener noreferrer">查看来源</a>
           </li></ul>
@@ -104,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, reactive, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue';
 import FirstCollectionSelector from './FirstCollectionSelector.vue';
 import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
 import { RequestError } from '../api/http';
@@ -130,7 +131,10 @@ let disposed = false;
 let requestKey: string | null = null;
 let appliedFilterKey: string | null = null;
 const preferenceLabel = (value:ArchiveCatalogPreference|null) => value === 'liked' ? '喜欢' : value === 'kept' ? '保留' : '未设置';
-const sourceLabel = (source:string) => ({hentaiclub:'历史种子（已退役）',costuan:'作品来源 · Costuan',manual:'手工', 'manual-history':'历史名称'}[source] ?? source);
+const sourceLabel = (source:string) => ({hentaiclub:'历史名称',costuan:'作品来源 · Costuan',manual:'手工', 'manual-history':'历史名称'}[source] ?? source);
+// Presentation only: keep the complete detail object for identity matching and actions.
+const visibleAliases = computed(() => detail.value?.aliases.filter(alias => alias.editable || alias.alias !== detail.value?.name) ?? []);
+const visibleSources = computed(() => detail.value?.sources.filter(source => source.source !== 'hentaiclub' && source.source !== 'manual-history') ?? []);
 const safeSourceUrl = (value:string|null) => !!value && /^https?:\/\//iu.test(value);
 function showError(reason:unknown) {
   error.value = reason instanceof Error ? reason.message : '操作失败';
