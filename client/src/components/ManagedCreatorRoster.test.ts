@@ -54,6 +54,22 @@ describe('managed roster UI',()=>{
     expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'alias',preference:'unset',rating:'unclassified',active:'inactive',limit:50}));
     await button(w,'下一页').trigger('click');await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:2}));
   });
+  it('returns to the rendered list top on successful paging, but not background refresh or failed paging',async()=>{
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    const list=w.get('.creator-cards').element as HTMLElement;
+    const scroll=vi.fn();
+    list.scrollIntoView=scroll;
+    list.getClientRects=()=>[new DOMRect()] as unknown as DOMRectList;
+    await button(w,'下一页').trigger('click');await flushPromises();
+    expect(scroll).toHaveBeenCalledWith({block:'start',behavior:'auto'});
+    await button(w,'上一页').trigger('click');await flushPromises();
+    expect(scroll).toHaveBeenCalledTimes(2);
+    await w.vm.refresh();await flushPromises();
+    expect(scroll).toHaveBeenCalledTimes(2);
+    vi.mocked(fetchArchiveCatalog).mockRejectedValueOnce(new Error('Unavailable'));
+    await button(w,'下一页').trigger('click');await flushPromises();
+    expect(scroll).toHaveBeenCalledTimes(2);
+  });
   it('immediately applies all five selects, resets pagination, and resets filters once',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();
     await button(w,'下一页').trigger('click');await flushPromises();

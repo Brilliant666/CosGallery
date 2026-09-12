@@ -16,7 +16,7 @@
     </form>
     <p v-if="error && !dialogOpen" role="alert" class="error">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
-    <div class="creator-cards" aria-label="博主账本列表">
+    <div ref="listTop" class="creator-cards" aria-label="博主账本列表">
       <article v-for="creator in payload?.items" :key="creator.id" class="creator-card">
         <div class="card-identity">
           <div class="card-name"><strong>{{ creator.name }}</strong><span class="badge" :class="creator.preference">{{ preferenceLabel(creator.preference) }}</span><span class="badge rating" :class="creator.rating">{{ creator.rating ?? '待分类' }}</span><small v-if="!creator.isActive">已停用</small></div>
@@ -125,7 +125,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue';
+import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref } from 'vue';
 import FirstCollectionSelector from './FirstCollectionSelector.vue';
 import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
 import { RequestError } from '../api/http';
@@ -134,6 +134,7 @@ import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, Archiv
 
 const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]]; 'plan-downloads': [creatorId: number] }>();
 const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
+const listTop = ref<HTMLElement | null>(null);
 const detail = ref<ArchiveCatalogCreatorDetail | null>(null);
 const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no', state:'' as ''|ArchiveCatalogState });
 const page = ref(1), loading = ref(false), busy = ref(false), error = ref(''), notice = ref('');
@@ -177,7 +178,7 @@ async function load(force = true) {
   loading.value = true;
   try {
     const result = await fetchArchiveCatalog(params);
-    if (generation === loadGeneration) { payload.value = result; appliedFilterKey = filterKey; }
+    if (generation === loadGeneration) { payload.value = result; appliedFilterKey = filterKey; return generation; }
   } catch (reason) { if (generation === loadGeneration) { requestKey = null; showError(reason); } }
   finally { if (generation === loadGeneration) loading.value = false; }
 }
@@ -225,7 +226,12 @@ async function handleSourcePlanned(creatorIds: number[]) {
 }
 async function goPage(value:number) {
   if (JSON.stringify(filters) !== appliedFilterKey) { await search(); return; }
-  clearQueryTimer(); page.value = value; await load(false);
+  clearQueryTimer(); page.value = value;
+  const generation = await load(false);
+  await nextTick();
+  if (!disposed && generation !== undefined && generation === loadGeneration && listTop.value?.getClientRects().length) {
+    listTop.value.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }
 }
 function showDialog() { if (!dialog.value?.open) dialog.value?.showModal(); dialogOpen.value = true; }
 function closeDialog() { if (!busy.value) { dialog.value?.close(); dialogOpen.value = false; } }
