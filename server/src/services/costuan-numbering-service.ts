@@ -273,7 +273,9 @@ export function parseCostuanCollectionCreator(title:string):string|null {
   const postfix=normalized.match(/^([^\[\]【】]+?)\s*写真图片包合集\s*[\[【]\d+\s*套[^\]】]*[\]】]\s*[\[【]COS(?:PLAY)?[\]】]\s*[\[【]持续更新[\]】]$/iu);
   if(postfix) return postfix[1].trim();
   const prefix=normalized.match(/^([^\[\]【】]+?)\s*COS(?:PLAY)?(?=\s|写真)/iu);
-  return prefix?.[1]?.trim() || null;
+  if (prefix) return prefix[1].trim();
+  const photo=normalized.match(/^([^\[\]【】]+?)\s*写真图片(?:包)?合集\s*\[\d+\s*套[^\]]*\]\s*\[持续更新\]$/u);
+  return photo?.[1]?.trim() || null;
 }
 
 // Costuan uses these names for the same unnumbered Weibo appendix, including

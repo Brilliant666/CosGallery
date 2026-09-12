@@ -55,6 +55,29 @@ describe('Costuan multi-evidence creator identity', () => {
   });
   afterEach(() => db.close());
 
+  it.each(['YeonYu','연유','YeonYu(연유)'])('verifies an article-local Korean name declaration with directory %s', directoryName => {
+    db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('YeonYu','yeonyu',id);
+    const proof=evidence();
+    proof.resourceDirectoryText=rawDirectory(directoryName);
+    proof.identityEvidence.creatorTags[0].name='YeonYu';
+    const before=snapshot();
+    expect(catalog.validateCostuanIdentity(id,postId,'韩国模特YeonYu(연유)写真图片包合集[3套][持续更新]',proof)).toMatchObject({creatorId:id,method:'title-directory-tags'});
+    expect(snapshot()).toBe(before);
+  });
+
+  it.each(['other-korean-owner','missing-tag','unrelated-directory','incomplete-directory','arbitrary-parenthesis'])('rejects unsafe multilingual evidence: %s', mode => {
+    db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('YeonYu','yeonyu',id);
+    const proof=evidence();
+    proof.resourceDirectoryText=rawDirectory('YeonYu');
+    proof.identityEvidence.creatorTags[0].name='연유';
+    if(mode==='other-korean-owner') creator(62,'연유');
+    if(mode==='missing-tag') proof.identityEvidence.creatorTags=[];
+    if(mode==='unrelated-directory') proof.resourceDirectoryText=rawDirectory('别人');
+    if(mode==='incomplete-directory') proof.resourceDirectoryText='YeonYu NO.001 春日 [2P-1MB]';
+    const title=mode==='arbitrary-parenthesis'?'韩国模特YeonYu(其他人)写真图片包合集[3套][持续更新]':'韩国模特YeonYu(연유)写真图片包合集[3套][持续更新]';
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,title,proof));
+  });
+
   it('accepts mixed canonical and bounded variant directory names with separated dashes without writes', () => {
     const proof=evidence();
     proof.resourceDirectoryText=`${name} – NO.001 春日 [2P-1MB]\n${name}MeetU — NO.002 夏日 [2P-1MB]\n${name} NO.003 秋日 [2P-1MB]`;

@@ -645,6 +645,24 @@ export class ArchiveCatalogService {
       if(ids.length>1 || ids.some(id=>id!==expectedCreatorId)) fail(`页面身份冲突或歧义：“${name}”对应 ${describe(ids)}`);
     }
     const result=(method:CostuanIdentityVerification['method'],message:string):CostuanIdentityVerification=>({method,creatorId:expectedCreatorId,postId,titleName:alias,message});
+    // This is an article-local Latin/Korean dual-name declaration, not a
+    // learned alias or a generic rule that discards arbitrary parentheses.
+    const koreanName=alias?.normalize('NFKC').match(/^(?:韩国模特\s*)?([A-Za-z][A-Za-z0-9_-]{1,63})\s*\(([\p{Script=Hangul}\s]{1,40})\)$/u);
+    if (koreanName) {
+      const latin=koreanName[1], korean=koreanName[2].trim();
+      const latinIds=this.findCreatorIdsByAliases([latin]), koreanIds=this.findCreatorIdsByAliases([korean]);
+      if(latinIds.length!==1 || latinIds[0]!==expectedCreatorId || koreanIds.some(id=>id!==expectedCreatorId)) return fail('多语言名称身份冲突或证据不足：拉丁名称须唯一对应当前博主，韩文名称不得对应其他博主');
+      if(!evidence || evidence.creatorTags.length!==1) return fail('多语言名称证据不足：缺少本篇文章唯一的博主标签');
+      const localNames=new Set([alias!,latin,korean,`${latin}(${korean})`].map(normalizeCreatorIdentity));
+      const validLocalName=(name:string)=>{
+        const ids=this.findCreatorIdsByAliases([name]);
+        return localNames.has(normalizeCreatorIdentity(name)) && ids.every(id=>id===expectedCreatorId);
+      };
+      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,validLocalName);
+      const tag=evidence.creatorTags[0];
+      if(!validLocalName(tag.name)) return fail('多语言名称证据不一致：本篇标签不属于标题明确声明的名称');
+      return {...result('title-directory-tags',`多语言名称已核验：“${alias}”及完整目录、本篇标签对应 ${target}；未新增通用别名。`),directoryName,tagNames:[tag.name]};
+    }
     if(dualNames) {
       if(!dualMatches.some(ids=>ids.length===1 && ids[0]===expectedCreatorId)) return fail('双名称证据不足：标题须包含当前博主唯一对应的完整规范名称或已登记别名');
       if(!evidence || evidence.creatorTags.length!==1) return fail('双名称证据不足：缺少本篇文章唯一的博主标签');
