@@ -55,6 +55,28 @@ describe('Costuan multi-evidence creator identity', () => {
   });
   afterEach(() => db.close());
 
+  it.each(['西园寺南歌(白露Mizu_)','白露Mizu_（西园寺南歌）'])('verifies parenthetical dual names %s without learning aliases', titleName => {
+    db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('西园寺南歌','西园寺南歌',id);
+    const proof=evidence();
+    proof.resourceDirectoryText=rawDirectory('西园寺南歌').replace('西园寺南歌 NO.002','白露Mizu_ NO.002');
+    proof.identityEvidence.creatorTags[0].name='白露Mizu_';
+    const before=snapshot();
+    expect(catalog.validateCostuanIdentity(id,postId,articleTitle(titleName),proof)).toMatchObject({creatorId:id,method:'title-directory-tags'});
+    expect(snapshot()).toBe(before);
+  });
+
+  it.each(['conflict','bound-conflict','missing-tag','unrelated-tag','nested','duplicate','no-anchor'])('rejects unsafe parenthetical names: %s', mode => {
+    const proof=evidence();
+    let titleName=`${name}(旧名称)`;
+    if(mode==='conflict' || mode==='bound-conflict') {creator(62,'旧名称');if(mode==='bound-conflict') bind();}
+    if(mode==='missing-tag') proof.identityEvidence.creatorTags=[];
+    if(mode==='unrelated-tag') proof.identityEvidence.creatorTags[0].name='第三名称';
+    if(mode==='nested') titleName=`${name}(旧名称(第三名称))`;
+    if(mode==='duplicate') titleName=`${name}(${name})`;
+    if(mode==='no-anchor') titleName='未登记(旧名称)';
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,articleTitle(titleName),proof));
+  });
+
   it.each(['YeonYu','연유','YeonYu(연유)'])('verifies an article-local Korean name declaration with directory %s', directoryName => {
     db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('YeonYu','yeonyu',id);
     const proof=evidence();
