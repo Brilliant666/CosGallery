@@ -17,8 +17,8 @@
     <div v-if="summary" v-show="workspace === 'roster'" class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6" aria-label="账本概览">
       <article v-for="card in summaryCards" :key="card.label" class="rounded-2xl border border-border bg-surface p-4 shadow-sm">
         <p class="m-0 text-xs font-semibold text-muted">{{ card.label }}</p>
-        <strong class="mt-2 block text-2xl tracking-[-0.04em]">{{ typeof card.value === 'number' ? formatCount(card.value) : card.value }}</strong>
-        <small class="mt-1 block text-xs leading-5 text-muted">{{ card.note }}</small>
+        <strong class="mt-2 block whitespace-pre-line text-2xl tracking-[-0.04em]">{{ typeof card.value === 'number' ? formatCount(card.value) : card.value }}</strong>
+        <small class="mt-1 block whitespace-pre-line text-xs leading-5 text-muted">{{ card.note }}</small>
       </article>
     </div>
 
@@ -417,11 +417,11 @@ const inboxExistingJobCount = computed(() => {
 });
 
 const summaryCards = computed(() => summary.value ? [
-  { label: '全库博主', value: summary.value.creators, note: `启用 ${summary.value.activeCreators} · 停用 ${summary.value.inactiveCreators} · 喜欢 ${summary.value.liked} · 保留 ${summary.value.kept} · 未设置 ${summary.value.unsetPreference}；全局统计，不随名单筛选变化` },
-  { label: '内容分级', value: `R15 ${summary.value.r15} / R18 ${summary.value.r18}`, note: `待分类 ${summary.value.unclassified}` },
+  { label: '全库博主', value: summary.value.creators, note: `喜欢 ${summary.value.liked}\n保留 ${summary.value.kept}\n未设置 ${summary.value.unsetPreference}` },
+  { label: '内容分级', value: `R15 ${summary.value.r15}\nR18 ${summary.value.r18}`, note: `待分类 ${summary.value.unclassified}` },
   { label: '有来源的博主', value: summary.value.creatorsWithSources, note: `${summary.value.sourceCollections} 个资源合集` },
   { label: '平台作品', value: summary.value.remoteWorks, note: '当前资源平台已记录' },
-  { label: '本地作品', value: summary.value.localWorks, note: `${summary.value.matchedWorks} 套已关联 · 有本地作品 ${summary.value.creatorsWithLocalWorks} 位 / 无本地作品 ${summary.value.creatorsWithoutLocalWorks} 位 · 未关联目录 ${summary.value.unlinkedLocalFolders}` },
+  { label: '本地作品', value: summary.value.localWorks, note: `${summary.value.matchedWorks} 套已关联\n有本地作品 ${summary.value.creatorsWithLocalWorks} 位\n无本地作品 ${summary.value.creatorsWithoutLocalWorks} 位\n未关联目录 ${summary.value.unlinkedLocalFolders}` },
   { label: '待收录作品', value: summary.value.missingWorks, note: `${summary.value.unresolvedLocalWorks} 套待核查` }
 ] : []);
 
