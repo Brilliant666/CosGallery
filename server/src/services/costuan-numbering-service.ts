@@ -132,7 +132,9 @@ export function parseCostuanNumbering(value: string): ParsedCostuanNumbering | n
   const normalized = String(value ?? '')
     .normalize('NFKC')
     .replace(/\u00a0/gu, ' ');
-  return explicitMatch(normalized) ?? specialMatch(normalized) ?? legacyNumericMatch(normalized);
+  // The creator-prefixed collection number wins over publisher Vol./No. in the title.
+  const named=/^(?!NO\s|VOL\s)[\p{L}][\p{L}\p{N}_.·-]*\s+\d{3}\s+\S/iu.test(normalized);
+  return (named ? legacyNumericMatch(normalized) : null) ?? explicitMatch(normalized) ?? specialMatch(normalized) ?? legacyNumericMatch(normalized);
 }
 
 function parseMediaDeclaration(rawTitle: string, mediaSummary: string): {

@@ -261,12 +261,11 @@ describe('Costuan multi-evidence creator identity', () => {
     rejectsWithoutWrites(() => catalog.validateCostuanIdentity(id, postId, articleTitle(), proof), /证据无效/);
   });
 
-  it.each(['missing-line', 'duplicate-line', 'mixed-prefix', 'no-explicit-number', 'incomplete-prefix', 'body-prose', 'mixed-schemes', 'only-count', 'unknown-appendix'])('rejects an incomplete or contradictory raw directory: %s', mode => {
+  it.each(['missing-line', 'duplicate-line', 'mixed-prefix', 'incomplete-prefix', 'body-prose', 'mixed-schemes', 'only-count', 'unknown-appendix'])('rejects an incomplete or contradictory raw directory: %s', mode => {
     const proof = evidence();
     if (mode === 'missing-line') proof.resourceDirectoryText = proof.resourceDirectoryText.replace(/[^\n]*NO\.003[^\n]*/, '');
     if (mode === 'duplicate-line') proof.resourceDirectoryText += `\n${name} NO.003 重复 [2P-1MB]`;
     if (mode === 'mixed-prefix') proof.resourceDirectoryText = proof.resourceDirectoryText.replace(`${name} NO.002`, '另一位博主 NO.002');
-    if (mode === 'no-explicit-number') proof.resourceDirectoryText = proof.resourceDirectoryText.replace(/NO\./g, '');
     if (mode === 'incomplete-prefix') proof.resourceDirectoryText = proof.resourceDirectoryText.replace(`${name} NO.002`, '咪兔 NO.002');
     if (mode === 'body-prose') proof.resourceDirectoryText += `\n大家都喜欢${name}，这不是资源目录条目。`;
     if (mode === 'mixed-schemes') proof.resourceDirectoryText = proof.resourceDirectoryText.replace('NO.002', 'VOL.002');

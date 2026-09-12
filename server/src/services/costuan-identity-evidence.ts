@@ -55,7 +55,7 @@ export function directoryCreatorNames(text: string): string[] {
   return text.split(/\r?\n/u).flatMap(raw => {
     const line = raw.normalize('NFKC').trim();
     const order = parseCostuanNumbering(line);
-    return order?.style === 'explicit' && order.start > 0 ? [line.slice(0, order.start).trim().replace(/\s+[-–—]\s*$/u, '').trim()] : [];
+    return order && ['explicit','implicit'].includes(order.style) && order.start > 0 ? [line.slice(0, order.start).trim().replace(/\s+[-–—]\s*$/u, '').trim()] : [];
   });
 }
 
@@ -72,9 +72,9 @@ export function completeIdentityDirectory(text: string | undefined, title: strin
     const order = parseCostuanNumbering(line);
     const works = parseCostuanDirectoryText(line);
     if (order?.order !== null && order?.order !== undefined && orders.has(order.order)) throw fail(`编号重复：${order.key}`);
-    if (!order || order.style !== 'explicit' || order.start < 1 || order.order === null || order.qualifier
+    if (!order || !['explicit','implicit'].includes(order.style) || order.start < 1 || order.order === null || order.qualifier
       || !['NO', 'VOL'].includes(order.scheme) || order.order < 1 || order.order > count || orders.has(order.order)
-      || works.length !== 1 || works[0].sourceOrderKey !== order.key || !works[0].mediaSummary) throw fail(`条目格式或编号不符合要求：${line.slice(0, 100)}`);
+      || works.length !== 1 || works[0].sourceOrderKey !== order.key) throw fail(`条目格式或编号不符合要求：${line.slice(0, 100)}`);
     // A separated dash immediately before NO/VOL is layout punctuation, not a name.
     const name = line.slice(0, order.start).trim().replace(/\s+[-–—]\s*$/u, '').trim(), normalized = normalizeCreatorIdentity(name);
     if (!normalized) throw fail();
