@@ -55,6 +55,27 @@ describe('Costuan multi-evidence creator identity', () => {
   });
   afterEach(() => db.close());
 
+  it.each(['韩国妹子','韩国模特'])('verifies bounded descriptive prefix %s without writes', prefix=>{
+    db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('Maruemon','maruemon',id);
+    const proof=evidence();
+    proof.resourceDirectoryText=rawDirectory('Maruemon');
+    proof.identityEvidence.creatorTags[0].name='Maruemon';
+    const before=snapshot();
+    expect(catalog.validateCostuanIdentity(id,postId,`${prefix}Maruemon写真图片包合集[3套][COSPLAY][持续更新]`,proof)).toMatchObject({creatorId:id,method:'title-directory-tags'});
+    expect(snapshot()).toBe(before);
+  });
+
+  it.each(['missing-tag','other-tag','incomplete','other-owner','unbounded-prefix'])('rejects invalid descriptive title evidence: %s',mode=>{
+    const proof=evidence();
+    let prefix='韩国妹子';
+    if(mode==='missing-tag') proof.identityEvidence.creatorTags=[];
+    if(mode==='other-tag') proof.identityEvidence.creatorTags[0].name='别人';
+    if(mode==='incomplete') proof.resourceDirectoryText=rawDirectory().split('\n')[0];
+    if(mode==='other-owner') {creator(62,'其他博主');alias(62,`韩国妹子${name}`);}
+    if(mode==='unbounded-prefix')prefix='推荐精选';
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,articleTitle(`${prefix}${name}`),proof));
+  });
+
   it.each(['西园寺南歌(白露Mizu_)','白露Mizu_（西园寺南歌）'])('verifies parenthetical dual names %s without learning aliases', titleName => {
     db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('西园寺南歌','西园寺南歌',id);
     const proof=evidence();

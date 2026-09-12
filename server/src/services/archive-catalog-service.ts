@@ -648,6 +648,21 @@ export class ArchiveCatalogService {
       if(ids.length>1 || ids.some(id=>id!==expectedCreatorId)) fail(`页面身份冲突或歧义：“${name}”对应 ${describe(ids)}`);
     }
     const result=(method:CostuanIdentityVerification['method'],message:string):CostuanIdentityVerification=>({method,creatorId:expectedCreatorId,postId,titleName:alias,message});
+    // Descriptive title prefixes generate candidates, never aliases or an
+    // identity shortcut. Keep this vocabulary bounded and article-local.
+    const describedName=alias?.normalize('NFKC').match(/^(?:韩国妹子|韩国模特)\s*([\p{L}\p{N}_·.\-]{2,64})$/u);
+    if(describedName) {
+      const name=describedName[1], ids=this.findCreatorIdsByAliases([name]);
+      if(ids.length!==1 || ids[0]!==expectedCreatorId) return fail('描述前缀后的名称未唯一对应当前规范博主');
+      if(!evidence || evidence.creatorTags.length!==1) return fail('描述前缀身份证据不足：缺少本篇文章唯一的博主标签');
+      const permitted=new Set([alias!,name].map(normalizeCreatorIdentity));
+      const accepts=(value:string)=>permitted.has(normalizeCreatorIdentity(value))
+        && this.findCreatorIdsByAliases([value]).every(id=>id===expectedCreatorId);
+      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,accepts);
+      const tag=evidence.creatorTags[0];
+      if(!accepts(tag.name)) return fail('描述前缀身份证据不一致：本篇标签不支持标题中的博主名称');
+      return {...result('title-directory-tags',`描述前缀已核验：“${alias}”的名称“${name}”及完整目录、本篇标签对应 ${target}；未新增别名。`),directoryName,tagNames:[tag.name]};
+    }
     // Parentheses declare candidate names only. Require an exact identity
     // anchor and article evidence; never register or discard the second name.
     const parenthetical=alias?.normalize('NFKC').match(/^(?:韩国模特\s*)?([\p{L}\p{N}_·.\-\s]{1,64})\s*\(([\p{L}\p{N}_·.\-\s]{1,64})\)$/u);
