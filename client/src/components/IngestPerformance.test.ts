@@ -13,4 +13,10 @@ describe('IngestPerformance', () => {
   it.each([undefined,null,{}, {version:2,latest:{durationMs:10}}, {version:1,latest:{durationMs:NaN}}])('does not invent missing history (%j)', performance => {
     expect(mount(IngestPerformance,{props:{performance}}).text()).toContain('旧任务未记录分阶段耗时');
   });
+  it('distinguishes same-volume moves from historical copies', () => {
+    const wrapper = mount(IngestPerformance, {props: {performance: {version: 1, latest: {operation: 'run', durationMs: 500, phases: {staging_move: 120}}}}});
+    expect(wrapper.text()).toContain('同卷暂存移动');
+    expect(wrapper.text()).toContain('0.12 秒');
+    expect(wrapper.text()).not.toContain('暂存文件复制');
+  });
 });

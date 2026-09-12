@@ -31,6 +31,7 @@ type CommonFixture = {
   sourcePath: string;
   database: DatabaseSync;
   service: LocalIngestService;
+  restartService: () => LocalIngestService;
   settings: ReturnType<typeof makeSettings>;
   advance: (milliseconds: number) => void;
   commandCounts: CommandCounts;
@@ -96,6 +97,8 @@ function makeSettings(libraryRoot: string, inboxRoot: string, processingRoot: st
 
 async function createFixture(options: {
   monotonicNow?: LocalIngestRuntimeDependencies['monotonicNow'];
+  mediaFileCount?: number;
+  hardlinkedMedia?: boolean;
   rescanResult?: { scanRunId: number; scanStatus: string; scanError: string | null; galleryIndexMs?: number; ledgerReconciliationMs?: number };
   hashFile?: LocalIngestRuntimeDependencies['hashFile'];
   wait?: LocalIngestRuntimeDependencies['wait'];
@@ -144,9 +147,11 @@ async function createFixture(options: {
       await fs.writeFile(path.join(output, '007.7zz'), 'synthetic inner archive');
     } else {
       commandCounts.inner += 1;
-      await sharp({ create: { width: 4, height: 4, channels: 3, background: '#778899' } })
-        .jpeg()
-        .toFile(path.join(output, 'cover.jpg'));
+      for (let index = 0; index < (options.mediaFileCount ?? 1); index += 1) {
+        const filename = path.join(output, index === 0 ? 'cover.jpg' : `cover-${index}.jpg`);
+        await sharp({ create: { width: 4, height: 4, channels: 3, background: '#778899' } }).jpeg().toFile(filename);
+        if (options.hardlinkedMedia) await fs.link(filename, path.join(root, `outside-link-${index}.jpg`));
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 15));
     return { code: 0, stdout: '', stderr: '' };
@@ -181,7 +186,7 @@ async function createFixture(options: {
     db.prepare("UPDATE archive_catalog_download_tasks SET status = 'ingested' WHERE id = 1").run();
     return options.rescanResult;
   };
-  const service = new LocalIngestService(database, settings, recycle, rescan, {
+  const restartService = () => new LocalIngestService(database, settings, recycle, rescan, {
     now: () => new Date(clock),
     monotonicNow: options.monotonicNow,
     wait: options.wait,
@@ -198,7 +203,8 @@ async function createFixture(options: {
     creatorName,
     sourcePath,
     database,
-    service,
+    service: restartService(),
+    restartService,
     settings,
     advance(milliseconds) { clock += milliseconds; },
     commandCounts,
@@ -230,11 +236,12 @@ describe.sequential('LocalIngest cross-platform hardening', () => {
     fixture.database.prepare('UPDATE local_ingest_jobs SET summary_json = ? WHERE id = ?')
       .run(JSON.stringify({ warnings: ['existing warning'], customEvidence: 'keep' }), id);
     const first = await fixture.service.runJob(id);
+    expect(first.status, first.errorDetail ?? '').toBe('ingested');
     const firstPerformance = first.summary!.performance as { latest: { phases: Record<string, number>; durationMs: number }; history: unknown[] };
     expect(firstPerformance.latest.phases).toEqual({
       source_hash: 10, outer_list: 10, outer_test: 10, outer_extract: 10,
       inner_list: 10, inner_test: 10, inner_extract: 10, media_validation: 10,
-      staging_copy: 10, final_commit: 10, index_ledger_reconciliation: 10
+      staging_move: 10, final_commit: 10, index_ledger_reconciliation: 10
     });
     expect(firstPerformance.latest.durationMs).toBe(230);
     expect(firstPerformance.history).toHaveLength(1);
@@ -274,9 +281,52 @@ describe.sequential('LocalIngest cross-platform hardening', () => {
     expect(performance.latest.phases).not.toHaveProperty('outer_extract');
     expect(performance.latest.phases).not.toHaveProperty('inner_extract');
     expect(performance.latest.phases).not.toHaveProperty('staging_copy');
+    expect(performance.latest.phases).not.toHaveProperty('staging_move');
     expect(performance.latest.phases.final_commit).toBe(10);
     expect(performance.history).toHaveLength(2);
     expect(fixture.commandCounts).toEqual({ list: 4, test: 4, outer: 1, inner: 1 });
+    fixture.database.close();
+  });
+
+  it('resumes a partial no-copy move from the complete manifest after restart', async () => {
+    const fixture = await createFixture({ mediaFileCount: 3 });
+    const discovery = await discoverStable(fixture);
+    const id = discovery.jobs[0].id;
+    const link = fs.link.bind(fs);
+    let links = 0;
+    const copy = vi.spyOn(fs, 'copyFile');
+    const interrupted = vi.spyOn(fs, 'link').mockImplementation(async (source, destination) => {
+      links += 1;
+      const manifest = JSON.parse(await fs.readFile(path.join(fixture.processingRoot, String(id), '.staging-move.json'), 'utf8'));
+      expect(manifest.files).toHaveLength(3);
+      if (links === 2) throw new Error('synthetic interruption');
+      return link(source, destination);
+    });
+    const first = await fixture.service.runJob(id);
+    expect(first.status).toBe('failed');
+    expect(await fs.readdir(path.join(fixture.processingRoot, String(id), 'level-2'))).toHaveLength(2);
+    interrupted.mockRestore();
+    const result = await fixture.restartService().runJob(id);
+    expect(result.status).toBe('ingested');
+    expect(result.summary).toMatchObject({ imageCount: 3, totalMediaCount: 3 });
+    expect(await fs.readdir(result.targetPath!)).toHaveLength(3);
+    expect(await fs.readdir(path.join(fixture.processingRoot, String(id), 'level-2'))).toHaveLength(0);
+    expect(copy).not.toHaveBeenCalled();
+    expect(fixture.commandCounts).toEqual({ list: 4, test: 4, outer: 1, inner: 1 });
+    await expect(fs.access(fixture.sourcePath)).resolves.toBeUndefined();
+    fixture.database.close();
+  });
+
+  it('keeps the copy path for extracted files that already share a hardlink', async () => {
+    const fixture = await createFixture({ hardlinkedMedia: true });
+    const discovery = await discoverStable(fixture);
+    const copy = vi.spyOn(fs, 'copyFile');
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result.status).toBe('ingested');
+    expect(copy).toHaveBeenCalledTimes(1);
+    expect(result.summary!.performance).toMatchObject({ latest: { phases: { staging_copy: expect.any(Number) } } });
+    await expect(fs.access(path.join(fixture.processingRoot, String(result.id), '.staging-move.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.access(path.join(fixture.processingRoot, String(result.id), 'level-2', 'cover.jpg'))).resolves.toBeUndefined();
     fixture.database.close();
   });
 

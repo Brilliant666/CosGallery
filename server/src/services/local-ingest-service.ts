@@ -18,6 +18,10 @@ import {
 } from './local-ingest-settings-service.js';
 import { recycleBinAdapter, type RecycleBinAdapter } from './recycle-bin-adapter.js';
 import {
+  createStagingMoveManifest, finishStagingMove, readStagingMoveManifest,
+  STAGING_MOVE_MANIFEST, StagingMoveFailure, verifyStagingMoveState
+} from './local-ingest-staging-move.js';
+import {
   assertLocalIngestRootPolicy,
   assertPathInsideLocalIngestRoot,
   canonicalizeLocalIngestPath,
@@ -1828,6 +1832,33 @@ export class LocalIngestService {
     const settings = await this.checkedSettings();
     await this.assertInside(settings.processingRoot, processingPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Job processing directory', { directChild: true });
     await this.assertInside(processingPath, levelTwoRoot, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Second-level extraction directory');
+    const targetPlan = await this.validatePersistedTarget(job, mapping, settings);
+    const targetPath = targetPlan.targetPath;
+    if (await pathExists(targetPath)) throw new LocalIngestFailure('TARGET_EXISTS', 'The planned target directory already exists', true);
+    const binding = {
+      jobId: job.id, sourceWorkId: mapping.source_work_id, archiveDownloadTaskId: mapping.archive_download_task_id,
+      sourceArchiveSha256: job.source_archive_sha256, targetPath, processingPath, levelTwoRoot
+    };
+    const recovery = await readStagingMoveManifest(binding);
+    if (recovery) {
+      // The source tree may already be sparse. The durable manifest is the
+      // complete validated inventory; never infer content root/counts anew.
+      const state = await verifyStagingMoveState(binding, recovery, (filename, kind) =>
+        kind === 'image' ? validateImage(filename) : validateVideo(filename));
+      stopValidation();
+      if (!state.ready) await this.timed(job.id, 'staging_move', () => finishStagingMove(binding, recovery));
+      const existing = safeJsonParse(this.getJobRow(job.id).summary_json) ?? {};
+      const summary = { ...existing, ...recovery.summary, performance: existing.performance } as unknown as ValidationSummary;
+      summary.warnings = [...new Set([
+        ...summary.warnings,
+        ...(Array.isArray(existing.warnings) ? existing.warnings.filter((value): value is string => typeof value === 'string') : [])
+      ])];
+      this.updateJob(job.id, {
+        status: 'running', phase: 'awaiting_commit', validationStatus: summary.warnings.length ? 'warning' : 'passed',
+        targetPath, summaryJson: JSON.stringify(summary), errorCode: null, errorDetail: null
+      });
+      return summary;
+    }
     const contentRoot = await discoverContentRoot(levelTwoRoot);
     await this.assertInside(levelTwoRoot, contentRoot, 'UNSAFE_ARCHIVE_PATH', 'Extracted content root', { allowRoot: true });
     const tree = await listTree(contentRoot);
@@ -1871,27 +1902,10 @@ export class LocalIngestService {
     if (media.length === 0) throw new LocalIngestFailure('NO_VALID_MEDIA', 'No valid image or video was found', true);
     stopValidation();
 
-    const targetPlan = await this.validatePersistedTarget(job, mapping, settings);
-    const targetPath = targetPlan.targetPath;
-    if (await pathExists(targetPath)) throw new LocalIngestFailure('TARGET_EXISTS', 'The planned target directory already exists', true);
     const readyBuildPath = path.join(processingPath, `ready-building-${randomUUID()}`);
     const readyPath = path.join(processingPath, 'ready');
     await this.assertInside(processingPath, readyBuildPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready build directory', { directChild: true });
     await this.assertInside(processingPath, readyPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready directory', { directChild: true });
-    if (!(await pathExists(readyPath))) {
-      const stopStaging = this.startTiming(job.id, 'staging_copy');
-      await fs.mkdir(readyBuildPath, { recursive: true });
-      for (const entry of media) {
-        const relativePath = path.relative(contentRoot, entry.absolutePath);
-        const destination = path.join(readyBuildPath, relativePath);
-        if (!isPathWithin(readyBuildPath, destination)) throw new LocalIngestFailure('UNSAFE_ARCHIVE_PATH', 'Media path escapes the staging directory', true);
-        await fs.mkdir(path.dirname(destination), { recursive: true });
-        await fs.copyFile(entry.absolutePath, destination, fs.constants.COPYFILE_EXCL);
-      }
-      await fs.rename(readyBuildPath, readyPath);
-      stopStaging();
-    }
-
     const existingSummary = safeJsonParse(this.getJobRow(job.id).summary_json) ?? {};
     const warnings: string[] = Array.isArray(existingSummary.warnings)
       ? existingSummary.warnings.filter((value): value is string => typeof value === 'string') : [];
@@ -1939,6 +1953,30 @@ export class LocalIngestService {
       declaredTotalBytes,
       declaredVsActualByteDifference: declaredTotalBytes === undefined ? undefined : totalBytes - declaredTotalBytes
     };
+    if (!(await pathExists(readyPath))) {
+      const { performance: _previousPerformance, ...manifestSummary } = summary as unknown as Record<string, unknown>;
+      const manifest = await createStagingMoveManifest(binding, contentRoot, tree.filter((entry) => !entry.directory).map((entry) => ({
+        relativePath: entry.relativePath, size: entry.size,
+        kind: IMAGE_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'image' as const
+          : VIDEO_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'video' as const
+            : ADVERTISEMENT_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'advertisement' as const : 'ignored' as const
+      })), manifestSummary);
+      if (manifest) {
+        await this.timed(job.id, 'staging_move', () => finishStagingMove(binding, manifest));
+      } else {
+        const stopStaging = this.startTiming(job.id, 'staging_copy');
+        await fs.mkdir(readyBuildPath, { recursive: true });
+        for (const entry of media) {
+          const relativePath = path.relative(contentRoot, entry.absolutePath);
+          const destination = path.join(readyBuildPath, relativePath);
+          if (!isPathWithin(readyBuildPath, destination)) throw new LocalIngestFailure('UNSAFE_ARCHIVE_PATH', 'Media path escapes the staging directory', true);
+          await fs.mkdir(path.dirname(destination), { recursive: true });
+          await fs.copyFile(entry.absolutePath, destination, fs.constants.COPYFILE_EXCL);
+        }
+        await fs.rename(readyBuildPath, readyPath);
+        stopStaging();
+      }
+    }
     this.updateJob(job.id, {
       status: 'running',
       phase: 'awaiting_commit',
@@ -2642,6 +2680,10 @@ export class LocalIngestService {
       const levelTwoRoot = path.join(processingPath, 'level-2');
       const levelOneCompleteMarker = path.join(processingPath, '.level-1-complete');
       const levelTwoCompleteMarker = path.join(processingPath, '.level-2-complete');
+      if (await pathExists(path.join(processingPath, STAGING_MOVE_MANIFEST))
+        && (!(await pathExists(levelOneCompleteMarker)) || !(await pathExists(levelTwoCompleteMarker)))) {
+        throw new StagingMoveFailure('Extraction completion evidence is missing for an existing staging move');
+      }
       await fs.mkdir(processingPath, { recursive: true });
       await fs.mkdir(levelOneRoot, { recursive: true });
       await fs.mkdir(levelTwoRoot, { recursive: true });
@@ -2727,7 +2769,9 @@ export class LocalIngestService {
       return await this.reconcile(id, true);
     } catch (error) {
       const secret = process.env.LOCAL_INGEST_ARCHIVE_PASSWORD ?? '';
-      const failure = error instanceof LocalIngestFailure
+      const failure = error instanceof StagingMoveFailure
+        ? new LocalIngestFailure(error.code, error.message, true)
+        : error instanceof LocalIngestFailure
         ? error
         : new LocalIngestFailure('LOCAL_INGEST_FAILED', error instanceof Error ? error.message : 'Local ingest failed');
       const latestJob = this.getJobRow(id);

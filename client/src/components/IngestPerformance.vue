@@ -19,7 +19,7 @@ const props = defineProps<{ performance?: unknown }>();
 const labels: Record<string, string> = {
   source_hash: '源压缩包哈希', outer_list: '外层目录安全校验', outer_test: '外层压缩包测试', outer_extract: '外层解压',
   inner_list: '内层目录安全校验', inner_test: '内层压缩包测试', inner_extract: '内层解压',
-  media_validation: '媒体校验', staging_copy: '暂存文件复制', final_commit: '提交至图库',
+  media_validation: '媒体校验', staging_copy: '暂存文件复制', staging_move: '同卷暂存移动', final_commit: '提交至图库',
   gallery_index: '图库索引', ledger_reconciliation: '账本对账', index_ledger_reconciliation: '索引与账本（未细分）', cleanup: '回收清理'
 };
 function object(value: unknown): Record<string, unknown> | null {
