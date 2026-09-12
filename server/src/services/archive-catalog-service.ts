@@ -666,9 +666,12 @@ export class ArchiveCatalogService {
     }
     if(!evidence || evidence.creatorTags.length!==1) return fail(`名称变体证据不足：“${alias}”缺少本篇文章唯一的博主标签`);
     const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title);
-    const directoryIds=this.findCreatorIdsByAliases([directoryName]),tag=evidence.creatorTags[0],tagIds=this.findCreatorIdsByAliases([tag.name]);
+    const evidenceIds=(name:string)=>[...new Set(allNames.filter(row=>normalizeCreatorIdentity(name)===normalizeCreatorIdentity(row.name)
+      || isCostuanNameVariant(name,row.name)).map(row=>row.creator_id))];
+    const directoryIds=evidenceIds(directoryName),tag=evidence.creatorTags[0],tagIds=evidenceIds(tag.name);
     if(directoryIds.length!==1 || directoryIds[0]!==expectedCreatorId || tagIds.length!==1 || tagIds[0]!==expectedCreatorId
-      || !isCostuanNameVariant(alias,directoryName)) return fail(`名称变体证据不一致：标题“${alias}”、目录“${directoryName}”、本篇标签“${tag.name}”未唯一指向同一博主`);
+      || (normalizeCreatorIdentity(alias)!==normalizeCreatorIdentity(directoryName) && !isCostuanNameVariant(alias,directoryName))
+      || (normalizeCreatorIdentity(tag.name)!==normalizeCreatorIdentity(directoryName) && !isCostuanNameVariant(tag.name,directoryName))) return fail(`名称变体证据不一致：标题“${alias}”、目录“${directoryName}”、本篇标签“${tag.name}”未唯一指向同一博主`);
     return {...result('title-directory-tags',`名称变体已核验：标题“${alias}”、完整目录“${directoryName}”及本篇标签“${tag.name}”唯一对应 ${target}；未新增通用别名。`),directoryName,tagNames:[tag.name]};
   }
 

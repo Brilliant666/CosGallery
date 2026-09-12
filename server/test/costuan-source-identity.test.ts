@@ -83,6 +83,22 @@ describe('Costuan multi-evidence creator identity', () => {
     expect(catalog.validateCostuanIdentity(id, postId, articleTitle('星野咪兔_MeetU'))).toMatchObject({method: 'exact-name'});
   });
 
+  it('accepts the same uniquely resolved Latin variant in title, complete directory and article tag without adding aliases', () => {
+    const proof=evidence();
+    proof.resourceDirectoryText=rawDirectory(`MeetU${name}`);
+    proof.identityEvidence.creatorTags[0].name=`MeetU${name}`;
+    const before=snapshot();
+    expect(catalog.validateCostuanIdentity(id,postId,articleTitle(`MeetU${name}`),proof)).toMatchObject({method:'title-directory-tags',creatorId:id});
+    expect(snapshot()).toBe(before);
+  });
+
+  it('rejects a tag variant that resolves to a different or ambiguous creator', () => {
+    creator(62,`${name}Meet`);
+    const proof=evidence();
+    proof.identityEvidence.creatorTags[0].name=`${name}MeetMore`;
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,articleTitle(),proof));
+  });
+
   it('retains the compatible bound-source path for old records lacking new evidence', () => {
     bind();
     expect(catalog.validateCostuanIdentity(id, postId, articleTitle())).toMatchObject({method: 'bound-source', creatorId: id});
