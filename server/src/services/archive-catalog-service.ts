@@ -665,9 +665,13 @@ export class ArchiveCatalogService {
         : `标题名称未匹配：“${alias}”不是当前博主的规范名称、已登记别名或可验证名称变体`);
     }
     if(!evidence || evidence.creatorTags.length!==1) return fail(`名称变体证据不足：“${alias}”缺少本篇文章唯一的博主标签`);
-    const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title);
     const evidenceIds=(name:string)=>[...new Set(allNames.filter(row=>normalizeCreatorIdentity(name)===normalizeCreatorIdentity(row.name)
       || isCostuanNameVariant(name,row.name)).map(row=>row.creator_id))];
+    const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,name=>{
+      const ids=evidenceIds(name);
+      return ids.length===1 && ids[0]===expectedCreatorId
+        && (normalizeCreatorIdentity(alias)===normalizeCreatorIdentity(name) || isCostuanNameVariant(alias,name));
+    });
     const directoryIds=evidenceIds(directoryName),tag=evidence.creatorTags[0],tagIds=evidenceIds(tag.name);
     if(directoryIds.length!==1 || directoryIds[0]!==expectedCreatorId || tagIds.length!==1 || tagIds[0]!==expectedCreatorId
       || (normalizeCreatorIdentity(alias)!==normalizeCreatorIdentity(directoryName) && !isCostuanNameVariant(alias,directoryName))

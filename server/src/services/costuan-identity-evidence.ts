@@ -55,15 +55,15 @@ export function directoryCreatorNames(text: string): string[] {
   return text.split(/\r?\n/u).flatMap(raw => {
     const line = raw.normalize('NFKC').trim();
     const order = parseCostuanNumbering(line);
-    return order?.style === 'explicit' && order.start > 0 ? [line.slice(0, order.start).trim()] : [];
+    return order?.style === 'explicit' && order.start > 0 ? [line.slice(0, order.start).trim().replace(/\s+[-–—]\s*$/u, '').trim()] : [];
   });
 }
 
 // A variant cannot be approved from one convenient line or a partially loaded
 // directory. Do not merge duplicates or infer identity from work descriptions.
-export function completeIdentityDirectory(text: string | undefined, title: string): string {
+export function completeIdentityDirectory(text: string | undefined, title: string, validateName?: (name: string) => boolean): string {
   const count = Number(title.normalize('NFKC').match(/\[(\d+)\s*套[^\]]*\]/u)?.[1]);
-  const fail = () => new Error('名称变体证据不足：资源目录须完整、编号唯一连续，且每条明确使用同一博主名称；保留暂停，需人工检查。');
+  const fail = (reason = '未取得有效目录或标题声明数量') => new Error(`来源目录校验未通过：${reason}；保留暂停，需人工检查。`);
   if (!text?.trim() || text.length > 2_000_000 || !Number.isInteger(count) || count < 1 || count > 10000) throw fail();
   const names = new Map<string, string>(), orders = new Set<number>(), schemes = new Set<string>();
   for (const raw of text.split(/\r?\n/u)) {
@@ -71,13 +71,19 @@ export function completeIdentityDirectory(text: string | undefined, title: strin
     if (!line || /^\d{4}[./-]\d{1,2}[./-]\d{1,2}更新\s*[:：]?$/u.test(line)) continue;
     const order = parseCostuanNumbering(line);
     const works = parseCostuanDirectoryText(line);
+    if (order?.order !== null && order?.order !== undefined && orders.has(order.order)) throw fail(`编号重复：${order.key}`);
     if (!order || order.style !== 'explicit' || order.start < 1 || order.order === null || order.qualifier
       || !['NO', 'VOL'].includes(order.scheme) || order.order < 1 || order.order > count || orders.has(order.order)
-      || works.length !== 1 || works[0].sourceOrderKey !== order.key || !works[0].mediaSummary) throw fail();
-    const name = line.slice(0, order.start).trim(), normalized = normalizeCreatorIdentity(name);
+      || works.length !== 1 || works[0].sourceOrderKey !== order.key || !works[0].mediaSummary) throw fail(`条目格式或编号不符合要求：${line.slice(0, 100)}`);
+    // A separated dash immediately before NO/VOL is layout punctuation, not a name.
+    const name = line.slice(0, order.start).trim().replace(/\s+[-–—]\s*$/u, '').trim(), normalized = normalizeCreatorIdentity(name);
     if (!normalized) throw fail();
     names.set(normalized, name); orders.add(order.order); schemes.add(order.scheme);
   }
-  if (orders.size !== count || names.size !== 1 || schemes.size !== 1) throw fail();
+  if (orders.size !== count) throw fail(`标题声明 ${count} 套，有效编号 ${orders.size} 套；缺少编号：${Array.from({length:count},(_,i)=>i+1).filter(n=>!orders.has(n)).slice(0,20).join('、')}`);
+  if (schemes.size !== 1) throw fail('目录混用了 NO 与 VOL 编号体系');
+  if (validateName) {
+    for (const name of names.values()) if (!validateName(name)) throw new Error(`目录身份核验未通过：名称“${name}”无法唯一对应当前博主，或不属于本篇标题的受限名称变体；保留暂停，需人工检查。`);
+  } else if (names.size !== 1) throw fail(`目录名称写法不一致：${[...names.values()].join('、')}`);
   return [...names.values()][0];
 }

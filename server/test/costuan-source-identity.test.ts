@@ -55,6 +55,28 @@ describe('Costuan multi-evidence creator identity', () => {
   });
   afterEach(() => db.close());
 
+  it('accepts mixed canonical and bounded variant directory names with separated dashes without writes', () => {
+    const proof=evidence();
+    proof.resourceDirectoryText=`${name} – NO.001 春日 [2P-1MB]\n${name}MeetU — NO.002 夏日 [2P-1MB]\n${name} NO.003 秋日 [2P-1MB]`;
+    proof.identityEvidence.creatorTags[0].name=`${name}MeetU`;
+    const before=snapshot();
+    expect(catalog.validateCostuanIdentity(id,postId,articleTitle(),proof)).toMatchObject({creatorId:id,method:'title-directory-tags'});
+    expect(snapshot()).toBe(before);
+  });
+
+  it('rejects a conflicting variant identity even behind a directory separator', () => {
+    creator(62,`${name}MeetU`);
+    const proof=evidence();
+    proof.resourceDirectoryText=rawDirectory(`${name}MeetU –`);
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,articleTitle(),proof));
+  });
+
+  it.each(['missing','duplicate'])('reports a specific directory error for %s', mode => {
+    const proof=evidence();
+    proof.resourceDirectoryText=mode==='missing' ? rawDirectory().replace(/[^\n]*NO\.003[^\n]*/,'') : rawDirectory()+`\n${name} NO.003 重复 [2P-1MB]`;
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,articleTitle(),proof), mode==='missing'?/缺少编号：3/:/编号重复：NO/);
+  });
+
   it.each([`${name}MeetU`, `MeetU${name}`])('confirms the bounded Latin variant %s using the complete directory and article tag without adding an alias, source or task', titleName => {
     const before = snapshot();
     const changes = db.prepare('SELECT total_changes() AS n').get();
