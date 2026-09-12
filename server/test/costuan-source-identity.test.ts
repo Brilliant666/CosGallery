@@ -195,6 +195,44 @@ describe('Costuan multi-evidence creator identity', () => {
     return {service, task, proof, record, request};
   };
 
+  it.each(['阿九从不咕咕/九言', '九言／阿九从不咕咕'])('verifies dual names %s through preflight, directory and completion without global aliases', titleName => {
+    db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('九言','九言',id);
+    const {service,request}=claimedRecord();
+    request.record.creatorName='九言';
+    request.record.costuan.title=articleTitle(titleName);
+    request.record.costuan.resourceDirectoryText=rawDirectory('阿九从不咕咕');
+    request.record.costuan.identityEvidence.creatorTags[0].name='阿九从不咕咕';
+    const before=snapshot();
+    expect(service.validateSource({...request,...request.record.costuan})).toMatchObject({identityVerification:{method:'title-directory-tags',creatorId:id}});
+    expect(service.validateDirectory(request).sourceFilenames).toEqual(['001.7z','002.7z','003.7z']);
+    expect(snapshot()).toBe(before);
+    expect(service.complete(request).task.status).toBe('completed');
+    expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases').get()?.n).toBe(0);
+    expect(db.prepare('SELECT creator_id FROM archive_catalog_collections').get()?.creator_id).toBe(id);
+  });
+
+  it.each(['other-owner','ambiguous-alias','bound-conflict','missing-tag','multiple-tags','tag-mismatch','incomplete-directory','mixed-directory','substring','three-names','empty-name','duplicate-name'])('rejects unsafe dual-name evidence without writes: %s', mode => {
+    let titleName=`旧名称/${name}`;
+    const proof=evidence();
+    proof.resourceDirectoryText=rawDirectory('旧名称');
+    proof.identityEvidence.creatorTags[0].name='旧名称';
+    if(['other-owner','ambiguous-alias','bound-conflict'].includes(mode)) {
+      creator(62,'另一位博主',0); alias(62,'旧名称');
+      if(mode==='ambiguous-alias') alias(id,'旧名称');
+      if(mode==='bound-conflict') bind();
+    }
+    if(mode==='missing-tag') proof.identityEvidence.creatorTags=[];
+    if(mode==='multiple-tags') proof.identityEvidence.creatorTags.push({name,url:'https://www.costuan.com/tag/562'});
+    if(mode==='tag-mismatch') proof.identityEvidence.creatorTags[0].name='未核实名';
+    if(mode==='incomplete-directory') proof.resourceDirectoryText=rawDirectory('旧名称').split('\n').slice(0,2).join('\n');
+    if(mode==='mixed-directory') proof.resourceDirectoryText=rawDirectory('旧名称').replace('旧名称 NO.003',`${name} NO.003`);
+    if(mode==='substring') titleName=`旧名称/前缀${name}`;
+    if(mode==='three-names') titleName+= '/第三名称';
+    if(mode==='empty-name') titleName=`/${name}`;
+    if(mode==='duplicate-name') titleName=`${name}/${name}`;
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,articleTitle(titleName),proof));
+  });
+
   it('carries the same evidence through read-only preflight, full directory validation and final completion without learning a global alias', () => {
     const {service, task, proof, request} = claimedRecord();
     const before = snapshot();

@@ -626,6 +626,16 @@ export class ArchiveCatalogService {
     }
     if(matches.length>1) fail(`名称存在歧义：标题“${alias}”对应 ${describe(matches)}`);
     if(matches.length===1 && matches[0]!==expectedCreatorId) fail(`标题身份不一致：“${alias}”对应 ${describe(matches)}`);
+    // A slash is a candidate dual-name relation, never a substring match.
+    // Check each component even when the full title or source is already bound.
+    const dualNames = alias?.normalize('NFKC').includes('/') ? alias.normalize('NFKC').split('/').map(name=>name.trim()) : null;
+    const dualMatches = dualNames?.map(name=>this.findCreatorIdsByAliases([name])) ?? [];
+    if (dualNames && (dualNames.length!==2 || dualNames.some(name=>!normalizeCreatorIdentity(name))
+      || new Set(dualNames.map(normalizeCreatorIdentity)).size!==2)) fail('双名称标题格式不明确：仅支持两个不同的完整名称');
+    for (let index=0;index<dualMatches.length;index++) {
+      const ids=dualMatches[index];
+      if(ids.length>1 || ids.some(id=>id!==expectedCreatorId)) fail(`双名称身份冲突或歧义：“${dualNames![index]}”对应 ${describe(ids)}`);
+    }
     const evidence=input.identityEvidence===undefined ? null : checkedIdentityEvidence(input.identityEvidence,postId);
     // Known contradictory identities veto even an old binding or exact title.
     // Unrecognized supplemental names are not implicitly registered as aliases.
@@ -635,6 +645,15 @@ export class ArchiveCatalogService {
       if(ids.length>1 || ids.some(id=>id!==expectedCreatorId)) fail(`页面身份冲突或歧义：“${name}”对应 ${describe(ids)}`);
     }
     const result=(method:CostuanIdentityVerification['method'],message:string):CostuanIdentityVerification=>({method,creatorId:expectedCreatorId,postId,titleName:alias,message});
+    if(dualNames) {
+      if(!dualMatches.some(ids=>ids.length===1 && ids[0]===expectedCreatorId)) return fail('双名称证据不足：标题须包含当前博主唯一对应的完整规范名称或已登记别名');
+      if(!evidence || evidence.creatorTags.length!==1) return fail('双名称证据不足：缺少本篇文章唯一的博主标签');
+      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title), tag=evidence.creatorTags[0];
+      const directoryIdentity=normalizeCreatorIdentity(directoryName);
+      if(!dualNames.some(name=>normalizeCreatorIdentity(name)===directoryIdentity)
+        || normalizeCreatorIdentity(tag.name)!==directoryIdentity) return fail('双名称证据不一致：完整目录与本篇标签须一致，且对应标题中的一个完整名称');
+      return {...result('title-directory-tags',`双名称已核验：标题“${alias}”、完整目录“${directoryName}”及本篇标签“${tag.name}”唯一对应 ${target}；未新增通用别名。`),directoryName,tagNames:[tag.name]};
+    }
     if(owners.length) return result('bound-source',`沿用 Costuan #${postId} 与 ${target} 的已确认归属。`);
     if(matches.length===1) return result('exact-name',`标题名称“${alias}”唯一对应 ${target}。`);
     if(!alias) return fail('标题无法解析：未从合集标题取得明确博主名称');
