@@ -31,10 +31,23 @@ describe('managed roster UI',()=>{
     for(const fn of [api.createManagedCreator,api.updateManagedCreator,api.addManagedAlias,api.deleteManagedAlias,api.setManagedCreatorActive,api.linkManagedFolder]) vi.mocked(fn).mockResolvedValue(structuredClone(creator));
     vi.mocked(api.unlinkManagedFolder).mockResolvedValue({folderId:11,creatorId:null});
   });
+  it('opens the ledger without management forms or writes',async()=>{
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    expect(w.get('.creator-card').text()).toContain('平台作品');
+    expect(w.get('.creator-card').text()).toContain('已关联');
+    await button(w,'查看账本').trigger('click');await flushPromises();
+    expect(w.get('dialog').text()).toContain('作品账本');
+    expect(w.find('.roster-edit').exists()).toBe(false);
+    expect(w.get('dialog').text()).not.toContain('添加别名');
+    expect(api.updateManagedCreator).not.toHaveBeenCalled();
+    await button(w,'关闭').trigger('click');
+    await button(w,'管理资料').trigger('click');await flushPromises();
+    expect(w.find('.roster-edit').exists()).toBe(true);
+  });
   it('uses paging and immediate combined filters, not an all-roster render',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();
     expect(fetchArchiveCatalog).toHaveBeenCalledWith(expect.objectContaining({page:1,limit:50,active:'active'}));
-    expect(w.findAll('tbody tr')).toHaveLength(1);expect(w.text()).toContain('593');
+    expect(w.findAll('.creator-card')).toHaveLength(1);expect(w.text()).toContain('593');
     const filters=w.get('.roster-filters');await filters.get('input').setValue('alias');
     await filters.findAll('select')[0].setValue('unset');await filters.findAll('select')[1].setValue('unclassified');
     await filters.findAll('select')[2].setValue('inactive');await filters.trigger('submit');await flushPromises();
@@ -74,7 +87,7 @@ describe('managed roster UI',()=>{
       collections:[{id:20,source:'costuan',sourceCollectionId:'20',title:'Alpha collection',url:'https://www.costuan.com/20.html',declaredWorkCount:2,observedAt:'2026-09-01T00:00:00Z',deliveries:[{provider:'baidu',type:'share',status:'verified',sourceFolderName:'020',destinationPath:'/cos待入库/Alpha',transferredAt:null}]}],
       missing:[{workId:30,source:'costuan',sourceCollectionId:'20',sourceOrder:2,sourceOrderLabel:'NO.002',title:'Second work'}],
       unresolved:[{folderName:'Uncertain album',relativePath:'Alpha/Uncertain album',parsedSourceOrder:null,status:'ambiguous'}]});
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
     expect(w.text()).toContain('Alpha collection');expect(w.text()).toContain('NO.002 · Second work');expect(w.text()).toContain('Alpha/Uncertain album');expect(w.text()).toContain('匹配存在歧义');
     expect(w.get('a[href="https://www.costuan.com/20.html"]').attributes('rel')).toContain('noopener');
     expect(w.emitted('plan-downloads')).toBeUndefined();expect(api.updateManagedCreator).not.toHaveBeenCalled();
@@ -132,12 +145,12 @@ describe('managed roster UI',()=>{
     pending[0]!.resolve({...payload,total:100,items:[{...creator,name:'Old'}]});await flushPromises();
     expect(button(w,'下一页').attributes('disabled')).toBeDefined();
     pending[1]!.resolve({...payload,total:7,items:[{...creator,name:'Newest'}]});await flushPromises();
-    expect(w.get('tbody').text()).toContain('Newest');expect(w.get('.roster-paging').text()).toContain('筛选结果 7 位');
+    expect(w.get('.creator-cards').text()).toContain('Newest');expect(w.get('.roster-paging').text()).toContain('筛选结果 7 位');
     await w.get('.roster-filters select').setValue('kept');
     await w.get('.roster-filters select').setValue('unset');
     pending[3]!.resolve({...payload,total:2,items:[{...creator,name:'Final'}]});await flushPromises();
     pending[2]!.reject(new Error('stale error'));await flushPromises();
-    expect(w.get('tbody').text()).toContain('Final');expect(w.get('.roster-paging').text()).toContain('筛选结果 2 位');
+    expect(w.get('.creator-cards').text()).toContain('Final');expect(w.get('.roster-paging').text()).toContain('筛选结果 2 位');
     expect(w.text()).not.toContain('stale error');expect(button(w,'下一页').attributes('disabled')).toBeUndefined();
   });
   it('creates a nullable creator only on explicit save and prevents duplicate submissions',async()=>{
@@ -152,7 +165,7 @@ describe('managed roster UI',()=>{
   });
   it('keeps dialog edits pending until explicit save',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();
-    await button(w,'管理').trigger('click');await flushPromises();
+    await button(w,'管理资料').trigger('click');await flushPromises();
     const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
     await w.get('.roster-edit input').setValue('Renamed');
     await w.get('.roster-edit select').setValue('kept');await flushPromises();
@@ -171,7 +184,7 @@ describe('managed roster UI',()=>{
     expect(api.createManagedCreator).toHaveBeenLastCalledWith(expect.objectContaining({confirmDistinct:true}));
   });
   it('keeps historical sources readonly, supports aliases and explicit directory linking',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
     expect(w.text()).not.toContain('历史种子');expect(w.text()).not.toContain('已退役');
     expect(w.text()).toContain('稳定 ID #1 · 启用');expect(w.text()).toContain('暂无其他别名');
     expect(w.text()).toContain('暂无作品来源');expect(w.findAll('button').some(b=>b.text()==='删除别名')).toBe(false);
@@ -187,7 +200,7 @@ describe('managed roster UI',()=>{
     value.sources.push({source:'costuan',sourceCreatorId:'collection:588',displayName:'Alpha',url:'https://www.costuan.com/588.html',firstSeenAt:'first',lastSeenAt:'last'});
     vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(value);
     const before=JSON.stringify(value);
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
     expect(w.get('.current-sources').text()).toContain('Costuan');
     expect(w.get('.current-sources').text()).not.toContain('historical');
     expect(w.get('.current-sources a').attributes('href')).toBe('https://www.costuan.com/588.html');
@@ -211,7 +224,7 @@ describe('managed roster UI',()=>{
     };
     vi.mocked(api.fetchIngestDestination).mockResolvedValueOnce(structuredClone(multiple));
     vi.mocked(api.setIngestDestination).mockResolvedValueOnce(structuredClone(explicit)).mockResolvedValueOnce(structuredClone(multiple));
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
     const destinationForm=w.findAll('.inline-form')[2]!;
     await destinationForm.get('select').setValue('1004');
     await destinationForm.trigger('submit');await flushPromises();
@@ -225,7 +238,7 @@ describe('managed roster UI',()=>{
     expect(api.setIngestDestination).toHaveBeenLastCalledWith(1,null);
   });
   it('shows impact before deactivation and never queues work on restore',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理').trigger('click');await flushPromises();
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
     await button(w,'停用').trigger('click');expect(api.setManagedCreatorActive).not.toHaveBeenCalled();expect(w.text()).toContain('未完成下载任务 0');
     vi.mocked(api.setManagedCreatorActive).mockResolvedValueOnce({...creator,isActive:false});
     await button(w,'确认变更').trigger('click');await flushPromises();expect(api.setManagedCreatorActive).toHaveBeenCalledWith(1,false);

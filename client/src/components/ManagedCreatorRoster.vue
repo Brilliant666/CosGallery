@@ -23,16 +23,18 @@
     </form>
     <p v-if="error && !dialogOpen" role="alert" class="error">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
-    <div class="roster-table">
-      <table><thead><tr><th>ID / 博主</th><th>偏好</th><th>分级</th><th>状态</th><th>别名 / 来源记录</th><th>本地 / 来源 / 缺失作品</th><th>更新</th><th>管理</th></tr></thead>
-        <tbody><tr v-for="creator in payload?.items" :key="creator.id">
-          <td><small>#{{ creator.id }}</small><strong>{{ creator.name }}</strong></td>
-          <td>{{ preferenceLabel(creator.preference) }}</td><td>{{ creator.rating ?? '待分类' }}</td>
-          <td>{{ creator.isActive ? '启用' : '停用' }}</td><td>{{ creator.aliasCount }} / {{ creator.sourceCount }}</td>
-          <td>{{ creator.localWorks }} / {{ creator.remoteWorks }} / {{ creator.missingWorks }} 套<small>关联目录 {{ creator.localFolderCount }} · 待核查 {{ creator.unresolvedLocalWorks }} 套</small></td><td>{{ creator.updatedAt.slice(0, 10) }}</td>
-          <td><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理</button></td>
-        </tr></tbody>
-      </table>
+    <div class="creator-cards" aria-label="博主账本列表">
+      <article v-for="creator in payload?.items" :key="creator.id" class="creator-card">
+        <div class="card-identity">
+          <div class="card-name"><strong>{{ creator.name }}</strong><span class="badge" :class="creator.preference">{{ preferenceLabel(creator.preference) }}</span><span class="badge rating" :class="creator.rating">{{ creator.rating ?? '待分类' }}</span><small v-if="!creator.isActive">已停用</small></div>
+          <p>{{ creator.sourceCollections }} 个资源合集 · {{ ledgerStatus(creator) }}</p>
+        </div>
+        <div class="card-metric"><small>平台作品</small><strong>{{ creator.remoteWorks }}</strong></div>
+        <div class="card-metric"><small>本地作品</small><strong>{{ creator.localWorks }}</strong></div>
+        <div class="card-metric"><small>已关联</small><strong>{{ creator.matchedWorks }}</strong></div>
+        <div class="card-metric" :class="{missing:creator.missingWorks > 0}"><small>待收录</small><strong>{{ creator.missingWorks }}</strong></div>
+        <div class="card-actions"><button type="button" @click="openCreator(creator.id, 'ledger')">查看账本</button><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理资料</button></div>
+      </article>
     </div>
     <p v-if="payload && !payload.items.length">没有符合条件的博主。</p>
     <footer class="roster-paging">
@@ -42,7 +44,7 @@
     </footer>
 
     <dialog ref="dialog" class="roster-dialog" aria-labelledby="roster-dialog-title" @close="dialogOpen = false" @cancel="cancelDialog">
-      <div class="roster-heading"><h2 id="roster-dialog-title">{{ detail ? `管理 ${detail.name}` : '新增博主' }}</h2><button :disabled="busy" @click="closeDialog">关闭</button></div>
+      <div class="roster-heading"><h2 id="roster-dialog-title">{{ detail ? `${dialogMode === 'ledger' ? '账本' : '管理'} ${detail.name}` : '新增博主' }}</h2><button :disabled="busy" @click="closeDialog">关闭</button></div>
       <p v-if="detail" class="hint">稳定 ID #{{ detail.id }} · {{ detail.isActive ? '启用' : '停用' }} · 改名不移动本地目录</p>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <aside v-if="candidates.length" class="collision">
@@ -50,7 +52,7 @@
         <button v-for="candidate in candidates" :key="candidate.id" :disabled="busy" @click="openCreator(candidate.id)">#{{ candidate.id }} {{ candidate.name }}</button>
         <label><input v-model="draft.confirmDistinct" type="checkbox" />我已核对，这是不同的人，允许同名</label>
       </aside>
-      <form class="roster-edit" @submit.prevent="save">
+      <form v-if="dialogMode === 'manage'" class="roster-edit" @submit.prevent="save">
         <label>主名称<input v-model="draft.name" required maxlength="255" :disabled="busy" /></label>
         <label>偏好<select v-model="draft.preference" :disabled="busy"><option :value="null">未设置</option><option value="liked">喜欢</option><option value="kept">保留</option></select></label>
         <label>博主分级<select v-model="draft.rating" :disabled="busy"><option :value="null">待分类</option><option>R15</option><option>R18</option></select></label>
@@ -79,6 +81,7 @@
             <ul class="source-list"><li v-for="(folder, index) in detail.unresolved" :key="`${folder.relativePath}:${index}`"><strong>{{ folder.folderName }}</strong><small>{{ folder.relativePath }} · {{ folder.status === 'ambiguous' ? '匹配存在歧义' : '尚未匹配' }} · 解析编号 {{ folder.parsedSourceOrder ?? '未知' }}</small></li></ul>
           </details>
         </section>
+        <template v-if="dialogMode === 'manage'">
         <section><h3>Stage 1 检查来源与补齐缺失</h3><FirstCollectionSelector :creator="detail" :disabled="busy || !detail.isActive" @planned="handleSourcePlanned" /></section>
         <section><h3>别名</h3>
           <p v-if="!visibleAliases.length" class="hint">暂无其他别名。</p>
@@ -122,6 +125,7 @@
           <p>{{ pendingAction.kind === 'unlink' ? '确认解除此目录与博主的关联？文件和已有作品关系不会删除。' : `确认${detail.isActive ? '停用' : '恢复'}博主？不会修改既有任务。` }}</p>
           <button class="primary" :disabled="busy" @click="confirmAction">确认变更</button><button :disabled="busy" @click="pendingAction = null">取消</button>
         </aside>
+        </template>
       </template>
     </dialog>
   </section>
@@ -140,6 +144,8 @@ const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
 const detail = ref<ArchiveCatalogCreatorDetail | null>(null);
 const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no', state:'' as ''|ArchiveCatalogState });
 const page = ref(1), loading = ref(false), busy = ref(false), error = ref(''), notice = ref('');
+const dialogMode = ref<'ledger'|'manage'>('manage');
+const ledgerStatus = (creator: {remoteWorks:number;localWorks:number;missingWorks:number;unresolvedLocalWorks:number}) => creator.unresolvedLocalWorks > 0 ? '待核查' : creator.remoteWorks === 0 ? '尚未接入资源' : creator.localWorks === 0 ? '尚未入库' : creator.missingWorks > 0 ? `有 ${creator.missingWorks} 套待收录` : '已完整关联';
 const dialog = ref<HTMLDialogElement | null>(null), dialogOpen = ref(false);
 const draft = reactive<api.ManagedCreatorInput>({ name:'', preference:null, rating:null, confirmDistinct:false });
 const aliasDraft = ref(''), folderDraft = ref<number|null>(null);
@@ -237,15 +243,17 @@ function setDetail(value:ArchiveCatalogCreatorDetail) {
   candidates.value = []; pendingAction.value = null;
 }
 function openNew() {
+  dialogMode.value = 'manage';
   detail.value = null; ingestDestination.value = null; preferredFolderDraft.value = null; error.value = ''; candidates.value = []; notice.value = '';
   Object.assign(draft,{name:'',preference:null,rating:null,confirmDistinct:false});
   showDialog();
 }
-async function openCreator(id:number) {
+async function openCreator(id:number, mode:'ledger'|'manage' = 'manage') {
   if (busy.value) return;
   error.value = ''; candidates.value = []; pendingAction.value = null; aliasDraft.value = ''; folderDraft.value = null;
   try {
     const [creator, destination] = await Promise.all([fetchArchiveCatalogCreator(id), api.fetchIngestDestination(id)]);
+    dialogMode.value = mode;
     setDetail(creator);
     ingestDestination.value = destination;
     preferredFolderDraft.value = destination.preferredLocalCreatorFolderId;
@@ -309,11 +317,12 @@ h2,h3,p{margin:0} h2{font-size:1.2rem;font-weight:650} h3{font-size:1rem;font-we
 .roster-counts{display:flex;flex-wrap:wrap;gap:.65rem 1.4rem;margin-bottom:1rem;font-size:.8rem}.roster-filters{display:flex;flex-wrap:wrap;align-items:end;gap:.6rem;margin-bottom:1rem}
 label{display:grid;gap:.3rem;font-size:.8rem}input,select,button{font:inherit}input:not([type=checkbox]),select{min-width:0;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:.5rem;padding:.6rem;width:100%}
 .search{flex:1 1 13rem}button{border:1px solid var(--border);border-radius:.5rem;background:var(--surface);color:var(--text);padding:.55rem .85rem;cursor:pointer;white-space:nowrap}button.primary{background:var(--accent);color:white;border-color:var(--accent)}button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.roster-table{overflow:auto}table{width:100%;border-collapse:collapse;min-width:55rem;font-size:.85rem}th,td{padding:.7rem .5rem;text-align:left;border-bottom:1px solid var(--border)}th{color:var(--muted);font-size:.75rem}td strong,td small{display:block}
 .roster-paging{display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:1rem;margin-top:1rem;font-size:.8rem}
 .roster-dialog{margin:auto;width:min(48rem,calc(100vw - 2rem));max-height:90vh;overflow:auto;padding:1.4rem;border:1px solid var(--border);border-radius:1rem;background:var(--surface);color:var(--text)}.roster-dialog::backdrop{background:#0007}.roster-dialog section{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)}
 .roster-edit{display:grid;grid-template-columns:2fr 1fr 1fr;gap:.8rem;margin-top:1rem;align-items:end}.roster-edit button{grid-column:1/-1}.alias-list,.source-list{list-style:none;padding:0;margin:0;display:grid;gap:.6rem}.alias-list li{display:flex;align-items:center;justify-content:space-between;gap:1rem;overflow-wrap:anywhere}.source-list small{display:block;overflow-wrap:anywhere}a{color:var(--accent)}
 .inline-form{display:flex;align-items:end;gap:.6rem;margin-top:1rem}.inline-form label{flex:1}.error{background:#fee2e2;color:#991b1b;padding:.7rem;border-radius:.5rem;margin:.7rem 0}.collision{background:var(--bg);border:1px solid var(--border);padding:1rem;margin:1rem 0;border-radius:.5rem}.collision button{margin:.4rem .4rem .4rem 0}.collision label{display:flex;align-items:center}.state-controls p{font-size:.85rem;margin-bottom:.65rem}
 .ledger-detail{margin-top:.8rem;padding:.7rem;border:1px solid var(--border);border-radius:.5rem;overflow-wrap:anywhere}.ledger-detail summary{cursor:pointer;font-weight:600}.ledger-detail .source-list{margin-top:.7rem}.ledger-detail li{padding:.5rem 0;border-bottom:1px solid var(--border)}
 @media(max-width:640px){.roster{padding:.8rem}.roster-edit{grid-template-columns:1fr}.roster-heading{align-items:start}.roster-dialog{padding:1rem}.roster-filters label{flex:1 1 8rem}.roster-filters .search{flex-basis:100%}}
+.creator-cards{display:grid;gap:1rem;margin-top:1.2rem}.creator-card{display:grid;grid-template-columns:minmax(15rem,2.5fr) repeat(4,minmax(4rem,.65fr)) auto;align-items:center;gap:1rem;padding:1.3rem;border:1px solid var(--border);border-radius:1rem;background:var(--surface);box-shadow:0 2px 3px #00000012}.card-name{display:flex;align-items:center;flex-wrap:wrap;gap:.5rem}.card-identity p{margin:.5rem 0 0;color:var(--muted);font-size:.8rem}.badge{border-radius:1rem;background:var(--bg);padding:.2rem .5rem;font-size:.7rem;font-weight:700}.badge.liked{background:#fee2e2;color:#dc2626}.badge.kept{background:#fef3c7;color:#92400e}.badge.rating{background:#6b7280;color:white}.badge.R15{background:#55718f}.badge.R18{background:#b72d45}.card-metric small{display:block;color:var(--muted);font-size:.75rem}.card-metric strong{display:block;margin-top:.3rem;font-size:1.15rem}.card-metric.missing strong{color:#d97706}.card-actions{display:flex;flex-wrap:wrap;gap:.5rem}.card-identity{min-width:0;overflow-wrap:anywhere}
+@media(max-width:1100px){.creator-card{grid-template-columns:repeat(4,minmax(0,1fr))}.card-identity{grid-column:1/-1}.card-actions{grid-column:1/-1;justify-content:flex-end}}
 </style>
