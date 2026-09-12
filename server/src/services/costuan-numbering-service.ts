@@ -107,9 +107,10 @@ function specialMatch(value: string): ParsedCostuanNumbering | null {
 }
 
 function legacyNumericMatch(value: string): ParsedCostuanNumbering | null {
+  const dotted = /^(\d{3})\.\s*(?=[^\d\s./\\-])/u.exec(value);
   const leading = /^(\d{3,4})(?=[^\d.\/-])/u.exec(value);
   const implicit = /(?:^|[\s_\-–—])(\d{3,4})(?=\s|[《【\[(])/u.exec(value);
-  const match = leading ?? implicit;
+  const match = dotted ?? leading ?? implicit;
   if (!match) return null;
   const order = Number(match[1]);
   if (!Number.isInteger(order) || order < 0) return null;
@@ -122,8 +123,8 @@ function legacyNumericMatch(value: string): ParsedCostuanNumbering | null {
     rawLabel: match[1],
     qualifier: null,
     start,
-    end: start + match[1].length,
-    style: leading ? 'leading' : 'implicit'
+    end: dotted ? match[0].length : start + match[1].length,
+    style: !dotted && leading ? 'leading' : 'implicit'
   };
 }
 
