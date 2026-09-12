@@ -70,7 +70,7 @@ describe('managed roster UI',()=>{
     await button(w,'重置筛选').trigger('click');await flushPromises();
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count+1);
     expect(fetchArchiveCatalog).toHaveBeenLastCalledWith({page:1,limit:50,query:'',active:'active',preference:undefined,rating:undefined,hasLocal:undefined,hasSource:undefined,state:undefined});
-    expect(w.text()).toContain('全库总数');expect(w.text()).toContain('筛选结果');
+    expect(w.text()).toContain('筛选结果');
   });
   it('preserves the ledger state filters in the unified roster',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();

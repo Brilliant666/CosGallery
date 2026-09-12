@@ -13,15 +13,16 @@
     <nav aria-label="账本工作区" class="mb-5 flex flex-wrap gap-2">
       <button v-for="tab in workspaces" :key="tab.id" type="button" :data-test="'workspace-'+tab.id" :aria-pressed="workspace === tab.id" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="workspace === tab.id ? 'bg-accent text-white border-accent' : 'bg-surface border-border'" @click="workspace = tab.id">{{ tab.label }}</button>
     </nav>
-    <div v-show="workspace === 'roster'"><ManagedCreatorRoster @changed="loadCatalog()" @source-planned="refreshSourceRegions" @plan-downloads="planCreatorDownloads" /></div>
 
     <div v-if="summary" v-show="workspace === 'roster'" class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6" aria-label="账本概览">
       <article v-for="card in summaryCards" :key="card.label" class="rounded-2xl border border-border bg-surface p-4 shadow-sm">
         <p class="m-0 text-xs font-semibold text-muted">{{ card.label }}</p>
-        <strong class="mt-2 block text-2xl tracking-[-0.04em]">{{ formatCount(card.value) }}</strong>
+        <strong class="mt-2 block text-2xl tracking-[-0.04em]">{{ typeof card.value === 'number' ? formatCount(card.value) : card.value }}</strong>
         <small class="mt-1 block text-xs leading-5 text-muted">{{ card.note }}</small>
       </article>
     </div>
+
+    <div v-show="workspace === 'roster'"><ManagedCreatorRoster @changed="loadCatalog()" @source-planned="refreshSourceRegions" @plan-downloads="planCreatorDownloads" /></div>
 
     <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="博主元数据采集队列" v-show="workspace === 'source'">
       <div class="flex flex-wrap items-start justify-between gap-4">
@@ -415,11 +416,11 @@ const inboxExistingJobCount = computed(() => {
 });
 
 const summaryCards = computed(() => summary.value ? [
-  { label: '全库博主', value: summary.value.creators, note: '全局账本统计，不随名单筛选变化' },
-  { label: '内容分级', value: summary.value.r18, note: `R18 ${summary.value.r18} · R15 ${summary.value.r15}` },
+  { label: '全库博主', value: summary.value.creators, note: `启用 ${summary.value.activeCreators} · 停用 ${summary.value.inactiveCreators} · 喜欢 ${summary.value.liked} · 保留 ${summary.value.kept} · 未设置 ${summary.value.unsetPreference}；全局统计，不随名单筛选变化` },
+  { label: '内容分级', value: `R15 ${summary.value.r15} / R18 ${summary.value.r18}`, note: `待分类 ${summary.value.unclassified}` },
   { label: '有来源的博主', value: summary.value.creatorsWithSources, note: `${summary.value.sourceCollections} 个资源合集` },
   { label: '平台作品', value: summary.value.remoteWorks, note: '当前资源平台已记录' },
-  { label: '本地作品', value: summary.value.localWorks, note: `${summary.value.matchedWorks} 套已关联` },
+  { label: '本地作品', value: summary.value.localWorks, note: `${summary.value.matchedWorks} 套已关联 · 有本地作品 ${summary.value.creatorsWithLocalWorks} 位 / 无本地作品 ${summary.value.creatorsWithoutLocalWorks} 位 · 未关联目录 ${summary.value.unlinkedLocalFolders}` },
   { label: '待收录作品', value: summary.value.missingWorks, note: `${summary.value.unresolvedLocalWorks} 套待核查` }
 ] : []);
 

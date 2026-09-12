@@ -4,13 +4,6 @@
       <div><h2>博主库</h2><p>统一维护博主 ID、名称与分类。来源平台只补充作品信息。</p></div>
       <button type="button" class="primary" @click="openNew">新增博主</button>
     </header>
-    <div v-if="payload" class="roster-counts" aria-label="博主库统计">
-      <span>全库总数 <b>{{ payload.summary.creators }}</b></span>
-      <span>启用 {{ payload.summary.activeCreators }} / 停用 {{ payload.summary.inactiveCreators }}</span>
-      <span>喜欢 {{ payload.summary.liked }} / 保留 {{ payload.summary.kept }} / 未设置 {{ payload.summary.unsetPreference }}</span>
-      <span>R15 {{ payload.summary.r15 }} / R18 {{ payload.summary.r18 }} / 待分类 {{ payload.summary.unclassified }}</span>
-      <span>有本地作品 {{ payload.summary.creatorsWithLocalWorks }} / 无本地作品 {{ payload.summary.creatorsWithoutLocalWorks }} / 未关联本地目录 {{ payload.summary.unlinkedLocalFolders }}</span>
-    </div>
     <form class="roster-filters" @submit.prevent="search" @change="onFilterChange">
       <label class="search">搜索名称或别名<input :value="filters.query" type="search" placeholder="名称或别名" @input="onQueryInput" @compositionstart="startComposition" @compositionend="endComposition" @keydown.enter="onEnter" /></label>
       <label>偏好<select v-model="filters.preference"><option value="">全部偏好</option><option value="liked">喜欢</option><option value="kept">保留</option><option value="unset">未设置</option></select></label>
