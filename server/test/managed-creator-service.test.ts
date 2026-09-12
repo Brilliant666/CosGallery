@@ -35,6 +35,14 @@ describe('managed creator canonical ownership', () => {
     expect(query.getCreatorDetail(creator.id)?.sources.some(s=>s.source==='hentaiclub')).toBe(true);
     expect(rows('archive_catalog_creator_sources')+rows('archive_catalog_creator_aliases')).toBe(before);
   });
+  it('never stores collection title fragments as Costuan aliases while retaining real alternate names', () => {
+    const creator=service.create({name:'菌烨tako'});
+    const result=new ArchiveCatalogService(db).importCostuanRecord({creatorName:'菌烨tako',aliases:['菌烨tako写真图片包合集[42套][','菌烨'],costuan:{postId:'411',title:'菌烨tako写真图片包合集[42套][Cosplay][持续更新]',works:[{order:1,sourceOrder:'NO.001',label:'Test'}]},baidu:{sourceFolderName:'130',destinationPath:'test',status:'saved'}});
+    expect(result.matchedCreators).toBe(1);
+    const aliases=query.getCreatorDetail(creator.id)!.aliases.map(a=>a.alias);
+    expect(aliases).toContain('菌烨');
+    expect(aliases.some(a=>a.includes('合集'))).toBe(false);
+  });
   it('creates stable manual IDs without files or tasks and persists nullable independent fields', () => {
     const creator=service.create({name:'  Ａlice  ',preference:'kept',rating:null});
     expect(creator).toMatchObject({name:'Alice',preference:'kept',rating:null,isActive:true,seedSource:'manual'});

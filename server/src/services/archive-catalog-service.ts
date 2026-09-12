@@ -215,6 +215,12 @@ function collectionCreatorAlias(title: string): string | null {
   return parseCostuanCollectionCreator(title);
 }
 
+// Collection labels (including truncated old parser output) are not personal names.
+function isCollectionLabel(alias: string): boolean {
+  return /(?:写真|图片|图集|cosplay).*合集\s*[\[【]\s*\d+\s*套/iu.test(alias)
+    || /合集\s*[\[【]\s*\d+\s*套.*持续更新/iu.test(alias);
+}
+
 function sha256(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex');
 }
@@ -679,7 +685,7 @@ export class ArchiveCatalogService {
           ...record.aliases,
           record.local?.folderName ?? '',
           titleAlias ?? ''
-        ].filter(Boolean);
+        ].filter(name => Boolean(name) && !isCollectionLabel(name));
         // Persistent platform identity wins over later display-name changes.
         // A disagreement between existing identities is quarantined as unmatched.
         const owners = this.database.prepare(`SELECT creator_id FROM archive_catalog_creator_sources
@@ -1306,6 +1312,7 @@ export class ArchiveCatalogService {
   }
 
   private upsertAlias(creatorId: number, alias: string, source: string): void {
+    if (source === 'costuan' && isCollectionLabel(alias)) return;
     const normalized = normalizeCreatorIdentity(alias);
     if (!normalized) return;
     this.database.prepare(
