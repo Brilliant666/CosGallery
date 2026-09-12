@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { databaseManager } from '../db/database.js';
 import {directShareMetadata,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
+import { preserveDownloadStagedAt, recordDownloadStagedAt } from './archive-download-activity.js';
 
 export type ArchiveDownloadTaskStatus =
   | 'pending'
@@ -330,7 +331,10 @@ export class ArchiveDownloadTaskService {
     const creatorFilter = creatorIds === null
       ? ''
       : `AND works.creator_id IN (${creatorIds.map(() => '?').join(', ')})`;
-    const result = this.database.prepare(
+    this.database.exec('SAVEPOINT reconcile_download_activity');
+    try {
+      preserveDownloadStagedAt(this.database, { provider, creatorIds });
+      const result = this.database.prepare(
       `UPDATE archive_catalog_download_tasks
        SET status = 'ingested', completed_at = COALESCE(completed_at, ?), updated_at = ?,
            claimed_by = NULL, claimed_at = NULL, last_error = NULL
@@ -349,7 +353,12 @@ export class ArchiveDownloadTaskService {
               ${creatorFilter}
           )`
     ).run(timestamp, timestamp, provider, ...(creatorIds ?? []));
-    return Number(result.changes ?? 0);
+      this.database.exec('RELEASE reconcile_download_activity');
+      return Number(result.changes ?? 0);
+    } catch (error) {
+      this.database.exec('ROLLBACK TO reconcile_download_activity; RELEASE reconcile_download_activity');
+      throw error;
+    }
   }
 
   private removeOutOfScopeTasks(provider: string, creatorIds: number[] | null = null): number {
@@ -577,7 +586,10 @@ export class ArchiveDownloadTaskService {
     const timestamp = nowIso();
     const startedAt = patch.status === 'downloading' && !current.startedAt ? timestamp : current.startedAt;
     const completedAt = ['downloaded', 'ingested'].includes(patch.status) ? timestamp : null;
-    this.database.prepare(
+    this.database.exec('SAVEPOINT update_download_activity');
+    try {
+      preserveDownloadStagedAt(this.database, { taskId: id });
+      this.database.prepare(
       `UPDATE archive_catalog_download_tasks
        SET status = ?, download_id = COALESCE(?, download_id), last_error = ?,
            started_at = ?, completed_at = ?, updated_at = ?
@@ -591,6 +603,14 @@ export class ArchiveDownloadTaskService {
       timestamp,
       id
     );
+      if (patch.status === 'staged' && current.status !== 'staged') {
+        recordDownloadStagedAt(this.database, id, timestamp);
+      }
+      this.database.exec('RELEASE update_download_activity');
+    } catch (error) {
+      this.database.exec('ROLLBACK TO update_download_activity; RELEASE update_download_activity');
+      throw error;
+    }
     return this.get(id);
   }
 

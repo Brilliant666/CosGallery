@@ -608,6 +608,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('confirms a stable exact local handoff in one scan operation and advances only staged tasks', async () => {
     fixture = await createFixture();
+    const stagedAt = fixture.database.prepare('SELECT updated_at FROM archive_catalog_download_tasks WHERE id=1').get()!.updated_at;
     const discovery = await fixture.service.scanInboxWithStableRecheck();
     expect(discovery).toMatchObject({
       discoveredCreators: 1,
@@ -618,6 +619,8 @@ describe.sequential('LocalIngestService', () => {
     });
     expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
       .toEqual({ status: 'downloaded' });
+    expect(fixture.database.prepare("SELECT value FROM app_settings WHERE key='archive.download-task.staged-at.1'").get())
+      .toEqual({ value: stagedAt });
 
     const repeated = await fixture.service.scanInboxWithStableRecheck();
     expect(repeated).toMatchObject({ existingJobs: 1, reconciledDownloadedTasks: 0 });
@@ -625,6 +628,8 @@ describe.sequential('LocalIngestService', () => {
     await fixture.service.scanInboxWithStableRecheck();
     expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
       .toEqual({ status: 'ingested' });
+    expect(fixture.database.prepare("SELECT value FROM app_settings WHERE key='archive.download-task.staged-at.1'").get())
+      .toEqual({ value: stagedAt });
   }, 60_000);
 
   it.runIf(process.platform === 'win32')('keeps unstable, unmapped, ambiguous, and cancelled handoffs out of downloaded', async () => {
@@ -673,6 +678,8 @@ describe.sequential('LocalIngestService', () => {
        END`
     );
     await expect(fixture.service.scanInboxWithStableRecheck()).rejects.toThrow(/synthetic handoff failure/i);
+    expect(fixture.database.prepare("SELECT value FROM app_settings WHERE key='archive.download-task.staged-at.1'").get())
+      .toBeUndefined();
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 0 });
     expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
       .toEqual({ status: 'staged' });

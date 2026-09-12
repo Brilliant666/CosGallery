@@ -22,7 +22,7 @@
       </article>
     </div>
 
-    <div v-show="workspace === 'roster'"><ManagedCreatorRoster @changed="loadCatalog()" @source-planned="refreshSourceRegions" @plan-downloads="planCreatorDownloads" /></div>
+    <div v-show="workspace === 'roster'"><ManagedCreatorRoster ref="managedRoster" @changed="loadCatalog()" @source-planned="refreshSourceRegions" @plan-downloads="planCreatorDownloads" /></div>
 
     <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="博主元数据采集队列" v-show="workspace === 'source'">
       <div class="flex flex-wrap items-start justify-between gap-4">
@@ -326,6 +326,7 @@ import { RequestError } from '../api/http';
 import { fetchMetadataCreators, type MetadataCreatorPage } from '../api/creator-sync';
 
 const summary = ref<ArchiveCatalogSummary | null>(null);
+const managedRoster = ref<InstanceType<typeof ManagedCreatorRoster> | null>(null);
 const inboxRoot = ref('G:\\cos待入库');
 const stage2Queue = ref<InstanceType<typeof Stage2CreatorQueue> | null>(null);
 const planningDownloads = ref(false);
@@ -621,7 +622,7 @@ async function completeStage3Refresh(kind: LocalIngestOperation['kind']) {
     if (kind === 'scan') {
       await loadDownloadTasks();
     } else if (kind === 'batch' || kind === 'single-job' || kind === 'cleanup') {
-      await Promise.all([loadDownloadTasks(), loadCatalog()]);
+      await Promise.all([loadDownloadTasks(), loadCatalog(), managedRoster.value?.refresh?.()]);
     }
   } finally {
     completionRefreshInFlight = false;

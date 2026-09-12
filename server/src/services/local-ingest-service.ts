@@ -11,6 +11,7 @@ import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js
 import { databaseManager } from '../db/database.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogPipelineService } from './archive-catalog-pipeline-service.js';
+import { preserveDownloadStagedAt } from './archive-download-activity.js';
 import {
   localIngestSettingsService,
   type LocalIngestSettingsService,
@@ -1385,13 +1386,21 @@ export class LocalIngestService {
       || mappings[0].source_work_id !== job.sourceWorkId
     ) return 0;
     const timestamp = this.timestamp();
-    const updated = this.database.prepare(
-      `UPDATE archive_catalog_download_tasks
-       SET status = 'downloaded', completed_at = COALESCE(completed_at, ?),
-           claimed_by = NULL, claimed_at = NULL, last_error = NULL, updated_at = ?
-       WHERE id = ? AND status = 'staged'`
-    ).run(timestamp, timestamp, job.archiveDownloadTaskId);
-    return Number(updated.changes ?? 0);
+    this.database.exec('SAVEPOINT ingest_download_activity');
+    try {
+      preserveDownloadStagedAt(this.database, { taskId: job.archiveDownloadTaskId });
+      const updated = this.database.prepare(
+        `UPDATE archive_catalog_download_tasks
+         SET status = 'downloaded', completed_at = COALESCE(completed_at, ?),
+             claimed_by = NULL, claimed_at = NULL, last_error = NULL, updated_at = ?
+         WHERE id = ? AND status = 'staged'`
+      ).run(timestamp, timestamp, job.archiveDownloadTaskId);
+      this.database.exec('RELEASE ingest_download_activity');
+      return Number(updated.changes ?? 0);
+    } catch (error) {
+      this.database.exec('ROLLBACK TO ingest_download_activity; RELEASE ingest_download_activity');
+      throw error;
+    }
   }
 
   private async replanDestinationBlockedJob(

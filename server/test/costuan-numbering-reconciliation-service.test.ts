@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { schemaSql } from '../src/db/schema.js';
 import { CostuanNumberingReconciliationService } from '../src/services/costuan-numbering-reconciliation-service.js';
+import { DOWNLOAD_STAGED_AT_PREFIX } from '../src/services/archive-download-activity.js';
 
 type SeedOptions = {
   creatorName: string;
@@ -113,6 +114,36 @@ describe('Costuan numbering reconciliation', () => {
   });
 
   afterEach(() => database.close());
+
+  it('preserves a legacy staged event when linking a local work and does not change it on repeated apply', () => {
+    const creatorName = '暂存历史博主';
+    const { creatorId, collectionId } = seedCollection(database, {
+      creatorName,
+      rawDirectoryText: `${creatorName} NO.001 白蕾丝姐姐 [20P-30MB]`
+    });
+    const source = seedSourceWork(database, creatorId, collectionId, 'NO.001', '白蕾丝姐姐', 1);
+    const localFolderId = seedLocalFolder(database, creatorId, creatorName);
+    seedLocalWork(database, localFolderId, `${creatorName} NO.001 白蕾丝姐姐`, null);
+    const stagedAt = '2026-09-01T10:00:00.000Z';
+    const taskId = Number(database.prepare(`INSERT INTO archive_catalog_download_tasks (
+      source_work_id, provider, target_root, target_relative_directory, target_filename,
+      status, claimed_by, claimed_at, updated_at
+    ) VALUES (?, 'baidu', '/synthetic/inbox', ?, '001.7z', 'staged', 'fixture-worker', ?, ?)`)
+      .run(source.sourceWorkDatabaseId, creatorName, '2026-09-01T09:00:00.000Z', stagedAt).lastInsertRowid);
+    const service = new CostuanNumberingReconciliationService(database);
+    const evidenceKey = `${DOWNLOAD_STAGED_AT_PREFIX}${taskId}`;
+    expect(database.prepare('SELECT value FROM app_settings WHERE key=?').get(evidenceKey)).toBeUndefined();
+
+    expect(service.apply({ creatorNames: [creatorName] }).applied.downloadTasksIngested).toBe(1);
+    expect(database.prepare('SELECT status,claimed_at FROM archive_catalog_download_tasks WHERE id=?').get(taskId))
+      .toEqual({ status: 'ingested', claimed_at: null });
+    expect(database.prepare('SELECT value FROM app_settings WHERE key=?').get(evidenceKey)).toEqual({ value: stagedAt });
+    const taskAfter = database.prepare('SELECT * FROM archive_catalog_download_tasks WHERE id=?').get(taskId);
+
+    expect(service.apply({ creatorNames: [creatorName] }).applied.downloadTasksIngested).toBe(0);
+    expect(database.prepare('SELECT value FROM app_settings WHERE key=?').get(evidenceKey)).toEqual({ value: stagedAt });
+    expect(database.prepare('SELECT * FROM archive_catalog_download_tasks WHERE id=?').get(taskId)).toEqual(taskAfter);
+  });
 
   it('adds a VOL work without colliding with the existing NO number and is idempotent', () => {
     const creatorName = '混合编号博主';

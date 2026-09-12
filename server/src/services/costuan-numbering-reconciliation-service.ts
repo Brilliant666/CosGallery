@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 import { sanitizeArchiveDirectoryName } from './archive-download-task-service.js';
+import { preserveDownloadStagedAt } from './archive-download-activity.js';
 import {
   areCostuanTitlesCompatible,
   mergeCostuanDirectoryWorks,
@@ -749,6 +750,7 @@ export class CostuanNumberingReconciliationService {
       }
 
       for (const task of before.downloadTasksToIngest) {
+        preserveDownloadStagedAt(this.database, { taskId: task.taskId });
         this.database.prepare(
           `UPDATE archive_catalog_download_tasks SET
              status = 'ingested', completed_at = COALESCE(completed_at, ?),

@@ -4,6 +4,7 @@ import { schemaSql } from '../src/db/schema.js';
 import { CreatorSyncQueryService } from '../src/services/creator-sync-query-service.js';
 import { ArchiveDownloadTaskService, type ArchiveDownloadTaskStatus } from '../src/services/archive-download-task-service.js';
 import { normalizeCreatorIdentity } from '../src/utils/creator-identity.js';
+import { DOWNLOAD_STAGED_AT_PREFIX } from '../src/services/archive-download-activity.js';
 
 describe('shared creator sync read model', () => {
   let db: DatabaseSync, service: CreatorSyncQueryService, sequence: number;
@@ -43,7 +44,7 @@ describe('shared creator sync read model', () => {
     'archive_catalog_source_works', 'archive_catalog_local_works', 'archive_catalog_local_creator_folders', 'archive_catalog_download_tasks',
     'archive_catalog_metadata_tasks', 'local_ingest_jobs', 'app_settings'].map(table => db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()));
   beforeEach(() => { db = new DatabaseSync(':memory:'); db.exec(schemaSql); sequence = 0; service = new CreatorSyncQueryService(db); });
-  afterEach(() => { vi.restoreAllMocks(); db.close(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); db.close(); });
 
   it('reads the entire canonical roster, not just metadata tasks, with aliases and multi-folder identity', () => {
     const a = creator('Canonical'), b = creator('HistoricalSource', 'kept', 'R15'), c = creator('NeverChecked', null, null);
@@ -202,6 +203,77 @@ describe('shared creator sync read model', () => {
     expect(service.downloadCreators({ sort: 'recent' }).items.map(row => row.creatorId)).toEqual([newest, middle, old]);
     expect(service.downloadCreators({ sort: 'name' }).items.map(row => row.creatorId)).toEqual([old, middle, newest]);
     expect(() => service.downloadCreators({ sort: 'invalid' as 'recent' })).toThrow();
+    expect(snapshot()).toBe(before);
+  });
+
+  it('keeps the actual staging order after local reconciliation clears claims and overwrites task timestamps', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const a = creator('A latest staged'), b = creator('B older staged');
+    const sa = source(a, collection(a), 1), sb = source(b, collection(b), 1);
+    const ta = task(sa.id, 'claimed'), tb = task(sb.id, 'claimed');
+    const downloads = new ArchiveDownloadTaskService(db);
+    vi.setSystemTime(new Date('2026-09-10T00:00:00Z'));
+    downloads.update(tb, { status: 'staged' });
+    vi.setSystemTime(new Date('2026-09-11T00:00:00Z'));
+    downloads.update(ta, { status: 'staged' });
+    const expected = [a, b];
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual(expected);
+    local(folder(a, 'A'), sa.workId);
+    vi.setSystemTime(new Date('2026-09-12T00:00:00Z'));
+    expect(downloads.planMissing({ targetRoot: '/synthetic/inbox', creatorIds: [a] }).reconciledLocal).toBe(1);
+    expect(downloads.get(ta)).toMatchObject({ status: 'ingested', claimedAt: null, updatedAt: '2026-09-12T00:00:00.000Z' });
+    // A new query service/process reads durable evidence, not a transient sort cache.
+    db.exec('PRAGMA query_only=ON');
+    expect([1, 2].flatMap(page => new CreatorSyncQueryService(db).downloadCreators({ page, limit: 1 }).items.map(row => row.creatorId)))
+      .toEqual(expected);
+    expect(db.prepare('SELECT value FROM app_settings WHERE key=?').get(`${DOWNLOAD_STAGED_AT_PREFIX}${ta}`))
+      .toEqual({ value: '2026-09-11T00:00:00.000Z' });
+  });
+
+  it('preserves legacy staging evidence without promoting receipt replays, and records a genuine restaging', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const a = creator('A old staging'), b = creator('B recent staging');
+    const ta = task(source(a, collection(a), 1).id, 'staged');
+    const tb = task(source(b, collection(b), 1).id, 'staged');
+    db.prepare('UPDATE archive_catalog_download_tasks SET updated_at=? WHERE id=?').run('2026-09-09T00:00:00Z', ta);
+    db.prepare('UPDATE archive_catalog_download_tasks SET updated_at=? WHERE id=?').run('2026-09-10T00:00:00Z', tb);
+    const downloads = new ArchiveDownloadTaskService(db);
+    vi.setSystemTime(new Date('2026-09-12T00:00:00Z'));
+    downloads.update(ta, { status: 'staged' });
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([b, a]);
+    downloads.update(ta, { status: 'pending' });
+    downloads.update(ta, { status: 'claimed' });
+    vi.setSystemTime(new Date('2026-09-13T00:00:00Z'));
+    downloads.update(ta, { status: 'staged' });
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([a, b]);
+    vi.setSystemTime(new Date('2026-09-14T00:00:00Z'));
+    downloads.update(ta, { status: 'downloaded' });
+    downloads.update(ta, { status: 'ingested' });
+    expect(db.prepare('SELECT value FROM app_settings WHERE key=?').get(`${DOWNLOAD_STAGED_AT_PREFIX}${ta}`))
+      .toEqual({ value: '2026-09-13T00:00:00.000Z' });
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([a, b]);
+    expect(db.prepare('SELECT value FROM app_settings WHERE key=?').get(`${DOWNLOAD_STAGED_AT_PREFIX}${tb}`)).toBeUndefined();
+  });
+
+  it('preserves existing staged timestamps in the selected local reconciliation scope but never invents ingested history', () => {
+    const a = creator('A'), b = creator('B');
+    const sa = source(a, collection(a), 1), sb = source(b, collection(b), 1);
+    const ta = task(sa.id, 'staged'), tb = task(sb.id, 'staged');
+    const old = task(source(a, collection(a), 2).id, 'ingested');
+    local(folder(a, 'A'), sa.workId);
+    new ArchiveDownloadTaskService(db).planMissing({ targetRoot: '/synthetic/inbox', creatorIds: [a] });
+    expect(db.prepare('SELECT key,value FROM app_settings WHERE key LIKE ?').all(`${DOWNLOAD_STAGED_AT_PREFIX}%`))
+      .toEqual([{ key: `${DOWNLOAD_STAGED_AT_PREFIX}${ta}`, value: timestamp }]);
+    expect(new ArchiveDownloadTaskService(db).get(tb)?.status).toBe('staged');
+    expect(db.prepare('SELECT value FROM app_settings WHERE key=?').get(`${DOWNLOAD_STAGED_AT_PREFIX}${old}`)).toBeUndefined();
+  });
+
+  it('rolls back the status write if durable staging evidence cannot be saved', () => {
+    const a = creator('A'), ta = task(source(a, collection(a), 1).id, 'claimed');
+    db.exec(`CREATE TRIGGER reject_staging_evidence BEFORE INSERT ON app_settings
+      WHEN NEW.key LIKE '${DOWNLOAD_STAGED_AT_PREFIX}%' BEGIN SELECT RAISE(ABORT,'fixture evidence failure'); END;`);
+    const before = snapshot();
+    expect(() => new ArchiveDownloadTaskService(db).update(ta, { status: 'staged' })).toThrow('fixture evidence failure');
     expect(snapshot()).toBe(before);
   });
 

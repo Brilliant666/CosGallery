@@ -299,6 +299,9 @@ async function confirmAction() {
     return fetchArchiveCatalogCreator(detail.value!.id);
   });
 }
+// Refresh only the visible list. Keep its filters/page and any open management
+// draft intact when another workspace finishes an ingest operation.
+defineExpose({ refresh: () => load() });
 onMounted(() => { void load(); });
 onBeforeUnmount(() => { disposed = true; clearQueryTimer(); invalidateLoad(); });
 </script>

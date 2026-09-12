@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 
 import { databaseManager } from '../db/database.js';
 import {directShareDeliverySql,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
+import { DOWNLOAD_STAGED_AT_PREFIX } from './archive-download-activity.js';
 import type { ArchiveDownloadTask, ArchiveDownloadTaskStatus, ArchiveDownloadTaskSummary } from './archive-download-task-service.js';
 import type { ArchiveMetadataTaskStatus, ArchiveSourceState } from './archive-metadata-task-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
@@ -360,14 +361,16 @@ export class CreatorSyncQueryService {
       }
       const completeSummary = summary(DOWNLOAD_STATUSES, [...totals].map(([status, count]) => ({ status, count })));
       // These are read-side evidence, not new execution timestamps. Stage3 may
-      // overwrite download updated/completed_at and clear claimed_at, so never
-      // interpret those later states as a new staging event. Older ingested rows
-      // without retained events fall back to their source observation time.
+      // overwrite download updated/completed_at and clear claimed_at. Retained
+      // staging evidence survives those changes; historical staged rows still
+      // use their current timestamp until their next write preserves it.
+      // Older ingested rows without evidence fall back to source observation.
       // Activity is creator-wide even when the displayed tasks are status-filtered.
       const activitySql = `${scope.sql}, activity_tasks AS (
-        SELECT tasks.*,work.creator_id FROM archive_catalog_download_tasks tasks
+        SELECT tasks.*,work.creator_id,julianday(staging.value) AS staged_event FROM archive_catalog_download_tasks tasks
         JOIN archive_catalog_source_works source ON source.id=tasks.source_work_id
         JOIN archive_catalog_works work ON work.id=source.work_id
+        LEFT JOIN app_settings staging ON staging.key='${DOWNLOAD_STAGED_AT_PREFIX}'||tasks.id
         WHERE work.creator_id IN (SELECT creator_id FROM task_scope)
       ), check_context AS (
         SELECT cohort.*,CASE WHEN json_valid(context.value) THEN context.value ELSE '{}' END AS context_json
@@ -392,7 +395,7 @@ export class CreatorSyncQueryService {
         UNION ALL
         SELECT creator_id,julianday(claimed_at) FROM activity_tasks
         UNION ALL
-        SELECT creator_id,julianday(updated_at) FROM activity_tasks WHERE status='staged'
+        SELECT creator_id,COALESCE(staged_event,CASE WHEN status='staged' THEN julianday(updated_at) END) FROM activity_tasks
       ), activity_times AS (
         SELECT creator_id,MAX(event_time) AS latest_event FROM activity_events GROUP BY creator_id
       ), ordered_creators AS (
