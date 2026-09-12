@@ -2381,7 +2381,10 @@ class ScannerService {
     );
 
     try {
-      const migrationPending = !derivativeMigrationService.isMigrationComplete();
+      // Reuse this pre-discovery result only within the current scan. Migration can
+      // change it, and the post-scan cleanup guard must still check independently.
+      let migrationComplete = derivativeMigrationService.isMigrationComplete();
+      const migrationPending = !migrationComplete;
       const requiresDerivativeMigration = !workScoped && options.allowDerivativeMigration && migrationPending;
       if (requiresDerivativeMigration) {
         this.setProgress({
@@ -2428,7 +2431,7 @@ class ScannerService {
         migratedRows: 0,
         repairedRows: 0,
         repairErrors: 0,
-        complete: derivativeMigrationService.isMigrationComplete()
+        complete: migrationComplete
       };
       if (requiresDerivativeMigration) {
         migrationSummary = await derivativeMigrationService.ensureMigrated({
@@ -2441,6 +2444,7 @@ class ScannerService {
             }));
           }
         });
+        migrationComplete = migrationSummary.complete && derivativeMigrationService.isMigrationComplete();
       }
       if (requiresDerivativeMigration) {
         this.updateMigrationProgress(migrationSummary);
@@ -2454,7 +2458,7 @@ class ScannerService {
         this.logProgress('phase');
       }
       imageProcessingContext.moveReconciliationEnabled =
-        !galleryRootChanged && migrationSummary.complete && derivativeMigrationService.isMigrationComplete();
+        !galleryRootChanged && migrationSummary.complete && migrationComplete;
 
       const existingFolders = folderRepository.getAll();
       if (!workScoped && treatCarouselsAsFolders) {

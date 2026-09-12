@@ -459,12 +459,17 @@ describe.sequential('COS gallery mode', () => {
     const deleteMissing = vi.spyOn(postRepository, 'softDeleteMissingByFolder');
     const syncPlaces = vi.spyOn(postRepository, 'syncRepresentativePlaces');
     const cleanup = vi.spyOn(derivativeMigrationService, 'cleanupStaleDerivatives');
+    const migrationComplete = vi.spyOn(derivativeMigrationService, 'isMigrationComplete');
+    const migrate = vi.spyOn(derivativeMigrationService, 'ensureMigrated');
     try {
       const first = await scannerService.scanCosCreators([creator], 'one-work', { workFolderName });
       expect(first).toMatchObject({ status: 'completed', scanned_files: 1, new_files: 1, removed_files: 0 });
+      expect(migrationComplete).toHaveBeenCalledTimes(1);
       const firstPosts = databaseManager.connection.prepare('SELECT id, source_path, is_deleted FROM posts ORDER BY id').all();
       const second = await scannerService.scanCosCreators([creator], 'one-work-repeat', { workFolderName });
       expect(second).toMatchObject({ status: 'completed', scanned_files: 1, new_files: 0, removed_files: 0 });
+      expect(migrationComplete).toHaveBeenCalledTimes(2);
+      expect(migrate).not.toHaveBeenCalled();
       expect(databaseManager.connection.prepare('SELECT id, source_path, is_deleted FROM posts ORDER BY id').all()).toEqual(firstPosts);
       expect(databaseManager.connection.prepare('SELECT * FROM posts WHERE source_path = ?').get(`${creator}/${siblingName}`)).toEqual(siblingPost);
       expect(readdir.mock.calls.some(([directory]) => String(directory) === siblingPath || String(directory) === creatorPath)).toBe(false);
@@ -477,6 +482,8 @@ describe.sequential('COS gallery mode', () => {
       deleteMissing.mockRestore();
       syncPlaces.mockRestore();
       cleanup.mockRestore();
+      migrationComplete.mockRestore();
+      migrate.mockRestore();
     }
   });
 

@@ -141,7 +141,7 @@ describe.sequential('derivative layout upgrade', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it('backfills asset keys, migrates mirrored derivatives, and updates stored paths on the next full scan', async () => {
+  it.each([true, false])('backfills asset keys and refreshes migration checks without bypassing summary.complete=%s', async (reportedComplete) => {
     const folder = folderRepository.upsert({
       slug: 'legacy',
       name: 'legacy',
@@ -187,9 +187,31 @@ describe.sequential('derivative layout upgrade', () => {
       previewPath
     });
 
-    await scannerService.scanAll('manual', {
-      repairUnchangedDerivatives: false
+    const originalEnsureMigrated = derivativeMigrationService.ensureMigrated.bind(derivativeMigrationService);
+    const originalIsComplete = derivativeMigrationService.isMigrationComplete.bind(derivativeMigrationService);
+    let migrationReturned = false;
+    const checksAfterMigration: boolean[] = [];
+    const migrationCheck = vi.spyOn(derivativeMigrationService, 'isMigrationComplete').mockImplementation(() => {
+      const complete = originalIsComplete();
+      if (migrationReturned) checksAfterMigration.push(complete);
+      return complete;
     });
+    const migration = vi.spyOn(derivativeMigrationService, 'ensureMigrated').mockImplementation(async (options) => {
+      const result = await originalEnsureMigrated(options);
+      migrationReturned = true;
+      return { ...result, complete: reportedComplete };
+    });
+    try {
+      await scannerService.scanAll('manual', {
+        repairUnchangedDerivatives: false
+      });
+      expect(migration).toHaveBeenCalledTimes(1);
+      // An incomplete summary retains its short circuit; cleanup still checks independently.
+      expect(checksAfterMigration).toEqual(reportedComplete ? [true, true] : [true]);
+    } finally {
+      migrationCheck.mockRestore();
+      migration.mockRestore();
+    }
 
     const migrated = imageRepository.getByRelativePath(relativePath);
     expect(migrated?.asset_key).toMatch(/^[a-f0-9]{32}$/);
