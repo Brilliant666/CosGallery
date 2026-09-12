@@ -498,7 +498,7 @@ async function pathExists(targetPath: string): Promise<boolean> {
 async function sha256File(filePath: string): Promise<string> {
   const hash = createHash('sha256');
   await new Promise<void>((resolve, reject) => {
-    const stream = createReadStream(filePath);
+    const stream = createReadStream(filePath, { highWaterMark: 1024 * 1024 });
     stream.on('data', (chunk) => hash.update(chunk));
     stream.on('error', reject);
     stream.on('end', resolve);
