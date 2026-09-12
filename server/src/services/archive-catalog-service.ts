@@ -13,6 +13,7 @@ import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { checkedIdentityEvidence, completeIdentityDirectory, directoryCreatorNames, isCostuanNameVariant,
   type CostuanIdentityInput, type CostuanIdentityVerification } from './costuan-identity-evidence.js';
 import {directShareDeliverySchema} from './archive-baidu-delivery.js';
+import {elyRangeDirectory} from './ely-range-directory.js';
 import {applyCostuanDirectoryReview,costuanDirectoryReviewSchema,directoryReviewKey} from './costuan-directory-review.js';
 import {
   areCostuanTitlesCompatible,
@@ -460,8 +461,9 @@ export class ArchiveCatalogService {
     const record=costuanRecordSchema.parse(recordInput);
     record.costuan.identityVerification=this.validateCostuanIdentity(creatorId,record.costuan.postId,record.costuan.title,record.costuan);
     const savedReview=this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(directoryReviewKey(creatorId)) as {value:string}|undefined;
-    const reviewed=savedReview?applyCostuanDirectoryReview(costuanDirectoryReviewSchema.parse(JSON.parse(savedReview.value)),
-      record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText):null;
+    const rangeReviewed=elyRangeDirectory(creatorId,record.costuan.postId,record.costuan.title,record.costuan.resourceDirectoryText);
+    const reviewed=rangeReviewed ?? (savedReview?applyCostuanDirectoryReview(costuanDirectoryReviewSchema.parse(JSON.parse(savedReview.value)),
+      record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText):null);
     // The effective directory must remain unique even if a caller supplied a
     // deduplicated works array. Retraction evidence is audit data, not authority
     // to erase an active line. Explicit server-owned revision reviews stay scoped.
@@ -535,7 +537,7 @@ export class ArchiveCatalogService {
     const canonicalDirectoryVerification={complete:true,checkedAt:proof.data.checkedAt,parsedWorkCount:works.length};
     return {record:{...record,costuan:{...record.costuan,works,supplementalContents,acceptedDirectoryRevisions,directoryVerification:canonicalDirectoryVerification}},
       supplementalContents,acceptedDirectoryRevisions,canonicalWorks:works,canonicalDirectoryVerification,sourceFilenames:[...filenames],
-      requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename))};
+      requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename) || (rangeReviewed && Number(filename.slice(0,-3))<=66))};
   }
 
   private confirmedLocalWorksForSourceCheck(creatorId:number):Set<number> {
@@ -585,6 +587,7 @@ export class ArchiveCatalogService {
 
   validateCompleteCostuanCheck(recordInput:unknown, creatorId:number, checkRoundId:string): CostuanArchiveRecord {
     const {record,requiredFilenames}=this.validateCompleteCostuanDirectory(recordInput,creatorId);
+    if(elyRangeDirectory(creatorId,record.costuan.postId,record.costuan.title,record.costuan.resourceDirectoryText) && record.baidu?.transport!=='direct-share') throw new Error('Ely 范围声明仅接受本轮原分享逐文件核验，不能用历史转存记录代替');
     if(record.baidu?.transport==='direct-share') {
       const proof=directShareDeliverySchema.safeParse(record.baidu);
       if(!proof.success || proof.data.verification.checkRoundId!==checkRoundId) {
