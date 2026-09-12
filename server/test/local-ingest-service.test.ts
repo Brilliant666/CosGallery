@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,7 @@ type FixtureOptions = {
   password?: string;
   innerCount?: number;
   includeUnknown?: boolean;
+  retainedExtensions?: string[];
   includeUrlAdvertisement?: boolean;
   includeImage?: boolean;
   includeVideo?: boolean;
@@ -197,6 +199,10 @@ async function makeNestedArchive(
     await fs.writeFile(path.join(payload, 'subfolder', '孔雀海.URL'), '[InternetShortcut]\nURL=https://example.invalid/ad');
   }
   if (options.includeUnknown) await fs.writeFile(path.join(payload, 'unknown.exe'), 'fixture');
+  for (const extension of options.retainedExtensions ?? []) {
+    await fs.mkdir(path.join(payload, 'originals'), { recursive: true });
+    await fs.writeFile(path.join(payload, 'originals', `original${extension}`), `synthetic original ${extension}`);
+  }
   if (options.includeNestedArchive) {
     const nestedSource = path.join(root, 'nested-source');
     await fs.mkdir(nestedSource, { recursive: true });
@@ -728,6 +734,62 @@ describe.sequential('LocalIngestService', () => {
     const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'NO_VALID_MEDIA' });
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('automatically retains unsupported originals with hashes without counting them as displayable images', async () => {
+    const extensions = ['.HEIC', '.heif', '.tif', '.tiff'];
+    fixture = await createFixture({ retainedExtensions: extensions, mediaSummary: '5P-1MB' });
+    const discovery = await discoverStable(fixture);
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result).toMatchObject({ status: 'ingested', validationStatus: 'warning', cleanupStatus: 'recycled', attemptCount: 1 });
+    expect(result.summary).toMatchObject({ imageCount: 1, videoCount: 0, retainedOriginalCount: 4,
+      retainedOriginals: { automaticPolicy: 1, count: 4 } });
+    const directory = path.join(result.targetPath!, '_未支持格式原件');
+    expect(result.summary?.retainedOriginalDirectory).toBe(directory);
+    for (const extension of extensions) {
+      const relativePath = `originals/original${extension}`;
+      const bytes = Buffer.from(`synthetic original ${extension}`);
+      expect(await fs.readFile(path.join(directory, relativePath))).toEqual(bytes);
+      expect(result.summary?.retainedOriginals).toMatchObject({ files: expect.arrayContaining([{
+        relativePath, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex').toUpperCase()
+      }]) });
+    }
+    expect((await fs.readdir(result.targetPath!)).sort()).toEqual(['_未支持格式原件', 'cover.jpg'].sort());
+    expect(fixture.recycleCalls).toHaveLength(2);
+    expect(existsSync(fixture.sourceArchivePath)).toBe(false);
+    const repeat = await fixture.service.runJob(result.id);
+    expect(repeat.summary?.retainedOriginals).toEqual(result.summary?.retainedOriginals);
+    expect(repeat.attemptCount).toBe(1);
+    expect(fixture.recycleCalls).toHaveLength(2);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('keeps both cleanup sources if an automatically retained original changes before cleanup', async () => {
+    fixture = await createFixture({ retainedExtensions: ['.heic'], recycleAfterIngest: false });
+    const discovery = await discoverStable(fixture);
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result.status).toBe('ingested');
+    expect(fixture.recycleCalls).toEqual([]);
+    expect(existsSync(fixture.sourceArchivePath)).toBe(true);
+    await fs.writeFile(path.join(result.targetPath!, '_未支持格式原件', 'originals', 'original.heic'), 'tampered');
+    const cleanup = await fixture.service.retryCleanup(result.id);
+    expect(cleanup.cleanupStatus).toBe('failed');
+    expect(fixture.recycleCalls).toEqual([]);
+    expect(existsSync(fixture.sourceArchivePath)).toBe(true);
+    expect(existsSync(path.join(fixture.processingRoot, String(result.id)))).toBe(true);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32').each([
+    { includeUnknown: true, includeImage: true, errorCode: 'UNKNOWN_FILE_TYPE' },
+    { includeUnknown: false, includeImage: false, errorCode: 'NO_VALID_MEDIA' }
+  ])('does not bypass review for unsupported originals with $errorCode', async ({ errorCode, ...options }) => {
+    fixture = await createFixture({ ...options, retainedExtensions: ['.heic'] });
+    const discovery = await discoverStable(fixture);
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result).toMatchObject({ status: 'awaiting_review', errorCode });
+    expect(fixture.rescanCalls).toBe(0);
+    expect(fixture.recycleCalls).toEqual([]);
+    expect(existsSync(fixture.sourceArchivePath)).toBe(true);
+    expect(await fs.readdir(path.join(fixture.libraryRoot, fixture.creatorName)).catch(() => [])).toEqual([]);
   }, 60_000);
 
   it.runIf(process.platform === 'win32')('blocks unreadable and zero-byte media', async () => {

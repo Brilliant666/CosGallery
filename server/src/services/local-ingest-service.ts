@@ -336,6 +336,15 @@ export type LocalIngestInboxCreatorsResult = {
 };
 
 type ValidationSummary = {
+  retainedOriginalCount?: number;
+  retainedOriginalDirectory?: string;
+  retainedOriginals?: {
+    automaticPolicy: 1;
+    directory: string;
+    count: number;
+    files: Array<{ relativePath: string; size: number; sha256: string }>;
+    verifiedAt: string;
+  };
   creator: string;
   sourceWorkId: number;
   archiveDownloadTaskId: number;
@@ -1865,11 +1874,15 @@ export class LocalIngestService {
     const media: typeof tree = [];
     const ads: typeof tree = [];
     const unknown: typeof tree = [];
+    const originals: typeof tree = [];
     const nestedArchives: typeof tree = [];
     let imageCount = 0;
     let videoCount = 0;
     let totalBytes = 0;
     for (const entry of tree) {
+      if (entry.relativePath.split(/[\\/]/)[0].toLowerCase() === RETAINED_ORIGINALS_DIRECTORY.toLowerCase()) {
+        throw new LocalIngestFailure('RETAINED_ORIGINALS_INVALID', 'Extracted content uses the reserved originals directory', true);
+      }
       if (entry.directory) continue;
       if (entry.symbolic || entry.size === 0) {
         throw new LocalIngestFailure('UNSAFE_OR_EMPTY_FILE', `File requires review: ${entry.relativePath}`, true);
@@ -1887,6 +1900,8 @@ export class LocalIngestService {
         media.push(entry);
       } else if (ADVERTISEMENT_EXTENSIONS.has(extension)) {
         ads.push(entry);
+      } else if (['.heic', '.heif', '.tif', '.tiff'].includes(extension)) {
+        originals.push(entry);
       } else if (NESTED_ARCHIVE_EXTENSIONS.has(extension)) {
         nestedArchives.push(entry);
       } else if (entry.relativePath !== '.DS_Store') {
@@ -1900,6 +1915,11 @@ export class LocalIngestService {
       throw new LocalIngestFailure('UNKNOWN_FILE_TYPE', `Unknown files require review: ${unknown.map((entry) => entry.relativePath).join(', ')}`, true);
     }
     if (media.length === 0) throw new LocalIngestFailure('NO_VALID_MEDIA', 'No valid image or video was found', true);
+    const originalFiles = [];
+    for (const entry of originals) {
+      originalFiles.push({ relativePath: entry.relativePath.replace(/\\/g, '/'), size: entry.size,
+        sha256: (await this.hashFile(entry.absolutePath)).toUpperCase() });
+    }
     stopValidation();
 
     const readyBuildPath = path.join(processingPath, `ready-building-${randomUUID()}`);
@@ -1913,7 +1933,12 @@ export class LocalIngestService {
     const declaredImages = /(?<!\d)(\d+)P(?=\d+V\b|\b)/i.exec(declared);
     const declaredVideos = /(?<!\d)(\d+)V\b/i.exec(declared);
     const declaredSize = /(?<![\d.])(\d+(?:\.\d+)?)\s*(KB|K|MB|M|GB|G)\b/i.exec(declared);
-    if (declaredImages && Number(declaredImages[1]) !== imageCount) warnings.push(`Declared ${declaredImages[1]} images; extracted ${imageCount}`);
+    if (declaredImages && Number(declaredImages[1]) !== imageCount + originals.length) {
+      warnings.push(originals.length
+        ? `来源声明${declaredImages[1]}张；可展示${imageCount}张，另保留${originals.length}张未支持原件，数量与声明不符`
+        : `Declared ${declaredImages[1]} images; extracted ${imageCount}`);
+    }
+    if (originals.length) warnings.push(`${originals.length}张 HEIC/HEIF/TIFF 原件已保留，暂不支持展示`);
     if (declaredVideos && Number(declaredVideos[1]) !== videoCount) warnings.push(`Declared ${declaredVideos[1]} videos; extracted ${videoCount}`);
     const declaredSizeMultiplier = declaredSize
       ? declaredSize[2].toLocaleUpperCase().startsWith('G') ? 1024 ** 3
@@ -1944,7 +1969,7 @@ export class LocalIngestService {
       advertisementFileCount: ads.length,
       unknownFiles: [],
       nestedArchives: [],
-      warnings,
+      warnings: [...new Set(warnings)],
       plannedTargetPath: targetPath,
       readyPath,
       declaredMediaSummary: mapping.media_summary,
@@ -1953,9 +1978,16 @@ export class LocalIngestService {
       declaredTotalBytes,
       declaredVsActualByteDifference: declaredTotalBytes === undefined ? undefined : totalBytes - declaredTotalBytes
     };
+    if (originalFiles.length) {
+      const directory = path.join(targetPath, RETAINED_ORIGINALS_DIRECTORY);
+      Object.assign(summary, { retainedOriginalCount: originalFiles.length, retainedOriginalDirectory: directory,
+        retainedOriginals: { automaticPolicy: 1, directory, count: originalFiles.length, files: originalFiles, verifiedAt: this.timestamp() } });
+    }
     if (!(await pathExists(readyPath))) {
       const { performance: _previousPerformance, ...manifestSummary } = summary as unknown as Record<string, unknown>;
-      const manifest = await createStagingMoveManifest(binding, contentRoot, tree.filter((entry) => !entry.directory).map((entry) => ({
+      // Mixed unsupported originals use copy staging: keep their complete source
+      // inventory until destination hashes are verified. Ordinary media still move.
+      const manifest = originals.length ? null : await createStagingMoveManifest(binding, contentRoot, tree.filter((entry) => !entry.directory).map((entry) => ({
         relativePath: entry.relativePath, size: entry.size,
         kind: IMAGE_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'image' as const
           : VIDEO_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'video' as const
@@ -1973,10 +2005,23 @@ export class LocalIngestService {
           await fs.mkdir(path.dirname(destination), { recursive: true });
           await fs.copyFile(entry.absolutePath, destination, fs.constants.COPYFILE_EXCL);
         }
+        for (const entry of originals) {
+          const destination = path.join(readyBuildPath, RETAINED_ORIGINALS_DIRECTORY, entry.relativePath);
+          if (!isPathWithin(readyBuildPath, destination)) throw new LocalIngestFailure('UNSAFE_ARCHIVE_PATH', 'Original path escapes staging', true);
+          await fs.mkdir(path.dirname(destination), { recursive: true });
+          await fs.copyFile(entry.absolutePath, destination, constants.COPYFILE_EXCL);
+        }
+        await this.verifyAutomaticOriginals(readyBuildPath, summary);
+        for (const file of originalFiles) {
+          if ((await this.hashFile(path.join(contentRoot, file.relativePath))).toUpperCase() !== file.sha256) {
+            throw new LocalIngestFailure('RETAINED_ORIGINALS_INVALID', 'Original changed during staging', true);
+          }
+        }
         await fs.rename(readyBuildPath, readyPath);
         stopStaging();
       }
     }
+    await this.verifyAutomaticOriginals(readyPath, summary);
     this.updateJob(job.id, {
       status: 'running',
       phase: 'awaiting_commit',
@@ -1987,6 +2032,36 @@ export class LocalIngestService {
       errorDetail: null
     });
     return summary;
+  }
+
+  private async verifyAutomaticOriginals(root: string, summary: { retainedOriginals?: unknown }): Promise<void> {
+    const evidence = summary.retainedOriginals as ValidationSummary['retainedOriginals'];
+    if (!evidence || evidence.automaticPolicy !== 1) return; // Historical manual retention keeps its explicit policy.
+    const fail = (): never => { throw new LocalIngestFailure('RETAINED_ORIGINALS_INVALID', 'Retained original inventory or checksum changed; cleanup is blocked', true); };
+    if (!Array.isArray(evidence.files) || !evidence.files.length || evidence.count !== evidence.files.length) fail();
+    const rootStat = await fs.lstat(root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail();
+    const directory = path.join(root, RETAINED_ORIGINALS_DIRECTORY);
+    await this.assertInside(root, directory, 'RETAINED_ORIGINALS_INVALID', 'Retained originals', { directChild: true });
+    const stat = await fs.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) fail();
+    const inventory = await listTree(directory);
+    if (inventory.some((entry) => entry.symbolic)) fail();
+    const actual = inventory.filter((entry) => !entry.directory);
+    const keys = new Set<string>();
+    if (actual.length !== evidence.files.length) fail();
+    for (const file of evidence.files) {
+      if (!file || typeof file.relativePath !== 'string' || path.isAbsolute(file.relativePath) || path.win32.isAbsolute(file.relativePath)
+        || file.relativePath.replace(/\\/g, '/').split('/').some((part) => !part || part === '.' || part === '..' || /[:\x00]/.test(part))
+        || !['.heic', '.heif', '.tif', '.tiff'].includes(path.extname(file.relativePath).toLowerCase())
+        || !Number.isSafeInteger(file.size) || file.size <= 0 || typeof file.sha256 !== 'string') fail();
+      const key = comparableRelativePath(file.relativePath);
+      if (keys.has(key)) fail();
+      keys.add(key);
+      const entry = actual.find((item) => comparableRelativePath(item.relativePath) === key);
+      if (!entry || !(await fs.lstat(entry.absolutePath)).isFile() || entry.size !== file.size
+        || (await this.hashFile(entry.absolutePath)).toUpperCase() !== file.sha256.toUpperCase()) fail();
+    }
   }
 
   async retainOriginals(input: LocalIngestManualPlacementInput): Promise<LocalIngestJob> {
@@ -2474,6 +2549,7 @@ export class LocalIngestService {
       throw new LocalIngestFailure('TARGET_MISSING_AFTER_COMMIT', 'The committed target directory cannot be found');
     }
     const targetPlan = await this.validatePersistedTarget(job, mapping, settings, true);
+    await this.verifyAutomaticOriginals(job.target_path, safeJsonParse(job.summary_json) ?? {});
     this.updateJob(jobId, { status: 'reconciling', phase: 'rescanning' });
     const creatorFolderName = path.basename(targetPlan.creatorDirectory);
     const rescanResult = await this.timed(jobId, 'index_ledger_reconciliation', () => this.rescanAndReconcile(
@@ -2764,6 +2840,7 @@ export class LocalIngestService {
       if (await pathExists(summary.plannedTargetPath)) throw new LocalIngestFailure('TARGET_EXISTS', 'The planned target directory already exists', true);
       await fs.mkdir(commitPlan.creatorDirectory, { recursive: true });
       this.updateJob(id, { phase: 'committing' });
+      await this.verifyAutomaticOriginals(summary.readyPath, summary);
       await this.timed(id, 'final_commit', () => fs.rename(summary.readyPath, summary.plannedTargetPath));
       this.updateJob(id, { status: 'reconciling', phase: 'rescanning', targetPath: summary.plannedTargetPath });
       return await this.reconcile(id, true);
@@ -2862,6 +2939,10 @@ export class LocalIngestService {
         if (comparedTarget === comparedSource || comparedTarget === comparedProcessing) {
           throw new LocalIngestFailure('RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT', 'Cleanup may not recycle the committed gallery target', true);
         }
+      }
+      if (summary.retainedOriginals) {
+        if (!job.target_path) throw new LocalIngestFailure('RETAINED_ORIGINALS_INVALID', 'Retention target missing', true);
+        await this.verifyAutomaticOriginals(job.target_path, summary);
       }
       if (await pathExists(job.source_archive_path)) await this.recycleAdapter.recycle(job.source_archive_path);
       summary.sourceArchiveRecycled = !(await pathExists(job.source_archive_path));
