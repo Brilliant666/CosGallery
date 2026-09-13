@@ -111,6 +111,7 @@ type ExistingLocalWorkLink = {
   match_method: string | null;
   work_creator_id: number | null;
   has_active_source: number;
+  identity_policy: string;
 };
 
 type RemoteWorkRow = {
@@ -505,8 +506,8 @@ export class ArchiveCatalogService {
       FROM archive_catalog_source_works sw JOIN archive_catalog_collections c ON c.id=sw.collection_id
       WHERE c.source='costuan' AND c.source_collection_id=? AND c.creator_id=? AND sw.is_active=1`)
       .all(record.costuan.postId,creatorId) as Array<{work_id:number;source_work_id:string;source_order_label:string|null;source_title:string;media_summary:string|null}>;
-    const previousCollection=this.database.prepare(`SELECT metadata_json FROM archive_catalog_collections
-      WHERE source='costuan' AND source_collection_id=? AND creator_id=?`).get(record.costuan.postId,creatorId) as {metadata_json:string|null}|undefined;
+    const previousCollection=this.database.prepare(`SELECT id,metadata_json FROM archive_catalog_collections
+      WHERE source='costuan' AND source_collection_id=? AND creator_id=?`).get(record.costuan.postId,creatorId) as {id:number;metadata_json:string|null}|undefined;
     const oldSupplements=previousCollection?.metadata_json ? JSON.parse(previousCollection.metadata_json).supplementalContents : [];
     if (Array.isArray(oldSupplements) && oldSupplements.some(old=>!supplementalContents.some(current=>
       current.sourceOrderKey===old.sourceOrderKey && current.rawTitle===old.rawTitle))) {
@@ -516,6 +517,7 @@ export class ArchiveCatalogService {
     // suffix can identify different content and must not be silently discarded.
     const stableSourceTitle=(value:string)=>value.normalize('NFKC').replace(/\s+/g,' ').trim();
     const confirmedLocalWorks=this.confirmedLocalWorksForSourceCheck(creatorId);
+    const heldSources=new Set((this.database.prepare('SELECT DISTINCT f.source_work_id FROM archive_catalog_local_fulfillments f JOIN archive_catalog_source_works s ON s.id=f.source_work_id JOIN archive_catalog_works w ON w.id=s.work_id WHERE w.creator_id=?').all(creatorId) as Array<{source_work_id:number}>).map(row=>row.source_work_id));
     const localFilenames=new Set<string>();
     for (const old of previous) {
       const key=parseCostuanNumbering(old.source_order_label ?? old.source_work_id)?.key;
@@ -526,7 +528,8 @@ export class ArchiveCatalogService {
       }
       // Equivalent label formatting must reuse the existing Source Work ID.
       work.sourceOrder=old.source_work_id;
-      if (confirmedLocalWorks.has(old.work_id)) {
+      const sourceRow=this.database.prepare('SELECT id FROM archive_catalog_source_works WHERE collection_id=? AND source_work_id=?').get(previousCollection!.id,old.source_work_id) as {id:number}|undefined;
+      if (confirmedLocalWorks.has(old.work_id) || (sourceRow && heldSources.has(sourceRow.id))) {
         const order=parseCostuanNumbering(old.source_order_label ?? old.source_work_id)?.order;
         if (order!==null && order!==undefined) localFilenames.add(`${String(order).padStart(3,'0')}.7z`);
       }
@@ -561,10 +564,11 @@ export class ArchiveCatalogService {
           throw new Error('本地博主目录路径与桥接不一致');
         }
         ensureReadableDirectory(root);ensureReadableDirectory(directory);
-        const rows=this.database.prepare(`SELECT l.work_id,l.relative_path,l.absolute_path,l.match_status,w.creator_id
+        const rows=this.database.prepare(`SELECT l.work_id,l.relative_path,l.absolute_path,l.match_status,w.creator_id,
+          EXISTS(SELECT 1 FROM archive_catalog_work_decisions d WHERE d.local_work_id=l.id) AS explicit_identity
           FROM archive_catalog_local_works l LEFT JOIN archive_catalog_works w ON w.id=l.work_id
           WHERE l.local_creator_folder_id=? AND l.is_active=1`).all(bridge.id) as Array<{
-          work_id:number|null;relative_path:string;absolute_path:string;match_status:string;creator_id:number|null}>;
+          work_id:number|null;relative_path:string;absolute_path:string;match_status:string;creator_id:number|null;explicit_identity:number}>;
         for (const row of rows) {
           // An unresolved registered local work is unknown, not permission to
           // assume an empty local set or infer its source from title/NO alone.
@@ -572,11 +576,11 @@ export class ArchiveCatalogService {
           const absolute=path.resolve(directory,row.relative_path),relative=path.relative(directory,absolute);
           if (!relative || relative==='..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
             || absolute.toLocaleLowerCase()!==path.resolve(row.absolute_path).toLocaleLowerCase()
-            || row.creator_id!==creatorId || confirmed.has(row.work_id)) throw new Error('本地作品身份、唯一关系或安全路径不明确');
+            || row.creator_id!==creatorId || (!row.explicit_identity && confirmed.has(row.work_id))) throw new Error('本地作品身份、唯一关系或安全路径不明确');
           let current=directory;
           for (const segment of relative.split(path.sep)) {current=path.join(current,segment);ensureReadableDirectory(current);}
           if (!readdirSync(absolute).length) throw new Error('已关联作品目录为空，当前本地状态需重新确认');
-          confirmed.add(row.work_id);
+          if(!row.explicit_identity) confirmed.add(row.work_id);
         }
       }
     } catch (cause) {
@@ -819,7 +823,7 @@ export class ArchiveCatalogService {
             this.database.prepare(
               `UPDATE archive_catalog_works
                SET display_title = ?, updated_at = CURRENT_TIMESTAMP
-               WHERE id = ?`
+               WHERE id = ? AND title_policy = 'auto'`
             ).run(work.label, workId);
             this.database.prepare(
               `UPDATE archive_catalog_source_works SET
@@ -838,11 +842,16 @@ export class ArchiveCatalogService {
             );
             result.updatedWorks += 1;
           } else {
-            const insertedWork = this.database.prepare(
+            const binding = this.database.prepare(`SELECT bindings.work_id FROM archive_catalog_source_bindings bindings
+              JOIN archive_catalog_work_decisions decisions ON decisions.id=bindings.decision_id
+              JOIN archive_catalog_works works ON works.id=bindings.work_id
+              WHERE bindings.collection_id=? AND bindings.source_work_id=? AND decisions.state='active' AND works.creator_id=?`)
+              .get(collectionId, sourceWorkId, creatorId) as {work_id:number} | undefined;
+            const insertedWork = binding ? null : this.database.prepare(
               `INSERT INTO archive_catalog_works (creator_id, display_title)
                VALUES (?, ?)`
             ).run(creatorId, work.label);
-            workId = asNumber(insertedWork.lastInsertRowid);
+            workId = binding?.work_id ?? asNumber(insertedWork!.lastInsertRowid);
             this.database.prepare(
               `INSERT INTO archive_catalog_source_works (
                  work_id, collection_id, source, source_work_id, source_order,
@@ -1086,8 +1095,8 @@ export class ArchiveCatalogService {
               && existing.work_id !== null
               && existing.match_status === 'matched'
               && existing.work_creator_id === creatorId
-              && existing.has_active_source === 1
-              && !claimedWorkIds.has(existing.work_id)
+              && (existing.identity_policy !== 'auto' || existing.has_active_source === 1)
+              && (existing.identity_policy !== 'auto' || !claimedWorkIds.has(existing.work_id))
             ) {
               preservedByRelativePath.set(relativePath, existing);
               claimedWorkIds.add(existing.work_id);
@@ -1101,6 +1110,11 @@ export class ArchiveCatalogService {
           result.localWorks += 1;
           const relativePath = this.localWorkRelativePath(workSnapshot);
           activeWorkPaths.add(relativePath);
+          const explicitLocalOnly=existingByRelativePath.get(relativePath);
+          if (explicitLocalOnly?.identity_policy === 'local_only' && explicitLocalOnly.work_id === null) {
+            this.upsertLocalWork({localFolderId,workId:null,snapshot:workSnapshot,status:'unmatched',method:'manual-local-only',scannedAt});
+            continue;
+          }
           const preserved = preservedByRelativePath.get(relativePath);
           if (preserved?.work_id !== null && preserved?.work_id !== undefined) {
             result.matchedWorks += 1;
@@ -1484,6 +1498,7 @@ export class ArchiveCatalogService {
     return this.database.prepare(
       `SELECT
          local_works.relative_path,
+         local_works.identity_policy,
          local_works.work_id,
          local_works.parsed_source_order,
          local_works.match_status,

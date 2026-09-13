@@ -30,6 +30,8 @@ export type MetadataCreatorPage = SyncPage<CreatorSyncRow> & {
   summary: { sourceCreators: number; sourceCollections: number; taskTotal: number; tasks: Record<ArchiveMetadataTask['status'] | 'total', number> };
 };
 export interface DownloadCreatorSummary {
+  localSatisfied?: number;
+  acquisitionReviewRequired?: number;
   creatorId: number; creatorName: string; preference: 'liked' | 'kept' | null;
   rating: 'R15' | 'R18' | null; isActive: boolean; total: number; summary: ArchiveDownloadTaskSummary;
 }

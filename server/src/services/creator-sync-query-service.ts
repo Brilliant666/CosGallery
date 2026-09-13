@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { databaseManager } from '../db/database.js';
 import {directShareDeliverySql,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
 import { DOWNLOAD_STAGED_AT_PREFIX } from './archive-download-activity.js';
+import { acquisitionHeldSql, fulfillmentValidSql, sourceNeedsAcquisitionSql } from './archive-local-fulfillment-service.js';
 import type { ArchiveDownloadTask, ArchiveDownloadTaskStatus, ArchiveDownloadTaskSummary } from './archive-download-task-service.js';
 import type { ArchiveMetadataTaskStatus, ArchiveSourceState } from './archive-metadata-task-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
@@ -59,6 +60,8 @@ export type CreatorSyncRosterItem = {
 export type CreatorSyncDownloadCreator = Pick<CreatorSyncRosterItem, 'creatorId' | 'creatorName' | 'preference' | 'rating' | 'isActive'> & {
   total: number;
   summary: ArchiveDownloadTaskSummary;
+  localSatisfied?: number;
+  acquisitionReviewRequired?: number;
 };
 export type CreatorSyncStats = {
   readAt: string;
@@ -95,7 +98,7 @@ const COHORT_CTES = `
     FROM local_rows GROUP BY creator_id
   ),
   source_rows AS MATERIALIZED (
-    SELECT source.id, source.work_id, work.creator_id, source.collection_id, collections.observed_at
+    SELECT source.id, source.work_id, work.creator_id, source.collection_id, collections.observed_at,${sourceNeedsAcquisitionSql('source')} AS needs_acquisition
     FROM archive_catalog_source_works source
     JOIN archive_catalog_works work ON work.id=source.work_id
     JOIN archive_catalog_collections collections ON collections.id=source.collection_id AND collections.creator_id=work.creator_id
@@ -104,9 +107,7 @@ const COHORT_CTES = `
   source_counts AS (
     SELECT creator_id, COUNT(*) AS source_works, COUNT(DISTINCT collection_id) AS source_collections,
       MAX(observed_at) AS latest_source_at,
-      COUNT(DISTINCT CASE WHEN NOT EXISTS (SELECT 1 FROM local_rows local
-        WHERE local.creator_id=source_rows.creator_id AND local.work_id=source_rows.work_id AND local.match_status='matched')
-        THEN work_id END) AS missing_works
+      COUNT(DISTINCT CASE WHEN needs_acquisition THEN work_id END) AS missing_works
     FROM source_rows GROUP BY creator_id
   ),
   supplemental_counts AS (
@@ -341,7 +342,7 @@ export class CreatorSyncQueryService {
       if (!Number.isSafeInteger(creatorId) || creatorId <= 0) throw new Error('必须指定有效的规范 creatorId。');
       conditions.push('work.creator_id=?'); values.push(creatorId);
     }
-    return { sql: `${cohort.sql}, task_scope AS (SELECT tasks.*,work.creator_id FROM archive_catalog_download_tasks tasks
+    return { sql: `${cohort.sql}, task_scope AS (SELECT tasks.*,work.creator_id,${fulfillmentValidSql('source')} AS local_satisfied,${acquisitionHeldSql('source')} AS acquisition_held FROM archive_catalog_download_tasks tasks
       JOIN archive_catalog_source_works source ON source.id=tasks.source_work_id
       JOIN archive_catalog_works work ON work.id=source.work_id JOIN cohort ON cohort.creator_id=work.creator_id
       ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''})`, values };
@@ -411,10 +412,13 @@ export class CreatorSyncQueryService {
       const rows = this.database.prepare(`${activitySql} SELECT creator_id,creator_name,preference,rating,is_active FROM ordered_creators
         ORDER BY ${order} LIMIT ? OFFSET ?`)
         .all(...scope.values, limit, (page - 1) * limit) as Array<Pick<RosterRow, 'creator_id' | 'creator_name' | 'preference' | 'rating' | 'is_active'>>;
+      const acceptanceRows=this.database.prepare(`${scope.sql} SELECT creator_id,SUM(local_satisfied) AS satisfied,SUM(CASE WHEN acquisition_held AND NOT local_satisfied THEN 1 ELSE 0 END) AS review FROM task_scope GROUP BY creator_id`).all(...scope.values) as Array<{creator_id:number;satisfied:number;review:number}>;
+      const acceptance=new Map(acceptanceRows.map(row=>[row.creator_id,row]));
       const items = rows.map(row => {
         const counts = summary(DOWNLOAD_STATUSES, byCreator.get(row.creator_id)!);
         return { creatorId: row.creator_id, creatorName: row.creator_name, preference: row.preference, rating: row.rating,
-          isActive: !!row.is_active, total: counts.total, summary: counts };
+          isActive: !!row.is_active, total: counts.total, summary: counts,
+          localSatisfied:acceptance.get(row.creator_id)?.satisfied??0,acquisitionReviewRequired:acceptance.get(row.creator_id)?.review??0 };
       });
       return { items, total: byCreator.size, page, limit, hasMore: page * limit < byCreator.size,
         readAt: new Date().toISOString(), summary: completeSummary, taskTotal: completeSummary.total };
@@ -443,7 +447,9 @@ export class CreatorSyncQueryService {
         tasks.target_relative_directory AS targetRelativeDirectory,tasks.target_filename AS targetFilename,tasks.status,
         tasks.claimed_by AS claimedBy,tasks.claimed_at AS claimedAt,tasks.started_at AS startedAt,tasks.completed_at AS completedAt,
         tasks.download_id AS downloadId,tasks.attempt_count AS attemptCount,tasks.last_error AS lastError,
-        tasks.created_at AS createdAt,tasks.updated_at AS updatedAt
+        tasks.created_at AS createdAt,tasks.updated_at AS updatedAt,
+        CASE WHEN tasks.local_satisfied THEN 'local_satisfied' WHEN tasks.acquisition_held THEN 'review_required' ELSE 'required' END AS acquisitionState,
+        CASE WHEN tasks.local_satisfied THEN '本地已有资源满足，无需继续获取；下载执行历史保留。' WHEN tasks.acquisition_held THEN '接受决定需复核，不自动重新获取。' END AS acquisitionExplanation
       FROM task_scope tasks JOIN archive_catalog_source_works source ON source.id=tasks.source_work_id
       JOIN archive_catalog_collections collections ON collections.id=source.collection_id
       JOIN archive_catalog_creators creators ON creators.id=tasks.creator_id

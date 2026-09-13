@@ -13,7 +13,7 @@
         <strong>{{ payload.taskTotal }} 条匹配任务 · {{ payload.total }} 位博主</strong>
         <span v-for="status in statuses" :key="status">{{ statusLabel(status) }} {{ payload.summary[status] }}</span>
       </div>
-      <p data-test="stage2-preview-scope" class="text-xs text-muted">汇总统计完整匹配范围，不受明细分页影响。读取时间：{{ payload.readAt }}</p>
+      <p data-test="stage2-preview-scope" class="text-xs text-muted">汇总统计完整匹配范围，不受明细分页影响。任务状态保留实际执行历史；本地满足与待复核另列，不计为新入库任务。读取时间：{{ payload.readAt }}</p>
       <p v-if="!payload.total" class="text-sm text-muted">当前筛选没有匹配的下载任务。</p>
       <div v-if="payload.items.length" data-test="stage2-creators" class="grid gap-2">
         <article v-for="group in payload.items" :key="group.creatorId" :data-creator-id="group.creatorId" class="overflow-hidden rounded-xl border border-border bg-bg">
@@ -21,6 +21,9 @@
             <span><strong class="block text-sm">{{ group.creatorName }} <small class="font-normal text-muted">#{{ group.creatorId }}</small></strong><small class="mt-1 block text-muted">完整汇总 {{ group.total }} 条 · {{ expanded.has(group.creatorId) ? '收起作品' : '展开作品' }}</small></span>
             <span class="flex flex-wrap gap-3"><span v-for="status in statuses.filter(value => group.summary[value] > 0)" :key="status"><strong>{{ group.summary[status] }}</strong> {{ statusLabel(status) }}</span></span>
           </button>
+          <p v-if="group.localSatisfied || group.acquisitionReviewRequired" data-test="stage2-local-acceptance" class="m-0 px-3 pb-3 text-xs text-muted">
+            本地已有资源满足 {{ group.localSatisfied ?? 0 }} 条 · 接受决定待复核 {{ group.acquisitionReviewRequired ?? 0 }} 条（未计为已满足，不自动重新获取）
+          </p>
           <div v-if="expanded.has(group.creatorId)" :id="`stage2-creator-${group.creatorId}`" class="border-t border-border bg-surface p-3">
             <p v-if="detailErrors[group.creatorId]" role="alert" class="text-sm text-red-700">{{ detailErrors[group.creatorId] }} <button class="underline" @click="loadDetail(group.creatorId)">重试读取</button></p>
             <p v-if="detailLoading[group.creatorId]" class="text-xs text-muted">正在读取明细…</p>
@@ -29,7 +32,7 @@
               <div class="max-h-[32rem] overflow-auto">
                 <table class="w-full min-w-[46rem] border-collapse text-left text-sm">
                   <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">作品</th><th class="p-3">网盘目录</th><th class="p-3">本地目标</th><th class="p-3">状态</th></tr></thead>
-                  <tbody><tr v-for="task in details[group.creatorId]!.items" :key="task.id" data-test="stage2-task" class="border-t border-border"><td class="p-3"><span class="font-semibold">{{ task.sourceOrderLabel ?? task.targetFilename }}</span><small class="mt-0.5 block text-muted">{{ task.title }}</small></td><td class="p-3 font-mono text-xs">{{ task.destinationPath }}/{{ task.sourceFolderName }}</td><td class="p-3 font-mono text-xs">{{ task.targetRelativeDirectory }}\{{ task.targetFilename }}</td><td class="p-3">{{ statusLabel(task.status) }}</td></tr></tbody>
+                  <tbody><tr v-for="task in details[group.creatorId]!.items" :key="task.id" data-test="stage2-task" class="border-t border-border"><td class="p-3"><span class="font-semibold">{{ task.sourceOrderLabel ?? task.targetFilename }}</span><small class="mt-0.5 block text-muted">{{ task.title }}</small></td><td class="p-3 font-mono text-xs">{{ task.destinationPath }}/{{ task.sourceFolderName }}</td><td class="p-3 font-mono text-xs">{{ task.targetRelativeDirectory }}\{{ task.targetFilename }}</td><td class="p-3"><span>{{ statusLabel(task.status) }}</span><small v-if="task.acquisitionState && task.acquisitionState !== 'required'" data-test="stage2-acquisition" class="mt-1 block text-muted">{{ task.acquisitionExplanation || (task.acquisitionState === 'local_satisfied' ? '本地已有资源满足，无需继续获取。' : '接受决定待复核，未计为已满足；不自动重新获取。') }}</small></td></tr></tbody>
                 </table>
               </div>
               <div class="mt-3 flex justify-center gap-3 text-xs"><button :disabled="detailLoading[group.creatorId] || details[group.creatorId]!.page <= 1" @click="loadDetail(group.creatorId, details[group.creatorId]!.page - 1)">上一页明细</button><span>第 {{ details[group.creatorId]!.page }} / {{ pages(details[group.creatorId]!) }} 页 · 共 {{ details[group.creatorId]!.total }} 条</span><button :disabled="detailLoading[group.creatorId] || !details[group.creatorId]!.hasMore" @click="loadDetail(group.creatorId, details[group.creatorId]!.page + 1)">下一页明细</button></div>

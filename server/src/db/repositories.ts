@@ -74,8 +74,19 @@ const NOT_EXPLICIT_FOLDER_COVER_SQL =
   `AND LOWER(cover_images.filename) IN (${COVER_FILENAME_SQL})` +
   `)`;
 
-const VISIBLE_POST_WHERE_SQL =
+// Presentation chooses an explicit primary copy, never a title/number match.
+// Keep secondary Posts and their media IDs intact for existing direct links.
+const DEFAULT_WORK_COPY_SQL = `NOT EXISTS (
+  SELECT 1 FROM archive_catalog_local_works presentation_copy
+  JOIN archive_catalog_works presentation_work ON presentation_work.id=presentation_copy.work_id
+  WHERE presentation_copy.post_id=posts.id AND presentation_work.primary_local_work_id IS NOT NULL
+    AND (presentation_work.primary_local_work_id<>presentation_copy.id OR presentation_copy.is_active<>1
+      OR NOT EXISTS (SELECT 1 FROM archive_catalog_local_creator_folders presentation_folder
+        WHERE presentation_folder.id=presentation_copy.local_creator_folder_id AND presentation_folder.is_active=1))
+)`;
+const READABLE_POST_WHERE_SQL =
   `posts.is_deleted = 0 AND posts.is_trashed = 0 AND ${NORMAL_FOLDER_ROLE_SQL} AND ${NOT_EXPLICIT_FOLDER_COVER_SQL}`;
+const VISIBLE_POST_WHERE_SQL = `${READABLE_POST_WHERE_SQL} AND ${DEFAULT_WORK_COPY_SQL}`;
 // Match the gallery identity projection: ambiguous physical owners are not a
 // canonical creator's readable scope, even if a damaged legacy index permits them.
 const CANONICAL_CREATOR_FOLDER_IDS_SQL = `
@@ -85,7 +96,7 @@ const CANONICAL_CREATOR_FOLDER_IDS_SQL = `
   HAVING COUNT(DISTINCT creator_id)=1 AND MIN(creator_id)=?
 `;
 const VISIBLE_POST_WHERE_UNSCOPED_SQL =
-  `is_deleted = 0 AND is_trashed = 0 AND folder_id IN (${NORMAL_FOLDER_ID_SUBQUERY_SQL}) AND ${NOT_EXPLICIT_FOLDER_COVER_SQL}`;
+  `is_deleted = 0 AND is_trashed = 0 AND folder_id IN (${NORMAL_FOLDER_ID_SUBQUERY_SQL}) AND ${NOT_EXPLICIT_FOLDER_COVER_SQL} AND ${DEFAULT_WORK_COPY_SQL}`;
 
 const STORY_IMAGE_WHERE_SQL = 'images.is_deleted = 0 AND images.is_trashed = 0';
 const STORY_IMAGE_WHERE_UNSCOPED_SQL = 'is_deleted = 0 AND is_trashed = 0';
@@ -151,6 +162,7 @@ const NEWEST_POST_AVATAR_IMAGE_ID_SQL = `
   WHERE p.folder_id = folders.id
     AND p.is_deleted = 0
     AND p.is_trashed = 0
+    AND ${DEFAULT_WORK_COPY_SQL.replaceAll('posts.id', 'p.id')}
   ORDER BY p.sort_timestamp DESC, p.id DESC
   LIMIT 1
 `;
@@ -219,6 +231,10 @@ const POST_SAVED_SELECT_SQL = `
   ) THEN 1 ELSE 0 END AS isSaved
 `;
 
+const WORK_DISPLAY_TITLE_SQL = `(SELECT work.display_title FROM archive_catalog_local_works copy
+  JOIN archive_catalog_works work ON work.id=copy.work_id
+  WHERE copy.post_id=posts.id AND copy.identity_policy IN ('manual','local_only') ORDER BY copy.id LIMIT 1)`;
+
 const BASE_POST_SELECT_SQL = `
   SELECT
     posts.id,
@@ -231,6 +247,7 @@ const BASE_POST_SELECT_SQL = `
     posts.post_type AS postType,
     posts.content_rating AS contentRating,
     posts.source_path AS sourcePath,
+    ${WORK_DISPLAY_TITLE_SQL} AS workDisplayTitle,
     images.width,
     images.height,
     images.media_type AS mediaType,
@@ -272,6 +289,7 @@ const FOLDER_SUMMARY_SELECT_SQL = `
       WHERE posts.folder_id = folders.id
         AND posts.is_deleted = 0
         AND posts.is_trashed = 0
+        AND ${DEFAULT_WORK_COPY_SQL}
     ) AS post_count,
     (
       SELECT COUNT(*)
@@ -281,6 +299,7 @@ const FOLDER_SUMMARY_SELECT_SQL = `
       WHERE p.folder_id = folders.id
         AND p.is_deleted = 0
         AND p.is_trashed = 0
+        AND ${DEFAULT_WORK_COPY_SQL.replaceAll('posts.id', 'p.id')}
         AND NOT (
           img.folder_id = p.folder_id
           AND LOWER(img.filename) IN (${COVER_FILENAME_SQL})
@@ -295,6 +314,7 @@ const FOLDER_SUMMARY_SELECT_SQL = `
         AND p.is_deleted = 0
         AND p.is_trashed = 0
         AND p.post_type = 'carousel'
+        AND ${DEFAULT_WORK_COPY_SQL.replaceAll('posts.id', 'p.id')}
         AND NOT (
           img.folder_id = p.folder_id
           AND LOWER(img.filename) IN (${COVER_FILENAME_SQL})
@@ -309,6 +329,7 @@ const FOLDER_SUMMARY_SELECT_SQL = `
         AND p.is_deleted = 0
         AND p.is_trashed = 0
         AND p.post_type = 'single'
+        AND ${DEFAULT_WORK_COPY_SQL.replaceAll('posts.id', 'p.id')}
         AND img.media_type = 'video'
     ) AS video_count,
     (
@@ -319,6 +340,7 @@ const FOLDER_SUMMARY_SELECT_SQL = `
       WHERE p.folder_id = folders.id
         AND p.is_deleted = 0
         AND p.is_trashed = 0
+        AND ${DEFAULT_WORK_COPY_SQL.replaceAll('posts.id', 'p.id')}
     ) AS latest_image_mtime_ms,
     CASE WHEN ${HAS_AVATAR_STORY_SQL} THEN 1 ELSE 0 END AS has_avatar_story,
     ${FOLDER_SUMMARY_AVATAR_IMAGE_ID_SQL} AS summary_avatar_image_id,
@@ -334,6 +356,7 @@ const ALL_FOLDER_SUMMARIES_SQL = `
     SELECT posts.* FROM posts
     JOIN folders ON folders.id=posts.folder_id AND folders.role='normal'
     WHERE posts.is_deleted=0 AND posts.is_trashed=0
+      AND ${DEFAULT_WORK_COPY_SQL}
   ), post_totals AS (
     SELECT folder_id, COUNT(*) AS post_count,
       MAX(CASE WHEN content_rating='R18' THEN 1 ELSE 0 END) AS has_r18
@@ -1744,6 +1767,7 @@ export const postRepository = {
         posts.caption AS caption,
         posts.post_type AS postType,
         posts.source_path AS sourcePath,
+        ${WORK_DISPLAY_TITLE_SQL} AS workDisplayTitle,
         images.width,
         images.height,
         images.media_type AS mediaType,
@@ -2005,6 +2029,7 @@ export const postRepository = {
         posts.caption AS caption,
         posts.post_type AS postType,
         posts.source_path AS sourcePath,
+        ${WORK_DISPLAY_TITLE_SQL} AS workDisplayTitle,
         images.width,
         images.height,
         images.media_type AS mediaType,
@@ -2267,6 +2292,7 @@ export const creatorRatingRepository = {
         JOIN images ON images.id = post_items.image_id
         WHERE posts.is_deleted = 0
           AND posts.is_trashed = 0
+          AND ${DEFAULT_WORK_COPY_SQL}
           AND images.is_deleted = 0
           AND images.is_trashed = 0
           AND images.media_type = 'image'
@@ -2277,7 +2303,7 @@ export const creatorRatingRepository = {
           COUNT(*) AS work_count,
           MAX(sort_timestamp) AS latest_work_at
         FROM posts
-        WHERE is_deleted = 0 AND is_trashed = 0
+        WHERE is_deleted = 0 AND is_trashed = 0 AND ${DEFAULT_WORK_COPY_SQL}
         GROUP BY folder_id
       )
       SELECT
@@ -2312,6 +2338,19 @@ export const creatorRatingRepository = {
 };
 
 export const canonicalCreatorGalleryRepository = {
+  listPrimaryCopies(creatorId: number) {
+    return database.prepare(`SELECT work.id AS workId, work.display_title AS title,
+      copy.post_id AS postId, copy.absolute_path AS absolutePath,
+      CASE WHEN copy.is_active=1 AND local_folder.is_active=1 AND posts.id IS NOT NULL AND posts.is_deleted=0 AND posts.is_trashed=0
+        THEN 1 ELSE 0 END AS indexedAvailable
+      FROM archive_catalog_works work
+      LEFT JOIN archive_catalog_local_works copy ON copy.id=work.primary_local_work_id AND copy.work_id=work.id
+      LEFT JOIN archive_catalog_local_creator_folders local_folder ON local_folder.id=copy.local_creator_folder_id
+      LEFT JOIN posts ON posts.id=copy.post_id
+      WHERE work.creator_id=? AND work.primary_local_work_id IS NOT NULL ORDER BY work.id`).all(creatorId) as unknown as Array<{
+        workId: number; title: string; postId: number | null; absolutePath: string | null; indexedAvailable: number;
+      }>;
+  },
   listUniqueFolderCreatorIds(): Array<{ folderId: number; creatorId: number }> {
     return database.prepare(`SELECT local.gallery_folder_id AS folderId, MIN(local.creator_id) AS creatorId
       FROM archive_catalog_local_creator_folders local
@@ -2359,6 +2398,7 @@ export const canonicalCreatorGalleryRepository = {
         INNER JOIN folders ON folders.id = posts.folder_id
         WHERE posts.is_deleted = 0
           AND posts.is_trashed = 0
+          AND ${DEFAULT_WORK_COPY_SQL}
           AND folders.role = 'normal'
           AND NOT EXISTS (
             SELECT 1
@@ -2394,7 +2434,7 @@ export const canonicalCreatorGalleryRepository = {
           FROM archive_catalog_creator_sources AS sources
           WHERE sources.creator_id = creators.id
         ) END AS ratingSourceCount,
-        folder_totals.work_count AS workCount,
+        COALESCE(folder_totals.work_count, 0) AS workCount,
         folder_totals.latest_work_at AS latestWorkAt,
         COALESCE(
           (
@@ -2445,16 +2485,26 @@ export const canonicalCreatorGalleryRepository = {
           ELSE 3
         END AS coverPriority
       FROM folders
-      INNER JOIN folder_totals ON folder_totals.folder_id = folders.id
+      LEFT JOIN folder_totals ON folder_totals.folder_id = folders.id
       LEFT JOIN (
         SELECT gallery_folder_id, MIN(creator_id) AS creator_id
         FROM archive_catalog_local_creator_folders
-        WHERE is_active=1 AND match_status='matched' AND creator_id IS NOT NULL
+        WHERE match_status='matched' AND creator_id IS NOT NULL AND (is_active=1 OR EXISTS (
+          SELECT 1 FROM archive_catalog_works known_work JOIN archive_catalog_local_works known_copy
+            ON known_copy.id=known_work.primary_local_work_id
+          WHERE known_copy.local_creator_folder_id=archive_catalog_local_creator_folders.id
+        ))
         GROUP BY gallery_folder_id HAVING COUNT(DISTINCT creator_id)=1
       ) AS local
         ON local.gallery_folder_id = folders.id
       LEFT JOIN archive_catalog_creators AS creators ON creators.id = local.creator_id
       WHERE folders.role = 'normal'
+        AND (folder_totals.work_count>0 OR EXISTS (
+          SELECT 1 FROM archive_catalog_works primary_work
+          JOIN archive_catalog_local_works primary_copy ON primary_copy.id=primary_work.primary_local_work_id
+          JOIN archive_catalog_local_creator_folders primary_folder ON primary_folder.id=primary_copy.local_creator_folder_id
+          WHERE primary_folder.gallery_folder_id=folders.id
+        ))
       ORDER BY folder_totals.latest_work_at DESC, folders.id ASC
       `
     ).all() as unknown as CosGalleryFolderCandidateRecord[];
@@ -2514,7 +2564,7 @@ export const canonicalCreatorGalleryRepository = {
        INNER JOIN folders ON folders.id = posts.folder_id
        WHERE posts.id = ?
          AND posts.folder_id IN (${CANONICAL_CREATOR_FOLDER_IDS_SQL})
-         AND ${VISIBLE_POST_WHERE_SQL}
+         AND ${READABLE_POST_WHERE_SQL}
        LIMIT 1`
     ).get(postId, creatorId));
   }

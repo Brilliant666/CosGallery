@@ -96,6 +96,19 @@ describe('CanonicalCreatorView', () => {
     expect(wrapper.get('h1').text()).toBe('lunana');
   });
 
+  it('explains unavailable explicit primary copies without offering an automatic replacement', async () => {
+    fetchWorks.mockResolvedValue({ ...payload(1), items: [], total: 0, hasMore: false,
+      creator: { ...creator(), workCount: 0, unavailablePrimaryWorks: [{ workId: 10, postId: 101,
+        title: 'Local album', reason: '主副本未索引或不可用，未自动切换其他副本' }] } });
+    const router = galleryTestRouter();
+    await router.push('/library/166');
+    const wrapper = mount(CanonicalCreatorView, { props: { creatorId: '166' }, global: { plugins: [router] } });
+    await flushPromises();
+    expect(wrapper.get('[role="status"]').text()).toContain('Local album');
+    expect(wrapper.get('[role="status"]').text()).toContain('未自动切换');
+    expect(wrapper.findAll('[role="status"] button')).toHaveLength(0);
+  });
+
   it('renders works from every linked Folder and preserves canonical navigation context', async () => {
     const router = galleryTestRouter();
     await router.push('/library/166?returnTo=/library%3Fq%3Dlunananya%26page%3D2');

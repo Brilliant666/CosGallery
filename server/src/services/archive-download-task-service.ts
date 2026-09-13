@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { databaseManager } from '../db/database.js';
 import {directShareMetadata,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
 import { preserveDownloadStagedAt, recordDownloadStagedAt } from './archive-download-activity.js';
+import { acquisitionHeldSql, fulfillmentValidSql, sourceNeedsAcquisitionSql } from './archive-local-fulfillment-service.js';
 
 export type ArchiveDownloadTaskStatus =
   | 'pending'
@@ -46,6 +47,8 @@ export type ArchiveDownloadTask = {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+  acquisitionState?: 'required' | 'local_satisfied' | 'review_required';
+  acquisitionExplanation?: string | null;
 };
 
 export type ArchiveDownloadTaskSummary = Record<ArchiveDownloadTaskStatus, number> & {
@@ -121,6 +124,8 @@ type TaskRow = {
   last_error: string | null;
   created_at: string;
   updated_at: string;
+  local_satisfied?: number;
+  acquisition_held?: number;
 };
 
 type PlanCandidateRow = {
@@ -188,6 +193,8 @@ function mapTask(row: TaskRow): ArchiveDownloadTask {
     lastError: row.last_error,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+    ,acquisitionState: row.local_satisfied ? 'local_satisfied' : row.acquisition_held ? 'review_required' : 'required'
+    ,acquisitionExplanation: row.local_satisfied ? '本地已有资源满足，无需继续获取；下载执行历史保留。' : row.acquisition_held ? '接受决定需复核，不自动重新获取。' : null
   };
 }
 
@@ -266,12 +273,15 @@ export class ArchiveDownloadTaskService {
            AND creators.is_active = 1
            AND source_works.is_active = 1
            AND collections.is_active = 1
+           AND ${sourceNeedsAcquisitionSql('source_works')}
+           AND NOT ${acquisitionHeldSql('source_works')}
            AND NOT EXISTS (
              SELECT 1
              FROM archive_catalog_local_works local_works
              JOIN archive_catalog_local_creator_folders local_folders
                ON local_folders.id = local_works.local_creator_folder_id
              WHERE local_works.work_id = works.id
+               AND NOT EXISTS (SELECT 1 FROM archive_catalog_work_decisions manual WHERE manual.local_work_id=local_works.id)
                AND local_works.is_active = 1
                AND local_folders.is_active = 1
            )
@@ -348,6 +358,8 @@ export class ArchiveDownloadTaskService {
             JOIN archive_catalog_local_creator_folders local_folders
               ON local_folders.id = local_works.local_creator_folder_id
             WHERE local_works.is_active = 1
+              AND NOT EXISTS (SELECT 1 FROM archive_catalog_work_decisions manual WHERE manual.local_work_id=local_works.id)
+              AND NOT ${acquisitionHeldSql('source_works')}
               AND EXISTS (SELECT 1 FROM archive_catalog_creators active_creator WHERE active_creator.id=works.creator_id AND active_creator.is_active=1)
               AND local_folders.is_active = 1
               ${creatorFilter}
@@ -374,6 +386,7 @@ export class ArchiveDownloadTaskService {
       `DELETE FROM archive_catalog_download_tasks
        WHERE provider = ?
           AND status IN ('pending', 'failed', 'cancelled')
+          AND NOT EXISTS (SELECT 1 FROM archive_catalog_local_fulfillments held WHERE held.source_work_id=archive_catalog_download_tasks.source_work_id)
           AND EXISTS (SELECT 1 FROM archive_catalog_source_works active_source
             JOIN archive_catalog_works active_work ON active_work.id=active_source.work_id
             JOIN archive_catalog_creators active_creator ON active_creator.id=active_work.creator_id
@@ -452,6 +465,7 @@ export class ArchiveDownloadTaskService {
     if (options.seedTaskId !== undefined) {
       if (!Number.isSafeInteger(options.seedTaskId) || options.seedTaskId <= 0) throw new Error('指定暂存任务 ID 无效，不能扩大领取范围。');
       const target = this.database.prepare(`SELECT works.creator_id, tasks.provider,
+          ${acquisitionHeldSql('source_works')} AS acquisition_held,
           creators.is_active AS creator_active, source_works.is_active AS source_active, collections.is_active AS collection_active,
           EXISTS (SELECT 1 FROM archive_catalog_deliveries deliveries WHERE deliveries.collection_id=collections.id
             AND deliveries.provider=tasks.provider AND ${currentBaiduDeliverySql('deliveries','tasks.target_filename')}) AS delivery_ready
@@ -460,8 +474,9 @@ export class ArchiveDownloadTaskService {
         JOIN archive_catalog_works works ON works.id=source_works.work_id
         JOIN archive_catalog_creators creators ON creators.id=works.creator_id
         JOIN archive_catalog_collections collections ON collections.id=source_works.collection_id
-        WHERE tasks.id=?`).get(options.seedTaskId) as {creator_id:number;provider:string;creator_active:number;source_active:number;collection_active:number;delivery_ready:number}|undefined;
+        WHERE tasks.id=?`).get(options.seedTaskId) as {creator_id:number;provider:string;creator_active:number;source_active:number;collection_active:number;delivery_ready:number;acquisition_held:number}|undefined;
       if (!target) throw new Error('指定暂存任务不存在。');
+      if(target.acquisition_held) throw new Error('指定任务已有本地接受决定或待复核，不能再次领取。');
       if (!target.creator_active || !target.source_active || !target.collection_active || !target.delivery_ready) {
         throw new Error('指定暂存任务的博主已停用或来源目录不可用，请先核验 Stage 1。');
       }
@@ -496,6 +511,7 @@ export class ArchiveDownloadTaskService {
            JOIN archive_catalog_works works ON works.id = source_works.work_id
            JOIN archive_catalog_creators creators ON creators.id = works.creator_id
            WHERE tasks.status IN ('pending', 'failed')
+             AND NOT ${acquisitionHeldSql('source_works')}
              AND creators.is_active=1 AND source_works.is_active=1
              AND EXISTS (SELECT 1 FROM archive_catalog_collections c JOIN archive_catalog_deliveries d ON d.collection_id=c.id
                WHERE c.id=source_works.collection_id AND c.is_active=1 AND d.provider=tasks.provider
@@ -532,6 +548,7 @@ export class ArchiveDownloadTaskService {
            AND source_works.collection_id = ?
            AND tasks.provider = ?
            AND source_works.is_active=1
+           AND NOT ${acquisitionHeldSql('source_works')}
            AND EXISTS (SELECT 1 FROM archive_catalog_collections c JOIN archive_catalog_deliveries d ON d.collection_id=c.id
              WHERE c.id=source_works.collection_id AND c.is_active=1 AND d.provider=tasks.provider
              AND ${currentBaiduDeliverySql('d','tasks.target_filename')})
@@ -577,6 +594,7 @@ export class ArchiveDownloadTaskService {
   }): ArchiveDownloadTask | null {
     const current = this.get(id);
     if (!current) return null;
+    if(current.acquisitionState !== 'required' && ['pending','claimed','downloading'].includes(patch.status) && patch.status!==current.status) throw new Error('本地接受决定阻止重新获取；需明确复核，历史回执仍可正常提交。');
     if (patch.status !== current.status && !ALLOWED_TRANSITIONS[current.status].has(patch.status)) {
       throw new Error(`下载任务不能从 ${current.status} 变更为 ${patch.status}。`);
     }
@@ -650,6 +668,8 @@ export class ArchiveDownloadTaskService {
                    source_works.source_order,
                    source_works.source_order_label,
                    source_works.source_title,
+                   ${fulfillmentValidSql('source_works')} AS local_satisfied,
+                   ${acquisitionHeldSql('source_works')} AS acquisition_held,
                    tasks.provider,
                    COALESCE(deliveries.source_folder_name, '') AS source_folder_name,
                    COALESCE(deliveries.destination_path, '') AS destination_path,

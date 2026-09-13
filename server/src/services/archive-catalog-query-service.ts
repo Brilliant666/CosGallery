@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { sourceNeedsAcquisitionSql } from './archive-local-fulfillment-service.js';
 
 import { databaseManager } from '../db/database.js';
 
@@ -301,15 +302,7 @@ export class ArchiveCatalogQueryService {
        WHERE works.creator_id = ?
          AND source_works.is_active = 1
          AND collections.is_active = 1
-         AND NOT EXISTS (
-           SELECT 1
-           FROM archive_catalog_local_works local_works
-           JOIN archive_catalog_local_creator_folders local_folders
-             ON local_folders.id = local_works.local_creator_folder_id
-           WHERE local_works.work_id = works.id
-             AND local_works.is_active = 1
-             AND local_folders.is_active = 1
-         )
+         AND ${sourceNeedsAcquisitionSql('source_works')}
        ORDER BY source_works.source COLLATE NOCASE,
                 collections.source_collection_id COLLATE NOCASE,
                 source_works.source_order IS NULL,
@@ -431,6 +424,7 @@ export class ArchiveCatalogQueryService {
        JOIN archive_catalog_collections collections ON collections.id = source_works.collection_id
        WHERE source_works.is_active = 1 AND collections.is_active = 1`
     ).all() as RemoteWorkRow[];
+    const missingRows=this.database.prepare(`SELECT DISTINCT works.creator_id,works.id AS work_id FROM archive_catalog_source_works source_works JOIN archive_catalog_works works ON works.id=source_works.work_id JOIN archive_catalog_collections c ON c.id=source_works.collection_id WHERE source_works.is_active=1 AND c.is_active=1 AND ${sourceNeedsAcquisitionSql('source_works')}`).all() as RemoteWorkRow[];
     const localWorks = this.database.prepare(
       `SELECT local_folders.creator_id, local_works.work_id, local_works.match_status
        FROM archive_catalog_local_works local_works
@@ -465,10 +459,7 @@ export class ArchiveCatalogQueryService {
     return creators.map((creator) => {
       const remote = remoteByCreator.get(creator.id) ?? new Set<number>();
       const matched = matchedByCreator.get(creator.id) ?? new Set<number>();
-      let missingWorks = 0;
-      for (const workId of remote) {
-        if (!matched.has(workId)) missingWorks += 1;
-      }
+      const missingWorks = missingRows.filter(row=>row.creator_id===creator.id).length;
       return {
         id: creator.id,
         name: creator.canonical_name,

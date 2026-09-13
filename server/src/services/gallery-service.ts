@@ -517,7 +517,7 @@ function mapFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivative
   return {
     ...rest,
     postType: rest.postType ?? 'single',
-    carouselTitle: rest.postType === 'carousel' && rest.sourcePath ? getLeafPathName(rest.sourcePath) : null,
+    carouselTitle: rest.workDisplayTitle ?? (rest.postType === 'carousel' && rest.sourcePath ? getLeafPathName(rest.sourcePath) : null),
     isAnimated: Boolean(rest.isAnimated),
     isSaved: Boolean(isSaved),
     folderParentName: getParentFolderDisplayName(rest.folderPath),
@@ -594,7 +594,7 @@ function mapSharedFeedImage(image: IndexedFeedImage, derivativeVersion = getDeri
     folderName: image.folderName,
     filename: image.filename,
     caption: image.caption,
-    carouselTitle: image.postType === 'carousel' && image.sourcePath ? getLeafPathName(image.sourcePath) : null,
+    carouselTitle: image.workDisplayTitle ?? (image.postType === 'carousel' && image.sourcePath ? getLeafPathName(image.sourcePath) : null),
     width: image.width,
     height: image.height,
     mediaType: image.mediaType,
@@ -616,7 +616,7 @@ function mapImageDetail(image: IndexedImageDetail, derivativeVersion = getDeriva
   return {
     ...rest,
     postType: rest.postType ?? 'single',
-    carouselTitle: rest.postType === 'carousel' && rest.sourcePath ? getLeafPathName(rest.sourcePath) : null,
+    carouselTitle: rest.workDisplayTitle ?? (rest.postType === 'carousel' && rest.sourcePath ? getLeafPathName(rest.sourcePath) : null),
     isAnimated: Boolean(rest.isAnimated),
     isSaved: Boolean(isSaved),
     exif: deserializeImageExifData(exifJson),
@@ -667,7 +667,7 @@ function mapSharedImageDetail(image: IndexedImageDetail, derivativeVersion = get
     folderName: image.folderName,
     filename: image.filename,
     caption: image.caption,
-    carouselTitle: image.postType === 'carousel' && image.sourcePath ? getLeafPathName(image.sourcePath) : null,
+    carouselTitle: image.workDisplayTitle ?? (image.postType === 'carousel' && image.sourcePath ? getLeafPathName(image.sourcePath) : null),
     mediaType: image.mediaType,
     mimeType: image.mimeType,
     width: image.width,
@@ -1494,7 +1494,14 @@ export const galleryService = {
   getCanonicalCreator(id: number) {
     if (!storageService.getState().libraryAvailable) return null;
     const creator = buildCosGalleryIdentityItems().find(item => item.identityType === 'creator' && item.id === id);
-    return creator ? { ...creator, ...canonicalCreatorGalleryRepository.getVisibleMediaSummary(id) } : null;
+    return creator ? {
+      ...creator,
+      ...canonicalCreatorGalleryRepository.getVisibleMediaSummary(id),
+      unavailablePrimaryWorks: canonicalCreatorGalleryRepository.listPrimaryCopies(id)
+        .filter(copy => copy.indexedAvailable !== 1)
+        .map(copy => ({ workId: copy.workId, postId: copy.postId, title: copy.title,
+          reason: '主副本未索引或不可用，未自动切换其他副本' }))
+    } : null;
   },
 
   getCanonicalCreatorWorks(

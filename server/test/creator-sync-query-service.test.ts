@@ -371,7 +371,7 @@ describe('shared creator sync read model', () => {
     service.roster({ limit: 100 }); expect(prepare).toHaveBeenCalledTimes(2); prepare.mockClear();
     service.metadataCreators({ limit: 100 }); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockClear();
     service.stats(); expect(prepare).toHaveBeenCalledTimes(5); prepare.mockClear();
-    service.downloadCreators(); expect(prepare).toHaveBeenCalledTimes(2); prepare.mockClear();
+    service.downloadCreators(); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockClear();
     service.downloadTaskPage({ creatorId: a }); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockRestore();
     expect(snapshot()).toBe(before);
     expect(() => service.roster({ page: 0 })).toThrow();

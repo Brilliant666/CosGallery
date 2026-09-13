@@ -17,6 +17,8 @@ import {
   TREAT_CAROUSELS_AS_FOLDERS_SETTING_KEY
 } from '../constants/app-setting-keys.js';
 import { appConfig } from '../config/env.js';
+import { databaseManager } from '../db/database.js';
+import { runWithAdmissionBarrier } from './local-admission-lock.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import {
   appSettingsRepository,
@@ -818,9 +820,11 @@ class ScannerService {
         options.beforeEnqueue();
       }
       const runWithMaintenanceLock = () => maintenanceOperationLock.runExclusive(async () => {
+        return runWithAdmissionBarrier(databaseManager.connection, async () => {
         const { permanentDeletionService } = await import('./permanent-deletion-service.js');
         await permanentDeletionService.recoverPendingDeletionsWhileLocked();
         return job();
+        });
       });
       this.queue = this.queue.then(runWithMaintenanceLock, runWithMaintenanceLock);
       return await this.queue;

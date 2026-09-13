@@ -288,6 +288,8 @@ CREATE TABLE IF NOT EXISTS archive_catalog_works (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   creator_id INTEGER NOT NULL,
   display_title TEXT NOT NULL,
+  title_policy TEXT NOT NULL DEFAULT 'auto' CHECK(title_policy IN ('auto','manual')),
+  primary_local_work_id INTEGER NULL REFERENCES archive_catalog_local_works(id),
   content_rating TEXT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -341,6 +343,9 @@ CREATE TABLE IF NOT EXISTS archive_catalog_local_works (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   local_creator_folder_id INTEGER NOT NULL,
   work_id INTEGER NULL,
+  identity_policy TEXT NOT NULL DEFAULT 'auto' CHECK(identity_policy IN ('auto','manual','local_only')),
+  post_id INTEGER NULL REFERENCES posts(id),
+  provenance_json TEXT NULL,
   relative_path TEXT NOT NULL,
   absolute_path TEXT NOT NULL,
   folder_name TEXT NOT NULL,
@@ -363,6 +368,39 @@ CREATE TABLE IF NOT EXISTS archive_catalog_local_works (
   CHECK (match_status IN ('matched', 'unmatched', 'ambiguous')),
   CHECK (is_active IN (0, 1))
 );
+
+CREATE TABLE IF NOT EXISTS archive_catalog_work_decisions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, decision_key TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
+ work_id INTEGER REFERENCES archive_catalog_works(id), local_work_id INTEGER REFERENCES archive_catalog_local_works(id),
+ source_work_id INTEGER REFERENCES archive_catalog_source_works(id), reason TEXT NOT NULL, payload_json TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','revoked')),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, revoked_at TEXT, revoked_reason TEXT
+);
+CREATE TABLE IF NOT EXISTS archive_catalog_source_bindings (
+ collection_id INTEGER NOT NULL REFERENCES archive_catalog_collections(id), source_work_id TEXT NOT NULL,
+ work_id INTEGER NOT NULL REFERENCES archive_catalog_works(id), decision_id INTEGER NOT NULL REFERENCES archive_catalog_work_decisions(id),
+ PRIMARY KEY(collection_id,source_work_id)
+);
+CREATE TABLE IF NOT EXISTS archive_catalog_local_fulfillments (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, decision_id INTEGER NOT NULL REFERENCES archive_catalog_work_decisions(id),
+ source_work_id INTEGER NOT NULL REFERENCES archive_catalog_source_works(id), local_work_id INTEGER NOT NULL REFERENCES archive_catalog_local_works(id),
+ work_id INTEGER NOT NULL REFERENCES archive_catalog_works(id), task_id INTEGER REFERENCES archive_catalog_download_tasks(id),
+ source_snapshot_json TEXT NOT NULL, local_snapshot_json TEXT NOT NULL, reason TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','revoked','stale')),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, revoked_at TEXT, revoked_reason TEXT
+);
+CREATE TABLE IF NOT EXISTS archive_local_admission_plans (
+ plan_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, payload_json TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS archive_local_admission_items (
+ plan_id TEXT NOT NULL REFERENCES archive_local_admission_plans(plan_id), item_key TEXT NOT NULL, state TEXT NOT NULL,
+ manifest_json TEXT NOT NULL, work_id INTEGER REFERENCES archive_catalog_works(id),
+ local_work_id INTEGER REFERENCES archive_catalog_local_works(id), last_error TEXT,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(plan_id,item_key)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_local_work_post ON archive_catalog_local_works(post_id) WHERE post_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS archive_catalog_import_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
