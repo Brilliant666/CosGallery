@@ -13,7 +13,7 @@ export type ArchiveCatalogListOptions = {
   rating?: ArchiveCatalogRating | 'unclassified';
   active?: 'active' | 'inactive' | 'all';
   hasLocal?: 'yes' | 'no';
-  hasSource?: 'yes' | 'no';
+  hasSource?: 'yes' | 'no' | 'no-unchecked' | 'no-not-found';
   state?: ArchiveCatalogState;
   query?: string;
 };
@@ -180,6 +180,11 @@ export class ArchiveCatalogQueryService {
 
   listCreators(options: ArchiveCatalogListOptions): ArchiveCatalogCreatorsPayload {
     const allItems = this.buildCreatorItems();
+    const checkStates = new Map<number, string>();
+    if (options.hasSource === 'no-unchecked' || options.hasSource === 'no-not-found') {
+      const tasks = this.database.prepare(`SELECT creator_id, status FROM archive_catalog_metadata_tasks WHERE source='costuan'`).all() as Array<{creator_id:number;status:string}>;
+      for (const task of tasks) checkStates.set(task.creator_id, task.status);
+    }
     const normalizedQuery = normalizeSearch(options.query ?? '');
     const aliasMatches = new Set<number>();
     if (normalizedQuery) {
@@ -197,6 +202,8 @@ export class ArchiveCatalogQueryService {
       if (options.rating && item.rating !== (options.rating === 'unclassified' ? null : options.rating)) return false;
       if (options.hasLocal && (item.localWorks > 0) !== (options.hasLocal === 'yes')) return false;
       if (options.hasSource && (item.sourceCount > 0) !== (options.hasSource === 'yes')) return false;
+      if (options.hasSource === 'no-unchecked' && checkStates.has(item.id)) return false;
+      if (options.hasSource === 'no-not-found' && checkStates.get(item.id) !== 'not_found') return false;
       if (
         normalizedQuery
         && !normalizeSearch(item.name).includes(normalizedQuery)

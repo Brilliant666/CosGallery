@@ -10,7 +10,7 @@
       <label>分级<select v-model="filters.rating"><option value="">全部分级</option><option>R15</option><option>R18</option><option value="unclassified">待分类</option></select></label>
       <label>状态<select v-model="filters.active"><option value="active">启用</option><option value="inactive">停用</option><option value="all">全部状态</option></select></label>
       <label>本地作品<select v-model="filters.hasLocal"><option value="">全部</option><option value="yes">有本地作品</option><option value="no">无本地作品</option></select></label>
-      <label>来源记录<select v-model="filters.hasSource"><option value="">全部</option><option value="yes">有来源记录</option><option value="no">无来源记录</option></select></label>
+      <label>来源记录<select v-model="filters.hasSource"><option value="">全部</option><option value="yes">有来源记录</option><option value="no">无来源记录（全部）</option><option value="no-unchecked">无来源记录 · 尚无检查任务</option><option value="no-not-found">无来源记录 · 最近检查未找到合集</option></select></label>
       <label>作品对账<select v-model="filters.state"><option value="">全部</option><option value="missing">有缺失作品</option><option value="no-local">无本地作品</option><option value="complete">已完整关联</option><option value="no-source">无来源作品</option><option value="unresolved">待核查</option></select></label>
       <button type="button" @click="resetFilters">重置筛选</button>
     </form>
@@ -136,7 +136,7 @@ const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]]; '
 const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
 const listTop = ref<HTMLElement | null>(null);
 const detail = ref<ArchiveCatalogCreatorDetail | null>(null);
-const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no', state:'' as ''|ArchiveCatalogState });
+const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no'|'no-unchecked'|'no-not-found', state:'' as ''|ArchiveCatalogState });
 const page = ref(1), loading = ref(false), busy = ref(false), error = ref(''), notice = ref('');
 const dialogMode = ref<'ledger'|'manage'>('manage');
 const ledgerStatus = (creator: {remoteWorks:number;localWorks:number;missingWorks:number;unresolvedLocalWorks:number}) => creator.unresolvedLocalWorks > 0 ? '待核查' : creator.remoteWorks === 0 ? '尚未接入资源' : creator.localWorks === 0 ? '尚未入库' : creator.missingWorks > 0 ? `有 ${creator.missingWorks} 套待收录` : '已完整关联';

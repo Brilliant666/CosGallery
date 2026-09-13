@@ -365,7 +365,7 @@ export function fetchArchiveCatalog(options: {
   rating?: 'R15' | 'R18' | 'unclassified';
   active?: 'active' | 'inactive' | 'all';
   hasLocal?: 'yes' | 'no';
-  hasSource?: 'yes' | 'no';
+  hasSource?: 'yes' | 'no' | 'no-unchecked' | 'no-not-found';
   state?: import('../types/api').ArchiveCatalogState;
   query?: string;
 } = {}) {

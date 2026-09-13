@@ -35,6 +35,24 @@ describe('managed creator canonical ownership', () => {
     expect(query.getCreatorDetail(creator.id)?.sources.some(s=>s.source==='hentaiclub')).toBe(true);
     expect(rows('archive_catalog_creator_sources')+rows('archive_catalog_creator_aliases')).toBe(before);
   });
+  it('splits absent sources by current check state before pagination without changing history', () => {
+    const untouched=service.create({name:'Unchecked'});
+    const absent=service.create({name:'Not found'});
+    const sourced=service.create({name:'With source'});
+    importSource('With source');
+    for (const id of [absent.id,sourced.id]) db.prepare(`INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status) VALUES(?,'costuan','not_found')`).run(id);
+    for (const status of ['pending','claimed','failed','completed','cancelled']) {
+      const creator=service.create({name:status});
+      db.prepare(`INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status) VALUES(?,'costuan',?)`).run(creator.id,status);
+    }
+    const before=rows('archive_catalog_metadata_tasks')+rows('archive_catalog_creator_sources');
+    expect(query.listCreators({page:1,limit:1,hasSource:'no-unchecked'}).items.map(c=>c.id)).toEqual([untouched.id]);
+    expect(query.listCreators({page:1,limit:1,hasSource:'no-not-found'}).items.map(c=>c.id)).toEqual([absent.id]);
+    expect(query.listCreators({page:2,limit:1,hasSource:'no-not-found'}).items).toEqual([]);
+    expect(query.listCreators({page:1,limit:50,hasSource:'no'}).total).toBe(7);
+    expect(query.listCreators({page:1,limit:50,hasSource:'yes'}).items.map(c=>c.id)).toEqual([sourced.id]);
+    expect(rows('archive_catalog_metadata_tasks')+rows('archive_catalog_creator_sources')).toBe(before);
+  });
   it('never stores collection title fragments as Costuan aliases while retaining real alternate names', () => {
     const creator=service.create({name:'菌烨tako'});
     const result=new ArchiveCatalogService(db).importCostuanRecord({creatorName:'菌烨tako',aliases:['菌烨tako写真图片包合集[42套][','菌烨'],costuan:{postId:'411',title:'菌烨tako写真图片包合集[42套][Cosplay][持续更新]',works:[{order:1,sourceOrder:'NO.001',label:'Test'}]},baidu:{sourceFolderName:'130',destinationPath:'test',status:'saved'}});

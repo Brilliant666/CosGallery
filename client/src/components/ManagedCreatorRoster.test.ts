@@ -98,6 +98,17 @@ describe('managed roster UI',()=>{
     await button(w,'重置筛选').trigger('click');await flushPromises();
     expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({state:undefined}));
   });
+  it('requests absent-source check subgroups from the server and resets pagination',async()=>{
+    const w=mount(ManagedCreatorRoster);await flushPromises();
+    await button(w,'下一页').trigger('click');await flushPromises();
+    const select=w.get('.roster-filters').findAll('select')[4]!;
+    for(const value of ['no-unchecked','no-not-found','no','yes']) {
+      await select.setValue(value);await flushPromises();
+      expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1,hasSource:value}));
+    }
+    expect(select.text()).toContain('无来源记录 · 尚无检查任务');
+    expect(select.text()).toContain('无来源记录 · 最近检查未找到合集');
+  });
   it('shows collection, missing and unresolved details without planning until explicitly requested',async()=>{
     vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...structuredClone(creator), remoteWorks:2,missingWorks:1,unresolvedLocalWorks:1,
       collections:[{id:20,source:'costuan',sourceCollectionId:'20',title:'Alpha collection',url:'https://www.costuan.com/20.html',declaredWorkCount:2,observedAt:'2026-09-01T00:00:00Z',deliveries:[{provider:'baidu',type:'share',status:'verified',sourceFolderName:'020',destinationPath:'/cos待入库/Alpha',transferredAt:null}]}],
