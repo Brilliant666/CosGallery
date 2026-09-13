@@ -65,6 +65,14 @@ describe('WorkGalleryView', () => {
     return { wrapper, router };
   }
 
+  it('uses the canonical display name while retaining the original directory identity', async () => {
+    fetchCanonicalWorkMock.mockResolvedValue({ ...workDetail(), caption: null,
+      carouselTitle: 'Blue Theme 2 (Night)', sourcePath: 'Creator/NO.032 Blue Theme 2 (Night) [31P]' });
+    const { wrapper } = await renderCanonical();
+    expect(wrapper.get('h1').text()).toBe('Blue Theme 2 (Night)');
+    expect(wrapper.get('h1').text()).not.toContain('NO.032');
+  });
+
   it('renders all media by position, not API input order, type or aspect ratio', async () => {
     const detail = workDetail();
     detail.mediaItems!.reverse();

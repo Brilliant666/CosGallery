@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type express from 'express';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { requestTestApp as requestApp } from './http-test-utils.js';
 
@@ -13,7 +13,7 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
   let release!: () => void;
   let active: Promise<void>;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foldergram-local-operation-routes-'));
     const dataRoot = path.join(tempRoot, 'data');
     const galleryRoot = path.join(tempRoot, 'gallery');
@@ -56,7 +56,7 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
     app = createApp();
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     release();
     await active;
     const { databaseManager } = await import('../src/db/database.js');
@@ -174,6 +174,8 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
   });
 
   it('rejects empty, invalid, or mixed explicit scopes without falling back to a global batch', async () => {
+    release();
+    await active;
     const { localIngestService } = await import('../src/services/local-ingest-service.js');
     const run = vi.spyOn(localIngestService, 'runBatch');
     const headers = { 'x-foldergram-intent': '1' };

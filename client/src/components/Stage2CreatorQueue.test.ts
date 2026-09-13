@@ -15,6 +15,13 @@ const clickLabel=async(w:ReturnType<typeof mount>,text:string)=>{await w.findAll
 describe('Stage 2 complete creator summaries and lazy detail pages',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.clearAllMocks();vi.mocked(fetchDownloadCreators).mockResolvedValue(page());vi.mocked(fetchDownloadTaskPage).mockImplementation(async options=>detail(options.creatorId,options.page));});
+  it('separates historical staged state from accepted local coverage and review holds',async()=>{
+    vi.mocked(fetchDownloadCreators).mockResolvedValue({...page(),items:[{...row(21),localSatisfied:1,acquisitionReviewRequired:1}]});
+    vi.mocked(fetchDownloadTaskPage).mockResolvedValue({...detail(21),items:[{...task(1,21),status:'staged',acquisitionState:'local_satisfied',acquisitionExplanation:'本地已有资源满足，无需继续获取。'},{...task(2,21),status:'staged',acquisitionState:'review_required'}]});
+    const w=await start();expect(w.get('[data-test=stage2-local-acceptance]').text()).toContain('本地已有资源满足 1 条 · 接受决定待复核 1 条');
+    await w.get('[data-creator-id="21"] button').trigger('click');await flushPromises();
+    const rows=w.findAll('[data-test=stage2-task]');expect(rows[0]!.text()).toContain('网盘已暂存，待本地确认');expect(rows[0]!.text()).toContain('无需继续获取');expect(rows[1]!.text()).toContain('未计为已满足');
+  });
   it('shows complete summaries including creators beyond 100 tasks, with no eager details or local preview counts',async()=>{
     const w=await start();expect(w.findAll('article')).toHaveLength(2);expect(w.text()).toContain('完整汇总 150 条');expect(w.text()).toContain('655 条匹配任务');expect(w.text()).not.toContain('当前预览');
     expect(fetchDownloadTaskPage).not.toHaveBeenCalled();expect(w.findAll('[data-test=stage2-task]')).toHaveLength(0);

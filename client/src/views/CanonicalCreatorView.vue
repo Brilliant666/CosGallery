@@ -23,6 +23,10 @@
           </div>
         </header>
         <section class="mx-auto w-[min(100%,66.5625rem)]">
+          <div v-if="creator.unavailablePrimaryWorks?.length" class="card mb-4 p-4 text-muted" role="status">
+            <p class="m-0">以下作品的主副本当前不可用，未自动切换或删除其他副本：</p>
+            <ul><li v-for="work in creator.unavailablePrimaryWorks" :key="work.workId">{{ work.title }} · {{ work.reason }}</li></ul>
+          </div>
           <div class="mb-px flex justify-center border-b border-border py-2" aria-label="全部图册"><span class="i-fluent-grid-24-regular h-7 w-7" aria-hidden="true" /></div>
           <FolderGrid v-if="items.length" :items="items" variant="works" navigation-mode="canonical-work-gallery" :canonical-creator-id="creator.id" show-work-labels />
           <div v-else-if="!loading && !error" class="p-8 text-center text-muted">该博主当前没有可浏览作品。</div>

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { databaseManager } from '../db/database.js';
+import { runWithAdmissionBarrier } from './local-admission-lock.js';
 
 export type LocalIngestOperationState = 'idle' | 'scanning' | 'running';
 
@@ -142,9 +144,9 @@ export class LocalIngestOperationCoordinator {
     let succeeded = false;
     let summary: Record<string, unknown> = {};
     try {
-      const result = await action({
+      const result = await runWithAdmissionBarrier(databaseManager.connection, async () => action({
         update: (patch) => this.update(token, patch)
-      });
+      }));
       succeeded = true;
       summary = summarize(result);
       return result;

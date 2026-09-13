@@ -497,6 +497,7 @@ export interface ImageCaptionMutationResult {
 }
 
 export interface CosGalleryCreator {
+  unavailablePrimaryWorks?: Array<{ workId: number; postId: number | null; title: string; reason: string }>;
   avatarUrl?: string | null;
   description?: string | null;
   imageCount?: number;
@@ -692,6 +693,8 @@ export interface ArchiveDownloadTaskSummary {
 }
 
 export interface ArchiveDownloadTask {
+  acquisitionState?: 'required' | 'local_satisfied' | 'review_required';
+  acquisitionExplanation?: string | null;
   id: number;
   creatorId: number;
   creatorName: string;

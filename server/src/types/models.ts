@@ -303,6 +303,7 @@ export interface FeedImage {
   folderBreadcrumb?: string | null;
   filename: string;
   sourcePath?: string;
+  workDisplayTitle?: string | null;
   caption: string | null;
   carouselTitle?: string | null;
   contentRating?: ContentRating;
