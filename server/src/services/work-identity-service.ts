@@ -133,10 +133,14 @@ export class WorkIdentityService {
       this.database.prepare("UPDATE archive_catalog_work_decisions SET state='revoked',revoked_at=CURRENT_TIMESTAMP,revoked_reason=? WHERE id=?").run(reason,decisionId);
       this.database.prepare("UPDATE archive_catalog_local_fulfillments SET state='revoked',revoked_at=CURRENT_TIMESTAMP,revoked_reason=? WHERE decision_id=?").run(reason,decisionId);
       if (decision.kind === 'source_binding') {
-        const binding=JSON.parse(decision.payload_json) as {collectionId:number;sourceWorkId:string};
         this.database.prepare(`UPDATE archive_catalog_local_fulfillments SET state='revoked',revoked_at=CURRENT_TIMESTAMP,revoked_reason=?
-          WHERE source_work_id IN (SELECT id FROM archive_catalog_source_works WHERE collection_id=? AND source_work_id=?) AND state='active'`)
-          .run(reason,binding.collectionId,binding.sourceWorkId);
+          WHERE work_id=? AND source_work_id IN (
+            SELECT s.id FROM archive_catalog_source_works s
+            JOIN archive_catalog_source_bindings b ON b.collection_id=s.collection_id
+              AND b.source_work_id=s.source_work_id AND b.work_id=s.work_id
+            WHERE b.decision_id=? AND b.work_id=?
+          ) AND state='active'`)
+          .run(reason,decision.work_id,decisionId,decision.work_id);
       }
       // Keep local identity, but stop interpreting a revoked association as permission to rematch.
       if (decision.local_work_id !== null && decision.kind === 'same_work') {

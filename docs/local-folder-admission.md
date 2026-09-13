@@ -51,7 +51,8 @@ write each item's nonempty `reason`, review `displayTitle` and choose `identity`
 ```
 
 These are four separate examples, not one JSON document. Source-first admission uses
-the source's existing Work. `same-as` references an earlier confirmed item in this plan.
+the source's existing Work. `same-as` references an earlier confirmed item in this plan
+and uses that item's confirmed display title (the original directory still stays intact).
 `localOnly:true` prevents automatic source guessing. `excludeSourceIds:[...]` records
 explicit negative candidates. New independent Work titles may be identical. Existing
 Work titles are retained rather than overwritten by another copy's display suggestion.
@@ -140,7 +141,10 @@ claim/resume checks, Stage1 required-file scope and creator-sync task/creator su
 Stage2 shows acquisition explanation separately from the original execution status.
 Historical staged worker ownership is retained; active claims/downloads/ingest execution
 block acceptance. Source or local snapshot changes invalidate coverage and require
-review. Raw staged timestamps, attempts and download IDs are not rewritten. Late staged
+review. Local evidence includes ordered media fingerprints/mtime and Post state, not
+merely file counts; ordinary scan/cache timestamps do not invalidate acceptance.
+Revoking an exact source binding invalidates only its derived fulfillment, including
+bindings confirmed before that source row existed. Raw staged timestamps, attempts and download IDs are not rewritten. Late staged
 receipts remain normal execution history; they cannot authorize renewed acquisition.
 
 ## Recovery and integrity
@@ -172,8 +176,9 @@ restart/replay, fulfillment filtering and compatibility, not research SQL projec
 Final PR records exact test/build/browser results.
 
 Local acceptance run: server **854 passed / 2 skipped**, client **429 passed**;
-server TypeScript build and client build/typecheck passed with Node 24. A final focused
-admission suite passed 6/6 after adding candidate task/relationship details. In-app
+server TypeScript build and client build/typecheck passed with Node 24. Final hardening
+tests passed 40/40 (admission 7, identity 5, fulfillment 8, creator-sync 20), covering
+post-index checkpoint loss, exact source-binding revocation and changed media evidence. In-app
 browser checked the isolated HTTP application backed by CLI-admitted synthetic files:
 three local directories, two independent same-title Work cards, four default images,
 primary details, ordered media viewer and the secondary copy's existing deep link.

@@ -5,7 +5,12 @@ import { databaseManager } from '../db/database.js';
 // Observation timestamps deliberately do not version content. Changes to the
 // actual source declaration require another explicit acceptance.
 export const sourceVersionSql = (s: string) => `json_object('workId',${s}.work_id,'sourceId',${s}.source_work_id,'order',${s}.source_order,'title',${s}.source_title,'media',${s}.media_summary,'metadata',${s}.metadata_json)`;
-export const localVersionSql = (l: string) => `json_object('workId',${l}.work_id,'path',${l}.absolute_path,'images',${l}.image_count,'videos',${l}.video_count,'bytes',${l}.total_bytes)`;
+// Reuse the existing media-index evidence, not another filesystem hash pass.
+// Ordering is explicit; scan/thumbnail timestamps are deliberately excluded.
+export const localVersionSql = (l: string) => `json_object('workId',${l}.work_id,'path',${l}.absolute_path,'images',${l}.image_count,'videos',${l}.video_count,'bytes',${l}.total_bytes,
+ 'post',(SELECT json_array(version_post.id,version_post.source_path,version_post.is_deleted,version_post.is_trashed) FROM posts version_post WHERE version_post.id=${l}.post_id),
+ 'media',(SELECT json_group_array(json_array(version_item.position,version_image.id,version_image.relative_path,version_image.media_type,version_image.file_size,version_image.checksum_or_fingerprint,version_image.mtime_ms,version_image.is_deleted,version_image.is_trashed) ORDER BY version_item.position,version_image.id)
+ FROM post_items version_item JOIN images version_image ON version_image.id=version_item.image_id WHERE version_item.post_id=${l}.post_id))`;
 export const fulfillmentValidSql = (s: string) => `EXISTS (SELECT 1 FROM archive_catalog_local_fulfillments fulfilled
  JOIN archive_catalog_work_decisions accepted ON accepted.id=fulfilled.decision_id
  JOIN archive_catalog_local_works accepted_local ON accepted_local.id=fulfilled.local_work_id

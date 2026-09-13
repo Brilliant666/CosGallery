@@ -88,4 +88,18 @@ describe.sequential('actual local directory admission and recovery',()=>{
   const result=spawnSync(process.execPath,['--import','./node_modules/tsx/dist/loader.mjs','test/fixtures/local-admission-restart.ts',String(creator),'Synthetic Creator',p.items[0].sourceRelativePath],{encoding:'utf8',env:process.env,cwd:fileURLToPath(new URL('../',import.meta.url))});
   expect(result.status,result.stderr).toBe(0);expect(JSON.parse(result.stdout)).toEqual(before);
  });
+ it('admits two confirmed same-work copies without a silent title or primary switch',async()=>{
+  await make('NO.201 Shared Theme','#123456');await make('NO.202 Shared Theme','#987654');
+  const p=await service.preview({creatorId:creator,inputRoot:input,directories:['NO.201 Shared Theme','NO.202 Shared Theme']});
+  p.items.forEach(i=>i.reason='Explicit synthetic same-work confirmation');p.items[1].identity={kind:'same-as',itemKey:p.items[0].key} as any;
+  const confirmed={...p,confirmed:true};
+  await expect(service.apply({...confirmed,items:confirmed.items.map((i,n)=>n?{...i,displayTitle:'Incorrect different title'}:i)})).rejects.toThrow('canonical displayTitle');
+  const result=await service.apply(confirmed);expect(result.items[0].work_id).toBe(result.items[1].work_id);
+  expect(manager.connection.prepare('SELECT primary_local_work_id FROM archive_catalog_works WHERE id=?').get(result.items[0].work_id)?.primary_local_work_id).toBe(result.items[0].local_work_id);
+  const ids=()=>rows('posts').map(p=>({id:p.id,source_path:p.source_path,folder_id:p.folder_id,cover_image_id:p.cover_image_id,item_count:p.item_count}));
+  const before=ids();
+  // Simulate an index commit whose admission checkpoint response was lost.
+  manager.connection.prepare("UPDATE archive_local_admission_items SET state='files_verified' WHERE plan_id=? AND item_key=?").run(p.planId,p.items[1].key);
+  await service.apply(confirmed);expect(ids()).toEqual(before);
+ });
 });

@@ -110,6 +110,10 @@ export class LocalFolderAdmissionService {
         if(item.displayTitle!==existing[0].display_title)throw Error(`Existing Work keeps its canonical title; confirm displayTitle as: ${existing[0].display_title}`);
       }
       if(item.identity.kind==='same-as'&&!keys.has(item.identity.itemKey))throw Error('same-as must reference an earlier explicitly confirmed item');
+      if(item.identity.kind==='same-as'){
+        const referencedKey=item.identity.itemKey;
+        if(item.displayTitle!==plan.items.find(i=>i.key===referencedKey)?.displayTitle)throw Error('Same-work copy must confirm the referenced canonical displayTitle; original directory remains unchanged');
+      }
       keys.add(item.key);targets.add(cmp(item.targetPath));
       const expected=path.join(plan.galleryRoot,plan.creatorDirectory,item.sourceRelativePath);
       if(cmp(path.resolve(item.targetPath))!==cmp(expected))throw Error('Target must preserve original directory name');

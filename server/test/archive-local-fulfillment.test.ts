@@ -8,6 +8,7 @@ import {ArchiveLocalFulfillmentService} from '../src/services/archive-local-fulf
 import {ArchiveDownloadTaskService} from '../src/services/archive-download-task-service.js';
 import {CreatorSyncQueryService} from '../src/services/creator-sync-query-service.js';
 import {sourceNeedsAcquisitionSql} from '../src/services/archive-local-fulfillment-service.js';
+import {WorkIdentityService} from '../src/services/work-identity-service.js';
 
 function fixture(){
  const dir=mkdtempSync(path.join(tmpdir(),'local-accept-'));const db=new DatabaseSync(':memory:');db.exec(schemaSql);
@@ -28,6 +29,25 @@ function fixture(){
  return {db,tasks,accept,clean(){db.close();rmSync(dir,{recursive:true,force:true});}};
 }
 describe('explicit local acquisition satisfaction',()=>{
+ it('revokes only fulfillment derived from the exact source binding, preserving staged execution history',()=>{
+  const f=fixture();try{
+   const identity=new WorkIdentityService(f.db);
+   const binding=identity.bindSource({workId:1,collectionId:1,sourceWorkId:'NO.030',key:'bind-source',reason:'Confirmed external relation'});
+   f.accept();
+   f.db.exec(`INSERT INTO archive_catalog_source_works(id,work_id,collection_id,source,source_work_id,source_order,source_title,media_summary,first_seen_at,last_seen_at)
+     VALUES(2,1,1,'costuan','NO.031',31,'Other source','31P','now','now');
+     INSERT INTO archive_catalog_download_tasks(id,source_work_id,provider,target_root,target_relative_directory,target_filename,status,attempt_count)
+     VALUES(2,2,'baidu','/inbox','Synthetic','031.7z','staged',2);`);
+   new ArchiveLocalFulfillmentService(f.db).accept({decisionKey:'accept-other',sourceWorkId:2,localWorkId:1,taskIds:[2],reason:'Separately confirmed'});
+   const history=f.db.prepare('SELECT * FROM archive_catalog_download_tasks ORDER BY id').all();
+   identity.revoke(binding,'Correction requires review');
+   expect(f.db.prepare('SELECT source_work_id,state FROM archive_catalog_local_fulfillments ORDER BY source_work_id').all())
+     .toEqual([{source_work_id:1,state:'revoked'},{source_work_id:2,state:'active'}]);
+   expect(f.tasks.get(1)?.acquisitionState).toBe('review_required');
+   expect(f.tasks.get(2)?.acquisitionState).toBe('local_satisfied');
+   expect(f.db.prepare('SELECT * FROM archive_catalog_download_tasks ORDER BY id').all()).toEqual(history);
+  }finally{f.clean();}
+ });
  it('retains staged worker/history; exact read/plan/claim/replay agree and late receipt remains accepted',()=>{
   const f=fixture();try{
    const before=f.db.prepare('SELECT * FROM archive_catalog_download_tasks').all();
@@ -58,6 +78,27 @@ describe('explicit local acquisition satisfaction',()=>{
    const query=new CreatorSyncQueryService(f.db);expect(query.stats().works.missing).toBe(1);
    expect(query.downloadCreators().items[0]).toMatchObject({localSatisfied:0,acquisitionReviewRequired:1});
    expect(f.tasks.planMissing({targetRoot:'/inbox',creatorIds:[1]}).created).toBe(0);
+  }finally{f.clean();}
+ });
+ it('invalidates acceptance when indexed bytes change despite identical counts and aggregate size',()=>{
+  const f=fixture();try{
+   f.accept();
+   f.db.exec("UPDATE archive_catalog_local_works SET scanned_at='later'; UPDATE images SET updated_at='later',thumbnail_path='new-thumb'");
+   expect(f.tasks.get(1)?.acquisitionState).toBe('local_satisfied');
+   f.db.exec("UPDATE images SET checksum_or_fingerprint='changed-content' WHERE id=1");
+   expect(f.tasks.get(1)?.acquisitionState).toBe('review_required');
+   expect(new CreatorSyncQueryService(f.db).stats().works.missing).toBe(1);
+   expect(f.tasks.planMissing({targetRoot:'/inbox',creatorIds:[1]}).created).toBe(0);
+   expect(f.db.prepare('SELECT image_count,total_bytes FROM archive_catalog_local_works WHERE id=1').get()).toEqual({image_count:1,total_bytes:1});
+  }finally{f.clean();}
+ });
+ it('soft-deleted primary Post invalidates accepted coverage without rewriting staged history',()=>{
+  const f=fixture();try{
+   f.accept();const before=f.db.prepare('SELECT * FROM archive_catalog_download_tasks').all();
+   f.db.exec('UPDATE posts SET is_deleted=1 WHERE id=1');
+   expect(f.tasks.get(1)?.acquisitionState).toBe('review_required');
+   expect(new CreatorSyncQueryService(f.db).downloadCreators().items[0]).toMatchObject({localSatisfied:0,acquisitionReviewRequired:1});
+   expect(f.db.prepare('SELECT * FROM archive_catalog_download_tasks').all()).toEqual(before);
   }finally{f.clean();}
  });
 });
