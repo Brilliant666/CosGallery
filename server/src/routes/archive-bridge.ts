@@ -12,6 +12,7 @@ import {
 } from '../services/archive-metadata-task-service.js';
 import { ArchiveCatalogPipelineService } from '../services/archive-catalog-pipeline-service.js';
 import { createCreatorSyncReadRouter } from './creator-sync-read-routes.js';
+import { costuanIdentityEvidenceSchema } from '../services/costuan-identity-evidence.js';
 
 const router = express.Router();
 const TOKEN_HEADER = 'x-cosgallery-bridge-token';
@@ -96,7 +97,7 @@ router.use((request, response, next) => {
 });
 
 router.get('/ping', (_request, response) => {
-  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 4, capabilities:{rosterFirstCollectionV1:true, unifiedCreatorSyncV1:true} });
+  response.json({ ok: true, service: 'cosgallery-archive-bridge', version: 4, capabilities:{rosterFirstCollectionV1:true, unifiedCreatorSyncV1:true, baiduDirectStageV1:true} });
 });
 
 router.use(createCreatorSyncReadRouter());
@@ -147,7 +148,8 @@ router.patch('/metadata-tasks/:id', (request, response) => {
 router.post('/metadata-tasks/:id/validate-source', (request,response) => {
   const {id}=idSchema.parse(request.params);
   const body=z.object({workerId:z.string().trim().min(1).max(120),canonicalCreatorId:z.number().int().positive(),
-    postId:z.string().trim().min(1).max(255),title:z.string().trim().min(1).max(1000),expectedAttempt:z.number().int().positive().optional()}).strict().parse(request.body);
+    postId:z.string().trim().min(1).max(255),title:z.string().trim().min(1).max(1000),expectedAttempt:z.number().int().positive().optional(),
+    resourceDirectoryText:z.string().max(2_000_000).optional(),identityEvidence:costuanIdentityEvidenceSchema.optional()}).strict().parse(request.body);
   response.json({ok:true,task:new ArchiveMetadataTaskService().validateSource({id,...body})});
 });
 

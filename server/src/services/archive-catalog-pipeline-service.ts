@@ -54,6 +54,7 @@ type ArchiveCatalogCreatorPipelineOptions = {
   galleryRoot: string;
   creatorId: number;
   creatorFolderName: string;
+  workFolderName?: string;
   defaultInboxRoot?: string;
   onProgress?: (message: string) => void;
 };
@@ -193,6 +194,7 @@ export class ArchiveCatalogPipelineService {
     const local = await catalogService.reconcileLocalCreators({
       rootPath: galleryRoot,
       creators: [{ creatorId: options.creatorId, folderName: creatorFolderName }],
+      workFolderName: options.workFolderName,
       onProgress: options.onProgress
     });
     const configuredInboxRoot = this.getSetting(ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY);

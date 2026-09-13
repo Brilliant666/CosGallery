@@ -35,7 +35,9 @@ export function createCreatorSyncReadRouter() {
     }).parse(request.query)));
   });
   router.get('/download-creators', (request, response) => {
-    response.json(new CreatorSyncQueryService().downloadCreators(downloads.parse(request.query)));
+    response.json(new CreatorSyncQueryService().downloadCreators(downloads.extend({
+      sort: z.enum(['recent', 'name']).default('recent')
+    }).parse(request.query)));
   });
   router.get('/download-task-page', (request, response) => {
     response.json(new CreatorSyncQueryService().downloadTaskPage(downloads.extend({

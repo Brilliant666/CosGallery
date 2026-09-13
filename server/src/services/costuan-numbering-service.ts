@@ -107,9 +107,10 @@ function specialMatch(value: string): ParsedCostuanNumbering | null {
 }
 
 function legacyNumericMatch(value: string): ParsedCostuanNumbering | null {
+  const dotted = /^(\d{3})\.\s*(?=[^\d\s./\\-])/u.exec(value);
   const leading = /^(\d{3,4})(?=[^\d.\/-])/u.exec(value);
   const implicit = /(?:^|[\s_\-–—])(\d{3,4})(?=\s|[《【\[(])/u.exec(value);
-  const match = leading ?? implicit;
+  const match = dotted ?? leading ?? implicit;
   if (!match) return null;
   const order = Number(match[1]);
   if (!Number.isInteger(order) || order < 0) return null;
@@ -122,8 +123,8 @@ function legacyNumericMatch(value: string): ParsedCostuanNumbering | null {
     rawLabel: match[1],
     qualifier: null,
     start,
-    end: start + match[1].length,
-    style: leading ? 'leading' : 'implicit'
+    end: dotted ? match[0].length : start + match[1].length,
+    style: !dotted && leading ? 'leading' : 'implicit'
   };
 }
 
@@ -131,7 +132,9 @@ export function parseCostuanNumbering(value: string): ParsedCostuanNumbering | n
   const normalized = String(value ?? '')
     .normalize('NFKC')
     .replace(/\u00a0/gu, ' ');
-  return explicitMatch(normalized) ?? specialMatch(normalized) ?? legacyNumericMatch(normalized);
+  // The creator-prefixed collection number wins over publisher Vol./No. in the title.
+  const named=/^(?!NO\s|VOL\s)[\p{L}][\p{L}\p{N}_.·-]*\s+\d{3}\s+\S/iu.test(normalized);
+  return (named ? legacyNumericMatch(normalized) : null) ?? explicitMatch(normalized) ?? specialMatch(normalized) ?? legacyNumericMatch(normalized);
 }
 
 function parseMediaDeclaration(rawTitle: string, mediaSummary: string): {
@@ -263,7 +266,61 @@ export function mergeCostuanDirectoryWorks(
   return [...merged.values()];
 }
 
-export function normalizeCostuanTitle(value: string): string {
+export type PendingCostuanSupplement = ParsedCostuanDirectoryWork & {status:'awaiting_review'};
+
+export function parseCostuanCollectionCreator(title:string):string|null {
+  const normalized=String(title??'').normalize('NFKC').trim();
+  // Some collections put the category after the count, not after the creator.
+  // Match that complete shape before the legacy prefix; never consume [Cosplay]
+  // and everything before it as a creator identity.
+  const postfix=normalized.match(/^([^\[\]【】]+?)\s*写真图片包合集\s*[\[【]\d+\s*套[^\]】]*[\]】]\s*[\[【]COS(?:PLAY)?[\]】]\s*[\[【]持续更新[\]】]$/iu);
+  if(postfix) return postfix[1].trim();
+  const prefix=normalized.match(/^([^\[\]【】]+?)\s*COS(?:PLAY)?(?=\s|写真)/iu);
+  if (prefix) return prefix[1].trim();
+  const photo=normalized.match(/^([^\[\]【】]+?)\s*写真图片(?:包)?合集\s*\[\d+\s*套[^\]]*\]\s*\[持续更新\]$/u);
+  return photo?.[1]?.trim() || null;
+}
+
+// Costuan uses these names for the same unnumbered Weibo appendix, including
+// different names in the collection title and resource directory. Keep the raw
+// label/key for review; this does not authorize staging the appendix itself.
+const WEIBO_SUPPLEMENT_LABELS = ['微博图', '微博散图', '微博配图'] as const;
+
+/** Split only an explicitly advertised, unnumbered appendix; never relax numbered validation. */
+export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWork[], text:string|undefined) {
+  const merged=mergeCostuanDirectoryWorks(works,text);
+  const supplementalContents:PendingCostuanSupplement[]=[];
+  const numbered=merged.filter(work=>{
+    const numbering=parseCostuanNumbering(work.sourceOrder);
+    return numbering && numbering.order!==null;
+  });
+  const extras=merged.filter(work=>!numbered.includes(work));
+  const declaration=title.normalize('NFKC').match(/\[\d+\s*套\s*\+\s*(?:微博图|微博散图|微博配图)\s*\]/u);
+  if (!extras.length && !declaration) return {works:merged,supplementalContents};
+  const creator=parseCostuanCollectionCreator(title);
+  const lines=String(text??'').split(/\r?\n/u).flatMap(line=>parseCostuanDirectoryText(line));
+  const keys=lines.map(work=>work.sourceOrderKey);
+  // The ordinary merge retains historical last-entry behavior. The new appendix
+  // exception requires complete, unique raw evidence instead of trusting that merge.
+  if (!declaration || extras.length!==1 || new Set(keys).size!==keys.length || lines.length!==merged.length
+    || works.length!==numbered.length || works.some(work=>{
+      const key=parseCostuanNumbering(work.sourceOrder)?.key;
+      return !key || !numbered.some(item=>item.sourceOrderKey===key);
+    })) {
+    throw new Error('来源附加内容或编号目录尚未明确核验；保留原来源，需人工检查。');
+  }
+  const extra=extras[0];
+  const raw=lines.find(work=>work.sourceOrderKey===extra.sourceOrderKey);
+  if (!creator || !raw || raw.order!==undefined
+    || !WEIBO_SUPPLEMENT_LABELS.some(label=>normalizeCostuanTitle(raw.label)===normalizeCostuanTitle(`${creator} ${label}`))
+    || !raw.mediaSummary || numbered.some(work=>!keys.includes(work.sourceOrderKey!))) {
+    throw new Error('来源附加内容身份不明确；未覆盖历史来源。');
+  }
+  supplementalContents.push({...raw,status:'awaiting_review'});
+  return {works:numbered,supplementalContents};
+}
+
+export function normalizeCostuanTitle(value: string, stripNumbering = true): string {
   const normalized = String(value ?? '')
     .normalize('NFKC')
     .replace(/\u00a0/gu, ' ')
@@ -276,7 +333,7 @@ export function normalizeCostuanTitle(value: string): string {
     .replace(/\s*[\[【][^\]】]+[\]】]\s*$/u, '')
     .trim();
   const numbering = parseCostuanNumbering(normalized);
-  const title = numbering ? normalized.slice(numbering.end) : normalized;
+  const title = numbering && stripNumbering ? normalized.slice(numbering.end) : normalized;
   return title
     .toLocaleLowerCase()
     .replace(/^[\s_\-–—:：]+/u, '')
@@ -285,7 +342,7 @@ export function normalizeCostuanTitle(value: string): string {
 
 function stripCreatorPrefix(value: string, creatorNames: string[]): string {
   const names = creatorNames
-    .map(normalizeCostuanTitle)
+    .map(name => normalizeCostuanTitle(name))
     .filter(Boolean)
     .sort((left, right) => right.length - left.length);
   for (const name of names) {
@@ -300,7 +357,12 @@ export function areCostuanTitlesCompatible(
   creatorNames: string[] = []
 ): boolean {
   const local = stripCreatorPrefix(normalizeCostuanTitle(localTitle), creatorNames);
-  const remote = stripCreatorPrefix(normalizeCostuanTitle(remoteTitle), creatorNames);
+  // Source titles are usually already labels: an embedded Vol.47 is content,
+  // not a second collection number. Still accept explicit numbered headers.
+  const remoteNumbering = parseCostuanNumbering(remoteTitle.normalize('NFKC'));
+  const prefix = remoteNumbering ? remoteTitle.normalize('NFKC').slice(0, remoteNumbering.start).trim().replace(/[\s_\-–—]+$/u, '') : '';
+  const numberedHeader = !prefix || creatorNames.some(name => name.normalize('NFKC').trim().toLocaleLowerCase() === prefix.toLocaleLowerCase());
+  const remote = stripCreatorPrefix(normalizeCostuanTitle(remoteTitle, numberedHeader), creatorNames);
   if (!local || !remote) return false;
   return local === remote || local.includes(remote) || remote.includes(local);
 }

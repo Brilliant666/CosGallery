@@ -31,6 +31,7 @@ type CommonFixture = {
   sourcePath: string;
   database: DatabaseSync;
   service: LocalIngestService;
+  restartService: () => LocalIngestService;
   settings: ReturnType<typeof makeSettings>;
   advance: (milliseconds: number) => void;
   commandCounts: CommandCounts;
@@ -95,7 +96,12 @@ function makeSettings(libraryRoot: string, inboxRoot: string, processingRoot: st
 }
 
 async function createFixture(options: {
+  monotonicNow?: LocalIngestRuntimeDependencies['monotonicNow'];
+  mediaFileCount?: number;
+  hardlinkedMedia?: boolean;
+  rescanResult?: { scanRunId: number; scanStatus: string; scanError: string | null; galleryIndexMs?: number; ledgerReconciliationMs?: number };
   hashFile?: LocalIngestRuntimeDependencies['hashFile'];
+  wait?: LocalIngestRuntimeDependencies['wait'];
   runCommand?: LocalIngestRuntimeDependencies['runCommand'];
   recycleAfterIngest?: boolean;
   recycle?: (targetPath: string) => Promise<{ targetPath: string; recycled: boolean }>;
@@ -141,9 +147,11 @@ async function createFixture(options: {
       await fs.writeFile(path.join(output, '007.7zz'), 'synthetic inner archive');
     } else {
       commandCounts.inner += 1;
-      await sharp({ create: { width: 4, height: 4, channels: 3, background: '#778899' } })
-        .jpeg()
-        .toFile(path.join(output, 'cover.jpg'));
+      for (let index = 0; index < (options.mediaFileCount ?? 1); index += 1) {
+        const filename = path.join(output, index === 0 ? 'cover.jpg' : `cover-${index}.jpg`);
+        await sharp({ create: { width: 4, height: 4, channels: 3, background: '#778899' } }).jpeg().toFile(filename);
+        if (options.hardlinkedMedia) await fs.link(filename, path.join(root, `outside-link-${index}.jpg`));
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 15));
     return { code: 0, stdout: '', stderr: '' };
@@ -176,9 +184,12 @@ async function createFixture(options: {
        ) VALUES (1, 1, 1, ?, ?, ?, 7, 1, 0, 0, 0, 1, 'matched', 'synthetic', 1, ?, ?, ?)`
     ).run(path.relative(libraryRoot, target.target_path), target.target_path, path.basename(target.target_path), now, now, now);
     db.prepare("UPDATE archive_catalog_download_tasks SET status = 'ingested' WHERE id = 1").run();
+    return options.rescanResult;
   };
-  const service = new LocalIngestService(database, settings, recycle, rescan, {
+  const restartService = () => new LocalIngestService(database, settings, recycle, rescan, {
     now: () => new Date(clock),
+    monotonicNow: options.monotonicNow,
+    wait: options.wait,
     hashFile: options.hashFile,
     runCommand: syntheticCommand,
     expectedGalleryRoot: libraryRoot,
@@ -192,7 +203,8 @@ async function createFixture(options: {
     creatorName,
     sourcePath,
     database,
-    service,
+    service: restartService(),
+    restartService,
     settings,
     advance(milliseconds) { clock += milliseconds; },
     commandCounts,
@@ -216,6 +228,211 @@ afterEach(async () => {
 });
 
 describe.sequential('LocalIngest cross-platform hardening', () => {
+  it('persists independent monotonic phase samples while retaining summaries and bounded retry history', async () => {
+    let tick = 0;
+    const fixture = await createFixture({ monotonicNow: () => { tick += 10; return tick; } });
+    const discovery = await discoverStable(fixture);
+    const id = discovery.jobs[0].id;
+    fixture.database.prepare('UPDATE local_ingest_jobs SET summary_json = ? WHERE id = ?')
+      .run(JSON.stringify({ warnings: ['existing warning'], customEvidence: 'keep' }), id);
+    const first = await fixture.service.runJob(id);
+    expect(first.status, first.errorDetail ?? '').toBe('ingested');
+    const firstPerformance = first.summary!.performance as { latest: { phases: Record<string, number>; durationMs: number }; history: unknown[] };
+    expect(firstPerformance.latest.phases).toEqual({
+      source_hash: 10, outer_list: 10, outer_test: 10, outer_extract: 10,
+      inner_list: 10, inner_test: 10, inner_extract: 10, media_validation: 10,
+      staging_move: 10, final_commit: 10, index_ledger_reconciliation: 10
+    });
+    expect(firstPerformance.latest.durationMs).toBe(230);
+    expect(firstPerformance.history).toHaveLength(1);
+    expect(first.summary).toMatchObject({ customEvidence: 'keep', warnings: expect.arrayContaining(['existing warning']) });
+    for (let index = 0; index < 6; index += 1) {
+      fixture.database.prepare("UPDATE local_ingest_jobs SET status = 'reconciling' WHERE id = ?").run(id);
+      const retried = await fixture.service.runJob(id);
+      expect(retried.attemptCount).toBe(1);
+      expect(retried.summary!.performance).toMatchObject({ latest: {
+        operation: 'reconcile', durationMs: 30, phases: { index_ledger_reconciliation: 10 }
+      } });
+    }
+    const final = fixture.service.getJob(id);
+    expect((final.summary!.performance as { history: unknown[] }).history).toHaveLength(5);
+    expect(final.summary).toMatchObject({ customEvidence: 'keep', warnings: expect.arrayContaining(['existing warning']) });
+    fixture.database.close();
+  });
+
+  it('records a failed phase and excludes extraction and staging reused on retry', async () => {
+    let tick = 0;
+    const fixture = await createFixture({ monotonicNow: () => { tick += 10; return tick; } });
+    const discovery = await discoverStable(fixture);
+    const id = discovery.jobs[0].id;
+    const rename = fs.rename.bind(fs);
+    const failure = vi.spyOn(fs, 'rename').mockImplementation(async (source, destination) => {
+      if (String(source).endsWith(`${path.sep}ready`)) throw new Error('synthetic commit failure');
+      return rename(source, destination);
+    });
+    const first = await fixture.service.runJob(id);
+    expect(first.status).toBe('failed');
+    expect(first.summary!.performance).toMatchObject({ latest: { status: 'failed', phases: { final_commit: 10 } } });
+    failure.mockRestore();
+    const second = await fixture.service.runJob(id);
+    const performance = second.summary!.performance as { latest: { phases: Record<string, number> }; history: unknown[] };
+    expect(second.status).toBe('ingested');
+    expect(second.attemptCount).toBe(2);
+    expect(performance.latest.phases).not.toHaveProperty('outer_extract');
+    expect(performance.latest.phases).not.toHaveProperty('inner_extract');
+    expect(performance.latest.phases).not.toHaveProperty('staging_copy');
+    expect(performance.latest.phases).not.toHaveProperty('staging_move');
+    expect(performance.latest.phases.final_commit).toBe(10);
+    expect(performance.history).toHaveLength(2);
+    expect(fixture.commandCounts).toEqual({ list: 4, test: 4, outer: 1, inner: 1 });
+    fixture.database.close();
+  });
+
+  it('resumes a partial no-copy move from the complete manifest after restart', async () => {
+    const fixture = await createFixture({ mediaFileCount: 3 });
+    const discovery = await discoverStable(fixture);
+    const id = discovery.jobs[0].id;
+    const link = fs.link.bind(fs);
+    let links = 0;
+    const copy = vi.spyOn(fs, 'copyFile');
+    const interrupted = vi.spyOn(fs, 'link').mockImplementation(async (source, destination) => {
+      links += 1;
+      const manifest = JSON.parse(await fs.readFile(path.join(fixture.processingRoot, String(id), '.staging-move.json'), 'utf8'));
+      expect(manifest.files).toHaveLength(3);
+      if (links === 2) throw new Error('synthetic interruption');
+      return link(source, destination);
+    });
+    const first = await fixture.service.runJob(id);
+    expect(first.status).toBe('failed');
+    expect(await fs.readdir(path.join(fixture.processingRoot, String(id), 'level-2'))).toHaveLength(2);
+    interrupted.mockRestore();
+    const result = await fixture.restartService().runJob(id);
+    expect(result.status).toBe('ingested');
+    expect(result.summary).toMatchObject({ imageCount: 3, totalMediaCount: 3 });
+    expect(await fs.readdir(result.targetPath!)).toHaveLength(3);
+    expect(await fs.readdir(path.join(fixture.processingRoot, String(id), 'level-2'))).toHaveLength(0);
+    expect(copy).not.toHaveBeenCalled();
+    expect(fixture.commandCounts).toEqual({ list: 4, test: 4, outer: 1, inner: 1 });
+    await expect(fs.access(fixture.sourcePath)).resolves.toBeUndefined();
+    fixture.database.close();
+  });
+
+  it('keeps the copy path for extracted files that already share a hardlink', async () => {
+    const fixture = await createFixture({ hardlinkedMedia: true });
+    const discovery = await discoverStable(fixture);
+    const copy = vi.spyOn(fs, 'copyFile');
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result.status).toBe('ingested');
+    expect(copy).toHaveBeenCalledTimes(1);
+    expect(result.summary!.performance).toMatchObject({ latest: { phases: { staging_copy: expect.any(Number) } } });
+    await expect(fs.access(path.join(fixture.processingRoot, String(result.id), '.staging-move.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.access(path.join(fixture.processingRoot, String(result.id), 'level-2', 'cover.jpg'))).resolves.toBeUndefined();
+    fixture.database.close();
+  });
+
+  it('uses split index and ledger metrics without also counting the combined phase', async () => {
+    const fixture = await createFixture({ rescanResult: {
+      scanRunId: 1, scanStatus: 'completed', scanError: null, galleryIndexMs: 7, ledgerReconciliationMs: 2
+    } });
+    const discovery = await discoverStable(fixture);
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result.errorCode).toBe('GALLERY_INDEX_INCOMPLETE');
+    const performance = result.summary!.performance as { latest: { phases: Record<string, number> } };
+    expect(performance.latest.phases).toMatchObject({ gallery_index: 7, ledger_reconciliation: 2 });
+    expect(performance.latest.phases).not.toHaveProperty('index_ledger_reconciliation');
+    expect(result.summary).toHaveProperty('imageCount', 1);
+    fixture.database.close();
+  });
+
+  it('keeps hashing failures timed before the existing attempt counter increments', async () => {
+    let failing = false;
+    let tick = 0;
+    const fixture = await createFixture({
+      monotonicNow: () => { tick += 10; return tick; },
+      hashFile: async (filePath) => {
+        if (failing) throw new Error('synthetic hash failure');
+        return digest(await fs.readFile(filePath));
+      }
+    });
+    const discovery = await discoverStable(fixture);
+    failing = true;
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result.attemptCount).toBe(0);
+    expect(result.summary!.performance).toMatchObject({ latest: {
+      status: 'failed', durationMs: 30, phases: { source_hash: 10 }
+    } });
+    fixture.database.close();
+  });
+
+  it('reads a creator directory once while observing a batch of new archives', async () => {
+    const hashFile = vi.fn(async () => 'unused');
+    const fixture = await createFixture({ hashFile });
+    const creatorDirectory = path.dirname(fixture.sourcePath);
+    await Promise.all(Array.from({ length: 19 }, (_, index) =>
+      fs.writeFile(path.join(creatorDirectory, `batch-${index}.7z`), 'synthetic archive')
+    ));
+    const readdir = vi.spyOn(fs, 'readdir');
+
+    expect(await fixture.service.scanInbox()).toMatchObject({ discoveredArchives: 20, waitingStable: 20, createdJobs: 0 });
+    expect(readdir.mock.calls.filter(([directory]) => String(directory) === creatorDirectory)).toHaveLength(1);
+    expect(hashFile).not.toHaveBeenCalled();
+    fixture.database.close();
+  });
+
+  it('keeps the five-second wait and skips unrelated creator directory IO on the stable recheck', async () => {
+    let fixture: CommonFixture;
+    const wait = vi.fn(async (milliseconds: number) => {
+      fixture.advance(milliseconds);
+      readdir.mockClear();
+      lstat.mockClear();
+      realpath.mockClear();
+      access.mockClear();
+    });
+    fixture = await createFixture({ wait });
+    const previousGet = fixture.settings.get.bind(fixture.settings);
+    fixture.settings.get = () => ({ ...previousGet(), fileStableSeconds: 5 });
+    const unrelatedDirectory = path.join(fixture.inboxRoot, 'Alpha Alias');
+    await fs.mkdir(unrelatedDirectory);
+    const timestamp = new Date().toISOString();
+    fixture.database.prepare(
+      `INSERT INTO archive_catalog_creator_aliases (creator_id, alias, normalized_alias, source, created_at, updated_at)
+       VALUES (1, 'Alpha Alias', 'alphaalias', 'test', ?, ?)`
+    ).run(timestamp, timestamp);
+    const readdir = vi.spyOn(fs, 'readdir');
+    const lstat = vi.spyOn(fs, 'lstat');
+    const realpath = vi.spyOn(fs, 'realpath');
+    const access = vi.spyOn(fs, 'access');
+
+    expect(await fixture.service.scanInboxWithStableRecheck()).toMatchObject({ createdJobs: 1, waitingStable: 0 });
+    expect(wait).toHaveBeenCalledExactlyOnceWith(5_000);
+    for (const operation of [readdir, lstat, realpath, access]) {
+      expect(operation.mock.calls.filter(([target]) => String(target) === unrelatedDirectory)).toHaveLength(0);
+    }
+    expect(readdir.mock.calls.filter(([directory]) => String(directory) === path.dirname(fixture.sourcePath))).toHaveLength(3);
+    fixture.database.close();
+  });
+
+  it('checks for newly arrived temporary files after the directory snapshot and before hashing', async () => {
+    const hashFile = vi.fn(async () => 'unused');
+    const fixture = await createFixture({ hashFile });
+    await fixture.service.scanInbox();
+    fixture.advance(1_100);
+    const originalReaddir = fs.readdir.bind(fs);
+    let insertedTemporary = false;
+    vi.spyOn(fs, 'readdir').mockImplementation((async (...args: Parameters<typeof fs.readdir>) => {
+      const entries = await originalReaddir(...args);
+      if (String(args[0]) === path.dirname(fixture.sourcePath) && !insertedTemporary) {
+        insertedTemporary = true;
+        await fs.writeFile(`${fixture.sourcePath}.crdownload`, 'arrived after snapshot');
+      }
+      return entries;
+    }) as typeof fs.readdir);
+
+    expect(await fixture.service.scanInbox()).toMatchObject({ waitingStable: 1, createdJobs: 0 });
+    expect(hashFile).not.toHaveBeenCalled();
+    fixture.database.close();
+  });
+
   it('does not hash until two unchanged observations span the stability window', async () => {
     let hashCalls = 0;
     const fixture = await createFixture({
@@ -530,6 +747,10 @@ describe.sequential('LocalIngest cross-platform hardening', () => {
     ).run(discovery.jobs[0].id);
     const result = await fixture.service.retryCleanup(discovery.jobs[0].id);
     expect(result).toMatchObject({ cleanupStatus: 'failed', errorCode: 'RECYCLE_FAILED' });
+    expect(result.summary!.performance).toMatchObject({ latest: {
+      operation: 'cleanup', status: 'ingested', cleanupStatus: 'failed', errorCode: 'RECYCLE_FAILED',
+      phases: { cleanup: expect.any(Number) }
+    } });
     await expect(fs.access(fixture.sourcePath)).resolves.toBeUndefined();
     fixture.database.close();
   });

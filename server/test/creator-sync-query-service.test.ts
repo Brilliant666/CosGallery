@@ -4,6 +4,7 @@ import { schemaSql } from '../src/db/schema.js';
 import { CreatorSyncQueryService } from '../src/services/creator-sync-query-service.js';
 import { ArchiveDownloadTaskService, type ArchiveDownloadTaskStatus } from '../src/services/archive-download-task-service.js';
 import { normalizeCreatorIdentity } from '../src/utils/creator-identity.js';
+import { DOWNLOAD_STAGED_AT_PREFIX } from '../src/services/archive-download-activity.js';
 
 describe('shared creator sync read model', () => {
   let db: DatabaseSync, service: CreatorSyncQueryService, sequence: number;
@@ -29,8 +30,8 @@ describe('shared creator sync read model', () => {
     (local_creator_folder_id,work_id,relative_path,absolute_path,folder_name,image_count,match_status,scanned_at) VALUES(?,?,?,?,'Work',1,?,?)`)
     .run(folderId, workId, `work-${++sequence}`, `/synthetic/work-${sequence}`, workId === null ? 'unmatched' : 'matched', timestamp).lastInsertRowid);
   const task = (sourceId: number, status: ArchiveDownloadTaskStatus = 'pending') => Number(db.prepare(`INSERT INTO archive_catalog_download_tasks
-    (source_work_id,provider,target_root,target_relative_directory,target_filename,status) VALUES(?,'baidu','/synthetic/inbox','Creator',?,?)`)
-    .run(sourceId, `${sourceId}.7z`, status).lastInsertRowid);
+    (source_work_id,provider,target_root,target_relative_directory,target_filename,status,created_at,updated_at) VALUES(?,'baidu','/synthetic/inbox','Creator',?,?,?,?)`)
+    .run(sourceId, `${sourceId}.7z`, status, timestamp, timestamp).lastInsertRowid);
   const job = (creatorId: number, sourceId: number, taskId: number) => db.prepare(`INSERT INTO local_ingest_jobs
     (creator_id,source_work_id,archive_download_task_id,source_archive_path,source_archive_name,source_archive_size,source_archive_mtime,source_archive_sha256,status,phase,validation_status,cleanup_status,summary_json)
     VALUES(?,?,?,?,'fixture.7z',1,1,?,'ingested','done','passed','recycled','{"warning":"historical manual choice"}')`)
@@ -43,7 +44,7 @@ describe('shared creator sync read model', () => {
     'archive_catalog_source_works', 'archive_catalog_local_works', 'archive_catalog_local_creator_folders', 'archive_catalog_download_tasks',
     'archive_catalog_metadata_tasks', 'local_ingest_jobs', 'app_settings'].map(table => db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()));
   beforeEach(() => { db = new DatabaseSync(':memory:'); db.exec(schemaSql); sequence = 0; service = new CreatorSyncQueryService(db); });
-  afterEach(() => { vi.restoreAllMocks(); db.close(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); db.close(); });
 
   it('reads the entire canonical roster, not just metadata tasks, with aliases and multi-folder identity', () => {
     const a = creator('Canonical'), b = creator('HistoricalSource', 'kept', 'R15'), c = creator('NeverChecked', null, null);
@@ -61,6 +62,22 @@ describe('shared creator sync read model', () => {
     expect(service.roster({ q: 'Old Alias' }).items.map(item => item.creatorId)).toEqual([a]);
     expect(service.roster({ q: 'oldalias' }).items.map(item => item.creatorId)).toEqual([a]);
     expect(service.stats()).toMatchObject({ creators: { total: 3, withLocal: 1, withSource: 2 }, works: { local: 2, source: 3, missing: 1 }, execution: { metadata: { total: 1, not_found: 1 } } });
+  });
+
+  it('keeps pending supplemental evidence separate from numbered work and task totals', () => {
+    const a = creator('A'), col = collection(a), retired = collection(a), other = creator('B');
+    source(a, col, 1);
+    const pending = { sourceOrderKey: 'SPECIAL:微博图', label: '微博图', rawTitle: 'A 微博图[354P-1.8GB]', status: 'awaiting_review' };
+    db.prepare('UPDATE archive_catalog_collections SET metadata_json=? WHERE id=?').run(JSON.stringify({ supplementalContents: [pending, pending,
+      { label: '已处理内容', status: 'completed' }, 'invalid entry', 1, null] }), col);
+    db.prepare('UPDATE archive_catalog_collections SET metadata_json=?,is_active=0 WHERE id=?').run(JSON.stringify({ supplementalContents: [{ ...pending, label: '旧附加内容' }] }), retired);
+    db.prepare('UPDATE archive_catalog_collections SET metadata_json=? WHERE id=?').run('not json', collection(other));
+    const before = snapshot();
+    expect(service.roster({ q: 'A' }).items[0]).toMatchObject({ pendingSupplementalTitles: ['微博图'], sourceWorks: 1, missingWorks: 1 });
+    expect(service.metadataCreators().items[0].pendingSupplementalTitles).toEqual(['微博图']);
+    expect(service.roster({ q: 'B' }).items[0].pendingSupplementalTitles).toEqual([]);
+    expect(service.stats()).toMatchObject({ works: { source: 1, missing: 1 }, execution: { download: { total: 0 } } });
+    expect(snapshot()).toBe(before);
   });
 
   it('keeps source, local works, download tasks and ingest jobs distinct rather than subtracting job totals', () => {
@@ -170,6 +187,163 @@ describe('shared creator sync read model', () => {
     expect(service.downloadTaskPage({ creatorId: early, page: 999 })).toMatchObject({ items: [], total: 107, summary: { total: 107 } });
     expect(service.downloadCreators({ status: 'ingested', limit: 1, page: 2 })).toMatchObject({ total: 2, taskTotal: 57, items: [{ creatorId: late, total: 3 }] });
     expect(service.downloadTaskPage({ creatorId: early, status: 'staged' }).summary.total).toBe(53);
+  });
+
+  it('orders Stage2 recent events before preference across pages and preserves explicit name ordering', () => {
+    const old = creator('A liked', 'liked'), middle = creator('B kept', 'kept'), newest = creator('Z recent', null);
+    for (const [id, time] of [[old, '2026-09-09T00:00:00Z'], [middle, '2026-09-10T00:00:00Z'], [newest, '2026-09-11T00:00:00Z']] as const) {
+      const t = task(source(id, collection(id), 1).id, 'staged');
+      db.prepare('UPDATE archive_catalog_download_tasks SET updated_at=? WHERE id=?').run(time, t);
+    }
+    const before = snapshot(); db.exec('PRAGMA query_only=ON');
+    const pages = [1, 2, 3].map(page => service.downloadCreators({ page, limit: 1 }));
+    expect(pages.flatMap(page => page.items.map(row => row.creatorId))).toEqual([newest, middle, old]);
+    for (const page of pages) expect(page).toMatchObject({ total: 3, taskTotal: 3, summary: { staged: 3 } });
+    expect(pages.map(page => page.hasMore)).toEqual([true, true, false]);
+    expect(service.downloadCreators({ sort: 'recent' }).items.map(row => row.creatorId)).toEqual([newest, middle, old]);
+    expect(service.downloadCreators({ sort: 'name' }).items.map(row => row.creatorId)).toEqual([old, middle, newest]);
+    expect(() => service.downloadCreators({ sort: 'invalid' as 'recent' })).toThrow();
+    expect(snapshot()).toBe(before);
+  });
+
+  it('keeps the actual staging order after local reconciliation clears claims and overwrites task timestamps', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const a = creator('A latest staged'), b = creator('B older staged');
+    const sa = source(a, collection(a), 1), sb = source(b, collection(b), 1);
+    const ta = task(sa.id, 'claimed'), tb = task(sb.id, 'claimed');
+    const downloads = new ArchiveDownloadTaskService(db);
+    vi.setSystemTime(new Date('2026-09-10T00:00:00Z'));
+    downloads.update(tb, { status: 'staged' });
+    vi.setSystemTime(new Date('2026-09-11T00:00:00Z'));
+    downloads.update(ta, { status: 'staged' });
+    const expected = [a, b];
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual(expected);
+    local(folder(a, 'A'), sa.workId);
+    vi.setSystemTime(new Date('2026-09-12T00:00:00Z'));
+    expect(downloads.planMissing({ targetRoot: '/synthetic/inbox', creatorIds: [a] }).reconciledLocal).toBe(1);
+    expect(downloads.get(ta)).toMatchObject({ status: 'ingested', claimedAt: null, updatedAt: '2026-09-12T00:00:00.000Z' });
+    // A new query service/process reads durable evidence, not a transient sort cache.
+    db.exec('PRAGMA query_only=ON');
+    expect([1, 2].flatMap(page => new CreatorSyncQueryService(db).downloadCreators({ page, limit: 1 }).items.map(row => row.creatorId)))
+      .toEqual(expected);
+    expect(db.prepare('SELECT value FROM app_settings WHERE key=?').get(`${DOWNLOAD_STAGED_AT_PREFIX}${ta}`))
+      .toEqual({ value: '2026-09-11T00:00:00.000Z' });
+  });
+
+  it('preserves legacy staging evidence without promoting receipt replays, and records a genuine restaging', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const a = creator('A old staging'), b = creator('B recent staging');
+    const ta = task(source(a, collection(a), 1).id, 'staged');
+    const tb = task(source(b, collection(b), 1).id, 'staged');
+    db.prepare('UPDATE archive_catalog_download_tasks SET updated_at=? WHERE id=?').run('2026-09-09T00:00:00Z', ta);
+    db.prepare('UPDATE archive_catalog_download_tasks SET updated_at=? WHERE id=?').run('2026-09-10T00:00:00Z', tb);
+    const downloads = new ArchiveDownloadTaskService(db);
+    vi.setSystemTime(new Date('2026-09-12T00:00:00Z'));
+    downloads.update(ta, { status: 'staged' });
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([b, a]);
+    downloads.update(ta, { status: 'pending' });
+    downloads.update(ta, { status: 'claimed' });
+    vi.setSystemTime(new Date('2026-09-13T00:00:00Z'));
+    downloads.update(ta, { status: 'staged' });
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([a, b]);
+    vi.setSystemTime(new Date('2026-09-14T00:00:00Z'));
+    downloads.update(ta, { status: 'downloaded' });
+    downloads.update(ta, { status: 'ingested' });
+    expect(db.prepare('SELECT value FROM app_settings WHERE key=?').get(`${DOWNLOAD_STAGED_AT_PREFIX}${ta}`))
+      .toEqual({ value: '2026-09-13T00:00:00.000Z' });
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([a, b]);
+    expect(db.prepare('SELECT value FROM app_settings WHERE key=?').get(`${DOWNLOAD_STAGED_AT_PREFIX}${tb}`)).toBeUndefined();
+  });
+
+  it('preserves existing staged timestamps in the selected local reconciliation scope but never invents ingested history', () => {
+    const a = creator('A'), b = creator('B');
+    const sa = source(a, collection(a), 1), sb = source(b, collection(b), 1);
+    const ta = task(sa.id, 'staged'), tb = task(sb.id, 'staged');
+    const old = task(source(a, collection(a), 2).id, 'ingested');
+    local(folder(a, 'A'), sa.workId);
+    new ArchiveDownloadTaskService(db).planMissing({ targetRoot: '/synthetic/inbox', creatorIds: [a] });
+    expect(db.prepare('SELECT key,value FROM app_settings WHERE key LIKE ?').all(`${DOWNLOAD_STAGED_AT_PREFIX}%`))
+      .toEqual([{ key: `${DOWNLOAD_STAGED_AT_PREFIX}${ta}`, value: timestamp }]);
+    expect(new ArchiveDownloadTaskService(db).get(tb)?.status).toBe('staged');
+    expect(db.prepare('SELECT value FROM app_settings WHERE key=?').get(`${DOWNLOAD_STAGED_AT_PREFIX}${old}`)).toBeUndefined();
+  });
+
+  it('rolls back the status write if durable staging evidence cannot be saved', () => {
+    const a = creator('A'), ta = task(source(a, collection(a), 1).id, 'claimed');
+    db.exec(`CREATE TRIGGER reject_staging_evidence BEFORE INSERT ON app_settings
+      WHEN NEW.key LIKE '${DOWNLOAD_STAGED_AT_PREFIX}%' BEGIN SELECT RAISE(ABORT,'fixture evidence failure'); END;`);
+    const before = snapshot();
+    expect(() => new ArchiveDownloadTaskService(db).update(ta, { status: 'staged' })).toThrow('fixture evidence failure');
+    expect(snapshot()).toBe(before);
+  });
+
+  it('pins metadata and download activity using all creator tasks even when status filters hide the active task', () => {
+    const recent = creator('A recent'), metadata = creator('B metadata'), claimed = creator('C claimed'), downloading = creator('D downloading');
+    for (const id of [recent, metadata, claimed, downloading]) {
+      const col = collection(id), staged = task(source(id, col, 1).id, 'staged');
+      db.prepare('UPDATE archive_catalog_download_tasks SET updated_at=? WHERE id=?')
+        .run(id === recent ? '2026-09-11T00:00:00Z' : timestamp, staged);
+      if (id === claimed || id === downloading) {
+        const active = task(source(id, col, 2).id, id === claimed ? 'claimed' : 'downloading');
+        db.prepare('UPDATE archive_catalog_download_tasks SET claimed_at=?,claimed_by=? WHERE id=?').run(timestamp, 'fixture-worker', active);
+      }
+    }
+    db.prepare(`INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status,claimed_at,claimed_by,attempt_count)
+      VALUES(?,'costuan','claimed',?,'fixture-worker',1)`).run(metadata, timestamp);
+    const all = service.downloadCreators();
+    expect(new Set(all.items.slice(0, 3).map(row => row.creatorId))).toEqual(new Set([metadata, claimed, downloading]));
+    expect(all.items[3].creatorId).toBe(recent);
+    const filtered = service.downloadCreators({ status: 'staged' });
+    expect(filtered.items.map(row => row.creatorId)).toEqual(all.items.map(row => row.creatorId));
+    expect(filtered).toMatchObject({ total: 4, taskTotal: 4, summary: { staged: 4, claimed: 0, downloading: 0 } });
+  });
+
+  it('compares actual instants across timezone formats and leaves invalid fallback dates last with stable identity ties', () => {
+    const earlier = creator('A offset'), later = creator('Z UTC'), tie1 = creator('Same'), tie2 = creator('Same'), invalid = creator('A invalid');
+    for (const [id, time] of [[earlier, '2026-09-11T10:00:00+08:00'], [later, '2026-09-11T03:00:00Z'],
+      [tie1, '2026-09-10T00:00:00Z'], [tie2, '2026-09-10T00:00:00Z'], [invalid, 'not-a-date']] as const) {
+      const col = collection(id), s = source(id, col, 1); task(s.id);
+      db.prepare('UPDATE archive_catalog_collections SET observed_at=? WHERE id=?').run(time, col);
+      db.prepare('UPDATE archive_catalog_source_works SET last_seen_at=? WHERE id=?').run(time, s.id);
+    }
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([later, earlier, tie1, tie2, invalid]);
+  });
+
+  it('ignores Stage3 completion and unrelated updates while keeping trusted prior checks after a pending reopen', () => {
+    const old = creator('A ingested'), history = creator('B reopened'), current = creator('C checked'), failed = creator('D failed');
+    for (const id of [old, history, current, failed]) task(source(id, collection(id), 1).id, 'ingested');
+    db.prepare("UPDATE archive_catalog_download_tasks SET updated_at='2099-01-01T00:00:00Z',completed_at='2099-01-01T00:00:00Z'").run();
+    const insert = db.prepare(`INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status,attempt_count,completed_at,updated_at)
+      VALUES(?,'costuan',?,?,?,?)`);
+    insert.run(old, 'completed', 0, '2099-01-01T00:00:00Z', '2099-01-01T00:00:00Z');
+    const h = Number(insert.run(history, 'pending', 2, null, '2099-01-01T00:00:00Z').lastInsertRowid);
+    const c = Number(insert.run(current, 'completed', 1, '2026-09-09T00:00:00Z', '2099-01-01T00:00:00Z').lastInsertRowid);
+    insert.run(failed, 'failed', 1, null, '2026-09-09T12:00:00Z');
+    const context = db.prepare('INSERT INTO app_settings(key,value) VALUES(?,?)');
+    context.run(`archive.metadata-task.context.${h}`, JSON.stringify({ checkRoundId: 'new-round', history: [
+      'malformed history entry', null, 42,
+      { status: 'completed', attemptCount: 1, completedAt: '2026-09-10T00:00:00Z', receipt: { receiptId: 'prior-receipt' } },
+      { status: 'completed', attemptCount: 0, completedAt: '2099-01-01T00:00:00Z' },
+      { status: 'pending', attemptCount: 2, completedAt: '2099-01-01T00:00:00Z' }
+    ] }));
+    context.run(`archive.metadata-task.context.${c}`, JSON.stringify({ receipt: { receiptId: 'current-receipt' } }));
+    const before = snapshot(); db.exec('PRAGMA query_only=ON');
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([history, failed, current, old]);
+    expect(snapshot()).toBe(before);
+  });
+
+  it('does not promote unclaimed pending work or receiptless synthetic completion over real result evidence', () => {
+    const pending = creator('A pending'), synthetic = creator('B synthetic'), notFound = creator('C not found'), claimed = creator('D staged claim');
+    for (const id of [pending, synthetic, notFound, claimed]) {
+      const t = task(source(id, collection(id), 1).id);
+      if (id === claimed) db.prepare("UPDATE archive_catalog_download_tasks SET status='failed',claimed_at='2026-09-10T00:00:00Z' WHERE id=?").run(t);
+    }
+    const insert = db.prepare(`INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status,attempt_count,completed_at,updated_at)
+      VALUES(?,'costuan',?,?,?,?)`);
+    insert.run(pending, 'pending', 4, null, '2099-01-01T00:00:00Z');
+    insert.run(synthetic, 'completed', 1, '2099-01-01T00:00:00Z', '2099-01-01T00:00:00Z');
+    insert.run(notFound, 'not_found', 1, '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z');
+    expect(service.downloadCreators().items.map(row => row.creatorId)).toEqual([claimed, notFound, pending, synthetic]);
   });
 
   it('returns the existing task detail shape without delivery JOIN multiplication', () => {

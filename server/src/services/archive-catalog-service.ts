@@ -7,12 +7,21 @@ import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 
 import { databaseManager } from '../db/database.js';
+import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import { LocalCreatorFolderBridgeService, normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
+import { checkedIdentityEvidence, completeIdentityDirectory, directoryCreatorNames, isCostuanNameVariant,
+  type CostuanIdentityInput, type CostuanIdentityVerification } from './costuan-identity-evidence.js';
+import {directShareDeliverySchema} from './archive-baidu-delivery.js';
+import {elyRangeDirectory} from './ely-range-directory.js';
+import {applyCostuanDirectoryReview,costuanDirectoryReviewSchema,directoryReviewKey} from './costuan-directory-review.js';
 import {
   areCostuanTitlesCompatible,
   mergeCostuanDirectoryWorks,
   normalizeCostuanTitle,
+  parseCostuanCollectionCreator,
+  splitCostuanCheckDirectory,
+  parseCostuanDirectoryText,
   parseCostuanNumbering
 } from './costuan-numbering-service.js';
 
@@ -65,7 +74,7 @@ export type CostuanArchiveRecord = z.infer<typeof costuanRecordSchema>;
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
-const ADVERTISEMENT_EXTENSIONS = new Set(['.html', '.htm', '.txt']);
+const ADVERTISEMENT_EXTENSIONS = new Set(['.html', '.htm', '.txt', '.url']);
 
 type MatchStatus = 'matched' | 'unmatched' | 'ambiguous';
 
@@ -204,8 +213,13 @@ function toPosixRelative(value: string): string {
 }
 
 function collectionCreatorAlias(title: string): string | null {
-  const match = title.match(/^(.+?)\s*COS(?:PLAY)?/i);
-  return match?.[1]?.trim() || null;
+  return parseCostuanCollectionCreator(title);
+}
+
+// Collection labels (including truncated old parser output) are not personal names.
+function isCollectionLabel(alias: string): boolean {
+  return /(?:写真|图片|图集|cosplay).*合集\s*[\[【]\s*\d+\s*套/iu.test(alias)
+    || /合集\s*[\[【]\s*\d+\s*套.*持续更新/iu.test(alias);
 }
 
 function sha256(buffer: Buffer): string {
@@ -269,6 +283,7 @@ async function inspectWorkDirectory(rootPath: string, workPath: string): Promise
       if (entry.isSymbolicLink()) continue;
       const absolutePath = path.join(current, entry.name);
       if (entry.isDirectory()) {
+        if (current === workPath && entry.name === RETAINED_ORIGINALS_DIRECTORY) continue;
         pending.push(absolutePath);
         continue;
       }
@@ -346,7 +361,7 @@ async function resolveDirectCreatorFolder(rootPath: string, folderName: string):
   return matches[0].name;
 }
 
-async function scanLocalCreatorDirectory(rootPath: string, folderName: string): Promise<LocalCreatorSnapshot> {
+async function scanLocalCreatorDirectory(rootPath: string, folderName: string, workFolderName?: string): Promise<LocalCreatorSnapshot> {
   const resolvedRoot = path.resolve(rootPath);
   const creatorPath = path.join(resolvedRoot, folderName);
   const relativeCreatorPath = path.relative(resolvedRoot, creatorPath);
@@ -362,12 +377,33 @@ async function scanLocalCreatorDirectory(rootPath: string, folderName: string): 
   if (!creatorStat.isDirectory() || creatorStat.isSymbolicLink()) {
     throw new Error(`博主路径不是可扫描的直接文件夹：${folderName}`);
   }
-  const workEntries = (await fs.readdir(creatorPath, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }));
+  let workNames: string[];
+  if (workFolderName !== undefined) {
+    if (!workFolderName.trim() || workFolderName !== workFolderName.trim()
+      || workFolderName === '.' || workFolderName === '..' || /[\\/:]/u.test(workFolderName)
+      || workFolderName.endsWith('.')
+      || path.basename(workFolderName) !== workFolderName || path.isAbsolute(workFolderName)) {
+      throw new Error('作品文件夹必须是博主目录下的单个直接子目录。');
+    }
+    const workPath = path.join(creatorPath, workFolderName);
+    const workStat = await fs.lstat(workPath);
+    const [realRoot, realCreator, realWork] = await Promise.all([
+      fs.realpath(resolvedRoot), fs.realpath(creatorPath), fs.realpath(workPath)
+    ]);
+    if (!workStat.isDirectory() || workStat.isSymbolicLink()
+      || path.dirname(realCreator) !== realRoot || path.dirname(realWork) !== realCreator) {
+      throw new Error('作品路径不是博主目录内可扫描的直接文件夹。');
+    }
+    workNames = [path.basename(realWork)];
+  } else {
+    workNames = (await fs.readdir(creatorPath, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }))
+      .map((entry) => entry.name);
+  }
   const works: LocalWorkSnapshot[] = [];
-  for (const workEntry of workEntries) {
-    works.push(await inspectWorkDirectory(resolvedRoot, path.join(creatorPath, workEntry.name)));
+  for (const workName of workNames) {
+    works.push(await inspectWorkDirectory(resolvedRoot, path.join(creatorPath, workName)));
   }
   return {
     relativePath: toPosixRelative(relativeCreatorPath),
@@ -411,20 +447,47 @@ export class ArchiveCatalogService {
     });
   }
 
-  validateCompleteCostuanDirectory(recordInput:unknown, creatorId:number): {record:CostuanArchiveRecord;requiredFilenames:string[];sourceFilenames:string[]} {
+  saveCostuanDirectoryReview(creatorId:number,input:unknown):void {
+    const review=costuanDirectoryReviewSchema.parse(input);
+    const alias=collectionCreatorAlias(review.collectionTitle),matches=alias?this.findCreatorIdsByAliases([alias]):[];
+    if(matches.length!==1 || matches[0]!==creatorId)throw new Error('人工审核记录的规范博主身份不唯一。');
+    const key=directoryReviewKey(creatorId),value=JSON.stringify(review);
+    const old=this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(key) as {value:string}|undefined;
+    if(old && old.value!==value)throw new Error('已有不同人工审核记录，不能自动覆盖。');
+    if(!old)this.database.prepare('INSERT INTO app_settings(key,value) VALUES (?,?)').run(key,value);
+  }
+
+  validateCompleteCostuanDirectory(recordInput:unknown, creatorId:number) {
     const record=costuanRecordSchema.parse(recordInput);
-    this.validateCostuanIdentity(creatorId,record.costuan.postId,record.costuan.title);
-    const proof=z.object({complete:z.literal(true),checkedAt:z.string().datetime({offset:true}),parsedWorkCount:z.number().int().positive()})
+    record.costuan.identityVerification=this.validateCostuanIdentity(creatorId,record.costuan.postId,record.costuan.title,record.costuan);
+    const savedReview=this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(directoryReviewKey(creatorId)) as {value:string}|undefined;
+    const rangeReviewed=elyRangeDirectory(creatorId,record.costuan.postId,record.costuan.title,record.costuan.resourceDirectoryText);
+    const reviewed=rangeReviewed ?? (savedReview?applyCostuanDirectoryReview(costuanDirectoryReviewSchema.parse(JSON.parse(savedReview.value)),
+      record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText):null);
+    // The effective directory must remain unique even if a caller supplied a
+    // deduplicated works array. Retraction evidence is audit data, not authority
+    // to erase an active line. Explicit server-owned revision reviews stay scoped.
+    if (!reviewed) {
+      const seen=new Set<string>(),duplicates=new Set<string>();
+      for (const work of (record.costuan.resourceDirectoryText??'').split(/\r?\n/u).flatMap(line=>parseCostuanDirectoryText(line))) {
+        if (work.order===undefined) continue;
+        if (seen.has(work.sourceOrderKey)) duplicates.add(work.sourceOrder);
+        seen.add(work.sourceOrderKey);
+      }
+      if (duplicates.size) throw new Error(`来源目录有效条目编号重复：${[...duplicates].join('、')}；未自动选择版本，需人工检查。`);
+    }
+    const proof=z.object({complete:z.boolean(),checkedAt:z.string().datetime({offset:true}),parsedWorkCount:z.number().int().positive()})
       .safeParse(record.costuan.directoryVerification);
-    const works=mergeCostuanDirectoryWorks(record.costuan.works,record.costuan.resourceDirectoryText);
+    const {works,supplementalContents}=reviewed??splitCostuanCheckDirectory(record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText);
     const titleCount=record.costuan.title.match(/[\[【](\d+)\s*套[^\]】]*[\]】]/u);
     const declared=record.costuan.collectionCount ?? (titleCount ? Number(titleCount[1]) : null);
-    if (!proof.success || !works.length || declared===null || declared!==works.length || proof.data.parsedWorkCount!==works.length
+    if (!proof.success || (!reviewed && !proof.data.complete) || !works.length || declared===null || declared!==works.length
+      || proof.data.parsedWorkCount!==(reviewed?record.costuan.works.length:works.length)
       || (titleCount && Number(titleCount[1])!==declared)) {
       throw new Error('本轮 Costuan 来源目录未完整核验或声明数量不符；保留上次有效来源，需人工检查。');
     }
     const keyOf=(work:{sourceOrder:string;sourceOrderKey?:string})=>parseCostuanNumbering(work.sourceOrder)?.key ?? null;
-    const rawKeys=record.costuan.works.map(keyOf);
+    const rawKeys=(reviewed?works:record.costuan.works).map(keyOf);
     if (rawKeys.some(key=>!key) || new Set(rawKeys).size!==rawKeys.length) throw new Error('本轮来源编号重复或不能明确解析；未覆盖历史来源。');
     const byKey=new Map<string,typeof works[number]>();
     const filenames=new Set<string>();
@@ -442,6 +505,13 @@ export class ArchiveCatalogService {
       FROM archive_catalog_source_works sw JOIN archive_catalog_collections c ON c.id=sw.collection_id
       WHERE c.source='costuan' AND c.source_collection_id=? AND c.creator_id=? AND sw.is_active=1`)
       .all(record.costuan.postId,creatorId) as Array<{work_id:number;source_work_id:string;source_order_label:string|null;source_title:string;media_summary:string|null}>;
+    const previousCollection=this.database.prepare(`SELECT metadata_json FROM archive_catalog_collections
+      WHERE source='costuan' AND source_collection_id=? AND creator_id=?`).get(record.costuan.postId,creatorId) as {metadata_json:string|null}|undefined;
+    const oldSupplements=previousCollection?.metadata_json ? JSON.parse(previousCollection.metadata_json).supplementalContents : [];
+    if (Array.isArray(oldSupplements) && oldSupplements.some(old=>!supplementalContents.some(current=>
+      current.sourceOrderKey===old.sourceOrderKey && current.rawTitle===old.rawTitle))) {
+      throw new Error('此前待人工处理的附加内容缺失或发生变化；保留原记录，需人工确认。');
+    }
     // Source refresh is not fuzzy local-title matching. Even a bracketed title
     // suffix can identify different content and must not be silently discarded.
     const stableSourceTitle=(value:string)=>value.normalize('NFKC').replace(/\s+/g,' ').trim();
@@ -463,8 +533,11 @@ export class ArchiveCatalogService {
     }
     // Validate the complete source above, but only replenish cloud packages needed
     // by the local difference. Never restore missing cloud archives for ingested works.
-    return {record:{...record,costuan:{...record.costuan,works}},sourceFilenames:[...filenames],
-      requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename))};
+    const acceptedDirectoryRevisions=reviewed?.acceptedDirectoryRevisions??[];
+    const canonicalDirectoryVerification={complete:true,checkedAt:proof.data.checkedAt,parsedWorkCount:works.length};
+    return {record:{...record,costuan:{...record.costuan,works,supplementalContents,acceptedDirectoryRevisions,directoryVerification:canonicalDirectoryVerification}},
+      supplementalContents,acceptedDirectoryRevisions,canonicalWorks:works,canonicalDirectoryVerification,sourceFilenames:[...filenames],
+      requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename) || (rangeReviewed && Number(filename.slice(0,-3))<=66))};
   }
 
   private confirmedLocalWorksForSourceCheck(creatorId:number):Set<number> {
@@ -514,6 +587,16 @@ export class ArchiveCatalogService {
 
   validateCompleteCostuanCheck(recordInput:unknown, creatorId:number, checkRoundId:string): CostuanArchiveRecord {
     const {record,requiredFilenames}=this.validateCompleteCostuanDirectory(recordInput,creatorId);
+    if(elyRangeDirectory(creatorId,record.costuan.postId,record.costuan.title,record.costuan.resourceDirectoryText) && record.baidu?.transport!=='direct-share') throw new Error('Ely 范围声明仅接受本轮原分享逐文件核验，不能用历史转存记录代替');
+    if(record.baidu?.transport==='direct-share') {
+      const proof=directShareDeliverySchema.safeParse(record.baidu);
+      if(!proof.success || proof.data.verification.checkRoundId!==checkRoundId) {
+        throw new Error('缺少本轮百度原分享只读核验凭据；不得将原分享核验写成已转存。');
+      }
+      const files=proof.data.verification.files.map(filename=>filename.toLowerCase());
+      if(requiredFilenames.some(filename=>files.filter(file=>file===filename.toLowerCase()).length!==1)) throw new Error('本轮原分享中的缺失作品文件尚未全部唯一核验可用；不规划未核验文件。');
+      return record;
+    }
     const verification=z.object({method:z.enum(['saved','reused']),checkedAt:z.string().datetime({offset:true}),
       sourceDirectory:z.string().min(1),checkRoundId:z.literal(checkRoundId),files:z.array(z.string().min(1))})
       .safeParse(record.baidu?.verification);
@@ -528,17 +611,111 @@ export class ArchiveCatalogService {
     return record;
   }
 
-  validateCostuanIdentity(expectedCreatorId: number, postId: string, title: string): void {
+  validateCostuanIdentity(expectedCreatorId: number, postId: string, title: string, input:CostuanIdentityInput = {}): CostuanIdentityVerification {
     const active = this.database.prepare('SELECT is_active FROM archive_catalog_creators WHERE id=?').get(expectedCreatorId) as {is_active:number}|undefined;
     if (!active?.is_active) throw new Error('指定规范博主不存在或已停用。');
     const owners = this.database.prepare(`SELECT creator_id FROM archive_catalog_creator_sources
       WHERE source='costuan' AND source_creator_id=? UNION SELECT creator_id FROM archive_catalog_collections
       WHERE source='costuan' AND source_collection_id=?`).all(`collection:${postId}`,postId) as Array<{creator_id:number}>;
     const alias=collectionCreatorAlias(title), matches=alias ? this.findCreatorIdsByAliases([alias]) : [];
-    if (owners.length ? owners.length !== 1 || owners[0].creator_id !== expectedCreatorId
-      : matches.length !== 1 || matches[0] !== expectedCreatorId) {
-      throw new Error('Costuan 合集身份与指定规范博主不一致或存在歧义，未写入来源。');
+    const describe=(ids:number[])=>ids.map(id=>{
+      const row=this.database.prepare('SELECT canonical_name FROM archive_catalog_creators WHERE id=?').get(id) as {canonical_name:string}|undefined;
+      return `#${id} ${row?.canonical_name ?? '未知博主'}`;
+    }).join('、');
+    const target=describe([expectedCreatorId]);
+    const fail=(reason:string):never=>{throw new Error(`${reason}；当前选择 ${target}，未写入来源。请先人工核对合集及图库“博主库”中的资料。`);};
+    if(owners.length && (owners.length!==1 || owners[0].creator_id!==expectedCreatorId)) {
+      fail(`合集身份归属冲突：Costuan #${postId} 已关联 ${describe(owners.map(owner=>owner.creator_id))}`);
     }
+    if(matches.length>1) fail(`名称存在歧义：标题“${alias}”对应 ${describe(matches)}`);
+    if(matches.length===1 && matches[0]!==expectedCreatorId) fail(`标题身份不一致：“${alias}”对应 ${describe(matches)}`);
+    // A slash is a candidate dual-name relation, never a substring match.
+    // Check each component even when the full title or source is already bound.
+    const dualNames = alias?.normalize('NFKC').includes('/') ? alias.normalize('NFKC').split('/').map(name=>name.trim()) : null;
+    const dualMatches = dualNames?.map(name=>this.findCreatorIdsByAliases([name])) ?? [];
+    if (dualNames && (dualNames.length!==2 || dualNames.some(name=>!normalizeCreatorIdentity(name))
+      || new Set(dualNames.map(normalizeCreatorIdentity)).size!==2)) fail('双名称标题格式不明确：仅支持两个不同的完整名称');
+    for (let index=0;index<dualMatches.length;index++) {
+      const ids=dualMatches[index];
+      if(ids.length>1 || ids.some(id=>id!==expectedCreatorId)) fail(`双名称身份冲突或歧义：“${dualNames![index]}”对应 ${describe(ids)}`);
+    }
+    const evidence=input.identityEvidence===undefined ? null : checkedIdentityEvidence(input.identityEvidence,postId);
+    // Known contradictory identities veto even an old binding or exact title.
+    // Unrecognized supplemental names are not implicitly registered as aliases.
+    const observed=[...(evidence?.creatorTags.map(tag=>tag.name) ?? []),...directoryCreatorNames(input.resourceDirectoryText ?? '')];
+    for(const name of new Set(observed)) {
+      const ids=this.findCreatorIdsByAliases([name]);
+      if(ids.length>1 || ids.some(id=>id!==expectedCreatorId)) fail(`页面身份冲突或歧义：“${name}”对应 ${describe(ids)}`);
+    }
+    const result=(method:CostuanIdentityVerification['method'],message:string):CostuanIdentityVerification=>({method,creatorId:expectedCreatorId,postId,titleName:alias,message});
+    // Descriptive title prefixes generate candidates, never aliases or an
+    // identity shortcut. Keep this vocabulary bounded and article-local.
+    const describedName=alias?.normalize('NFKC').match(/^(?:韩国妹子|韩国模特)\s*([\p{L}\p{N}_·.\-]{2,64})$/u);
+    if(describedName) {
+      const name=describedName[1], ids=this.findCreatorIdsByAliases([name]);
+      if(ids.length!==1 || ids[0]!==expectedCreatorId) return fail('描述前缀后的名称未唯一对应当前规范博主');
+      if(!evidence || evidence.creatorTags.length!==1) return fail('描述前缀身份证据不足：缺少本篇文章唯一的博主标签');
+      const permitted=new Set([alias!,name].map(normalizeCreatorIdentity));
+      const accepts=(value:string)=>permitted.has(normalizeCreatorIdentity(value))
+        && this.findCreatorIdsByAliases([value]).every(id=>id===expectedCreatorId);
+      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,accepts);
+      const tag=evidence.creatorTags[0];
+      if(!accepts(tag.name)) return fail('描述前缀身份证据不一致：本篇标签不支持标题中的博主名称');
+      return {...result('title-directory-tags',`描述前缀已核验：“${alias}”的名称“${name}”及完整目录、本篇标签对应 ${target}；未新增别名。`),directoryName,tagNames:[tag.name]};
+    }
+    // Parentheses declare candidate names only. Require an exact identity
+    // anchor and article evidence; never register or discard the second name.
+    const parenthetical=alias?.normalize('NFKC').match(/^(?:韩国模特\s*)?([\p{L}\p{N}_·.\-\s]{1,64})\s*\(([\p{L}\p{N}_·.\-\s]{1,64})\)$/u);
+    if (parenthetical) {
+      const first=parenthetical[1].trim(), second=parenthetical[2].trim();
+      const components=[first,second];
+      const componentIds=components.map(name=>this.findCreatorIdsByAliases([name]));
+      if(components.some(name=>!normalizeCreatorIdentity(name)) || normalizeCreatorIdentity(first)===normalizeCreatorIdentity(second)
+        || !componentIds.some(ids=>ids.length===1 && ids[0]===expectedCreatorId)
+        || componentIds.some(ids=>ids.length>1 || ids.some(id=>id!==expectedCreatorId))) return fail('括注双名称身份冲突或证据不足：至少一个完整名称须唯一对应当前博主，另一名称不得存在歧义或对应其他博主');
+      if(!evidence || evidence.creatorTags.length!==1) return fail('括注双名称证据不足：缺少本篇文章唯一的博主标签');
+      const localNames=new Set([alias!,first,second,`${first}(${second})`].map(normalizeCreatorIdentity));
+      const validLocalName=(name:string)=>{
+        const ids=this.findCreatorIdsByAliases([name]);
+        return localNames.has(normalizeCreatorIdentity(name)) && ids.every(id=>id===expectedCreatorId);
+      };
+      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,validLocalName);
+      const tag=evidence.creatorTags[0];
+      if(!validLocalName(tag.name)) return fail('括注双名称证据不一致：本篇标签不属于标题明确声明的名称');
+      return {...result('title-directory-tags',`括注双名称已核验：“${alias}”及完整目录、本篇标签对应 ${target}；未新增通用别名。`),directoryName,tagNames:[tag.name]};
+    }
+    if(dualNames) {
+      if(!dualMatches.some(ids=>ids.length===1 && ids[0]===expectedCreatorId)) return fail('双名称证据不足：标题须包含当前博主唯一对应的完整规范名称或已登记别名');
+      if(!evidence || evidence.creatorTags.length!==1) return fail('双名称证据不足：缺少本篇文章唯一的博主标签');
+      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title), tag=evidence.creatorTags[0];
+      const directoryIdentity=normalizeCreatorIdentity(directoryName);
+      if(!dualNames.some(name=>normalizeCreatorIdentity(name)===directoryIdentity)
+        || normalizeCreatorIdentity(tag.name)!==directoryIdentity) return fail('双名称证据不一致：完整目录与本篇标签须一致，且对应标题中的一个完整名称');
+      return {...result('title-directory-tags',`双名称已核验：标题“${alias}”、完整目录“${directoryName}”及本篇标签“${tag.name}”唯一对应 ${target}；未新增通用别名。`),directoryName,tagNames:[tag.name]};
+    }
+    if(owners.length) return result('bound-source',`沿用 Costuan #${postId} 与 ${target} 的已确认归属。`);
+    if(matches.length===1) return result('exact-name',`标题名称“${alias}”唯一对应 ${target}。`);
+    if(!alias) return fail('标题无法解析：未从合集标题取得明确博主名称');
+    const allNames=this.database.prepare(`SELECT id AS creator_id,canonical_name AS name FROM archive_catalog_creators
+      UNION SELECT creator_id,alias AS name FROM archive_catalog_creator_aliases`).all() as Array<{creator_id:number;name:string}>;
+    const variantIds=[...new Set(allNames.filter(row=>isCostuanNameVariant(alias,row.name)).map(row=>row.creator_id))];
+    if(variantIds.length!==1 || variantIds[0]!==expectedCreatorId) {
+      return fail(variantIds.length>1 ? `名称变体存在歧义：“${alias}”可能对应 ${describe(variantIds)}`
+        : `标题名称未匹配：“${alias}”不是当前博主的规范名称、已登记别名或可验证名称变体`);
+    }
+    if(!evidence || evidence.creatorTags.length!==1) return fail(`名称变体证据不足：“${alias}”缺少本篇文章唯一的博主标签`);
+    const evidenceIds=(name:string)=>[...new Set(allNames.filter(row=>normalizeCreatorIdentity(name)===normalizeCreatorIdentity(row.name)
+      || isCostuanNameVariant(name,row.name)).map(row=>row.creator_id))];
+    const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,name=>{
+      const ids=evidenceIds(name);
+      return ids.length===1 && ids[0]===expectedCreatorId
+        && (normalizeCreatorIdentity(alias)===normalizeCreatorIdentity(name) || isCostuanNameVariant(alias,name));
+    });
+    const directoryIds=evidenceIds(directoryName),tag=evidence.creatorTags[0],tagIds=evidenceIds(tag.name);
+    if(directoryIds.length!==1 || directoryIds[0]!==expectedCreatorId || tagIds.length!==1 || tagIds[0]!==expectedCreatorId
+      || (normalizeCreatorIdentity(alias)!==normalizeCreatorIdentity(directoryName) && !isCostuanNameVariant(alias,directoryName))
+      || (normalizeCreatorIdentity(tag.name)!==normalizeCreatorIdentity(directoryName) && !isCostuanNameVariant(tag.name,directoryName))) return fail(`名称变体证据不一致：标题“${alias}”、目录“${directoryName}”、本篇标签“${tag.name}”未唯一指向同一博主`);
+    return {...result('title-directory-tags',`名称变体已核验：标题“${alias}”、完整目录“${directoryName}”及本篇标签“${tag.name}”唯一对应 ${target}；未新增通用别名。`),directoryName,tagNames:[tag.name]};
   }
 
   private importCostuanRecords(
@@ -573,7 +750,7 @@ export class ArchiveCatalogService {
           ...record.aliases,
           record.local?.folderName ?? '',
           titleAlias ?? ''
-        ].filter(Boolean);
+        ].filter(name => Boolean(name) && !isCollectionLabel(name));
         // Persistent platform identity wins over later display-name changes.
         // A disagreement between existing identities is quarantined as unmatched.
         const owners = this.database.prepare(`SELECT creator_id FROM archive_catalog_creator_sources
@@ -584,8 +761,8 @@ export class ArchiveCatalogService {
         if (importMetadata.expectedCreatorId !== undefined) {
           const expected = importMetadata.expectedCreatorId;
           // The task name in a submitted record is not independent source evidence.
-          // A first collection must identify this creator through its own title.
-          this.validateCostuanIdentity(expected, record.costuan.postId, record.costuan.title);
+          // Recompute from page evidence at import, never trust a client verdict.
+          record.costuan.identityVerification=this.validateCostuanIdentity(expected, record.costuan.postId, record.costuan.title,record.costuan);
           creatorMatches.splice(0, creatorMatches.length, expected);
         }
         if (creatorMatches.length !== 1) {
@@ -751,6 +928,7 @@ export class ArchiveCatalogService {
   async reconcileLocalCreators(options: {
     rootPath: string;
     creators: LocalCreatorReconciliationScope[];
+    workFolderName?: string;
     onProgress?: (message: string) => void;
   }): Promise<LocalReconciliationResult> {
     const resolvedRoot = path.resolve(options.rootPath);
@@ -758,6 +936,9 @@ export class ArchiveCatalogService {
     if (!rootStat.isDirectory()) throw new Error(`图库根目录不是文件夹：${resolvedRoot}`);
     if (options.creators.length === 0) {
       throw new Error('博主定向对账至少需要一个明确的博主范围。');
+    }
+    if (options.workFolderName !== undefined && options.creators.length !== 1) {
+      throw new Error('作品定向对账必须且只能指定一个博主。');
     }
 
     const explicitCreatorIds = new Map<string, number>();
@@ -781,7 +962,7 @@ export class ArchiveCatalogService {
         throw new Error(`博主 ID ${scope.creatorId} 与文件夹“${actualFolderName}”无法唯一对应。`);
       }
       options.onProgress?.(`[${index + 1}/${options.creators.length}] 只读扫描 ${actualFolderName}`);
-      const snapshot = await scanLocalCreatorDirectory(resolvedRoot, actualFolderName);
+      const snapshot = await scanLocalCreatorDirectory(resolvedRoot, actualFolderName, options.workFolderName);
       if (explicitCreatorIds.has(snapshot.relativePath)) {
         throw new Error(`博主定向对账中出现重复文件夹：${actualFolderName}`);
       }
@@ -793,7 +974,8 @@ export class ArchiveCatalogService {
       resolvedRoot,
       snapshots,
       explicitCreatorIds,
-      deactivateMissingCreatorFolders: false
+      deactivateMissingCreatorFolders: false,
+      partialWorks: options.workFolderName !== undefined
     });
   }
 
@@ -802,6 +984,7 @@ export class ArchiveCatalogService {
     snapshots: LocalCreatorSnapshot[];
     explicitCreatorIds: Map<string, number> | null;
     deactivateMissingCreatorFolders: boolean;
+    partialWorks?: boolean;
   }): LocalReconciliationResult {
     const scannedAt = new Date().toISOString();
     const result: LocalReconciliationResult = {
@@ -886,6 +1069,14 @@ export class ArchiveCatalogService {
         const existingByRelativePath = new Map(existingLinks.map((row) => [row.relative_path, row]));
         const preservedByRelativePath = new Map<string, ExistingLocalWorkLink>();
         const claimedWorkIds = new Set<number>();
+        if (input.partialWorks) {
+          const selectedPaths = new Set(creatorSnapshot.works.map((work) => this.localWorkRelativePath(work)));
+          // Unvisited links remain authoritative, even if their directories are currently absent.
+          for (const existing of existingLinks) {
+            if (!selectedPaths.has(existing.relative_path) && existing.match_status === 'matched'
+              && existing.work_id !== null) claimedWorkIds.add(existing.work_id);
+          }
+        }
         if (creatorId !== null) {
           for (const workSnapshot of creatorSnapshot.works) {
             const relativePath = this.localWorkRelativePath(workSnapshot);
@@ -990,7 +1181,7 @@ export class ArchiveCatalogService {
           });
         }
 
-        this.deactivateMissingLocalWorks(localFolderId, activeWorkPaths);
+        if (!input.partialWorks) this.deactivateMissingLocalWorks(localFolderId, activeWorkPaths);
       }
 
       if (input.deactivateMissingCreatorFolders) {
@@ -1186,6 +1377,7 @@ export class ArchiveCatalogService {
   }
 
   private upsertAlias(creatorId: number, alias: string, source: string): void {
+    if (source === 'costuan' && isCollectionLabel(alias)) return;
     const normalized = normalizeCreatorIdentity(alias);
     if (!normalized) return;
     this.database.prepare(

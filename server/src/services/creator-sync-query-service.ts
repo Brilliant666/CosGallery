@@ -1,6 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 import { databaseManager } from '../db/database.js';
+import {directShareDeliverySql,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
+import { DOWNLOAD_STAGED_AT_PREFIX } from './archive-download-activity.js';
 import type { ArchiveDownloadTask, ArchiveDownloadTaskStatus, ArchiveDownloadTaskSummary } from './archive-download-task-service.js';
 import type { ArchiveMetadataTaskStatus, ArchiveSourceState } from './archive-metadata-task-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
@@ -15,6 +17,7 @@ export type CreatorSyncFilters = {
 };
 export type CreatorSyncPageOptions = CreatorSyncFilters & { page?: number; limit?: number };
 export type CreatorSyncDownloadOptions = CreatorSyncPageOptions & { status?: ArchiveDownloadTaskStatus };
+export type CreatorSyncDownloadCreatorOptions = CreatorSyncDownloadOptions & { sort?: 'recent' | 'name' };
 export type CreatorSyncMetadataOptions = CreatorSyncPageOptions & { status?: ArchiveMetadataTaskStatus | 'no_task' };
 export type CreatorSyncMetadataPage = CreatorSyncPage<CreatorSyncRosterItem> & {
   summary: {
@@ -49,6 +52,7 @@ export type CreatorSyncRosterItem = {
   sourceCollections: number;
   missingWorks: number;
   latestSourceAt: string | null;
+  pendingSupplementalTitles: string[];
   sourceState: ArchiveSourceState;
   metadataTask: CreatorSyncMetadataTask | null;
 };
@@ -105,18 +109,34 @@ const COHORT_CTES = `
         THEN work_id END) AS missing_works
     FROM source_rows GROUP BY creator_id
   ),
+  supplemental_counts AS (
+    SELECT creator_id, json_group_array(label) AS titles_json FROM (
+      SELECT DISTINCT collections.creator_id, json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.label') AS label
+      FROM archive_catalog_collections collections,
+        json_each(CASE WHEN json_valid(collections.metadata_json)
+          THEN CASE WHEN json_type(collections.metadata_json,'$.supplementalContents')='array'
+            THEN json_extract(collections.metadata_json,'$.supplementalContents') ELSE '[]' END
+          ELSE '[]' END) item
+      WHERE collections.source='costuan' AND collections.is_active=1 AND item.type='object'
+        AND json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.status')='awaiting_review'
+        AND json_type(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.label')='text'
+        AND TRIM(json_extract(CASE WHEN item.type='object' THEN item.value ELSE '{}' END,'$.label'))<>''
+      ORDER BY collections.creator_id,label
+    ) GROUP BY creator_id
+  ),
   delivery_counts AS (
     SELECT collections.creator_id, COUNT(*) AS usable,
+      MAX(CASE WHEN ${directShareDeliverySql('deliveries')} THEN 1 ELSE 0 END) AS direct_share,
       MAX(CASE WHEN json_valid(deliveries.metadata_json) THEN
-        CASE WHEN json_extract(deliveries.metadata_json,'$.verification.checkedAt') IS NOT NULL
+        CASE WHEN ${directShareDeliverySql('deliveries')} THEN 1
+          WHEN json_extract(deliveries.metadata_json,'$.verification.checkedAt') IS NOT NULL
           AND json_extract(deliveries.metadata_json,'$.verification.method') IN ('saved','reused')
           AND LENGTH(COALESCE(json_extract(deliveries.metadata_json,'$.verification.sourceDirectory'),''))>0 THEN 1 ELSE 0 END
         ELSE 0 END) AS verified
     FROM archive_catalog_collections collections
     JOIN archive_catalog_deliveries deliveries ON deliveries.collection_id=collections.id
     WHERE collections.id IN (SELECT collection_id FROM source_rows) AND deliveries.provider='baidu'
-      AND deliveries.status IN ('saved','already-saved')
-      AND TRIM(COALESCE(deliveries.source_folder_name,''))<>'' AND TRIM(COALESCE(deliveries.destination_path,''))<>''
+      AND ${currentBaiduDeliverySql('deliveries')}
     GROUP BY collections.creator_id
   ),
   aliases AS (
@@ -133,13 +153,16 @@ const COHORT_CTES = `
       COALESCE(source_counts.source_works,0) AS source_works,
       COALESCE(source_counts.source_collections,0) AS source_collections,
       COALESCE(source_counts.missing_works,0) AS missing_works, source_counts.latest_source_at,
+      COALESCE(supplemental_counts.titles_json,'[]') AS supplemental_titles_json,
       COALESCE(delivery_counts.usable,0) AS usable_delivery, COALESCE(delivery_counts.verified,0) AS verified_delivery,
+      COALESCE(delivery_counts.direct_share,0) AS direct_share,
       tasks.id AS metadata_task_id, tasks.status AS metadata_status, tasks.attempt_count AS metadata_attempt_count,
       tasks.claimed_by AS metadata_claimed_by, tasks.claimed_at AS metadata_claimed_at,
       tasks.completed_at AS metadata_completed_at, tasks.last_error AS metadata_last_error, tasks.updated_at AS metadata_updated_at
     FROM archive_catalog_creators creators
     LEFT JOIN local_counts ON local_counts.creator_id=creators.id
     LEFT JOIN source_counts ON source_counts.creator_id=creators.id
+    LEFT JOIN supplemental_counts ON supplemental_counts.creator_id=creators.id
     LEFT JOIN delivery_counts ON delivery_counts.creator_id=creators.id
     LEFT JOIN aliases ON aliases.creator_id=creators.id
     LEFT JOIN archive_catalog_metadata_tasks tasks ON tasks.creator_id=creators.id AND tasks.source='costuan'
@@ -149,7 +172,8 @@ type RosterRow = {
   creator_id: number; creator_name: string; preference: 'liked' | 'kept' | null; rating: 'R15' | 'R18' | null;
   is_active: number; aliases_json: string; local_works: number; matched_local_works: number;
   source_works: number; source_collections: number; missing_works: number; latest_source_at: string | null;
-  usable_delivery: number; verified_delivery: number; metadata_task_id: number | null;
+  supplemental_titles_json: string;
+  usable_delivery: number; verified_delivery: number; direct_share:number; metadata_task_id: number | null;
   metadata_status: ArchiveMetadataTaskStatus | null; metadata_attempt_count: number | null;
   metadata_claimed_by: string | null; metadata_claimed_at: string | null; metadata_completed_at: string | null;
   metadata_last_error: string | null; metadata_updated_at: string | null;
@@ -203,9 +227,11 @@ function rosterItem(row: RosterRow): CreatorSyncRosterItem {
     localWorks: row.local_works, matchedLocalWorks: row.matched_local_works, unresolvedLocalWorks: row.local_works - row.matched_local_works,
     sourceWorks: row.source_works, sourceCollections: row.source_collections, missingWorks: row.missing_works,
     latestSourceAt: row.latest_source_at,
+    pendingSupplementalTitles: JSON.parse(row.supplemental_titles_json) as string[],
     sourceState: { metadataAccepted: row.source_works > 0, deliveryReady: row.usable_delivery > 0,
       deliveryEvidence: row.verified_delivery ? 'verified' : row.usable_delivery ? 'historical' : 'missing',
-      missing: !row.source_works ? ['尚无有效 Costuan 作品来源'] : row.usable_delivery ? [] : ['完整百度来源目录尚未转存或确认，缺少可用来源路径'] },
+      deliveryMode:row.direct_share?'direct-share':row.usable_delivery?'owned-folder':'missing',
+      missing: !row.source_works ? ['尚无有效 Costuan 作品来源'] : row.usable_delivery ? [] : ['百度原分享或已有网盘来源尚未核验，缺少可用来源'] },
     metadataTask: row.metadata_task_id === null ? null : { id: row.metadata_task_id, status: row.metadata_status!,
       attemptCount: row.metadata_attempt_count!, claimedBy: row.metadata_claimed_by, claimedAt: row.metadata_claimed_at,
       completedAt: row.metadata_completed_at, lastError: row.metadata_last_error, updatedAt: row.metadata_updated_at! } };
@@ -321,7 +347,8 @@ export class CreatorSyncQueryService {
       ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''})`, values };
   }
 
-  downloadCreators(options: CreatorSyncDownloadOptions = {}): CreatorSyncPage<CreatorSyncDownloadCreator> & { summary: ArchiveDownloadTaskSummary; taskTotal: number } {
+  downloadCreators(options: CreatorSyncDownloadCreatorOptions = {}): CreatorSyncPage<CreatorSyncDownloadCreator> & { summary: ArchiveDownloadTaskSummary; taskTotal: number } {
+    if (options.sort !== undefined && options.sort !== 'recent' && options.sort !== 'name') throw new Error('博主排序无效。');
     const { page, limit } = pageOptions(options), scope = this.taskScope(options);
     return this.read(() => {
       const grouped = this.database.prepare(`${scope.sql} SELECT creator_id, status,COUNT(*) AS count FROM task_scope GROUP BY creator_id,status`)
@@ -333,9 +360,56 @@ export class CreatorSyncQueryService {
         totals.set(row.status, (totals.get(row.status) ?? 0) + row.count);
       }
       const completeSummary = summary(DOWNLOAD_STATUSES, [...totals].map(([status, count]) => ({ status, count })));
-      const rows = this.database.prepare(`${scope.sql} SELECT creator_id,creator_name,preference,rating,is_active FROM cohort
-        WHERE creator_id IN (SELECT creator_id FROM task_scope)
-        ORDER BY CASE preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,creator_name COLLATE NOCASE,creator_id LIMIT ? OFFSET ?`)
+      // These are read-side evidence, not new execution timestamps. Stage3 may
+      // overwrite download updated/completed_at and clear claimed_at. Retained
+      // staging evidence survives those changes; historical staged rows still
+      // use their current timestamp until their next write preserves it.
+      // Older ingested rows without evidence fall back to source observation.
+      // Activity is creator-wide even when the displayed tasks are status-filtered.
+      const activitySql = `${scope.sql}, activity_tasks AS (
+        SELECT tasks.*,work.creator_id,julianday(staging.value) AS staged_event FROM archive_catalog_download_tasks tasks
+        JOIN archive_catalog_source_works source ON source.id=tasks.source_work_id
+        JOIN archive_catalog_works work ON work.id=source.work_id
+        LEFT JOIN app_settings staging ON staging.key='${DOWNLOAD_STAGED_AT_PREFIX}'||tasks.id
+        WHERE work.creator_id IN (SELECT creator_id FROM task_scope)
+      ), check_context AS (
+        SELECT cohort.*,CASE WHEN json_valid(context.value) THEN context.value ELSE '{}' END AS context_json
+        FROM cohort LEFT JOIN app_settings context ON context.key='archive.metadata-task.context.'||cohort.metadata_task_id
+        WHERE cohort.creator_id IN (SELECT creator_id FROM task_scope)
+      ), check_history AS (
+        SELECT checks.creator_id,CASE WHEN history.type='object' THEN history.value ELSE '{}' END AS entry
+        FROM check_context checks,json_each(CASE WHEN json_type(checks.context_json,'$.history')='array'
+          THEN json_extract(checks.context_json,'$.history') ELSE '[]' END) history
+      ), activity_events AS (
+        SELECT creator_id,julianday(metadata_claimed_at) AS event_time FROM check_context
+          WHERE metadata_status='claimed'
+        UNION ALL
+        SELECT creator_id,julianday(CASE WHEN metadata_status='failed' THEN metadata_updated_at ELSE metadata_completed_at END) FROM check_context
+          WHERE metadata_attempt_count>0 AND (metadata_status IN ('failed','not_found')
+            OR (metadata_status='completed' AND json_type(context_json,'$.receipt')='object'))
+        UNION ALL
+        SELECT creator_id,julianday(json_extract(entry,'$.completedAt')) FROM check_history
+          WHERE json_extract(entry,'$.attemptCount')>0
+            AND (json_extract(entry,'$.status') IN ('failed','not_found')
+              OR (json_extract(entry,'$.status')='completed' AND json_type(entry,'$.receipt')='object'))
+        UNION ALL
+        SELECT creator_id,julianday(claimed_at) FROM activity_tasks
+        UNION ALL
+        SELECT creator_id,COALESCE(staged_event,CASE WHEN status='staged' THEN julianday(updated_at) END) FROM activity_tasks
+      ), activity_times AS (
+        SELECT creator_id,MAX(event_time) AS latest_event FROM activity_events GROUP BY creator_id
+      ), ordered_creators AS (
+        SELECT cohort.*,COALESCE(activity_times.latest_event,julianday(cohort.latest_source_at)) AS last_activity,
+          CASE WHEN cohort.metadata_status='claimed' OR EXISTS (SELECT 1 FROM activity_tasks tasks
+            WHERE tasks.creator_id=cohort.creator_id AND tasks.status IN ('claimed','downloading')) THEN 1 ELSE 0 END AS active
+        FROM cohort LEFT JOIN activity_times ON activity_times.creator_id=cohort.creator_id
+        WHERE cohort.creator_id IN (SELECT creator_id FROM task_scope)
+      )`;
+      const order = options.sort === 'name'
+        ? "CASE preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END,creator_name COLLATE NOCASE,creator_id"
+        : 'active DESC,last_activity DESC,creator_name COLLATE NOCASE,creator_id';
+      const rows = this.database.prepare(`${activitySql} SELECT creator_id,creator_name,preference,rating,is_active FROM ordered_creators
+        ORDER BY ${order} LIMIT ? OFFSET ?`)
         .all(...scope.values, limit, (page - 1) * limit) as Array<Pick<RosterRow, 'creator_id' | 'creator_name' | 'preference' | 'rating' | 'is_active'>>;
       const items = rows.map(row => {
         const counts = summary(DOWNLOAD_STATUSES, byCreator.get(row.creator_id)!);
@@ -356,7 +430,7 @@ export class CreatorSyncQueryService {
       const counts = summary(DOWNLOAD_STATUSES, this.database.prepare(`${scope.sql} SELECT status,COUNT(*) AS count FROM task_scope GROUP BY status`)
         .all(...scope.values) as Array<{ status: string; count: number }>);
       const items = this.database.prepare(`${scope.sql}, deliveries_ranked AS (
-        SELECT deliveries.*,ROW_NUMBER() OVER (PARTITION BY collection_id,provider ORDER BY transferred_at DESC,id DESC) AS ranking
+        SELECT deliveries.*,ROW_NUMBER() OVER (PARTITION BY collection_id,provider ORDER BY last_seen_at DESC,id DESC) AS ranking
         FROM archive_catalog_deliveries deliveries
         WHERE collection_id IN (SELECT source.collection_id FROM task_scope tasks JOIN archive_catalog_source_works source ON source.id=tasks.source_work_id)
       ) SELECT tasks.id,tasks.creator_id AS creatorId,creators.canonical_name AS creatorName,creators.preference,creators.effective_rating AS rating,
@@ -364,6 +438,8 @@ export class CreatorSyncQueryService {
         collections.source_collection_id AS sourceCollectionId,source.source_order AS sourceOrder,source.source_order_label AS sourceOrderLabel,
         source.source_title AS title,tasks.provider,COALESCE(deliveries.source_folder_name,'') AS sourceFolderName,
         COALESCE(deliveries.destination_path,'') AS destinationPath,tasks.target_root AS targetRoot,
+        CASE WHEN ${directShareDeliverySql('deliveries')} THEN 'direct-share' ELSE 'owned-folder' END AS sourceMode,
+        CASE WHEN ${directShareDeliverySql('deliveries')} THEN json_extract(deliveries.metadata_json,'$.shareUrl') ELSE NULL END AS sourceShareUrl,
         tasks.target_relative_directory AS targetRelativeDirectory,tasks.target_filename AS targetFilename,tasks.status,
         tasks.claimed_by AS claimedBy,tasks.claimed_at AS claimedAt,tasks.started_at AS startedAt,tasks.completed_at AS completedAt,
         tasks.download_id AS downloadId,tasks.attempt_count AS attemptCount,tasks.last_error AS lastError,

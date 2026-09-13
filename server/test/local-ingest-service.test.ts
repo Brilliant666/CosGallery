@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,8 @@ type FixtureOptions = {
   password?: string;
   innerCount?: number;
   includeUnknown?: boolean;
+  retainedExtensions?: string[];
+  includeUrlAdvertisement?: boolean;
   includeImage?: boolean;
   includeVideo?: boolean;
   includeNestedArchive?: boolean;
@@ -52,7 +55,7 @@ type Fixture = {
   service: LocalIngestService;
   recycleCalls: string[];
   rescanCalls: number;
-  rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string }>;
+  rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string; workFolderName?: string }>;
   advanceTime: (milliseconds: number) => void;
 };
 
@@ -191,7 +194,15 @@ async function makeNestedArchive(
     ]);
   }
   await fs.writeFile(path.join(payload, 'advertisement.txt'), 'not part of the final gallery');
+  if (options.includeUrlAdvertisement) {
+    await fs.mkdir(path.join(payload, 'subfolder'), { recursive: true });
+    await fs.writeFile(path.join(payload, 'subfolder', '孔雀海.URL'), '[InternetShortcut]\nURL=https://example.invalid/ad');
+  }
   if (options.includeUnknown) await fs.writeFile(path.join(payload, 'unknown.exe'), 'fixture');
+  for (const extension of options.retainedExtensions ?? []) {
+    await fs.mkdir(path.join(payload, 'originals'), { recursive: true });
+    await fs.writeFile(path.join(payload, 'originals', `original${extension}`), `synthetic original ${extension}`);
+  }
   if (options.includeNestedArchive) {
     const nestedSource = path.join(root, 'nested-source');
     await fs.mkdir(nestedSource, { recursive: true });
@@ -263,16 +274,17 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     smokeTest: async () => ({ targetPath: '', recycled: true })
   } as unknown as RecycleBinAdapter;
   let rescanCalls = 0;
-  const rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string }> = [];
+  const rescanScopes: Array<{ libraryRoot: string; creatorId: number; creatorFolderName: string; workFolderName?: string }> = [];
   let remainingReconciliationFailures = options.reconciliationFailures ?? 0;
   const rescan = async (
     db: DatabaseSync,
     scopedLibraryRoot: string,
     creatorId: number,
-    creatorFolderName: string
+    creatorFolderName: string,
+    workFolderName?: string
   ) => {
     rescanCalls += 1;
-    rescanScopes.push({ libraryRoot: scopedLibraryRoot, creatorId, creatorFolderName });
+    rescanScopes.push({ libraryRoot: scopedLibraryRoot, creatorId, creatorFolderName, workFolderName });
     if (remainingReconciliationFailures > 0) {
       remainingReconciliationFailures -= 1;
       return;
@@ -459,7 +471,7 @@ describe.sequential('LocalIngestService', () => {
   });
 
   it.runIf(process.platform === 'win32')('discovers, maps, extracts twice, commits, reconciles, recycles, and reruns idempotently', async () => {
-    fixture = await createFixture();
+    fixture = await createFixture({ includeUrlAdvertisement: true });
     const discovery = await discoverStable(fixture);
     expect(discovery.createdJobs).toBe(1);
     expect(discovery.jobs[0]).toMatchObject({ sourceWorkId: 1, archiveDownloadTaskId: 1, status: 'queued' });
@@ -471,12 +483,13 @@ describe.sequential('LocalIngestService', () => {
     expect(fixture.rescanScopes).toEqual([{
       libraryRoot: fixture.libraryRoot,
       creatorId: 1,
-      creatorFolderName: fixture.creatorName
+      creatorFolderName: fixture.creatorName,
+      workFolderName: path.basename(result.targetPath!)
     }]);
     expect(result.summary).toMatchObject({
       imageCount: 1,
       videoCount: 0,
-      advertisementFileCount: 1,
+      advertisementFileCount: 2,
       levelOneOutput: ['007.7zz', 'outer-note.html'],
       innerOriginalName: '007.7zz',
       innerWorkingName: '007.7z',
@@ -584,7 +597,8 @@ describe.sequential('LocalIngestService', () => {
     expect(fixture.rescanScopes).toEqual([{
       libraryRoot: fixture.libraryRoot,
       creatorId: 1,
-      creatorFolderName: 'preferred-root'
+      creatorFolderName: 'preferred-root',
+      workFolderName: path.basename(completed.targetPath!)
     }]);
     await expect(fs.access(completed.targetPath!)).resolves.toBeUndefined();
     await expect(fs.access(path.join(fixture.libraryRoot, 'Creator Renamed'))).rejects.toThrow();
@@ -594,6 +608,7 @@ describe.sequential('LocalIngestService', () => {
 
   it.runIf(process.platform === 'win32')('confirms a stable exact local handoff in one scan operation and advances only staged tasks', async () => {
     fixture = await createFixture();
+    const stagedAt = fixture.database.prepare('SELECT updated_at FROM archive_catalog_download_tasks WHERE id=1').get()!.updated_at;
     const discovery = await fixture.service.scanInboxWithStableRecheck();
     expect(discovery).toMatchObject({
       discoveredCreators: 1,
@@ -604,6 +619,8 @@ describe.sequential('LocalIngestService', () => {
     });
     expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
       .toEqual({ status: 'downloaded' });
+    expect(fixture.database.prepare("SELECT value FROM app_settings WHERE key='archive.download-task.staged-at.1'").get())
+      .toEqual({ value: stagedAt });
 
     const repeated = await fixture.service.scanInboxWithStableRecheck();
     expect(repeated).toMatchObject({ existingJobs: 1, reconciledDownloadedTasks: 0 });
@@ -611,6 +628,8 @@ describe.sequential('LocalIngestService', () => {
     await fixture.service.scanInboxWithStableRecheck();
     expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
       .toEqual({ status: 'ingested' });
+    expect(fixture.database.prepare("SELECT value FROM app_settings WHERE key='archive.download-task.staged-at.1'").get())
+      .toEqual({ value: stagedAt });
   }, 60_000);
 
   it.runIf(process.platform === 'win32')('keeps unstable, unmapped, ambiguous, and cancelled handoffs out of downloaded', async () => {
@@ -659,6 +678,8 @@ describe.sequential('LocalIngestService', () => {
        END`
     );
     await expect(fixture.service.scanInboxWithStableRecheck()).rejects.toThrow(/synthetic handoff failure/i);
+    expect(fixture.database.prepare("SELECT value FROM app_settings WHERE key='archive.download-task.staged-at.1'").get())
+      .toBeUndefined();
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual({ count: 0 });
     expect(fixture.database.prepare('SELECT status FROM archive_catalog_download_tasks WHERE id = 1').get())
       .toEqual({ status: 'staged' });
@@ -720,6 +741,62 @@ describe.sequential('LocalIngestService', () => {
     const discovery = await discoverStable(fixture);
     const result = await fixture.service.runJob(discovery.jobs[0].id);
     expect(result).toMatchObject({ status: 'awaiting_review', errorCode: 'NO_VALID_MEDIA' });
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('automatically retains unsupported originals with hashes without counting them as displayable images', async () => {
+    const extensions = ['.HEIC', '.heif', '.tif', '.tiff'];
+    fixture = await createFixture({ retainedExtensions: extensions, mediaSummary: '5P-1MB' });
+    const discovery = await discoverStable(fixture);
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result).toMatchObject({ status: 'ingested', validationStatus: 'warning', cleanupStatus: 'recycled', attemptCount: 1 });
+    expect(result.summary).toMatchObject({ imageCount: 1, videoCount: 0, retainedOriginalCount: 4,
+      retainedOriginals: { automaticPolicy: 1, count: 4 } });
+    const directory = path.join(result.targetPath!, '_未支持格式原件');
+    expect(result.summary?.retainedOriginalDirectory).toBe(directory);
+    for (const extension of extensions) {
+      const relativePath = `originals/original${extension}`;
+      const bytes = Buffer.from(`synthetic original ${extension}`);
+      expect(await fs.readFile(path.join(directory, relativePath))).toEqual(bytes);
+      expect(result.summary?.retainedOriginals).toMatchObject({ files: expect.arrayContaining([{
+        relativePath, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex').toUpperCase()
+      }]) });
+    }
+    expect((await fs.readdir(result.targetPath!)).sort()).toEqual(['_未支持格式原件', 'cover.jpg'].sort());
+    expect(fixture.recycleCalls).toHaveLength(2);
+    expect(existsSync(fixture.sourceArchivePath)).toBe(false);
+    const repeat = await fixture.service.runJob(result.id);
+    expect(repeat.summary?.retainedOriginals).toEqual(result.summary?.retainedOriginals);
+    expect(repeat.attemptCount).toBe(1);
+    expect(fixture.recycleCalls).toHaveLength(2);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('keeps both cleanup sources if an automatically retained original changes before cleanup', async () => {
+    fixture = await createFixture({ retainedExtensions: ['.heic'], recycleAfterIngest: false });
+    const discovery = await discoverStable(fixture);
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result.status).toBe('ingested');
+    expect(fixture.recycleCalls).toEqual([]);
+    expect(existsSync(fixture.sourceArchivePath)).toBe(true);
+    await fs.writeFile(path.join(result.targetPath!, '_未支持格式原件', 'originals', 'original.heic'), 'tampered');
+    const cleanup = await fixture.service.retryCleanup(result.id);
+    expect(cleanup.cleanupStatus).toBe('failed');
+    expect(fixture.recycleCalls).toEqual([]);
+    expect(existsSync(fixture.sourceArchivePath)).toBe(true);
+    expect(existsSync(path.join(fixture.processingRoot, String(result.id)))).toBe(true);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32').each([
+    { includeUnknown: true, includeImage: true, errorCode: 'UNKNOWN_FILE_TYPE' },
+    { includeUnknown: false, includeImage: false, errorCode: 'NO_VALID_MEDIA' }
+  ])('does not bypass review for unsupported originals with $errorCode', async ({ errorCode, ...options }) => {
+    fixture = await createFixture({ ...options, retainedExtensions: ['.heic'] });
+    const discovery = await discoverStable(fixture);
+    const result = await fixture.service.runJob(discovery.jobs[0].id);
+    expect(result).toMatchObject({ status: 'awaiting_review', errorCode });
+    expect(fixture.rescanCalls).toBe(0);
+    expect(fixture.recycleCalls).toEqual([]);
+    expect(existsSync(fixture.sourceArchivePath)).toBe(true);
+    expect(await fs.readdir(path.join(fixture.libraryRoot, fixture.creatorName)).catch(() => [])).toEqual([]);
   }, 60_000);
 
   it.runIf(process.platform === 'win32')('blocks unreadable and zero-byte media', async () => {
@@ -797,6 +874,8 @@ describe.sequential('LocalIngestService', () => {
     const recovered = await fixture.service.runJob(first.id);
     expect(recovered).toMatchObject({ status: 'ingested', phase: 'done', cleanupStatus: 'recycled', attemptCount: 1 });
     expect(fixture.rescanCalls).toBe(2);
+    expect(fixture.rescanScopes[0].workFolderName).toBe(path.basename(first.targetPath!));
+    expect(fixture.rescanScopes[1].workFolderName).toBeUndefined();
     expect((await fs.readdir(path.join(fixture.libraryRoot, fixture.creatorName))).filter((name) => name.includes('NO.007'))).toHaveLength(1);
   }, 60_000);
 

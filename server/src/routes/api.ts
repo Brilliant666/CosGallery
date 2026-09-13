@@ -287,7 +287,7 @@ const archiveCatalogQuerySchema = z.object({
   rating: z.enum(['R15', 'R18', 'unclassified']).optional(),
   active: z.enum(['active', 'inactive', 'all']).default('active'),
   hasLocal: z.enum(['yes', 'no']).optional(),
-  hasSource: z.enum(['yes', 'no']).optional(),
+  hasSource: z.enum(['yes', 'no', 'no-unchecked', 'no-not-found']).optional(),
   state: z.enum(['missing', 'complete', 'no-local', 'no-source', 'unresolved']).optional(),
   q: z.string().trim().max(160).optional()
 });

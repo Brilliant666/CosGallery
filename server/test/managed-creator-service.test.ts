@@ -23,6 +23,44 @@ describe('managed creator canonical ownership', () => {
   function importSource(creatorName:string,postId='source1') {
     return new ArchiveCatalogService(db).importCostuanRecord({creatorName,aliases:[],costuan:{postId,title:`${creatorName}合集`,works:[{order:1,sourceOrder:'NO.001',label:'Test work'}]},baidu:{sourceFolderName:'1',destinationPath:'test',status:'saved'}});
   }
+  it('excludes seed provenance from displayed source counts but preserves historical identity and search', () => {
+    const creator=service.create({name:'Alpha'});
+    db.prepare(`INSERT INTO archive_catalog_creator_sources(creator_id,source,source_creator_id,source_display_name,first_seen_at,last_seen_at)
+      VALUES(?,'hentaiclub','old-id','Alpha','fixed','fixed')`).run(creator.id);
+    db.prepare(`INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,'Old Alpha','oldalpha','hentaiclub')`).run(creator.id);
+    const before=rows('archive_catalog_creator_sources')+rows('archive_catalog_creator_aliases');
+    expect(query.listCreators({page:1,limit:50,hasSource:'no'}).items.map(c=>c.id)).toContain(creator.id);
+    expect(query.listCreators({page:1,limit:50,hasSource:'yes'}).total).toBe(0);
+    expect(query.listCreators({page:1,limit:50,query:'Old Alpha'}).items[0]?.id).toBe(creator.id);
+    expect(query.getCreatorDetail(creator.id)?.sources.some(s=>s.source==='hentaiclub')).toBe(true);
+    expect(rows('archive_catalog_creator_sources')+rows('archive_catalog_creator_aliases')).toBe(before);
+  });
+  it('splits absent sources by current check state before pagination without changing history', () => {
+    const untouched=service.create({name:'Unchecked'});
+    const absent=service.create({name:'Not found'});
+    const sourced=service.create({name:'With source'});
+    importSource('With source');
+    for (const id of [absent.id,sourced.id]) db.prepare(`INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status) VALUES(?,'costuan','not_found')`).run(id);
+    for (const status of ['pending','claimed','failed','completed','cancelled']) {
+      const creator=service.create({name:status});
+      db.prepare(`INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status) VALUES(?,'costuan',?)`).run(creator.id,status);
+    }
+    const before=rows('archive_catalog_metadata_tasks')+rows('archive_catalog_creator_sources');
+    expect(query.listCreators({page:1,limit:1,hasSource:'no-unchecked'}).items.map(c=>c.id)).toEqual([untouched.id]);
+    expect(query.listCreators({page:1,limit:1,hasSource:'no-not-found'}).items.map(c=>c.id)).toEqual([absent.id]);
+    expect(query.listCreators({page:2,limit:1,hasSource:'no-not-found'}).items).toEqual([]);
+    expect(query.listCreators({page:1,limit:50,hasSource:'no'}).total).toBe(7);
+    expect(query.listCreators({page:1,limit:50,hasSource:'yes'}).items.map(c=>c.id)).toEqual([sourced.id]);
+    expect(rows('archive_catalog_metadata_tasks')+rows('archive_catalog_creator_sources')).toBe(before);
+  });
+  it('never stores collection title fragments as Costuan aliases while retaining real alternate names', () => {
+    const creator=service.create({name:'菌烨tako'});
+    const result=new ArchiveCatalogService(db).importCostuanRecord({creatorName:'菌烨tako',aliases:['菌烨tako写真图片包合集[42套][','菌烨'],costuan:{postId:'411',title:'菌烨tako写真图片包合集[42套][Cosplay][持续更新]',works:[{order:1,sourceOrder:'NO.001',label:'Test'}]},baidu:{sourceFolderName:'130',destinationPath:'test',status:'saved'}});
+    expect(result.matchedCreators).toBe(1);
+    const aliases=query.getCreatorDetail(creator.id)!.aliases.map(a=>a.alias);
+    expect(aliases).toContain('菌烨');
+    expect(aliases.some(a=>a.includes('合集'))).toBe(false);
+  });
   it('creates stable manual IDs without files or tasks and persists nullable independent fields', () => {
     const creator=service.create({name:'  Ａlice  ',preference:'kept',rating:null});
     expect(creator).toMatchObject({name:'Alice',preference:'kept',rating:null,isActive:true,seedSource:'manual'});

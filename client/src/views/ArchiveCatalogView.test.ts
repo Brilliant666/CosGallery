@@ -442,39 +442,17 @@ describe('ArchiveCatalogView', () => {
     });
   });
 
-  it('shows ledger totals and loads missing works when a creator is expanded', async () => {
-    const wrapper = mount(ArchiveCatalogView);
-    await flushPromises();
-
-    expect(wrapper.text()).toContain('图库账本');
-    expect(wrapper.text()).toContain('1,088');
-    expect(wrapper.get('[data-test="catalog-creator"]').text()).toContain('rua阮阮');
-    expect(wrapper.get('[data-test="catalog-creator"]').text()).toContain('有 4 套待收录');
-
-    await wrapper.get('[data-test="catalog-creator"] button[aria-expanded="false"]').trigger('click');
-    await flushPromises();
-
-    expect(fetchArchiveCatalogCreator).toHaveBeenCalledWith(115);
-    expect(wrapper.get('[data-test="catalog-detail"]').text()).toContain('NO.014');
-    expect(wrapper.get('[data-test="catalog-detail"]').text()).toContain('课间的阳光');
-    expect(wrapper.get('[data-test="catalog-detail"]').text()).toContain('百度网盘：saved');
-  });
-
-  it('passes preference and rating filters to the API', async () => {
-    const wrapper = mount(ArchiveCatalogView);
-    await flushPromises();
-
-    const selects = wrapper.get('[data-test="catalog-filters"]').findAll('select');
-    await selects[0].setValue('liked');
-    await flushPromises();
-    await selects[1].setValue('R18');
-    await flushPromises();
-
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({
-      page: 1,
-      preference: 'liked',
-      rating: 'R18'
-    }));
+  it('keeps one roster and switches workspaces without business writes', async () => {
+    const wrapper=mount(ArchiveCatalogView); await flushPromises();
+    expect(wrapper.find('[data-test="catalog-creator"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-test="managed-roster-slot"]')).toHaveLength(1);
+    expect(wrapper.get('[aria-label="本地入库"]').isVisible()).toBe(false);
+    for(const name of ['source','staging','ingest','roster']) await wrapper.get('[data-test="workspace-'+name+'"]').trigger('click');
+    expect(wrapper.get('[aria-label="本地入库"]').isVisible()).toBe(false);
+    expect(planArchiveDownloadTasks).not.toHaveBeenCalled();
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="ingest-settings"]').attributes('open')).toBeUndefined();
   });
 
   it('generates per-creator download tasks under the isolated inbox root', async () => {
@@ -493,7 +471,7 @@ describe('ArchiveCatalogView', () => {
 
   it('retires the unscoped metadata planner while retaining the explicit selector and read-only refresh', async () => {
     const wrapper = mount(ArchiveCatalogView); await flushPromises();
-    expect(wrapper.text()).toContain('检查来源与补齐缺失');
+    expect(wrapper.text()).toContain('来源检查记录');
     expect(wrapper.find('[data-test="plan-metadata"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="first-collection-slot"]').exists()).toBe(true);
     await wrapper.get('[data-test="refresh-stage1"]').trigger('click'); await flushPromises();
@@ -512,18 +490,38 @@ describe('ArchiveCatalogView', () => {
     const wrapper = mount(ArchiveCatalogView); await flushPromises();
     const rows = wrapper.get('[data-test="metadata-creators"]').findAll('tbody tr');
     expect(rows).toHaveLength(3);
-    expect(rows[0]!.text()).toContain('历史转存记录可用');
-    expect(rows[0]!.text()).toContain('来源记录：2026-08-31T00:00:00.000Z');
-    expect(rows[0]!.text()).toContain('暂无检查任务记录');
+    expect(rows[0]!.text()).toContain('已记录 Costuan 来源');
+    expect(rows[0]!.text()).toContain('网盘状态待重新核验');
+    expect(rows[0]!.text()).toContain('来源记录时间：');
+    expect(rows[0]!.text()).not.toContain('2026-08-31T');
+    expect(rows[0]!.text()).toContain('无检查记录');
     expect(rows[0]!.text()).not.toMatch(/任务 #|更新：|2026-09-09/);
-    expect(rows[1]!.text()).toContain('尚无 Costuan 来源');
-    expect(rows[1]!.text()).toContain('本次未找到合集');
+    expect(rows[1]!.text()).toContain('尚未取得有效来源');
+    expect(rows[1]!.text()).toContain('上次检查未找到合集');
     expect(rows[1]!.text()).toContain('任务 #42');
     expect(rows[1]!.text()).not.toContain('来源记录：');
-    expect(rows[2]!.text()).toContain('历史转存记录可用');
+    expect(rows[2]!.text()).toContain('已记录 Costuan 来源');
     expect(rows[2]!.text()).toContain('失败待重试');
     expect(rows[2]!.text()).toContain('fixture source check failed');
+    expect(rows[2]!.findAll('details').every(detail => detail.attributes('open') === undefined)).toBe(true);
+    expect(wrapper.get('[data-test="metadata-creators"]').text()).toContain('最近检查');
     expect(planArchiveMetadataTasks).not.toHaveBeenCalled();
+  });
+
+  it('labels completed checks independently of verified delivery and does not invent a verification time', async () => {
+    vi.mocked(fetchMetadataCreators).mockResolvedValue(metadataPage([metadataRow({
+      pendingSupplementalTitles: ['微博图'],
+      metadataTask: { id: 32, status: 'completed', attemptCount: 1, claimedBy: null, claimedAt: null, completedAt: null, lastError: null, updatedAt: '2026-09-08T12:00:00.000Z' },
+      sourceState: { metadataAccepted: true, deliveryReady: true, deliveryEvidence: 'verified', missing: [] }
+    })]));
+    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const row = wrapper.get('[data-test="metadata-creators"] tbody tr');
+    expect(row.text()).toContain('检查已完成');
+    expect(row.text()).toContain('网盘来源已核验');
+    expect(row.text()).toContain('微博图：附加内容待人工处理，不参与自动下载/入库');
+    expect(row.text()).toContain('编号作品网盘来源已核验');
+    expect(row.text()).not.toContain('核验时间');
+    expect(row.text()).not.toContain('元数据已接入');
   });
 
   it('fetches Stage 1 page two from the server and retains all enabled states', async () => {
@@ -668,6 +666,21 @@ describe('ArchiveCatalogView', () => {
     expect(evidence.text()).toContain(`计划路径：${reviewJob.targetPath}`);
     expect(wrapper.find('[data-test="run-local-ingest-job"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="run-local-ingest-creator"]').exists()).toBe(false);
+  });
+
+  it('shows retained unsupported originals separately from indexed media', async () => {
+    const job: LocalIngestJob = { ...localIngestJob, validationStatus: 'warning', cleanupStatus: 'not_ready',
+      summary: { ...localIngestJob.summary, retainedOriginalCount: 2,
+        retainedOriginalDirectory: 'G:/gallery/work/_未支持格式原件' } };
+    vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard(job));
+    const wrapper = mount(ArchiveCatalogView);
+    await flushPromises();
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
+    const evidence = wrapper.get('[data-test="retained-originals-summary"]');
+    expect(evidence.text()).toContain('另保留 2 张原件，暂不支持展示');
+    expect(evidence.text()).toContain('G:/gallery/work/_未支持格式原件');
+    expect(wrapper.text()).toContain('图片 24');
   });
 
   it('reads inbox creators without saving and appends unique canonical names to the draft', async () => {

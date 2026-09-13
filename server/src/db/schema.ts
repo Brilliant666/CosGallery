@@ -486,6 +486,7 @@ CREATE INDEX IF NOT EXISTS idx_images_folder_media_sort ON images(folder_id, med
 CREATE INDEX IF NOT EXISTS idx_images_is_deleted ON images(is_deleted);
 CREATE INDEX IF NOT EXISTS idx_images_media_type ON images(media_type, is_deleted, sort_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_images_visibility_flags ON images(is_deleted, is_trashed);
+CREATE INDEX IF NOT EXISTS idx_images_move_signature ON images(file_size, ROUND(mtime_ms), LOWER(extension), id) WHERE is_deleted = 0 AND is_trashed = 0;
 CREATE INDEX IF NOT EXISTS idx_images_taken_at_source_visibility ON images(is_deleted, is_trashed, taken_at_source);
 CREATE INDEX IF NOT EXISTS idx_images_folder_visible_sort ON images(folder_id, is_deleted, is_trashed, sort_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_images_folder_media_visible_sort ON images(folder_id, media_type, is_deleted, is_trashed, sort_timestamp DESC);

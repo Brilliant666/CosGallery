@@ -17,6 +17,7 @@ import {
   TREAT_CAROUSELS_AS_FOLDERS_SETTING_KEY
 } from '../constants/app-setting-keys.js';
 import { appConfig } from '../config/env.js';
+import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import {
   appSettingsRepository,
   folderRepository,
@@ -235,6 +236,7 @@ interface DerivativeProcessingSummary {
 interface FullScanContextOptions {
   rebuildDerivativeReuseIndex?: RebuildDerivativeReuseIndex;
   creatorNames?: string[];
+  workFolderName?: string;
 }
 
 type ScanPhase = 'idle' | 'migration' | 'discovery' | 'derivatives';
@@ -702,7 +704,7 @@ class ScannerService {
   async scanCosCreators(
     creatorNames: string[],
     reason = 'local-ingest',
-    options: EnqueueScanOptions = {}
+    options: EnqueueScanOptions & { workFolderName?: string } = {}
   ): Promise<ScanRunRecord | undefined> {
     if (!appConfig.cosGalleryMode) {
       throw new Error('Creator-scoped scans are only available in CosGallery mode');
@@ -714,16 +716,61 @@ class ScannerService {
     ) {
       throw new Error('Creator-scoped scans require one or more direct gallery-root directory names');
     }
+    if (options.workFolderName !== undefined) {
+      if (normalizedCreatorNames.length !== 1) {
+        throw new Error('Work-scoped scans require exactly one creator');
+      }
+      await this.validateWorkScanScope(normalizedCreatorNames[0]!, options.workFolderName);
+    }
     const resolvedOptions = resolveFullScanOptions({
       repairUnchangedDerivatives: false,
       allowDerivativeMigration: false,
       ...options
     });
     await this.enqueue(
-      async () => this.performFullScan(reason, resolvedOptions, { creatorNames: normalizedCreatorNames }),
+      async () => this.performFullScan(reason, resolvedOptions, {
+        creatorNames: normalizedCreatorNames,
+        workFolderName: options.workFolderName
+      }),
       options
     );
     return scanRunRepository.latest();
+  }
+
+  private async validateWorkScanScope(creatorName: string, workFolderName: string): Promise<void> {
+    const isDirectName = (name: string) => Boolean(name)
+      && name === name.trim()
+      && name !== '.' && name !== '..'
+      && !name.endsWith('.')
+      && !/[\\/:\0]/u.test(name);
+    if (!isDirectName(creatorName) || !isDirectName(workFolderName)) {
+      throw new Error('Work-scoped scans require direct creator and work directory names');
+    }
+    const compared = (value: string) => process.platform === 'win32' ? value.toLocaleLowerCase() : value;
+    const storedGalleryRoot = appSettingsRepository.get(LAST_SUCCESSFUL_GALLERY_ROOT_SETTING_KEY);
+    if (storedGalleryRoot && compared(normalizePath(storedGalleryRoot)) !== compared(normalizePath(appConfig.galleryRoot))) {
+      throw new Error('Work-scoped scans require a full scan after the gallery root changes');
+    }
+    const creatorPath = path.join(appConfig.galleryRoot, creatorName);
+    const workPath = path.join(creatorPath, workFolderName);
+    const rootRealPath = await fs.realpath(appConfig.galleryRoot);
+    const directories: Array<[string, string]> = [
+      [creatorPath, rootRealPath],
+      [workPath, path.join(rootRealPath, creatorName)]
+    ];
+    for (const [directory, parent] of directories) {
+      const stats = await fs.lstat(directory);
+      const realPath = await fs.realpath(directory);
+      if (!stats.isDirectory() || stats.isSymbolicLink()
+        || compared(path.dirname(realPath)) !== compared(parent)) {
+        throw new Error('Work-scoped scans require regular direct-child directories inside the gallery root');
+      }
+    }
+    const relativePath = normalizePath(`${creatorName}/${workFolderName}`);
+    if (isHiddenPath(relativePath) || this.isManagedGalleryPath(relativePath)
+      || matchesExcludedFolder(relativePath, this.getEffectiveExcludedFolderRules())) {
+      throw new Error('Work-scoped scan directory is excluded from the gallery');
+    }
   }
 
   async rebuildLibraryIndex(reason = 'rebuild'): Promise<ScanRunRecord | undefined> {
@@ -1304,7 +1351,8 @@ class ScannerService {
   private async collectRecursiveMediaFiles(
     currentAbsolutePath: string,
     currentRelativePath: string,
-    excludedFolderRules: string[]
+    excludedFolderRules: string[],
+    isWorkRoot = false
   ): Promise<IndexedFileReference[]> {
     if (matchesExcludedFolder(currentRelativePath, excludedFolderRules)) {
       return [];
@@ -1334,6 +1382,7 @@ class ScannerService {
       }
 
       if (entry.isDirectory()) {
+        if (isWorkRoot && entry.name === RETAINED_ORIGINALS_DIRECTORY) continue;
         if (this.isManagedGalleryPath(relativeEntryPath) || matchesExcludedFolder(relativeEntryPath, excludedFolderRules)) {
           continue;
         }
@@ -1539,9 +1588,15 @@ class ScannerService {
     errors: ScanErrorCollector,
     options: FullScanOptions,
     context: ImageProcessingContext,
-    excludedFolderRules: string[]
+    excludedFolderRules: string[],
+    workFolderName?: string
   ): Promise<ReservedCarouselScanResult> {
-    const creatorEntries = await fs
+    if (workFolderName !== undefined) {
+      await this.validateWorkScanScope(sourceFolder.relativePath, workFolderName);
+    }
+    const creatorEntries = workFolderName !== undefined
+      ? [{ name: workFolderName, isDirectory: () => true }]
+      : await fs
       .readdir(sourceFolder.absolutePath, { withFileTypes: true })
       .catch((error: unknown) => {
         const filesystemError = error as NodeJS.ErrnoException;
@@ -1583,7 +1638,8 @@ class ScannerService {
       const recursiveFiles = await this.collectRecursiveMediaFiles(
         workAbsolutePath,
         workRelativePath,
-        excludedFolderRules
+        excludedFolderRules,
+        true
       );
       recursiveFiles.sort((a, b) => compareNaturalFilename(a.relativePath, b.relativePath));
       if (recursiveFiles.length === 0) continue;
@@ -1695,7 +1751,9 @@ class ScannerService {
       conflicts: postTopologyRepair.conflicts.length
     });
 
-    postRepository.softDeleteMissingByFolder(ownerFolder.id, activeWorkPaths);
+    if (workFolderName === undefined) {
+      postRepository.softDeleteMissingByFolder(ownerFolder.id, activeWorkPaths);
+    }
     folderRepository.syncAvatarSelection(ownerFolder.id);
     return { ownerFolder, results, postTopologyRepair };
   }
@@ -2295,6 +2353,7 @@ class ScannerService {
     const scopedCreatorNames = contextOptions.creatorNames
       ? new Set(contextOptions.creatorNames.map((name) => normalizePath(name).toLocaleLowerCase()))
       : null;
+    const workScoped = contextOptions.workFolderName !== undefined;
 
     if (!storageService.refreshAvailability().libraryAvailable) {
       return this.finishUnavailableRun(runId, reason);
@@ -2322,8 +2381,11 @@ class ScannerService {
     );
 
     try {
-      const migrationPending = !derivativeMigrationService.isMigrationComplete();
-      const requiresDerivativeMigration = options.allowDerivativeMigration && migrationPending;
+      // Reuse this pre-discovery result only within the current scan. Migration can
+      // change it, and the post-scan cleanup guard must still check independently.
+      let migrationComplete = derivativeMigrationService.isMigrationComplete();
+      const migrationPending = !migrationComplete;
+      const requiresDerivativeMigration = !workScoped && options.allowDerivativeMigration && migrationPending;
       if (requiresDerivativeMigration) {
         this.setProgress({
           phase: 'migration',
@@ -2369,7 +2431,7 @@ class ScannerService {
         migratedRows: 0,
         repairedRows: 0,
         repairErrors: 0,
-        complete: derivativeMigrationService.isMigrationComplete()
+        complete: migrationComplete
       };
       if (requiresDerivativeMigration) {
         migrationSummary = await derivativeMigrationService.ensureMigrated({
@@ -2382,6 +2444,7 @@ class ScannerService {
             }));
           }
         });
+        migrationComplete = migrationSummary.complete && derivativeMigrationService.isMigrationComplete();
       }
       if (requiresDerivativeMigration) {
         this.updateMigrationProgress(migrationSummary);
@@ -2395,13 +2458,13 @@ class ScannerService {
         this.logProgress('phase');
       }
       imageProcessingContext.moveReconciliationEnabled =
-        !galleryRootChanged && migrationSummary.complete && derivativeMigrationService.isMigrationComplete();
+        !galleryRootChanged && migrationSummary.complete && migrationComplete;
 
       const existingFolders = folderRepository.getAll();
-      if (treatCarouselsAsFolders) {
+      if (!workScoped && treatCarouselsAsFolders) {
         postRepository.softDeleteReservedCarouselsForLegacyMode();
       }
-      if (galleryRootChanged && normalizedStoredGalleryRoot && existingFolders.length > 0) {
+      if (!workScoped && galleryRootChanged && normalizedStoredGalleryRoot && existingFolders.length > 0) {
         this.markLibraryRebuildRequired(normalizedStoredGalleryRoot);
         log.info(
           joinLogParts([
@@ -2496,7 +2559,8 @@ class ScannerService {
             errors,
             options,
             imageProcessingContext,
-            excludedFolderRules
+            excludedFolderRules,
+            contextOptions.workFolderName
           );
 
           if (creatorScan.ownerFolder) {
@@ -2588,7 +2652,7 @@ class ScannerService {
         }
       }
 
-      postRepository.syncRepresentativePlaces();
+      if (!workScoped) postRepository.syncRepresentativePlaces();
 
       metrics.removedFolderStateRows = scopedCreatorNames
         ? 0
@@ -2610,7 +2674,7 @@ class ScannerService {
 
       derivativeSummary = await this.processDerivativeJobs([...derivativeJobs.values()], errors);
 
-      if (summary.status !== 'failed' && !errors.hasErrors && derivativeMigrationService.isMigrationComplete()) {
+      if (!workScoped && summary.status !== 'failed' && !errors.hasErrors && derivativeMigrationService.isMigrationComplete()) {
         await derivativeMigrationService.cleanupStaleDerivatives();
       }
     } catch (error) {
@@ -2622,7 +2686,7 @@ class ScannerService {
     await this.applyScanErrors(summary, errors);
     await this.applyScanWarnings(summary, warnings);
 
-    if (summary.status !== 'failed') {
+    if (!workScoped && summary.status !== 'failed') {
       appSettingsRepository.setMany([
         {
           key: LAST_SUCCESSFUL_GALLERY_ROOT_SETTING_KEY,
@@ -2635,7 +2699,7 @@ class ScannerService {
       ]);
     }
 
-    if (summary.status === 'completed' && avifMetadataRepairPending) {
+    if (!workScoped && summary.status === 'completed' && avifMetadataRepairPending) {
       this.markAvifMetadataRepairComplete();
     }
 

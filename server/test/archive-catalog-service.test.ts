@@ -123,6 +123,7 @@ describe('archive catalog first-stage pipeline', () => {
     await Promise.all([
       fs.writeFile(path.join(ruaFirst, '01.jpg'), 'image'),
       fs.writeFile(path.join(ruaFirst, 'costuan.txt'), 'advertisement'),
+      fs.writeFile(path.join(ruaFirst, '孔雀海.URL'), '[InternetShortcut]\nURL=https://example.invalid/ad'),
       fs.writeFile(path.join(ruaThird, '01.mp4'), 'video'),
       fs.writeFile(path.join(lunanaFirst, '01.png'), 'image')
     ]);
@@ -152,7 +153,7 @@ describe('archive catalog first-stage pipeline', () => {
        FROM archive_catalog_local_works
        WHERE folder_name = 'rua阮阮 001 第一套'`
     ).get();
-    expect(localMetadata).toEqual({ image_count: 1, video_count: 0, advertisement_file_count: 1 });
+    expect(localMetadata).toEqual({ image_count: 1, video_count: 0, advertisement_file_count: 2 });
 
     const secondCostuanImport = await service.importCostuanArchive(costuanPath);
     expect(secondCostuanImport).toMatchObject({ importedWorks: 4, addedWorks: 0, updatedWorks: 4 });

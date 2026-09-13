@@ -13,6 +13,7 @@ import {
 } from '../src/utils/image-utils.js';
 import { getRelativeGalleryPath } from '../src/utils/path-utils.js';
 import { requestTestApp } from './http-test-utils.js';
+import { RETAINED_ORIGINALS_DIRECTORY } from '../src/constants/retained-originals.js';
 
 const generateDerivativesMock = vi.fn();
 const generateThumbnailDerivativeMock = vi.fn();
@@ -147,6 +148,42 @@ describe.sequential('COS gallery mode', () => {
       })
     ]);
     expect(detail?.mediaItems.some((item) => item.imageId === creators[0].coverImageId)).toBe(true);
+  });
+
+  it('excludes retained originals only at the work root from media and catalog counts', async () => {
+    const workPath = path.join(appConfig.galleryRoot, 'Creator A', 'NO.001 Work');
+    const retainedPath = path.join(workPath, RETAINED_ORIGINALS_DIRECTORY);
+    const ordinaryNestedPath = path.join(workPath, 'nested', RETAINED_ORIGINALS_DIRECTORY);
+    const siblingPath = path.join(appConfig.galleryRoot, 'Creator A', 'NO.002 Sibling');
+    for (const directory of [retainedPath, ordinaryNestedPath, siblingPath]) {
+      await fs.mkdir(directory, { recursive: true });
+    }
+    for (const name of ['source.heic', 'source.tiff', 'masquerading.jpg', 'unknown.bin']) {
+      await fs.writeFile(path.join(retainedPath, name), 'retained');
+    }
+    await fs.writeFile(path.join(workPath, '01.jpg'), 'image');
+    await fs.writeFile(path.join(ordinaryNestedPath, '02.jpg'), 'nested');
+    await fs.writeFile(path.join(ordinaryNestedPath, 'unknown.bin'), 'unknown');
+    await fs.writeFile(path.join(siblingPath, '01.jpg'), 'sibling');
+
+    const summary = await scannerService.scanAll('retained-originals-test');
+    expect(summary).toMatchObject({ status: 'completed', scanned_files: 3 });
+    const indexed = databaseManager.connection.prepare('SELECT relative_path FROM images ORDER BY relative_path').all();
+    expect(indexed).toEqual([
+      { relative_path: 'Creator A/NO.001 Work/01.jpg' },
+      { relative_path: `Creator A/NO.001 Work/nested/${RETAINED_ORIGINALS_DIRECTORY}/02.jpg` },
+      { relative_path: 'Creator A/NO.002 Sibling/01.jpg' }
+    ]);
+
+    const { ArchiveCatalogService } = await import('../src/services/archive-catalog-service.js');
+    await new ArchiveCatalogService(databaseManager.connection).reconcileLocalRoot(appConfig.galleryRoot);
+    const counts = databaseManager.connection.prepare(
+      'SELECT folder_name, image_count, other_file_count, total_bytes FROM archive_catalog_local_works ORDER BY folder_name'
+    ).all();
+    expect(counts).toEqual([
+      { folder_name: 'NO.001 Work', image_count: 2, other_file_count: 1, total_bytes: 18 },
+      { folder_name: 'NO.002 Sibling', image_count: 1, other_file_count: 0, total_bytes: 7 }
+    ]);
   });
 
   it('aggregates linked physical folders by canonical creator before filtering and paging', async () => {
@@ -395,6 +432,94 @@ describe.sequential('COS gallery mode', () => {
       'Creator Scoped A',
       'Creator Scoped B'
     ]);
+  });
+
+  it('indexes one work without traversing or deleting siblings and without completing global maintenance', async () => {
+    const creator = 'Creator Work Scoped';
+    const creatorPath = path.join(appConfig.galleryRoot, creator);
+    const siblingName = `${creator} NO.001`;
+    const workFolderName = `${creator} NO.002`;
+    const siblingPath = path.join(creatorPath, siblingName);
+    const targetPath = path.join(creatorPath, workFolderName);
+    await fs.mkdir(siblingPath, { recursive: true });
+    await fs.writeFile(path.join(siblingPath, '01.jpg'), 'sibling');
+    await scannerService.scanAll('initial-work-scope');
+    const siblingPost = databaseManager.connection.prepare('SELECT * FROM posts WHERE source_path = ?')
+      .get(`${creator}/${siblingName}`);
+    await fs.mkdir(targetPath, { recursive: true });
+    await fs.writeFile(path.join(targetPath, '02.jpg'), 'target');
+    const { appSettingsRepository } = await import('../src/db/repositories.js');
+    const { derivativeMigrationService } = await import('../src/services/derivative-migration-service.js');
+    const settingKeys = await import('../src/constants/app-setting-keys.js');
+    databaseManager.connection.prepare('DELETE FROM app_settings WHERE key = ?')
+      .run(settingKeys.LAST_SUCCESSFUL_GALLERY_ROOT_SETTING_KEY);
+    appSettingsRepository.set(settingKeys.AVIF_METADATA_REPAIR_VERSION_SETTING_KEY, 'pending');
+    const settingsBefore = databaseManager.connection.prepare('SELECT * FROM app_settings ORDER BY key').all();
+    const readdir = vi.spyOn(fs, 'readdir');
+    const deleteMissing = vi.spyOn(postRepository, 'softDeleteMissingByFolder');
+    const syncPlaces = vi.spyOn(postRepository, 'syncRepresentativePlaces');
+    const cleanup = vi.spyOn(derivativeMigrationService, 'cleanupStaleDerivatives');
+    const migrationComplete = vi.spyOn(derivativeMigrationService, 'isMigrationComplete');
+    const migrate = vi.spyOn(derivativeMigrationService, 'ensureMigrated');
+    try {
+      const first = await scannerService.scanCosCreators([creator], 'one-work', { workFolderName });
+      expect(first).toMatchObject({ status: 'completed', scanned_files: 1, new_files: 1, removed_files: 0 });
+      expect(migrationComplete).toHaveBeenCalledTimes(1);
+      const firstPosts = databaseManager.connection.prepare('SELECT id, source_path, is_deleted FROM posts ORDER BY id').all();
+      const second = await scannerService.scanCosCreators([creator], 'one-work-repeat', { workFolderName });
+      expect(second).toMatchObject({ status: 'completed', scanned_files: 1, new_files: 0, removed_files: 0 });
+      expect(migrationComplete).toHaveBeenCalledTimes(2);
+      expect(migrate).not.toHaveBeenCalled();
+      expect(databaseManager.connection.prepare('SELECT id, source_path, is_deleted FROM posts ORDER BY id').all()).toEqual(firstPosts);
+      expect(databaseManager.connection.prepare('SELECT * FROM posts WHERE source_path = ?').get(`${creator}/${siblingName}`)).toEqual(siblingPost);
+      expect(readdir.mock.calls.some(([directory]) => String(directory) === siblingPath || String(directory) === creatorPath)).toBe(false);
+      expect(deleteMissing).not.toHaveBeenCalled();
+      expect(syncPlaces).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(databaseManager.connection.prepare('SELECT * FROM app_settings ORDER BY key').all()).toEqual(settingsBefore);
+    } finally {
+      readdir.mockRestore();
+      deleteMissing.mockRestore();
+      syncPlaces.mockRestore();
+      cleanup.mockRestore();
+      migrationComplete.mockRestore();
+      migrate.mockRestore();
+    }
+  });
+
+  it('rejects unsafe, missing and symbolic-link work scan scopes before indexing', async () => {
+    const creator = 'Creator Scope Validation';
+    const creatorPath = path.join(appConfig.galleryRoot, creator);
+    const workFolderName = 'Valid Work';
+    await fs.mkdir(path.join(creatorPath, workFolderName), { recursive: true });
+    for (const invalid of ['', '.', '..', 'trailing.', '../escape', 'nested/work', 'nested\\work', 'C:escape', '.hidden']) {
+      await expect(scannerService.scanCosCreators([creator], 'invalid-work', { workFolderName: invalid })).rejects.toThrow();
+    }
+    await expect(scannerService.scanCosCreators([creator, 'Other'], 'invalid-creators', { workFolderName })).rejects.toThrow('exactly one');
+    await expect(scannerService.scanCosCreators([creator], 'missing-work', { workFolderName: 'missing' })).rejects.toThrow();
+    const outsidePath = path.join(tempRoot, 'outside-scope');
+    await fs.mkdir(outsidePath);
+    await fs.symlink(outsidePath, path.join(creatorPath, 'Linked Work'), process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(scannerService.scanCosCreators([creator], 'linked-work', { workFolderName: 'Linked Work' })).rejects.toThrow('regular direct-child');
+    await fs.symlink(creatorPath, path.join(appConfig.galleryRoot, 'Linked Creator'), process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(scannerService.scanCosCreators(['Linked Creator'], 'linked-creator', { workFolderName })).rejects.toThrow('regular direct-child');
+    expect(databaseManager.connection.prepare('SELECT COUNT(*) AS count FROM posts').get()).toMatchObject({ count: 0 });
+  });
+
+  it('rejects a work-scoped scan when the recorded gallery root changed', async () => {
+    const creator = 'Creator Changed Root';
+    const workFolderName = 'New Work';
+    await fs.mkdir(path.join(appConfig.galleryRoot, creator, workFolderName), { recursive: true });
+    await fs.writeFile(path.join(appConfig.galleryRoot, creator, workFolderName, '01.jpg'), 'new root image');
+    const { appSettingsRepository } = await import('../src/db/repositories.js');
+    const { LAST_SUCCESSFUL_GALLERY_ROOT_SETTING_KEY } = await import('../src/constants/app-setting-keys.js');
+    appSettingsRepository.set(LAST_SUCCESSFUL_GALLERY_ROOT_SETTING_KEY, path.join(tempRoot, 'previous-gallery'));
+
+    await expect(scannerService.scanCosCreators([creator], 'changed-root', { workFolderName }))
+      .rejects.toThrow('require a full scan after the gallery root changes');
+    expect(databaseManager.connection.prepare('SELECT COUNT(*) AS count FROM posts').get()).toMatchObject({ count: 0 });
+    expect(appSettingsRepository.get(LAST_SUCCESSFUL_GALLERY_ROOT_SETTING_KEY)).toBe(path.join(tempRoot, 'previous-gallery'));
+    expect(readMediaMetadataMock).not.toHaveBeenCalled();
   });
 
   it('reuses a legacy post by exact media membership when its source path changed', async () => {

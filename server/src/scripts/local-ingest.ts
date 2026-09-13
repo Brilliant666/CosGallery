@@ -57,8 +57,8 @@ async function main(): Promise<void> {
     print(await localIngestService.retryCleanup(id));
     return;
   }
-  if (command === 'adopt-manual') {
-    if (args.length !== 1) throw new Error('Usage: local-ingest adopt-manual <absolute-plan.json>');
+  if (command === 'adopt-manual' || command === 'retain-originals') {
+    if (args.length !== 1) throw new Error(`Usage: local-ingest ${command} <absolute-plan.json>`);
     const planPath = path.resolve(args[0]);
     if (!path.isAbsolute(args[0])) {
       throw new Error('The manual-placement plan path must be absolute');
@@ -66,7 +66,9 @@ async function main(): Promise<void> {
     const items = manualPlacementItems(JSON.parse(await fs.readFile(planPath, 'utf8')));
     const jobs = [];
     for (const item of items) {
-      const job = await localIngestService.adoptManualPlacement(item);
+      const job = command === 'retain-originals'
+        ? await localIngestService.retainOriginals(item)
+        : await localIngestService.adoptManualPlacement(item);
       jobs.push(job);
       if (job.status !== 'ingested' || job.phase !== 'done') {
         print({ planPath, completed: false, jobs });

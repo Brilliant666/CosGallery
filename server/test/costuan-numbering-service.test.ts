@@ -2,12 +2,57 @@ import { describe, expect, it } from 'vitest';
 
 import {
   mergeCostuanDirectoryWorks,
+  areCostuanTitlesCompatible,
   normalizeCostuanTitle,
+  parseCostuanCollectionCreator,
+  splitCostuanCheckDirectory,
   parseCostuanDirectoryText,
   parseCostuanNumbering
 } from '../src/services/costuan-numbering-service.js';
 
 describe('Costuan numbering parser', () => {
+  it('preserves embedded volume labels when comparing source titles',()=>{
+    for(const title of ['自分撮りvol.47','自撮Vol.76','自撮り VOL.63','自摄Vol.102']){
+      expect(areCostuanTitlesCompatible(`白银81 NO.065 ${title}[121P3V-789MB]`,title,['白银81'])).toBe(true);
+    }
+    expect(areCostuanTitlesCompatible('白银81 NO.065 自分撮りvol.47','自分撮りvol.48',['白银81'])).toBe(false);
+    expect(areCostuanTitlesCompatible('博主 VOL.013 白蕾丝姐姐','博主 VOL.013 白蕾丝姐姐',['博主'])).toBe(true);
+    expect(areCostuanTitlesCompatible('博主 VOL.013 白蕾丝姐姐','VOL.013 白蕾丝姐姐',['博主'])).toBe(true);
+  });
+  it.each([
+    ['白银81写真图片包合集[189套][Cosplay][持续更新]','白银81'],
+    ['小仓千代w COSPLAY写真图片包合集[182套+微博图][持续更新]','小仓千代w'],
+    ['soso_嗖嗖COSPLAY写真图片包合集[26套][持续更新]','soso_嗖嗖'],
+    ['Fixture COS 合集[3套]','Fixture'],
+    ['白银81写真图片包合集【189套】【COSPLAY】【持续更新】','白银81'],
+    ['其他标题[189套][Cosplay][持续更新]',null],
+    ['白银81写真图片包合集[189套][Cosplay][持续更新] 广告',null],
+  ])('extracts collection creator without reading category tags as identity: %s',(title,expected)=>{
+    expect(parseCostuanCollectionCreator(title)).toBe(expected);
+  });
+
+  it('uses the same identity parser for a postposed-category supplemental directory',()=>{
+    const result=splitCostuanCheckDirectory('Fixture写真图片包合集[1套+微博图][Cosplay][持续更新]',
+      [{sourceOrder:'NO.001',order:1,label:'Work'}],'Fixture 微博图[2P]\nFixture NO.001 Work[1P]');
+    expect(result.works).toHaveLength(1);
+    expect(result.supplementalContents[0]).toMatchObject({label:'Fixture 微博图',status:'awaiting_review'});
+  });
+
+  const weiboLabels=['微博图','微博散图','微博配图'];
+  it.each(weiboLabels.flatMap(titleLabel=>weiboLabels.map(directoryLabel=>[titleLabel,directoryLabel])))
+    ('separates the limited Weibo appendix aliases %s / %s without rewriting raw evidence',(titleLabel,directoryLabel)=>{
+      const rawTitle=`rioko凉凉子 ${directoryLabel}[12P-20MB]`;
+      const result=splitCostuanCheckDirectory(`rioko凉凉子COSPLAY写真图片包合集[2套+${titleLabel}][持续更新]`,
+        [{sourceOrder:'NO.001',order:1,label:'First'},{sourceOrder:'NO.002',order:2,label:'Second'}],
+        `${rawTitle}\nrioko凉凉子 NO.001 First[1P]\nrioko凉凉子 NO.002 Second[1P]`);
+      expect(result.works.map(work=>work.sourceOrderKey)).toEqual(['NO:001','NO:002']);
+      expect(result.supplementalContents).toHaveLength(1);
+      expect(result.supplementalContents[0]).toMatchObject({
+        label:`rioko凉凉子 ${directoryLabel}`,rawTitle,status:'awaiting_review',
+        sourceOrderKey:parseCostuanDirectoryText(rawTitle)[0].sourceOrderKey
+      });
+    });
+
   it('keeps NO and VOL as distinct parts of work identity', () => {
     expect(parseCostuanNumbering('博主 NO.013 黑护士')).toMatchObject({
       scheme: 'NO',

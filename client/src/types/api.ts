@@ -708,6 +708,8 @@ export interface ArchiveDownloadTask {
   provider: string;
   sourceFolderName: string;
   destinationPath: string;
+  sourceMode?: 'direct-share' | 'owned-folder';
+  sourceShareUrl?: string | null;
   targetRoot: string;
   targetRelativeDirectory: string;
   targetFilename: string;
@@ -782,6 +784,7 @@ export interface ArchiveSourceState {
   metadataAccepted: boolean;
   deliveryReady: boolean;
   deliveryEvidence: 'verified' | 'historical' | 'missing';
+  deliveryMode?: 'direct-share' | 'owned-folder' | 'missing';
   missing: string[];
 }
 
