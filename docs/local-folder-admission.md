@@ -59,6 +59,16 @@ Work titles are retained rather than overwritten by another copy's display sugge
 For an existing Work, set the confirmed `displayTitle` to its `canonicalTitle` from
 the candidate; a mismatch is explicitly rejected rather than silently ignored.
 
+New previews explicitly use `localOnly:false`: no current source does not mean that
+future source reuse is forbidden. The local identity is still `manual`, so directory
+number scans cannot replace the confirmed Work. Explicit historical `localOnly:true`
+continues to prohibit automatic reuse; older plans omitting it retain the prior true default.
+`acceptExistingVersion` defaults to false. Setting it to true in a confirmed plan records
+the user's acceptance of this local version for future safe unique-title source reuse
+in `provenance_json`; it does not assert byte equality or itself satisfy any task.
+Explicit local-only and negative decisions still take precedence. `acceptVersions`
+continues to describe exact known-source acceptance independently.
+
 `primary:true` explicitly selects this indexed copy. A first sole copy is naturally
 primary; adding a second does not switch it. Same-work identity never means identical
 bytes and never authorizes physical duplicate deletion.

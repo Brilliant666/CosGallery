@@ -7,6 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 
 import { databaseManager } from '../db/database.js';
+import { LocalSourceReuseService } from './local-source-reuse-service.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import { LocalCreatorFolderBridgeService, normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
@@ -516,7 +517,7 @@ export class ArchiveCatalogService {
     // Source refresh is not fuzzy local-title matching. Even a bracketed title
     // suffix can identify different content and must not be silently discarded.
     const stableSourceTitle=(value:string)=>value.normalize('NFKC').replace(/\s+/g,' ').trim();
-    const confirmedLocalWorks=this.confirmedLocalWorksForSourceCheck(creatorId);
+    const confirmedLocalWorks=previous.length ? this.confirmedLocalWorksForSourceCheck(creatorId) : new Set<number>();
     const heldSources=new Set((this.database.prepare('SELECT DISTINCT f.source_work_id FROM archive_catalog_local_fulfillments f JOIN archive_catalog_source_works s ON s.id=f.source_work_id JOIN archive_catalog_works w ON w.id=s.work_id WHERE w.creator_id=?').all(creatorId) as Array<{source_work_id:number}>).map(row=>row.source_work_id));
     const localFilenames=new Set<string>();
     for (const old of previous) {
@@ -537,9 +538,16 @@ export class ArchiveCatalogService {
     // Validate the complete source above, but only replenish cloud packages needed
     // by the local difference. Never restore missing cloud archives for ingested works.
     const acceptedDirectoryRevisions=reviewed?.acceptedDirectoryRevisions??[];
+    const localSourceReuse=new LocalSourceReuseService(this.database).evaluate(creatorId,record.costuan.postId,works);
+    for(const [index,decision] of localSourceReuse.entries()){
+      if(decision.satisfied || decision.status==='review'){
+        const order=parseCostuanNumbering(works[index].sourceOrder)?.order;
+        if(order!==null&&order!==undefined)localFilenames.add(`${String(order).padStart(3,'0')}.7z`);
+      }
+    }
     const canonicalDirectoryVerification={complete:true,checkedAt:proof.data.checkedAt,parsedWorkCount:works.length};
     return {record:{...record,costuan:{...record.costuan,works,supplementalContents,acceptedDirectoryRevisions,directoryVerification:canonicalDirectoryVerification}},
-      supplementalContents,acceptedDirectoryRevisions,canonicalWorks:works,canonicalDirectoryVerification,sourceFilenames:[...filenames],
+      supplementalContents,acceptedDirectoryRevisions,canonicalWorks:works,canonicalDirectoryVerification,sourceFilenames:[...filenames],localSourceReuse,
       requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename) || (rangeReviewed && Number(filename.slice(0,-3))<=66))};
   }
 
@@ -804,13 +812,21 @@ export class ArchiveCatalogService {
           metadata: { ...record.costuan, works: mergedCostuanWorks }
         });
 
+        // Resolve against the complete collection before changing any source row.
+        // Pending facts remain in collection metadata, not duplicate placeholder Work IDs.
+        const reuseService=new LocalSourceReuseService(this.database);
+        const reuseResults=reuseService.evaluate(creatorId,record.costuan.postId,mergedCostuanWorks);
+        this.database.prepare("UPDATE archive_catalog_collections SET metadata_json=json_set(metadata_json,'$.localSourceReuse',json(?)) WHERE id=?")
+          .run(JSON.stringify(reuseResults),collectionId);
+
         this.database.prepare(
           `UPDATE archive_catalog_source_works
            SET is_active = 0
            WHERE collection_id = ? AND source = 'costuan'`
         ).run(collectionId);
 
-        for (const work of mergedCostuanWorks) {
+        for (const [workIndex,work] of mergedCostuanWorks.entries()) {
+          const reuse=reuseResults[workIndex];
           const sourceOrder = work.order ?? parseArchiveSourceOrder(work.sourceOrder);
           const sourceWorkId = work.sourceOrder || (sourceOrder === null ? work.label : `NO.${String(sourceOrder).padStart(3, '0')}`);
           const existing = this.database.prepare(
@@ -840,6 +856,7 @@ export class ArchiveCatalogService {
               observedAt,
               existing.id
             );
+            reuseService.accept(existing.id,reuse);
             result.updatedWorks += 1;
           } else {
             const binding = this.database.prepare(`SELECT bindings.work_id FROM archive_catalog_source_bindings bindings
@@ -847,12 +864,14 @@ export class ArchiveCatalogService {
               JOIN archive_catalog_works works ON works.id=bindings.work_id
               WHERE bindings.collection_id=? AND bindings.source_work_id=? AND decisions.state='active' AND works.creator_id=?`)
               .get(collectionId, sourceWorkId, creatorId) as {work_id:number} | undefined;
-            const insertedWork = binding ? null : this.database.prepare(
+            if(reuse.status==='review' && !binding)continue;
+            const reuseWorkId=binding?.work_id ?? (reuse.status==='reuse'?reuse.workId:undefined);
+            const insertedWork = reuseWorkId ? null : this.database.prepare(
               `INSERT INTO archive_catalog_works (creator_id, display_title)
                VALUES (?, ?)`
             ).run(creatorId, work.label);
-            workId = binding?.work_id ?? asNumber(insertedWork!.lastInsertRowid);
-            this.database.prepare(
+            workId = reuseWorkId ?? asNumber(insertedWork!.lastInsertRowid);
+            const insertedSource=this.database.prepare(
               `INSERT INTO archive_catalog_source_works (
                  work_id, collection_id, source, source_work_id, source_order,
                  source_order_label, source_title, raw_title, media_summary,
@@ -871,6 +890,7 @@ export class ArchiveCatalogService {
               observedAt,
               observedAt
             );
+            reuseService.accept(Number(insertedSource.lastInsertRowid),reuse);
             result.addedWorks += 1;
           }
           result.importedWorks += 1;

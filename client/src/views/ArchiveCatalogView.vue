@@ -47,6 +47,7 @@
         <p class="m-0 text-sm text-muted">此处列出有来源或检查记录的博主，不是全部博主名单。选择与检查需明确操作。</p>
       </div>
       <p v-if="metadataNotice" data-test="metadata-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ metadataNotice }}</p>
+      <SourceReuseReview />
 
       <p v-if="metadataLoading" role="status" class="mt-3 text-sm text-muted">正在读取来源与检查任务…</p>
       <p v-if="metadataError" role="alert" class="mt-3 text-sm text-red-700">{{ metadataError }}</p>
@@ -292,6 +293,7 @@ import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
 import IngestPerformance from '../components/IngestPerformance.vue';
 import FirstCollectionSelector from '../components/FirstCollectionSelector.vue';
 import Stage2CreatorQueue from '../components/Stage2CreatorQueue.vue';
+import SourceReuseReview from '../components/SourceReuseReview.vue';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import {

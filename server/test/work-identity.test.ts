@@ -24,6 +24,16 @@ describe('persistent local work identity in real catalog reconciliation',()=>{
   return identity.registerLocal({creatorId,rootPath:root,creatorFolderName:'Synthetic',absolutePath,relativePath:name,title:'Same display title',reason:'confirmed synthetic',key:name,...extra});
  }
  const record=(works:Array<{order:number;sourceOrder:string;label:string}>)=>({creatorName:'Synthetic',costuan:{postId:'synthetic',title:'Synthetic collection',works}});
+ it('persists opt-in separately from explicit local-only, with manual identity for source-free admission',async()=>{
+  const ordinary=await register('Ordinary'),accepted=await register('Accepted',{acceptExistingVersion:true}),blocked=await register('Blocked',{localOnly:true,acceptExistingVersion:true});
+  const policy=(id:number)=>db.prepare('SELECT identity_policy,provenance_json FROM archive_catalog_local_works WHERE id=?').get(id) as {identity_policy:string;provenance_json:string};
+  expect(policy(ordinary.localWorkId).identity_policy).toBe('manual');
+  expect(JSON.parse(policy(ordinary.localWorkId).provenance_json).acceptExistingVersion).toBe(false);
+  expect(JSON.parse(policy(accepted.localWorkId).provenance_json).acceptExistingVersion).toBe(true);
+  expect(policy(blocked.localWorkId).identity_policy).toBe('local_only');
+  await catalog.reconcileLocalCreators({rootPath:root,creators:[{creatorId,folderName:'Synthetic'}]});
+  expect(JSON.parse(policy(accepted.localWorkId).provenance_json).acceptExistingVersion).toBe(true);
+ });
  it('keeps same-title independent Work IDs, local-only identity and exact IDs after database reopen and real rescan',async()=>{
   const first=await register('Unknown NO.032 Theme',{localOnly:true}),second=await register('Another NO.032 Theme');
   expect(first.workId).not.toBe(second.workId);
@@ -57,6 +67,16 @@ describe('persistent local work identity in real catalog reconciliation',()=>{
   expect(db.prepare('SELECT display_title FROM archive_catalog_works WHERE id=?').get(local.workId)).toEqual({display_title:'Same display title'});
   const other=await register('Other');
   expect(()=>identity.bindSource({workId:other.workId,collectionId:collection,sourceWorkId:'NO.030',reason:'no merge',key:'conflict'})).toThrow('merge');
+ });
+ it('revokes unique-name fulfillment only for its source/copy without disabling other relations',async()=>{
+  catalog.importCostuanRecord(record([{order:1,sourceOrder:'NO.001',label:'Theme'},{order:2,sourceOrder:'NO.002',label:'Other'}]));
+  const sources=db.prepare('SELECT id FROM archive_catalog_source_works ORDER BY id').all() as {id:number}[];
+  const local=await register('Revocation copy');
+  const unique=Number(db.prepare("INSERT INTO archive_catalog_work_decisions(decision_key,kind,work_id,local_work_id,source_work_id,reason,payload_json) VALUES('unique','unique_name',?,?,?,'test','{}')").run(local.workId,local.localWorkId,sources[0].id).lastInsertRowid);
+  for(const source of sources)db.prepare("INSERT INTO archive_catalog_local_fulfillments(decision_id,source_work_id,local_work_id,work_id,source_snapshot_json,local_snapshot_json,reason) VALUES(?,?,?,?,'{}','{}','test')").run(local.decisionId,source.id,local.localWorkId,local.workId);
+  identity.revoke(unique,'User corrected source identity');
+  expect(db.prepare('SELECT state FROM archive_catalog_local_fulfillments ORDER BY id').all()).toEqual([{state:'revoked'},{state:'active'}]);
+  expect(db.prepare('SELECT work_id,identity_policy FROM archive_catalog_local_works WHERE id=?').get(local.localWorkId)).toEqual({work_id:local.workId,identity_policy:'manual'});
  });
  it('keeps explicit exclusion and local-only after revoke without deleting assets',async()=>{
   catalog.importCostuanRecord(record([{order:1,sourceOrder:'NO.001',label:'Theme'}]));

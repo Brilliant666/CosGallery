@@ -5,7 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 export type LocalIdentityInput = {
   creatorId: number; rootPath: string; creatorFolderName: string; absolutePath: string;
   relativePath: string; title: string; workId?: number; sourceWorkId?: number;
-  sameAsLocalId?: number; reason: string; key: string; localOnly?: boolean;
+  sameAsLocalId?: number; reason: string; key: string; localOnly?: boolean; acceptExistingVersion?: boolean;
 };
 
 /** Explicit identity writes. No file operations and no execution-history rewriting. */
@@ -66,7 +66,7 @@ export class WorkIdentityService {
       if (existing) throw new Error('Target local directory already has an identity; use its existing plan');
       const localId = Number(this.database.prepare(`INSERT INTO archive_catalog_local_works
         (local_creator_folder_id,work_id,relative_path,absolute_path,folder_name,match_status,match_method,scanned_at,identity_policy,provenance_json)
-        VALUES(?,?,?,?,?,'matched','manual-admission',CURRENT_TIMESTAMP,?,?)`).run(folderId,workId,relative,path.resolve(input.absolutePath),relative,input.localOnly?'local_only':'manual',JSON.stringify({origin:'local-admission',key:input.key})).lastInsertRowid);
+        VALUES(?,?,?,?,?,'matched','manual-admission',CURRENT_TIMESTAMP,?,?)`).run(folderId,workId,relative,path.resolve(input.absolutePath),relative,input.localOnly?'local_only':'manual',JSON.stringify({origin:'local-admission',key:input.key,acceptExistingVersion:input.acceptExistingVersion===true})).lastInsertRowid);
       this.database.prepare("UPDATE archive_catalog_works SET title_policy='manual' WHERE id=?").run(workId);
       const decisionId = this.decision(input.key,'same_work',workId,localId,input.sourceWorkId??null,input.reason,input);
       this.database.exec('RELEASE local_identity');
@@ -125,13 +125,18 @@ export class WorkIdentityService {
 
   revoke(decisionId: number, reason: string): void {
     if (!reason.trim()) throw new Error('Revocation reason required');
-    const decision = this.database.prepare('SELECT kind,local_work_id,work_id,payload_json FROM archive_catalog_work_decisions WHERE id=?').get(decisionId) as {kind:string;local_work_id:number|null;work_id:number|null;payload_json:string}|undefined;
+    const decision = this.database.prepare('SELECT kind,local_work_id,work_id,source_work_id,payload_json FROM archive_catalog_work_decisions WHERE id=?').get(decisionId) as {kind:string;local_work_id:number|null;work_id:number|null;source_work_id:number|null;payload_json:string}|undefined;
     if (!decision) throw new Error('Decision not found');
     if (decision.kind === 'primary_copy') throw new Error('Choose an explicit replacement primary copy; primary revocation cannot silently select a fallback');
     this.database.exec('SAVEPOINT revoke_identity');
     try {
       this.database.prepare("UPDATE archive_catalog_work_decisions SET state='revoked',revoked_at=CURRENT_TIMESTAMP,revoked_reason=? WHERE id=?").run(reason,decisionId);
       this.database.prepare("UPDATE archive_catalog_local_fulfillments SET state='revoked',revoked_at=CURRENT_TIMESTAMP,revoked_reason=? WHERE decision_id=?").run(reason,decisionId);
+      if (decision.kind === 'unique_name') {
+        this.database.prepare(`UPDATE archive_catalog_local_fulfillments SET state='revoked',revoked_at=CURRENT_TIMESTAMP,revoked_reason=?
+          WHERE source_work_id=? AND local_work_id=? AND work_id=? AND state='active'`)
+          .run(reason,decision.source_work_id,decision.local_work_id,decision.work_id);
+      }
       if (decision.kind === 'source_binding') {
         this.database.prepare(`UPDATE archive_catalog_local_fulfillments SET state='revoked',revoked_at=CURRENT_TIMESTAMP,revoked_reason=?
           WHERE work_id=? AND source_work_id IN (

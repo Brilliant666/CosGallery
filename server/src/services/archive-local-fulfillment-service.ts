@@ -21,7 +21,11 @@ export const fulfillmentValidSql = (s: string) => `EXISTS (SELECT 1 FROM archive
  AND EXISTS (SELECT 1 FROM posts accepted_post JOIN post_items accepted_item ON accepted_item.post_id=accepted_post.id JOIN images accepted_image ON accepted_image.id=accepted_item.image_id WHERE accepted_post.id=accepted_local.post_id AND accepted_post.is_deleted=0 AND accepted_post.is_trashed=0 AND accepted_image.is_deleted=0 AND accepted_image.is_trashed=0)
  AND fulfilled.source_snapshot_json=${sourceVersionSql(s)} AND fulfilled.local_snapshot_json=${localVersionSql('accepted_local')})`;
 /** A revoked/changed acceptance is a review hold, never an automatic re-download. */
-export const acquisitionHeldSql = (s: string) => `EXISTS (SELECT 1 FROM archive_catalog_local_fulfillments held WHERE held.source_work_id=${s}.id)`;
+export const acquisitionHeldSql = (s: string) => `(EXISTS (SELECT 1 FROM archive_catalog_local_fulfillments held WHERE held.source_work_id=${s}.id)
+ OR EXISTS (SELECT 1 FROM archive_catalog_collections reuse_collection,
+ json_each(COALESCE(json_extract(reuse_collection.metadata_json,'$.localSourceReuse'),'[]')) reuse_entry
+ WHERE reuse_collection.id=${s}.collection_id AND json_extract(reuse_entry.value,'$.sourceOrder')=${s}.source_work_id
+ AND json_extract(reuse_entry.value,'$.status')='review'))`;
 export const legacyLocalCoverageSql = (s: string) => `EXISTS (SELECT 1 FROM archive_catalog_local_works legacy_local
  JOIN archive_catalog_local_creator_folders legacy_folder ON legacy_folder.id=legacy_local.local_creator_folder_id
  WHERE legacy_local.work_id=${s}.work_id AND legacy_local.is_active=1 AND legacy_folder.is_active=1
