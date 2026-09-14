@@ -7,6 +7,7 @@ import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/lo
 import { LocalIngestDestinationService } from './local-ingest-destination-service.js';
 import { WorkIdentityService } from './work-identity-service.js';
 import { runAdmissionExclusive } from './local-admission-lock.js';
+import { extractWorkDisplayTitle } from '../utils/work-title.js';
 
 const leaf = z.string().min(1).refine(v => !/[\\/:\x00]/.test(v) && v!=='.' && v!=='..', 'A direct child directory name is required');
 const entrySchema = z.object({ relativePath:z.string().min(1), kind:z.enum(['directory','image','video','other']), size:z.number().int().nonnegative(), dev:z.string(), ino:z.string(), mtimeNs:z.string() }).strict();
@@ -15,7 +16,7 @@ const itemSchema = z.object({ key:z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), so
     z.object({kind:z.literal('new')}),z.object({kind:z.literal('existing'),workId:z.number().int().positive().optional(),sourceWorkId:z.number().int().positive().optional()}),
     z.object({kind:z.literal('same-as'),itemKey:z.string().min(1)})
   ]), reason:z.string().trim().min(1), localOnly:z.boolean().default(true), excludeSourceIds:z.array(z.number().int().positive()).default([]),
-  primary:z.boolean().default(false), approvedAds:z.array(z.string().min(1)).default([]),
+  acceptExistingVersion:z.boolean().default(false), primary:z.boolean().default(false), approvedAds:z.array(z.string().min(1)).default([]),
   acceptVersions:z.array(z.object({sourceWorkId:z.number().int().positive(),taskIds:z.array(z.number().int().positive()),reason:z.string().trim().min(1)}).strict()).default([])
 });
 export const admissionPlanSchema=z.object({ version:z.literal(1),planId:z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),confirmed:z.literal(true),creatorId:z.number().int().positive(),
@@ -31,13 +32,7 @@ async function regularDirectory(v:string){const s=await fs.lstat(v);if(!s.isDire
 
 /** Display-only extraction. Never changes path or assigns source identity. */
 export function extractAdmissionTitle(name:string,creatorNames:string[]):string {
-  let title=name;
-  for(const prefix of [...creatorNames].sort((a,b)=>b.length-a.length)) {
-    if(title.startsWith(prefix) && /^\s/.test(title.slice(prefix.length))){title=title.slice(prefix.length).trim();break;}
-  }
-  title=title.replace(/^(?:NO\.?|VOL\.?)\s*\d+\s+/iu,'');
-  title=title.replace(/\s*\[(?=[^\]]*\d)(?:\d+(?:\.\d+)?\s*(?:P|V|KB|MB|GB|TB|K|M|G|T)[\s+-]*)+\]\s*$/iu,'').trim();
-  return title||name;
+  return extractWorkDisplayTitle(name,creatorNames);
 }
 
 /** Metadata inventory only; no media decoding, file hashing or URL access. */
@@ -89,7 +84,7 @@ export class LocalFolderAdmissionService {
         .map(r=>({...r,tasks:this.db.prepare('SELECT id,status,attempt_count FROM archive_catalog_download_tasks WHERE source_work_id=? ORDER BY id').all(r.sourceWorkId)}));
       const existingRelations=this.db.prepare(`SELECT l.id localWorkId,l.work_id workId,l.post_id postId,l.identity_policy identityPolicy,w.display_title canonicalTitle
         FROM archive_catalog_local_works l LEFT JOIN archive_catalog_works w ON w.id=l.work_id WHERE l.absolute_path=?`).all(targetPath);
-      items.push({key:randomUUID(),sourceRelativePath:name,targetPath,displayTitle,manifest,identity:{kind:'new'},reason:'',localOnly:true,excludeSourceIds:[],primary:false,approvedAds:[],
+      items.push({key:randomUUID(),sourceRelativePath:name,targetPath,displayTitle,manifest,identity:{kind:'new'},reason:'',localOnly:false,acceptExistingVersion:false,excludeSourceIds:[],primary:false,approvedAds:[],
         review:{candidates,existingRelations,conflicts:await exists(targetPath)?['target exists']:[],summary:{images:manifest.filter(x=>x.kind==='image').length,videos:manifest.filter(x=>x.kind==='video').length,other:manifest.filter(x=>x.kind==='other').length,bytes:manifest.reduce((n,x)=>n+x.size,0)}}});
     }
     return {version:1,planId:randomUUID(),confirmed:false,creatorId:input.creatorId,inputRoot:path.resolve(input.inputRoot),galleryRoot:path.resolve(this.galleryRoot),creatorDirectory,items};
@@ -159,7 +154,9 @@ export class LocalFolderAdmissionService {
     await regularDirectory(plan.inputRoot);await regularDirectory(plan.galleryRoot);
     const identity=new WorkIdentityService(this.db);
     const payload=json(plan);const prior=this.db.prepare('SELECT payload_json FROM archive_local_admission_plans WHERE plan_id=?').get(plan.planId) as {payload_json:string}|undefined;
-    if(prior&&prior.payload_json!==payload)throw Error('Plan ID content changed; new confirmation required');
+    // Older checkpoints lack the new optional policy field. Compare normalized plans,
+    // while retaining their original persisted payload and hash unchanged.
+    if(prior&&json(admissionPlanSchema.parse(JSON.parse(prior.payload_json)))!==payload)throw Error('Plan ID content changed; new confirmation required');
     if(!prior){
       const destination=await new LocalIngestDestinationService(this.db,plan.galleryRoot).resolveNewTarget(plan.creatorId,plan.items[0].sourceRelativePath);
       const expected=(await assertPathInsideLocalIngestRoot(plan.galleryRoot,destination.creatorDirectory,{directChild:true})).relative;
@@ -193,7 +190,8 @@ export class LocalFolderAdmissionService {
           let sameAsLocalId:number|undefined;
           if(item.identity.kind==='same-as')sameAsLocalId=(this.db.prepare('SELECT local_work_id FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.identity.itemKey) as {local_work_id:number}).local_work_id;
           const mapped=identity.registerLocal({creatorId:plan.creatorId,rootPath:plan.galleryRoot,creatorFolderName:plan.creatorDirectory,absolutePath:target,relativePath:path.relative(plan.galleryRoot,target),title:item.displayTitle,
-            ...(item.identity.kind==='existing'?{workId:item.identity.workId,sourceWorkId:item.identity.sourceWorkId}:{}),sameAsLocalId,reason:item.reason,key:`${plan.planId}:${item.key}`,localOnly:item.localOnly});
+            ...(item.identity.kind==='existing'?{workId:item.identity.workId,sourceWorkId:item.identity.sourceWorkId}:{}),sameAsLocalId,reason:item.reason,key:`${plan.planId}:${item.key}`,localOnly:item.localOnly,
+            ...(item.acceptExistingVersion?{acceptExistingVersion:true}:{})});
           this.db.prepare("UPDATE archive_local_admission_items SET state='move_intent',work_id=?,local_work_id=? WHERE plan_id=? AND item_key=?").run(mapped.workId,mapped.localWorkId,plan.planId,item.key);
           state={...state,state:'move_intent',work_id:mapped.workId,local_work_id:mapped.localWorkId};
         }

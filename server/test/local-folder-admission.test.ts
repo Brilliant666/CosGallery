@@ -31,6 +31,7 @@ describe.sequential('actual local directory admission and recovery',()=>{
  const rows=(table:string)=>manager.connection.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
  it('previews without writes, preserves names, admits source-free sets through real scanner and API',async()=>{
   const p=await plan('Synthetic Creator NO.032 Blue Theme 2 (Night) [1P-2MB]');
+  expect(p.items[0].localOnly).toBe(false);expect(p.items[0].acceptExistingVersion).toBe(false);
   expect(p.items[0].displayTitle).toBe('Blue Theme 2 (Night)');expect(rows('archive_catalog_works')).toHaveLength(0);
   const result=await service.apply(p);expect(result.completed).toBe(true);
   expect(rows('archive_catalog_local_works')[0].work_id).toBeTruthy();expect(rows('posts')).toHaveLength(1);
@@ -41,14 +42,22 @@ describe.sequential('actual local directory admission and recovery',()=>{
   expect(await fs.readFile(path.join(p.items[0].targetPath,'keep.txt'),'utf8')).toBe('untouched attachment');
   expect(await fs.stat(path.join(p.items[0].targetPath,'nested','1.jpg'))).toBeTruthy();
   const before=rows('posts');await service.apply(p);expect(rows('posts')).toEqual(before);
+  // A completed legacy checkpoint without the opt-in field still replays safely.
+  const saved=manager.connection.prepare('SELECT payload_json FROM archive_local_admission_plans WHERE plan_id=?').get(p.planId) as {payload_json:string};
+  const legacy=JSON.parse(saved.payload_json);delete legacy.items[0].acceptExistingVersion;
+  manager.connection.prepare('UPDATE archive_local_admission_plans SET payload_json=? WHERE plan_id=?').run(JSON.stringify(legacy),p.planId);
+  await service.apply(legacy);expect(rows('posts')).toEqual(before);
   await expect(service.apply({...p,items:p.items.map(i=>({...i,displayTitle:'changed'}))})).rejects.toThrow('content changed');
  });
  it('resumes a real move before verification checkpoint without recreating identities',async()=>{
   const p=await plan('NO.099 Interrupted');
+  p.items[0].acceptExistingVersion=true;
   await expect(service.apply(p,{stopAfterMove:true})).rejects.toThrow('Simulated interruption');
   const before=rows('archive_catalog_works').map(x=>x.id);
   await expect(fs.stat(path.join(input,p.items[0].sourceRelativePath))).rejects.toThrow();
   expect((await service.apply(p)).completed).toBe(true);expect(rows('archive_catalog_works').map(x=>x.id)).toEqual(before);
+  const local=rows('archive_catalog_local_works').find(x=>x.absolute_path===p.items[0].targetPath)!;
+  expect(local.identity_policy).toBe('manual');expect(JSON.parse(String(local.provenance_json)).acceptExistingVersion).toBe(true);
  });
  it('rejects empty scope, source changes, target conflict and unauthorized attachment exclusion',async()=>{
   await expect(service.preview({creatorId:creator,inputRoot:input,directories:[]})).rejects.toThrow('non-empty');

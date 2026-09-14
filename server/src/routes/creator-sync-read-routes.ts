@@ -1,6 +1,8 @@
 import express from 'express';
 import { z } from 'zod';
 import { CreatorSyncQueryService } from '../services/creator-sync-query-service.js';
+import { databaseManager } from '../db/database.js';
+import { readSourceReuse } from './source-reuse-read.js';
 
 // Both authenticated clients use exactly the same filters and complete-count queries.
 const filters = z.object({
@@ -25,6 +27,11 @@ export function createCreatorSyncReadRouter() {
   });
   router.get('/creator-sync/roster', (request, response) => {
     response.json(new CreatorSyncQueryService().roster(filters.parse(request.query)));
+  });
+  router.get('/creator-sync/source-reuse', (request, response) => {
+    const { page, limit } = z.object({ page: z.coerce.number().int().positive().default(1),
+      limit: z.coerce.number().int().min(1).max(100).default(20) }).strict().parse(request.query);
+    response.json(readSourceReuse(databaseManager.connection, page, limit));
   });
   router.get('/creator-sync/stats', (request, response) => {
     response.json(new CreatorSyncQueryService().stats(filters.parse(request.query)));
