@@ -8,6 +8,7 @@ import { LocalIngestDestinationService } from './local-ingest-destination-servic
 import { WorkIdentityService } from './work-identity-service.js';
 import { runAdmissionExclusive } from './local-admission-lock.js';
 import { extractWorkDisplayTitle } from '../utils/work-title.js';
+import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 
 const leaf = z.string().min(1).refine(v => !/[\\/:\x00]/.test(v) && v!=='.' && v!=='..', 'A direct child directory name is required');
 const entrySchema = z.object({ relativePath:z.string().min(1), kind:z.enum(['directory','image','video','other']), size:z.number().int().nonnegative(), dev:z.string(), ino:z.string(), mtimeNs:z.string() }).strict();
@@ -23,6 +24,10 @@ export const admissionPlanSchema=z.object({ version:z.literal(1),planId:z.string
   inputRoot:z.string().min(1),galleryRoot:z.string().min(1),creatorDirectory:leaf,items:z.array(itemSchema).min(1).max(500) }).strict();
 export type AdmissionPlan=z.infer<typeof admissionPlanSchema>;
 type Entry=z.infer<typeof entrySchema>;
+const recoverySchema=z.object({confirmed:z.literal(true),planId:z.string().min(1),key:z.string().min(1).max(100),reason:z.string().trim().min(1),evidence:z.string().trim().min(1),
+  removals:z.array(z.object({itemKey:z.string().min(1),entry:entrySchema,retainOriginal:z.literal(true).optional()}).strict()).min(1).max(2000)}).strict();
+const removalKind='admission_file_removal';
+type Removal={planId:string;itemKey:string;contentHash:string;entry:Entry;reason:string;evidence:string;retainOriginal?:true};
 
 function cmp(v:string){return process.platform==='win32'?v.toLowerCase():v;}
 function json(v:unknown){return JSON.stringify(v);}
@@ -128,7 +133,77 @@ export class LocalFolderAdmissionService {
     return path.join(plan.inputRoot,'.local-admission-attachments',plan.planId,item.key,relative);
   }
 
-  private async verifyTarget(plan:AdmissionPlan,item:AdmissionPlan['items'][number]){
+  private removals(plan:AdmissionPlan,item:AdmissionPlan['items'][number]):Removal[]{
+    const rows=this.db.prepare(`SELECT payload_json FROM archive_catalog_work_decisions WHERE kind=? AND state='active'
+      AND local_work_id=(SELECT local_work_id FROM archive_local_admission_items WHERE plan_id=? AND item_key=?)`).all(removalKind,plan.planId,item.key) as {payload_json:string}[];
+    const saved=this.db.prepare('SELECT content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(plan.planId) as {content_hash:string}|undefined;
+    return rows.map(row=>{
+      const r=JSON.parse(row.payload_json) as Removal;
+      if(r.planId!==plan.planId||r.itemKey!==item.key||r.contentHash!==saved?.content_hash||!r.reason||!r.evidence||
+        !item.manifest.some(e=>json(e)===json(r.entry)))throw Error('Recovery evidence does not match immutable plan');
+      return r;
+    });
+  }
+
+  /** Record explicit, already-performed removals. Never deletes files or rewrites a plan. */
+  async recover(raw:unknown){
+    return runAdmissionExclusive(this.db,async()=>{
+      this.idle();const request=recoverySchema.parse(raw);
+      const saved=this.db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(request.planId) as {payload_json:string;content_hash:string}|undefined;
+      if(!saved)throw Error('Existing admission plan required');
+      const plan=this.validate(JSON.parse(saved.payload_json));
+      const pending:{key:string;payload:Removal;workId:number;localId:number}[]=[],seen=new Set<string>();
+      for(const [index,removal] of request.removals.entries()){
+        const item=plan.items.find(i=>i.key===removal.itemKey);
+        if(!item||!item.manifest.some(e=>json(e)===json(removal.entry)))throw Error('Removal must exactly match original manifest entry');
+        const identifier=item.key+'\0'+removal.entry.relativePath;if(seen.has(identifier))throw Error('Duplicate removal');seen.add(identifier);
+        const state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key) as ItemState|undefined;
+        if(!state?.work_id||!state.local_work_id||!['files_verified','indexed','completed'].includes(state.state))throw Error('Removal requires an already verified move');
+        if(removal.retainOriginal&&(!['image','video'].includes(removal.entry.kind)||item.manifest.some(e=>e.relativePath.split('/')[0]===RETAINED_ORIGINALS_DIRECTORY)))throw Error('Retention requires explicit media and an unused reserved originals directory');
+        const payload:Removal={planId:plan.planId,itemKey:item.key,contentHash:saved.content_hash,entry:removal.entry,reason:request.reason,evidence:request.evidence,...(removal.retainOriginal?{retainOriginal:true as const}:{})};
+        const key=`admission-removal:${request.key}:${index}`;
+        const old=this.db.prepare('SELECT kind,payload_json,state FROM archive_catalog_work_decisions WHERE decision_key=?').get(key) as {kind:string;payload_json:string;state:string}|undefined;
+        if(old&&(old.kind!==removalKind||old.payload_json!==json(payload)||old.state!=='active'))throw Error('Recovery key differs or was revoked; explicit new decision required');
+        if(!old&&this.removals(plan,item).some(r=>r.entry.relativePath===removal.entry.relativePath))throw Error('File already has an active removal decision; reuse the original request');
+        if(this.db.prepare(`SELECT t.id FROM archive_catalog_download_tasks t JOIN archive_catalog_source_works s ON s.id=t.source_work_id
+          WHERE s.work_id=? AND t.status IN ('claimed','downloading') LIMIT 1`).get(state.work_id))throw Error('Related acquisition is active');
+        const ad=item.approvedAds.includes(removal.entry.relativePath);
+        if(!ad&&!old){
+          if(!['image','video'].includes(removal.entry.kind))throw Error('Only original approved advertisements or explicitly failed media may be removed');
+          const local=this.db.prepare('SELECT post_id FROM archive_catalog_local_works WHERE id=?').get(state.local_work_id) as {post_id:number|null};
+          if(state.state!=='files_verified'||local.post_id!==null||this.db.prepare("SELECT id FROM archive_catalog_local_fulfillments WHERE local_work_id=? AND state='active'").get(state.local_work_id))throw Error('Media recovery is limited to unfinished, unfulfilled indexing');
+        }
+        pending.push({key,payload,workId:state.work_id,localId:state.local_work_id});
+      }
+      // Validate ALL affected items before writing any decision. No broad ignore flag.
+      for(const key of new Set(pending.map(r=>r.payload.itemKey))){
+        const item=plan.items.find(i=>i.key===key)!;
+        await assertPathInsideLocalIngestRoot(plan.inputRoot,path.join(plan.inputRoot,item.sourceRelativePath),{directChild:true});
+        if(await exists(path.join(plan.inputRoot,item.sourceRelativePath)))throw Error('Source still exists; recovery cannot authorize a move');
+        await this.verifyTarget(plan,item,pending.filter(r=>r.payload.itemKey===key).map(r=>r.payload),true);
+      }
+      this.db.exec('SAVEPOINT admission_recovery');
+      try{
+        // File verification yields to other connections. Recheck at the decision
+        // transaction boundary so a newly acquired claim cannot be overlooked.
+        this.idle();
+        for(const workId of new Set(pending.map(r=>r.workId))){
+          if(this.db.prepare(`SELECT t.id FROM archive_catalog_download_tasks t JOIN archive_catalog_source_works s ON s.id=t.source_work_id
+            WHERE s.work_id=? AND t.status IN ('claimed','downloading') LIMIT 1`).get(workId))throw Error('Related acquisition is active');
+        }
+        const ids=pending.map(r=>{
+          this.db.prepare(`INSERT INTO archive_catalog_work_decisions(decision_key,kind,work_id,local_work_id,reason,payload_json)
+            VALUES(?,?,?,?,?,?) ON CONFLICT(decision_key) DO NOTHING`).run(r.key,removalKind,r.workId,r.localId,r.payload.reason,json(r.payload));
+          return this.db.prepare('SELECT id FROM archive_catalog_work_decisions WHERE decision_key=?').get(r.key)!.id;
+        });
+        this.db.exec('RELEASE admission_recovery');
+        return {planId:plan.planId,decisionIds:ids,recordedRemovals:pending.map(r=>r.payload),resumed:false};
+      }catch(e){this.db.exec('ROLLBACK TO admission_recovery; RELEASE admission_recovery');throw e;}
+    });
+  }
+
+  private async verifyTarget(plan:AdmissionPlan,item:AdmissionPlan['items'][number],additional:Removal[]=[],allowPendingRetention=false){
+    await assertPathInsideLocalIngestRoot(plan.galleryRoot,item.targetPath);
     const observed=await inventoryAdmissionDirectory(item.targetPath);
     for(const ad of item.approvedAds){
       const saved=this.attachmentPath(plan,item,ad);await assertPathInsideLocalIngestRoot(plan.inputRoot,saved);
@@ -138,8 +213,69 @@ export class LocalFolderAdmissionService {
       if(!stat.isFile()||stat.isSymbolicLink())throw Error('Saved attachment is not a regular file');
       observed.push({relativePath:ad,kind:'other',size:Number(stat.size),dev:String(stat.dev),ino:String(stat.ino),mtimeNs:String(stat.mtimeNs)});
     }
+    const decisions=[...this.removals(plan,item),...additional];
+    const retained=new Map(decisions.filter(r=>r.retainOriginal).map(r=>[r.entry.relativePath,r]));
+    const generatedDirs=new Set<string>();
+    for(const relative of retained.keys()){
+      const destination=RETAINED_ORIGINALS_DIRECTORY+'/'+relative;
+      for(let parent=path.posix.dirname(destination);parent!=='.';parent=path.posix.dirname(parent))generatedDirs.add(parent);
+      const from=observed.find(e=>e.relativePath===relative),to=observed.find(e=>e.relativePath===destination);
+      if(from&&to||!to&&(!allowPendingRetention||!from))throw Error('Retained original missing or present in both locations');
+      if(to)to.relativePath=relative;
+    }
+    for(let n=observed.length-1;n>=0;n--)if(observed[n].kind==='directory'&&generatedDirs.has(observed[n].relativePath))observed.splice(n,1);
+    const removed=new Set(decisions.filter(r=>!r.retainOriginal).map(r=>r.entry.relativePath));
+    if(!item.manifest.some(e=>['image','video'].includes(e.kind)&&!removed.has(e.relativePath)&&!retained.has(e.relativePath)))throw Error('No supported media remains for display');
+    // A returned/replaced file is not ignored. Explicit removal describes absence only.
+    if(observed.some(e=>removed.has(e.relativePath)))throw Error('Approved removed file is present again; review required');
     const sorted=(entries:Entry[])=>[...entries].sort((a,b)=>a.relativePath.localeCompare(b.relativePath,'en'));
-    if(hash(sorted(observed))!==hash(sorted(item.manifest)))throw Error('Target or saved attachments changed; review required');
+    if(hash(sorted(observed))!==hash(sorted(item.manifest.filter(e=>!removed.has(e.relativePath)))))throw Error('Target or saved attachments changed; review required');
+  }
+
+  /** The durable decision precedes rename. Replay verifies either side, never overwrites. */
+  private async retainRecoveredOriginals(plan:AdmissionPlan,item:AdmissionPlan['items'][number]){
+    const retained=this.removals(plan,item).filter(r=>r.retainOriginal);
+    if(!retained.length)return;
+    await this.verifyTarget(plan,item,[],true);
+    if(!(await Promise.all(retained.map(r=>exists(path.join(item.targetPath,r.entry.relativePath))))).some(Boolean))return;
+    const state=this.db.prepare('SELECT work_id,local_work_id FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key)!;
+    if(this.db.prepare("SELECT id FROM archive_catalog_local_fulfillments WHERE local_work_id=? AND state='active'").get(state.local_work_id)||
+      this.db.prepare("SELECT t.id FROM archive_catalog_download_tasks t JOIN archive_catalog_source_works s ON s.id=t.source_work_id WHERE s.work_id=? AND t.status IN ('claimed','downloading') LIMIT 1").get(state.work_id))throw Error('Retention acquisition changed; review required');
+    for(const r of retained){
+      const from=path.join(item.targetPath,r.entry.relativePath),to=path.join(item.targetPath,RETAINED_ORIGINALS_DIRECTORY,r.entry.relativePath);
+      await assertPathInsideLocalIngestRoot(item.targetPath,from);await assertPathInsideLocalIngestRoot(item.targetPath,to);
+      if(await exists(from)){
+        if(await exists(to))throw Error('Retained original target occupied');
+        await fs.mkdir(path.dirname(to),{recursive:true});
+        await assertPathInsideLocalIngestRoot(item.targetPath,to);
+        if((await fs.stat(from,{bigint:true})).dev!==(await fs.stat(path.dirname(to),{bigint:true})).dev)throw Error('Retention must remain on the same volume');
+        await fs.rename(from,to);
+      }
+    }
+    await this.verifyTarget(plan,item);
+  }
+
+  private async detachRecoveredMedia(plan:AdmissionPlan,item:AdmissionPlan['items'][number],localId:number){
+    const removals=this.removals(plan,item).filter(r=>['image','video'].includes(r.entry.kind));
+    if(!removals.length)return;
+    const local=this.db.prepare('SELECT post_id,work_id FROM archive_catalog_local_works WHERE id=?').get(localId) as {post_id:number|null;work_id:number}|undefined;
+    if(!local||this.db.prepare("SELECT id FROM archive_catalog_local_fulfillments WHERE local_work_id=? AND state='active'").get(localId)||
+      this.db.prepare(`SELECT t.id FROM archive_catalog_download_tasks t JOIN archive_catalog_source_works s ON s.id=t.source_work_id
+        WHERE s.work_id=? AND t.status IN ('claimed','downloading') LIMIT 1`).get(local.work_id))throw Error('Media recovery ownership or acquisition changed; review required');
+    const sourcePath=path.relative(plan.galleryRoot,item.targetPath).split(path.sep).join('/');
+    const post=this.db.prepare('SELECT id FROM posts WHERE source_path=? AND is_deleted=0 AND is_trashed=0').get(sourcePath) as {id:number}|undefined;
+    if(local.post_id!==null&&local.post_id!==post?.id)throw Error('Recovery LocalWork Post changed; review required');
+    if(!post)return;
+    if(this.db.prepare('SELECT id FROM archive_catalog_local_works WHERE post_id=? AND id<>?').get(post.id,localId))throw Error('Recovery Post belongs to another LocalWork');
+    const removedPaths=new Set(removals.map(r=>sourcePath+'/'+r.entry.relativePath));
+    const members=this.db.prepare(`SELECT p.image_id,p.position,i.relative_path FROM post_items p JOIN images i ON i.id=p.image_id
+      WHERE p.post_id=? ORDER BY p.position`).all(post.id) as {image_id:number;position:number;relative_path:string}[];
+    const kept=members.filter(m=>!removedPaths.has(m.relative_path));
+    if(kept.length===members.length)return;
+    // Only the audited absent media is detached. No ID deletion or arbitrary topology repair.
+    // The normal scoped scanner must still finish and mark absent Image rows inactive.
+    const {postRepository}=await import('../db/repositories.js');
+    postRepository.setPostItems(post.id,kept.map((m,n)=>({imageId:m.image_id,position:n+1})));
   }
 
   /** Each DB checkpoint commits before/after a filesystem step, never pretending rename is part of SQLite. */
@@ -182,7 +318,7 @@ export class LocalFolderAdmissionService {
         const sourceExists=await exists(source),targetExists=await exists(target);
         if(sourceExists===targetExists)throw Error('Both source and target exist or both are absent; review required');
         if(sourceExists){if(hash(await inventoryAdmissionDirectory(source))!==hash(item.manifest))throw Error('Directory changed since confirmation; review required');}
-        else await this.verifyTarget(plan,item);
+        else {await this.retainRecoveredOriginals(plan,item);await this.verifyTarget(plan,item);}
         if(state.state==='planned'){
           if(!sourceExists)throw Error('No recorded move intent; cannot adopt target');
           await fs.mkdir(path.dirname(target),{recursive:true});await regularDirectory(path.dirname(target));
@@ -215,6 +351,7 @@ export class LocalFolderAdmissionService {
             }
           }
           await this.verifyTarget(plan,item);
+          await this.detachRecoveredMedia(plan,item,state.local_work_id!);
           const {scannerService}=await import('./scanner-service.js');
           const scan=await scannerService.scanCosCreators([plan.creatorDirectory],'local-folder-admission',{workFolderName:item.sourceRelativePath});
           if(scan?.status!=='completed')throw Error('Scoped media indexing did not complete');
@@ -232,7 +369,8 @@ export class LocalFolderAdmissionService {
           for(const acceptance of item.acceptVersions)new ArchiveLocalFulfillmentService(this.db).accept({decisionKey:`${plan.planId}:${item.key}:accept:${acceptance.sourceWorkId}`,localWorkId:state.local_work_id!,...acceptance});
           this.db.prepare("UPDATE archive_local_admission_items SET state='completed',last_error=NULL WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='completed';
         }
-        results.push({key:item.key,...state,excludedAttachments:item.approvedAds.map(ad=>({relativePath:ad,preservedAt:this.attachmentPath(plan,item,ad)}))});
+        const approvedRemovals=this.removals(plan,item);
+        results.push({key:item.key,...state,approvedRemovals:approvedRemovals.filter(r=>!r.retainOriginal),retainedOriginals:approvedRemovals.filter(r=>r.retainOriginal).map(r=>({...r,preservedAt:path.join(target,RETAINED_ORIGINALS_DIRECTORY,r.entry.relativePath)})),excludedAttachments:item.approvedAds.map(ad=>({relativePath:ad,preservedAt:this.attachmentPath(plan,item,ad),status:approvedRemovals.some(r=>r.entry.relativePath===ad)?'removed_by_explicit_decision':'preserved'}))});
       } catch(e){this.db.prepare('UPDATE archive_local_admission_items SET last_error=? WHERE plan_id=? AND item_key=?').run(e instanceof Error?e.message:String(e),plan.planId,item.key);throw e;}
     }return {planId:plan.planId,completed:true,items:results};
   }
