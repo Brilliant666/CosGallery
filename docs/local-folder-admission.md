@@ -166,6 +166,93 @@ If rename succeeds before its checkpoint, resume verifies the existing target ag
 the recorded manifest. An index commit before its checkpoint safely reuses original IDs.
 Both paths present, neither present, changed contents/metadata or occupied targets stop.
 
+### Explicit recovery after authorized file removal
+
+`recover <absolute-confirmed-removals.json>` records an **already performed, explicitly
+authorized removal**. It does not recycle files, start indexing, resume a plan or change
+any acquisition status. Use the original immutable plan with `resume` afterwards.
+
+```json
+{
+  "confirmed": true,
+  "planId": "original-plan-id",
+  "key": "unique-recovery-request",
+  "reason": "User approved recycling the broken image and original approved ads",
+  "evidence": "Local removal log location and user confirmation reference",
+  "removals": [
+    {
+      "itemKey": "original-item-key",
+      "entry": {
+        "relativePath": "broken.jpg", "kind": "image", "size": 0,
+        "dev": "original-value", "ino": "original-value", "mtimeNs": "original-value"
+      }
+    }
+  ]
+}
+```
+
+Copy `entry` exactly from the saved manifest; never invent file metadata. Evidence is
+a user/operator statement, not proof that the OS recycle bin still contains the file.
+The service verifies the absence and all remaining metadata, not the truth of an external
+log. Review the real removal records before confirming. Include every authorized missing
+file for each affected item in one request; unrelated missing, replaced or new files stop
+registration without partially writing decisions.
+
+No migration is required. Additive `admission_file_removal` rows in the existing
+`archive_catalog_work_decisions` table retain plan/item identity, original entry,
+original content hash, reason and evidence. Original plan payload/hash, item manifest,
+checkpoints, source declarations and download history are not rewritten. `recover`
+uses the same exclusive admission lock and refuses related active acquisition.
+
+Storage compatibility: migration 000019 already permits arbitrary decision kinds;
+this patch adds no column, index or migration. Recovery payloads keep the existing
+`planId`, `itemKey`, `contentHash`, exact `entry`, `reason` and `evidence` fields.
+An absent `retainOriginal` means the original removal-only format; only explicit
+`true` authorizes preservation on resume. Existing rows are read as-is, not
+backfilled or rewritten. Active decisions must still match the immutable saved
+plan; revoked decisions are excluded. Plans without recovery decisions retain
+normal manifest validation. Old binaries do not understand these exceptions and
+must not be used to resume a recovered plan: schema compatibility is not semantic
+recovery support. No downgrade or automatic conversion is provided.
+
+Publication review additionally rechecks idle state and related active claims
+inside the decision-save transaction after asynchronous filesystem verification.
+A claim acquired during that verification refuses the entire recovery registration;
+the claim and original plan remain untouched. The recovery test exercises this
+window explicitly. The four focused admission/identity/gallery/fulfillment suites
+pass 33 tests on Node 24; this is synthetic isolation evidence, not a new real
+admission run or production rollout.
+
+Allowed scope is deliberately narrow:
+
+- Originally approved TXT/URL advertisements after a verified move (including completed
+  items whose saved advertisements were subsequently recycled).
+- Explicit image/video removal only at `files_verified`, before LocalWork/Post attachment
+  and without active fulfillment. Provisional scanner data may exist after a failed scan;
+  the normal scoped scanner still has to finish. Already attached/indexed media is refused.
+- No directory exclusions, arbitrary other attachments, source-side/planned removals,
+wildcard rules, automatic missing-file acceptance or physical cleanup.
+
+For a failed scan that already created a provisional Post, resume uses the existing
+Post repository to detach only the explicitly removed media memberships before scoped
+indexing. Post IDs and surviving Image IDs remain; the scanner must finish marking the
+absent media inactive and refreshing card counts/cover. This is not applied to unrelated
+Post ownership conflicts. If scanning fails again, the removal decision and checkpoint
+remain for retry; membership updates and scanning are not one atomic transaction.
+
+Removing an empty media subdirectory is a separate change and is **not** authorized by
+its file's exclusion; preserve original internal directories. A removed file appearing
+again (even as a replacement) also stops replay. At least one supported medium must remain.
+Do not clear saved advertisements from an unfinished batch without retaining explicit
+removal evidence for recovery.
+
+The exact request is idempotent even after successful resume. A second request key for
+the same active file exclusion is refused. `decide` with `kind:"revoke"` revokes a removal
+decision; subsequent resume again requires the original file. Revocation does not restore
+files, undo prior scans or recreate thumbnails. A correction needs an explicit new decision,
+not silent resurrection of the revoked key. CLI results list `approvedRemovals` separately
+and mark removed advertisements as `removed_by_explicit_decision`, never as still preserved.
+
 The manifest records every selected entry's relative path/type/size/device/inode/mtime.
 Same-volume rename preserves these; no claim of cross-source byte identity is made.
 Cross-volume admission is explicitly unsupported. Verification covers the selected
@@ -178,6 +265,25 @@ expired based on age. No external file editor can be locked by SQLite: source di
 must remain quiescent during the operation, and observed changes stop the plan.
 
 ## Validation and remaining scope
+
+### Explicit retained-original recovery
+
+An individual `recover` request entry may specify `retainOriginal:true` for a failed
+image/video in an unfinished `files_verified` item. This is not automatic exclusion
+of every decoder error. The exact original manifest entry, reason and evidence are
+required. `recover` persists the decision without moving files; the original plan's
+`resume` moves the file to `_未支持格式原件/<original relative path>` on the same
+volume. The scanner already excludes this reserved direct child from display.
+The original manifest and IDs remain immutable. CLI `retainedOriginals` reports the
+preserved path separately from actual `approvedRemovals`: retained does not mean lost.
+
+The decision commits before rename. Interrupted replay accepts either original or
+retained location, never both, verifies exact file metadata and unrelated entries,
+and refuses an occupied destination, changed file, active acquisition, or exclusion
+of the last displayable medium. Reserved-directory conflicts in the original plan
+are rejected. Revoking a decision does not move the file back; physical correction
+requires explicit handling and normal validation, not an implicit rollback.
+This uses existing decision storage; no migration or decoder pixel-limit change.
 
 Tests live in `server/test/local-folder-admission.test.ts`, `work-identity.test.ts`,
 `local-admission-gallery.test.ts`, `archive-local-fulfillment.test.ts` and matching client
