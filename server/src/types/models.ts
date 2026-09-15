@@ -331,6 +331,15 @@ export interface FeedPost extends FeedImage {
   mediaItems: PostMediaItem[];
 }
 
+// A creator card is not an authorized, fully loaded album. Detail endpoints
+// retain FeedPost/PostDetail and their complete position-ordered mediaItems.
+export interface CanonicalWorkSummary extends Omit<FeedPost, 'mediaItems'> {
+  representation: 'summary';
+  imageCount: number;
+  videoCount: number;
+  mediaItems?: never;
+}
+
 export interface ReelCandidate extends FeedPost {
   likedAt: string | null;
 }

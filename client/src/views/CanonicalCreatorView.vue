@@ -48,7 +48,7 @@ import InfiniteLoader from '../components/InfiniteLoader.vue';
 import CreatorFolderActions from '../components/CreatorFolderActions.vue';
 import { useAppStore } from '../stores/app';
 import { useCreatorReadingStore } from '../stores/creator-reading';
-import type { CosGalleryCreator, FeedItem, FolderSummary } from '../types/api';
+import type { CosGalleryCreator, CanonicalWorkSummary, FolderSummary } from '../types/api';
 import { parsePositiveId, libraryReturnRoute } from '../utils/work-gallery';
 
 const props = defineProps<{ creatorId: string }>();
@@ -57,7 +57,7 @@ const router = useRouter();
 const appStore = useAppStore();
 const reading = useCreatorReadingStore();
 const creator = shallowRef<CosGalleryCreator | null>(null);
-const items = ref<FeedItem[]>([]);
+const items = ref<CanonicalWorkSummary[]>([]);
 const total = ref(0);
 const nextPage = ref(1);
 const hasMore = ref(true);

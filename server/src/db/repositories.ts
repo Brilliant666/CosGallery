@@ -8,6 +8,7 @@ import type {
   CollectionRecord,
   CollectionSummaryRecord,
   CosGalleryCreatorRecord,
+  CanonicalWorkSummary,
   CosGalleryCreatorAliasRecord,
   CosGalleryFolderCandidateRecord,
   CreatorRatingSourceRecord,
@@ -2524,7 +2525,7 @@ export const canonicalCreatorGalleryRepository = {
     limit: number,
     order: FolderImageOrder = 'newest',
     mediaType?: MediaType
-  ): FeedPost[] {
+  ): CanonicalWorkSummary[] {
     const offset = (page - 1) * limit;
     const direction = order === 'oldest' ? 'ASC' : 'DESC';
     const mediaTypeClause = mediaType ? ' AND images.media_type = ?' : '';
@@ -2539,8 +2540,36 @@ export const canonicalCreatorGalleryRepository = {
       ORDER BY posts.sort_timestamp ${direction}, posts.id ${direction}
       LIMIT ? OFFSET ?
       `
-    ).all(...params) as unknown as FeedPost[];
-    return postRepository.hydratePostItems(posts);
+    ).all(...params) as unknown as Omit<FeedPost, 'mediaItems'>[];
+    if (posts.length === 0) return [];
+
+    // Read only counts for the selected page. The cover is already selected by
+    // BASE_POST_SELECT_SQL; do not fetch/parse every image's URLs or EXIF here.
+    // Join exactly the same media rows as hydratePostItems to retain its counts.
+    const counts = database.prepare(`
+      SELECT pi.post_id AS postId, COUNT(*) AS itemCount,
+        SUM(CASE WHEN img.media_type = 'image' THEN 1 ELSE 0 END) AS imageCount,
+        SUM(CASE WHEN img.media_type = 'video' THEN 1 ELSE 0 END) AS videoCount
+      FROM post_items pi JOIN images img ON img.id = pi.image_id
+      WHERE pi.post_id IN (${posts.map(() => '?').join(', ')})
+      GROUP BY pi.post_id
+    `).all(...posts.map(post => post.id)) as Array<{
+      postId: number; itemCount: number; imageCount: number; videoCount: number;
+    }>;
+    const countsByPost = new Map(counts.map(row => [row.postId, row]));
+    return posts.map(post => {
+      const count = countsByPost.get(post.id);
+      const itemCount = count?.itemCount ?? 0;
+      return {
+        ...post,
+        representation: 'summary',
+        postType: itemCount > 1 ? 'carousel' : post.postType,
+        isAnimated: Boolean(post.isAnimated),
+        itemCount,
+        imageCount: count?.imageCount ?? 0,
+        videoCount: count?.videoCount ?? 0
+      };
+    });
   },
 
   countVisibleWorks(creatorId: number, mediaType?: MediaType): number {

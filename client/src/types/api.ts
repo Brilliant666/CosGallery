@@ -106,6 +106,17 @@ export interface FeedItem {
   itemCount?: number;
 }
 
+// Reading-list entries cannot stand in for ImageDetail in the gallery/Viewer.
+// Other feed and share endpoints still carry their existing mediaItems payload.
+export interface CanonicalWorkSummary extends Omit<FeedItem, 'mediaItems'> {
+  representation: 'summary';
+  postType: PostType;
+  itemCount: number;
+  imageCount: number;
+  videoCount: number;
+  mediaItems?: never;
+}
+
 export type PlaceKind = 'city' | 'approximate_spot' | 'manual';
 
 export interface PlaceSummary {
@@ -545,8 +556,9 @@ export interface CosGalleryCreatorsPayload {
   };
 }
 
-export interface CanonicalCreatorWorksPayload extends PaginatedFeed {
+export interface CanonicalCreatorWorksPayload extends Omit<PaginatedFeed, 'items'> {
   creator: CosGalleryCreator;
+  items: CanonicalWorkSummary[];
 }
 
 export interface LocalIngestDestinationCandidate {
