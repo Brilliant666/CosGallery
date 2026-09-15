@@ -78,6 +78,113 @@ describe.sequential('actual local directory admission and recovery',()=>{
   await fs.writeFile(path.join(p.items[0].targetPath,'keep.txt'),'external change');
   await expect(service.apply(p)).rejects.toThrow('changed');
  });
+ it('records audited removal, resumes remaining items and retains original plan and IDs',async()=>{
+  await make('Recovery first');await make('Recovery next');
+  await fs.writeFile(path.join(input,'Recovery first','bad.jpg'),'');
+  const preview=await service.preview({creatorId:creator,inputRoot:input,directories:['Recovery first','Recovery next']});
+  const p={...preview,confirmed:true,items:preview.items.map(i=>({...i,reason:'Explicit batch',approvedAds:['ad.url']}))};
+  const {scannerService}=await import('../src/services/scanner-service.js');
+  const scan=vi.spyOn(scannerService,'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic decoder failure'));
+  await expect(service.apply(p)).rejects.toThrow('Synthetic decoder');scan.mockRestore();
+  const original=manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(p.planId);
+  const first=manager.connection.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(p.planId,p.items[0].key)!;
+  const item=p.items[0];const saved=path.join(input,'.local-admission-attachments',p.planId,item.key,'ad.url');
+  await fs.unlink(saved);await fs.unlink(path.join(item.targetPath,'bad.jpg'));
+  await expect(service.apply(p)).rejects.toThrow('changed');
+  const request={confirmed:true,planId:p.planId,key:'recovery-batch',reason:'User accepted missing broken file and recycled ad',evidence:'Synthetic removal record',removals:['bad.jpg','ad.url'].map(relativePath=>({itemKey:item.key,entry:item.manifest.find(e=>e.relativePath===relativePath)!}))};
+  const recorded=await service.recover(request);expect(recorded.resumed).toBe(false);
+  await expect(service.recover({...request,key:'different-key'})).rejects.toThrow('already has an active');
+  expect(manager.connection.prepare('SELECT state FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(p.planId,item.key)?.state).toBe('files_verified');
+  expect((await service.recover(request)).decisionIds).toEqual(recorded.decisionIds);
+  const done=await service.apply(p);expect(done.completed).toBe(true);expect(done.items[0].work_id).toBe(first.work_id);expect(done.items[0].local_work_id).toBe(first.local_work_id);
+  expect(done.items[0].approvedRemovals).toHaveLength(2);expect(done.items[0].excludedAttachments[0].status).toBe('removed_by_explicit_decision');
+  expect(manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(p.planId)).toEqual(original);
+  expect(manager.connection.prepare('SELECT manifest_json FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(p.planId,item.key)?.manifest_json).toBe(first.manifest_json);
+  expect((await service.recover(request)).decisionIds).toEqual(recorded.decisionIds);
+  expect((await service.apply(p)).completed).toBe(true);
+  // New/changed files are never covered by a missing-file authorization.
+  await fs.writeFile(path.join(item.targetPath,'bad.jpg'),'replacement');await expect(service.apply(p)).rejects.toThrow('present again');await fs.unlink(path.join(item.targetPath,'bad.jpg'));
+  await fs.writeFile(path.join(item.targetPath,'extra.txt'),'not authorized');await expect(service.apply(p)).rejects.toThrow('changed');await fs.unlink(path.join(item.targetPath,'extra.txt'));
+ });
+ it('allows completed advertisement recovery but rejects unapproved, wrong and revoked evidence',async()=>{
+  const p=await plan('Recovery completed ads');p.items[0].approvedAds=['ad.url'];const done=await service.apply(p);const item=p.items[0];
+  await fs.unlink(done.items[0].excludedAttachments[0].preservedAt);
+  const request={confirmed:true,planId:p.planId,key:'completed-ad',reason:'Recycle approved ad',evidence:'Synthetic user record',removals:[{itemKey:item.key,entry:item.manifest.find(e=>e.relativePath==='ad.url')!}]};
+  await expect(service.recover({...request,confirmed:false})).rejects.toThrow();
+  await expect(service.recover({...request,removals:[{...request.removals[0],entry:{...request.removals[0].entry,size:999}}]})).rejects.toThrow('original manifest');
+  await expect(service.recover({...request,removals:[{itemKey:item.key,entry:item.manifest.find(e=>e.relativePath==='keep.txt')!}]})).rejects.toThrow('Only original approved');
+  await expect(service.recover({...request,removals:[{itemKey:item.key,entry:item.manifest.find(e=>e.kind==='directory')!}]})).rejects.toThrow('Only original approved');
+  const recorded=await service.recover(request);expect((await service.apply(p)).completed).toBe(true);
+  await fs.mkdir(path.dirname(done.items[0].excludedAttachments[0].preservedAt),{recursive:true});
+  await fs.writeFile(done.items[0].excludedAttachments[0].preservedAt,'returned ad');
+  await expect(service.apply(p)).rejects.toThrow('present again');await fs.unlink(done.items[0].excludedAttachments[0].preservedAt);
+  await expect(service.recover({...request,key:'indexed-media',removals:[{itemKey:item.key,entry:item.manifest.find(e=>e.kind==='image')!}]})).rejects.toThrow('unfinished');
+  const {WorkIdentityService}=await import('../src/services/work-identity-service.js');new WorkIdentityService(manager.connection).revoke(Number(recorded.decisionIds[0]),'User revoked exception');
+  await expect(service.apply(p)).rejects.toThrow('changed');await expect(service.recover(request)).rejects.toThrow('revoked');
+ });
+ it('recovery is atomic across items and rejects unexplained missing files',async()=>{
+  const p=await plan('Recovery rejects collateral');p.items[0].approvedAds=['ad.url'];const done=await service.apply(p);const item=p.items[0];await fs.unlink(done.items[0].excludedAttachments[0].preservedAt);await fs.unlink(path.join(item.targetPath,'keep.txt'));
+  const before=rows('archive_catalog_work_decisions');
+  await expect(service.recover({confirmed:true,planId:p.planId,key:'collateral',reason:'ad only',evidence:'test',removals:[{itemKey:item.key,entry:item.manifest.find(e=>e.relativePath==='ad.url')!}]})).rejects.toThrow('changed');
+  expect(rows('archive_catalog_work_decisions')).toEqual(before);
+ });
+ it('does not grant removals for an unstarted plan or planned directory',async()=>{
+  const p=await plan('Recovery not moved');const item=p.items[0];
+  await expect(service.recover({confirmed:true,planId:p.planId,key:'unstarted',reason:'test',evidence:'test',removals:[{itemKey:item.key,entry:item.manifest.find(e=>e.kind==='image')!}]})).rejects.toThrow('Existing admission plan');
+ });
+ it('recovers provisional scanner Post/media without replacing surviving IDs',async()=>{
+  const name='Recovery provisional Post';const dir=await make(name);
+  await sharp({create:{width:32,height:48,channels:3,background:'#abc123'}}).jpeg().toFile(path.join(dir,'second.jpg'));
+  const preview=await service.preview({creatorId:creator,inputRoot:input,directories:[name]});const p={...preview,confirmed:true,items:preview.items.map(i=>({...i,reason:'User approved individual broken-media removal'}))};
+  const {scannerService}=await import('../src/services/scanner-service.js');const original= scannerService.scanCosCreators.bind(scannerService);
+  const spy=vi.spyOn(scannerService,'scanCosCreators').mockImplementationOnce(async(...args)=>{await original(...args);throw Error('Lost scan response');});
+  await expect(service.apply(p)).rejects.toThrow('Lost scan response');spy.mockRestore();
+  const item=p.items[0],relative=path.relative(gallery,item.targetPath).split(path.sep).join('/');
+  const post=manager.connection.prepare('SELECT * FROM posts WHERE source_path=?').get(relative)!;
+  const active=()=>manager.connection.prepare('SELECT i.id FROM images i JOIN post_items p ON p.image_id=i.id WHERE p.post_id=? AND i.is_deleted=0 AND i.is_trashed=0 ORDER BY i.id').all(post.id);
+  const before=active();expect(before).toHaveLength(2);
+  await fs.unlink(path.join(item.targetPath,'second.jpg'));
+  await service.recover({confirmed:true,planId:p.planId,key:'provisional',reason:'User accepts remaining original',evidence:'synthetic recycle',removals:[{itemKey:item.key,entry:item.manifest.find(e=>e.relativePath==='second.jpg')!}]});
+  const done=await service.apply(p);expect(done.completed).toBe(true);
+  const after=manager.connection.prepare(`SELECT posts.*,(SELECT count(*) FROM post_items WHERE post_id=posts.id) item_count,
+    (SELECT image_id FROM post_items WHERE post_id=posts.id ORDER BY position LIMIT 1) cover_image_id FROM posts WHERE source_path=?`).get(relative)!;expect(after.id).toBe(post.id);expect(after.item_count).toBe(1);
+  expect(active()).toHaveLength(1);expect(before.map(i=>i.id)).toContain(active()[0].id);expect(after.cover_image_id).toBe(active()[0].id);
+ });
+ it('retains explicit oversized originals through interrupted rename and actual scoped indexing',async()=>{
+  const name='Retain original';const dir=await make(name);
+  await fs.writeFile(path.join(dir,'bad.jpeg'),'synthetic undecodable original');
+  const preview=await service.preview({creatorId:creator,inputRoot:input,directories:[name]});
+  const p={...preview,confirmed:true,items:preview.items.map(i=>({...i,reason:'Keep explicit original'}))};
+  const {scannerService}=await import('../src/services/scanner-service.js');
+  const spy=vi.spyOn(scannerService,'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic pixel limit'));
+  await expect(service.apply(p)).rejects.toThrow('pixel limit');spy.mockRestore();
+  const original=manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(p.planId);
+  const item=p.items[0],entry=item.manifest.find(e=>e.relativePath==='bad.jpeg')!;
+  const request={confirmed:true,planId:p.planId,key:'retained-original',reason:'User keeps oversized original',evidence:'synthetic failure',removals:[{itemKey:item.key,entry,retainOriginal:true}]};
+  const recorded=await service.recover(request);
+  expect(await fs.readFile(path.join(item.targetPath,'bad.jpeg'),'utf8')).toBe('synthetic undecodable original');
+  // Decision committed but rename failed; replay resumes the very same operation.
+  const rename=vi.spyOn(fs,'rename').mockRejectedValueOnce(new Error('Synthetic rename interruption'));
+  await expect(service.apply(p)).rejects.toThrow('rename interruption');rename.mockRestore();
+  const done=await service.apply(p);expect(done.completed).toBe(true);
+  expect(done.items[0].approvedRemovals).toHaveLength(0);expect(done.items[0].retainedOriginals).toHaveLength(1);
+  const retained=done.items[0].retainedOriginals[0].preservedAt;
+  expect(await fs.readFile(retained,'utf8')).toBe('synthetic undecodable original');
+  await expect(fs.stat(path.join(item.targetPath,'bad.jpeg'))).rejects.toThrow();
+  const local=manager.connection.prepare('SELECT post_id FROM archive_catalog_local_works WHERE id=?').get(done.items[0].local_work_id)!;
+  expect(manager.connection.prepare('SELECT count(*) n FROM post_items WHERE post_id=?').get(local.post_id)?.n).toBe(1);
+  expect(manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(p.planId)).toEqual(original);
+  expect((await service.recover(request)).decisionIds).toEqual(recorded.decisionIds);
+  expect((await service.apply(p)).completed).toBe(true);
+  await fs.writeFile(path.join(item.targetPath,'bad.jpeg'),'duplicate');await expect(service.apply(p)).rejects.toThrow('both locations');await fs.unlink(path.join(item.targetPath,'bad.jpeg'));
+  await fs.writeFile(path.join(path.dirname(retained),'extra.txt'),'unapproved');await expect(service.apply(p)).rejects.toThrow('changed');await fs.unlink(path.join(path.dirname(retained),'extra.txt'));
+  await fs.writeFile(retained,'changed original');await expect(service.apply(p)).rejects.toThrow('changed');
+ });
+ it('does not authorize removal of the last supported medium',async()=>{
+  const p=await plan('Recovery no media');const {scannerService}=await import('../src/services/scanner-service.js');const spy=vi.spyOn(scannerService,'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic fail'));
+  await expect(service.apply(p)).rejects.toThrow('Synthetic fail');spy.mockRestore();const item=p.items[0],entry=item.manifest.find(e=>e.kind==='image')!;await fs.unlink(path.join(item.targetPath,entry.relativePath));
+  await expect(service.recover({confirmed:true,planId:p.planId,key:'empty-media',reason:'test',evidence:'test',removals:[{itemKey:item.key,entry}]})).rejects.toThrow('No supported media');
+ });
  it('reopens the real database in a separate Node process without rebuilding IDs',()=>{
   const before=rows('archive_catalog_local_works').map(x=>({id:x.id,work_id:x.work_id}));
   const result=spawnSync(process.execPath,['--input-type=module','-e',`import {DatabaseSync} from 'node:sqlite';const d=new DatabaseSync(process.argv[1],{readOnly:true});console.log(JSON.stringify(d.prepare('SELECT id,work_id FROM archive_catalog_local_works ORDER BY id').all()));d.close();`,path.join(root,'db','gallery.sqlite')],{encoding:'utf8'});
@@ -110,5 +217,34 @@ describe.sequential('actual local directory admission and recovery',()=>{
   // Simulate an index commit whose admission checkpoint response was lost.
   manager.connection.prepare("UPDATE archive_local_admission_items SET state='files_verified' WHERE plan_id=? AND item_key=?").run(p.planId,p.items[1].key);
   await service.apply(confirmed);expect(ids()).toEqual(before);
+ });
+ it('refuses active acquisition at registration and again at resume without clearing claim history',async()=>{
+  const {ManagedCreatorService}=await import('../src/services/managed-creator-service.js');
+  const other=new ManagedCreatorService(manager.connection,gallery).create({name:'Recovery Claim Owner',rating:'R15',preference:'liked'});
+  const {ArchiveCatalogService}=await import('../src/services/archive-catalog-service.js');
+  new ArchiveCatalogService(manager.connection).importCostuanRecord({creatorName:'Recovery Claim Owner',costuan:{postId:'recovery-claim-source',title:'Synthetic collection',works:[{order:1,sourceOrder:'NO.001',label:'Claim Theme'}]}});
+  const source=manager.connection.prepare('SELECT s.id FROM archive_catalog_source_works s JOIN archive_catalog_collections c ON c.id=s.collection_id WHERE c.creator_id=?').get(other.id)!;
+  const name='Claim Theme';const dir=await make(name);await fs.writeFile(path.join(dir,'bad.jpg'),'');
+  const preview=await service.preview({creatorId:other.id,inputRoot:input,directories:[name]});const p={...preview,confirmed:true,items:preview.items.map(i=>({...i,reason:'Explicit source mapping',displayTitle:'Claim Theme',identity:{kind:'existing',sourceWorkId:Number(source.id)}}))};
+  const {scannerService}=await import('../src/services/scanner-service.js');const spy=vi.spyOn(scannerService,'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic decoder fail'));
+  await expect(service.apply(p)).rejects.toThrow('Synthetic decoder');spy.mockRestore();const item=p.items[0];await fs.unlink(path.join(item.targetPath,'bad.jpg'));
+  const taskId=manager.connection.prepare(`INSERT INTO archive_catalog_download_tasks(source_work_id,provider,target_root,target_relative_directory,target_filename,status,claimed_by,attempt_count)
+    VALUES(?,'baidu',?,'Synthetic','001.7z','claimed','synthetic-worker',3)`).run(source.id,input).lastInsertRowid;
+  const task=()=>manager.connection.prepare('SELECT * FROM archive_catalog_download_tasks WHERE id=?').get(taskId);
+  const request={confirmed:true,planId:p.planId,key:'claim-test',reason:'User recycles broken file',evidence:'synthetic log',removals:[{itemKey:item.key,entry:item.manifest.find(e=>e.relativePath==='bad.jpg')!}]};
+  const before=task();await expect(service.recover(request)).rejects.toThrow('acquisition is active');expect(task()).toEqual(before);
+  manager.connection.prepare("UPDATE archive_catalog_download_tasks SET status='staged' WHERE id=?").run(taskId);
+  // A worker can acquire the task while the asynchronous target inventory runs.
+  const verification=service as unknown as {verifyTarget(...args:unknown[]):Promise<void>};
+  const verify=verification.verifyTarget.bind(service);
+  const decisionsBefore=rows('archive_catalog_work_decisions');
+  const duringVerification=vi.spyOn(verification,'verifyTarget').mockImplementationOnce(async(...args)=>{
+    await verify(...args);
+    manager.connection.prepare("UPDATE archive_catalog_download_tasks SET status='claimed' WHERE id=?").run(taskId);
+  });
+  try{await expect(service.recover(request)).rejects.toThrow('acquisition is active');}finally{duringVerification.mockRestore();}
+  expect(task()).toEqual(before);expect(rows('archive_catalog_work_decisions')).toEqual(decisionsBefore);
+  manager.connection.prepare("UPDATE archive_catalog_download_tasks SET status='staged' WHERE id=?").run(taskId);await service.recover(request);
+  manager.connection.prepare("UPDATE archive_catalog_download_tasks SET status='claimed' WHERE id=?").run(taskId);const claimed=task();await expect(service.apply(p)).rejects.toThrow('acquisition changed');expect(task()).toEqual(claimed);
  });
 });

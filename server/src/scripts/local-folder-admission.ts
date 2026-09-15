@@ -6,6 +6,7 @@ const help=`Local folder admission (Node 24)
   local-folder-admission preview <absolute-scope.json>
   local-folder-admission apply <absolute-confirmed-plan.json>
   local-folder-admission resume <absolute-confirmed-plan.json>
+  local-folder-admission recover <absolute-confirmed-removals.json>
   local-folder-admission decide <absolute-decision.json>
 Scope: {creatorId,inputRoot,directories:["original directory name"]}
 Decisions: bind-source | exclude-source | accept-version | primary | revoke.
@@ -19,7 +20,7 @@ async function main(){
   if(command==='help'||command==='--help'){process.stdout.write(help+'\n');return;}
   // Reserve stdout for a single machine-readable result, including real scanner runs.
   console.log=console.error;console.info=console.error;
-  if(!['preview','apply','resume','decide'].includes(command)||!filename||!path.isAbsolute(filename)||extra.length)throw Error(help);
+  if(!['preview','apply','resume','recover','decide'].includes(command)||!filename||!path.isAbsolute(filename)||extra.length)throw Error(help);
   for(const key of ['DATA_ROOT','DB_DIR','GALLERY_ROOT','THUMBNAILS_DIR','PREVIEWS_DIR'])if(!process.env[key]||!path.isAbsolute(process.env[key]!))throw Error(`Explicit absolute ${key} is required`);
   const input=JSON.parse(await fs.readFile(filename,'utf8'));
   const {appConfig}=await import('../config/env.js');
@@ -31,6 +32,7 @@ async function main(){
     let result:unknown;
     const service=new LocalFolderAdmissionService(db,appConfig.galleryRoot);
     if(command==='preview')result=await service.preview(input);
+    else if(command==='recover')result=await service.recover(input);
     else if(command==='apply'||command==='resume')result=await service.apply(input);
     else {
       if(input.confirmed!==true)throw Error('Decision requires confirmed:true');
