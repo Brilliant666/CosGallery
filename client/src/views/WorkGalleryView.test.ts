@@ -9,7 +9,8 @@ import { galleryTestRouter, mediaItem, mixedOrientationItems, workDetail } from 
 import WorkGalleryView from './WorkGalleryView.vue';
 import PostView from './PostView.vue';
 import { useAuthStore } from '../stores/auth';
-import type { AppStatus } from '../types/api';
+import { useCreatorReadingStore } from '../stores/creator-reading';
+import type { AppStatus, CanonicalWorkSummary } from '../types/api';
 
 vi.mock('../api/gallery', () => ({
   fetchFolder: vi.fn().mockResolvedValue({ canonicalCreatorId: null }),
@@ -49,12 +50,12 @@ describe('WorkGalleryView', () => {
     return { wrapper, router };
   }
 
-  async function renderCanonical(returnTo = '/library/166?loaded=2') {
+  async function renderCanonical(returnTo = '/library/166?loaded=2', media?: string) {
     const router = galleryTestRouter();
     await router.push({
       name: 'canonical-work-gallery',
       params: { creatorId: '166', postId: '123' },
-      query: { returnTo }
+      query: { returnTo, ...(media ? { media } : {}) }
     });
     const wrapper = mount(WorkGalleryView, {
       attachTo: document.body,
@@ -124,6 +125,34 @@ describe('WorkGalleryView', () => {
     expect(useAppStore().imageModalBackgroundPath).toBeNull();
     expect(wrapper.get('.work-gallery__grid').element).toBe(grid);
     expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never adopts a cached summary as detail and loads only the selected album once for a media deep link', async () => {
+    const { mediaItems, ...cover } = workDetail();
+    const summary: CanonicalWorkSummary = { ...cover, representation: 'summary', postType: 'carousel',
+      itemCount: 5, imageCount: 3, videoCount: 2 };
+    const { creator } = await fetchCanonicalCreator(166);
+    fetchCanonicalCreatorMock.mockClear();
+    useCreatorReadingStore().save('166', { creator, items: [summary, { ...summary, id: 124 }],
+      total: 2, nextPage: 2, hasMore: false, scrollY: 500 });
+
+    const { wrapper, router } = await renderCanonical('/library/166?loaded=2', '704');
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledExactlyOnceWith(166, 123);
+    expect(wrapper.findAll('article')).toHaveLength(5);
+    expect(wrapper.getComponent(PostView).props('authorizedWork')?.mediaItems).toHaveLength(5);
+    expect(router.currentRoute.value.query.media).toBe('704');
+    const grid = wrapper.get('.work-gallery__grid').element;
+    await router.replace({ path: router.currentRoute.value.path, query: { media: '703' } });
+    await flushPromises();
+    expect(wrapper.getComponent(PostView).props('authorizedWork')?.mediaItems).toHaveLength(5);
+    wrapper.getComponent(PostView).vm.$emit('close');
+    await flushPromises();
+    expect(router.currentRoute.value.query.media).toBeUndefined();
+    expect(wrapper.get('.work-gallery__grid').element).toBe(grid);
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useCreatorReadingStore().pages['166']?.items).toHaveLength(2);
+    expect(useCreatorReadingStore().pages['166']?.items.every(item => !('mediaItems' in item))).toBe(true);
   });
 
   it('does not accept a canonical return path for a different creator', async () => {

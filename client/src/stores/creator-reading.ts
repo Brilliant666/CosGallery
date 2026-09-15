@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
-import type { CosGalleryCreator, FeedItem } from '../types/api';
+import type { CosGalleryCreator, CanonicalWorkSummary } from '../types/api';
 export interface CreatorReadingState {
-  creator: CosGalleryCreator; items: FeedItem[]; total: number; nextPage: number; hasMore: boolean; scrollY: number;
+  creator: CosGalleryCreator; items: CanonicalWorkSummary[]; total: number; nextPage: number; hasMore: boolean; scrollY: number;
 }
 // Bounded navigation state; never persisted to disk.
 export const useCreatorReadingStore = defineStore('creator-reading', {

@@ -48,7 +48,7 @@ import { RouterLink, useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 
 import { useAppStore } from '../stores/app';
-import type { FeedItem, SharedFeedItem } from '../types/api';
+import type { CanonicalWorkSummary, FeedItem, SharedFeedItem } from '../types/api';
 import { formatCosGalleryWorkLabel } from '../utils/cos-gallery-titles';
 import { formatMediaDuration } from '../utils/media';
 import { canonicalWorkGalleryRoute, workGalleryRoute } from '../utils/work-gallery';
@@ -56,7 +56,7 @@ import ResilientImage from './ResilientImage.vue';
 
 const props = withDefaults(
   defineProps<{
-    items: Array<FeedItem | SharedFeedItem>;
+    items: Array<CanonicalWorkSummary | FeedItem | SharedFeedItem>;
     variant?: 'square' | 'posts' | 'works' | 'reels';
     columns?: 'adaptive' | 'three';
     sharedSlug?: string | null;
@@ -78,7 +78,7 @@ const appStore = useAppStore();
 const route = useRoute();
 const { t } = useI18n();
 
-function buildItemRoute(item: FeedItem | SharedFeedItem) {
+function buildItemRoute(item: CanonicalWorkSummary | FeedItem | SharedFeedItem) {
   if (props.sharedSlug) {
     return {
       name: 'shared-post',

@@ -7,7 +7,7 @@ import CreatorFolderActions from '../components/CreatorFolderActions.vue';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 
 import { fetchCanonicalCreatorWorks } from '../api/gallery';
-import type { CanonicalCreatorWorksPayload, CosGalleryCreator, FeedItem } from '../types/api';
+import type { CanonicalCreatorWorksPayload, CanonicalWorkSummary, CosGalleryCreator } from '../types/api';
 import { galleryTestRouter, workDetail } from '../../test/work-gallery-fixtures';
 import CanonicalCreatorView from './CanonicalCreatorView.vue';
 
@@ -43,9 +43,15 @@ function creator(): CosGalleryCreator {
   };
 }
 
-function work(id: number, folderId: number, folderSlug: string): FeedItem {
+function work(id: number, folderId: number, folderSlug: string): CanonicalWorkSummary {
+  const { mediaItems, ...cover } = workDetail();
   return {
-    ...workDetail(),
+    ...cover,
+    representation: 'summary',
+    postType: 'carousel',
+    itemCount: mediaItems?.length ?? 0,
+    imageCount: mediaItems?.filter(item => item.mediaType === 'image').length ?? 0,
+    videoCount: mediaItems?.filter(item => item.mediaType === 'video').length ?? 0,
     id,
     folderId,
     folderSlug,
@@ -78,7 +84,7 @@ describe('CanonicalCreatorView', () => {
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 1; });
     vi.stubGlobal('scrollTo', vi.fn());
     setActivePinia(createPinia());
-    fetchWorks.mockReset().mockImplementation(async (_id, page) => payload(page));
+    fetchWorks.mockReset().mockImplementation(async (_id, page = 1) => payload(page));
   });
 
   it('reloads a genuinely invalidated active creator and rejects the previous response', async () => {
@@ -124,6 +130,8 @@ describe('CanonicalCreatorView', () => {
     expect(wrapper.text()).toContain('25 套作品');
     expect(wrapper.text()).not.toContain('规范博主 #');
     expect(wrapper.findAll('section.grid a')).toHaveLength(2);
+    expect(wrapper.findAll('section.grid img')).toHaveLength(2);
+    expect(payload(1).items.every(item => !('mediaItems' in item))).toBe(true);
     expect(wrapper.get('a[href^="/library"]').attributes('href')).toBe('/library?q=lunananya&page=2');
 
     await wrapper.findAll('section.grid a')[1]!.trigger('click');
@@ -187,6 +195,7 @@ describe('CanonicalCreatorView', () => {
     await flushPromises();
     expect(fetchWorks).not.toHaveBeenCalled();
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 1500 });
+    expect(useCreatorReadingStore().pages['166']?.items.every(item => item.representation === 'summary' && !('mediaItems' in item))).toBe(true);
     wrapper.getComponent(InfiniteLoader).vm.$emit('load-more');
     await flushPromises();
     expect(fetchWorks).toHaveBeenLastCalledWith(166, 3, 24);

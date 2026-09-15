@@ -531,6 +531,8 @@ CREATE INDEX IF NOT EXISTS idx_images_folder_media_visible_sort ON images(folder
 CREATE INDEX IF NOT EXISTS idx_images_media_visible_sort ON images(media_type, is_deleted, is_trashed, sort_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_images_trashed_listing ON images(is_trashed, is_deleted, trashed_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_images_relative_path ON images(relative_path);
+CREATE INDEX IF NOT EXISTS idx_images_thumbnail_path ON images(thumbnail_path);
+CREATE INDEX IF NOT EXISTS idx_images_preview_path ON images(preview_path);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_images_asset_key ON images(asset_key) WHERE asset_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_images_deleted_at ON images(deleted_at);
 

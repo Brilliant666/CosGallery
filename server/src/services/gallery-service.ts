@@ -35,6 +35,7 @@ import {
 } from '../db/repositories.js';
 import { parseTreatCarouselsAsFoldersSetting, serializeTreatCarouselsAsFoldersSetting } from '../utils/carousels-utils.js';
 import type {
+  CanonicalWorkSummary,
   CollectionMembershipRecord,
   CollectionSummaryRecord,
   FeedImage,
@@ -512,8 +513,8 @@ function getParentFolderDisplayName(folderPath: string): string | null {
   return getLeafPathName(parentFolderPath);
 }
 
-function mapFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivativeAssetVersion()): FeedImage {
-  const { playbackStrategy, placeId, placeSlug, placeName, placeKind, placeIsApproximate, isSaved, mediaItems, itemCount, ...rest } = image as any;
+function mapFeedCover(image: IndexedFeedImage, derivativeVersion: string | null): Omit<FeedImage, 'mediaItems'> {
+  const { playbackStrategy, placeId, placeSlug, placeName, placeKind, placeIsApproximate, isSaved, mediaItems, itemCount, ...rest } = image;
   return {
     ...rest,
     postType: rest.postType ?? 'single',
@@ -529,7 +530,14 @@ function mapFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivative
       previewUrl: rest.previewUrl
     }, false, derivativeVersion),
     place: mapPlaceSummaryFromRow({ placeId, placeSlug, placeName, placeKind, placeIsApproximate }),
-    mediaItems: (mediaItems ?? []).map((item: any) => ({
+    itemCount: itemCount ?? (mediaItems ? mediaItems.length : 1)
+  };
+}
+
+function mapFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivativeAssetVersion()): FeedImage {
+  return {
+    ...mapFeedCover(image, derivativeVersion),
+    mediaItems: (image.mediaItems ?? []).map((item) => ({
       imageId: item.imageId,
       position: item.position,
       filename: item.filename,
@@ -550,8 +558,18 @@ function mapFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivative
       fileSize: item.fileSize,
       relativePath: item.relativePath,
       exif: item.exif ?? null
-    })),
-    itemCount: itemCount ?? (mediaItems ? mediaItems.length : 1)
+    }))
+  };
+}
+
+function mapCanonicalWorkSummary(item: CanonicalWorkSummary, derivativeVersion: string | null): CanonicalWorkSummary {
+  return {
+    ...mapFeedCover(item, derivativeVersion),
+    representation: 'summary',
+    postType: item.postType,
+    itemCount: item.itemCount,
+    imageCount: item.imageCount,
+    videoCount: item.videoCount
   };
 }
 
@@ -876,7 +894,7 @@ function mapCollectionMembership(collection: CollectionMembershipRecord, derivat
   };
 }
 
-function buildPaginatedPayload(items: FeedImage[], page: number, limit: number, total: number) {
+function buildPaginatedPayload<T extends FeedImage>(items: T[], page: number, limit: number, total: number) {
   return {
     items,
     page,
@@ -1520,9 +1538,10 @@ export const galleryService = {
       getDefaultFolderImageOrder(),
       mediaType
     );
+    const derivativeVersion = getDerivativeAssetVersion();
     return {
       creator,
-      ...buildPaginatedPayload(mapFeedItems(items), page, limit, total)
+      ...buildPaginatedPayload(items.map(item => mapCanonicalWorkSummary(item, derivativeVersion)), page, limit, total)
     };
   },
 
