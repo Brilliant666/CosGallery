@@ -46,6 +46,36 @@ describe('shared creator sync read model', () => {
   beforeEach(() => { db = new DatabaseSync(':memory:'); db.exec(schemaSql); sequence = 0; service = new CreatorSyncQueryService(db); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); db.close(); });
 
+  it('evaluates the full roster once per request and never retains coverage across reads', () => {
+    const id=creator('Request snapshot'), col=collection(id), s=source(id,col,1);
+    task(s.id,'staged');
+    const prepare=vi.spyOn(db,'prepare');
+    for(const read of [()=>service.roster(),()=>service.stats(),()=>service.metadataCreators(),()=>service.downloadCreators(),()=>service.downloadTaskPage({creatorId:id})]) {
+      prepare.mockClear();read();
+      expect(prepare.mock.calls.filter(([sql])=>sql.includes('local_rows AS MATERIALIZED'))).toHaveLength(1);
+    }
+    expect(service.stats().works.missing).toBe(1);
+    local(folder(id,'New local'),s.workId);
+    expect(service.stats().works.missing).toBe(0);
+    expect(service.metadataCreators().items[0].missingWorks).toBe(0);
+    expect(service.roster({page:2,limit:1})).toMatchObject({total:1,items:[]});
+  });
+
+  it('materializes status-filtered task aggregates instead of decoding the roster for every task', () => {
+    const id=creator('Filtered staged'), col=collection(id);
+    for(let n=1;n<=3;n++)task(source(id,col,n).id,n===3?'claimed':'staged');
+    const prepare=vi.spyOn(db,'prepare');
+    const result=service.downloadCreators({status:'staged',sort:'recent'});
+    expect(result).toMatchObject({total:1,taskTotal:2,summary:{staged:2,claimed:0}});
+    const activity=prepare.mock.calls.map(([sql])=>sql).find(sql=>sql.includes('FROM ordered_creators'))!;
+    expect(activity).toContain('roster AS MATERIALIZED');
+    expect(activity).toContain('cohort AS MATERIALIZED');
+    // Keep task_scope flattenable: count/order-only reads must not eagerly
+    // compute acceptance snapshots they do not use.
+    expect(activity).toContain('task_scope AS (');
+    expect(activity).toContain('activity_tasks AS MATERIALIZED');
+  });
+
   it('reads the entire canonical roster, not just metadata tasks, with aliases and multi-folder identity', () => {
     const a = creator('Canonical'), b = creator('HistoricalSource', 'kept', 'R15'), c = creator('NeverChecked', null, null);
     db.prepare("INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,'Old Alias','oldalias','manual')").run(a);
@@ -368,11 +398,12 @@ describe('shared creator sync read model', () => {
     for (let n = 0; n < 110; n++) creator(`Roster-${n}`);
     const before = snapshot(); db.exec('PRAGMA query_only=ON');
     const prepare = vi.spyOn(db, 'prepare');
-    service.roster({ limit: 100 }); expect(prepare).toHaveBeenCalledTimes(2); prepare.mockClear();
-    service.metadataCreators({ limit: 100 }); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockClear();
-    service.stats(); expect(prepare).toHaveBeenCalledTimes(5); prepare.mockClear();
-    service.downloadCreators(); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockClear();
-    service.downloadTaskPage({ creatorId: a }); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockRestore();
+    // One expensive roster read plus bounded lightweight aggregate queries.
+    service.roster({ limit: 100 }); expect(prepare).toHaveBeenCalledTimes(3); prepare.mockClear();
+    service.metadataCreators({ limit: 100 }); expect(prepare).toHaveBeenCalledTimes(4); prepare.mockClear();
+    service.stats(); expect(prepare).toHaveBeenCalledTimes(6); prepare.mockClear();
+    service.downloadCreators(); expect(prepare).toHaveBeenCalledTimes(4); prepare.mockClear();
+    service.downloadTaskPage({ creatorId: a }); expect(prepare).toHaveBeenCalledTimes(4); prepare.mockRestore();
     expect(snapshot()).toBe(before);
     expect(() => service.roster({ page: 0 })).toThrow();
     expect(() => service.roster({ enabled: 'invalid' as 'all' })).toThrow();

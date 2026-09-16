@@ -261,12 +261,23 @@ export class CreatorSyncQueryService {
 
   private cohort(options: CreatorSyncFilters) {
     const filters = whereFilters(options);
-    return { sql: `WITH ${COHORT_CTES}, cohort AS (SELECT * FROM roster ${filters.sql})`, values: filters.values };
+    // Compute indexed source coverage once inside this request's read snapshot.
+    // Reuse only the small creator aggregate, never a persistent media/version
+    // cache. Later requests always re-evaluate the full acceptance evidence.
+    const rows = this.database.prepare(`WITH ${COHORT_CTES} SELECT * FROM roster`).all();
+    if (!rows.length) return { sql: `WITH ${COHORT_CTES}, cohort AS (SELECT * FROM roster ${filters.sql})`, values: filters.values };
+    const columns = Object.keys(rows[0]).map(column => `json_extract(row.value,'$.${column}') AS ${column}`).join(',');
+    // Prevent a status-first task join from repeatedly decoding the JSON array
+    // for every task. Materialization is statement-local and can be indexed by
+    // SQLite; it does not outlive this request's read snapshot.
+    return { sql: `WITH roster AS MATERIALIZED (SELECT ${columns} FROM json_each(?) row), cohort AS MATERIALIZED (SELECT * FROM roster ${filters.sql})`,
+      values: [JSON.stringify(rows), ...filters.values] };
   }
 
   roster(options: CreatorSyncPageOptions = {}): CreatorSyncPage<CreatorSyncRosterItem> {
-    const { page, limit } = pageOptions(options), cohort = this.cohort(options);
+    const { page, limit } = pageOptions(options);
     return this.read(() => {
+      const cohort = this.cohort(options);
       const total = (this.database.prepare(`${cohort.sql} SELECT COUNT(*) AS count FROM cohort`).get(...cohort.values) as { count: number }).count;
       const rows = this.database.prepare(`${cohort.sql} SELECT * FROM cohort
         ORDER BY CASE preference WHEN 'liked' THEN 0 WHEN 'kept' THEN 1 ELSE 2 END, creator_name COLLATE NOCASE,creator_id LIMIT ? OFFSET ?`)
@@ -276,8 +287,8 @@ export class CreatorSyncQueryService {
   }
 
   stats(options: CreatorSyncFilters = {}): CreatorSyncStats {
-    const cohort = this.cohort(options);
     return this.read(() => {
+      const cohort = this.cohort(options);
       const counts = this.database.prepare(`${cohort.sql} SELECT COUNT(*) AS total, COALESCE(SUM(is_active),0) AS enabled,
         COALESCE(SUM(CASE WHEN local_works>0 THEN 1 ELSE 0 END),0) AS withLocal,
         COALESCE(SUM(CASE WHEN source_works>0 THEN 1 ELSE 0 END),0) AS withSource,
@@ -306,16 +317,17 @@ export class CreatorSyncQueryService {
 
   /** Stage 1 is the canonical source/task union; a historical source never creates a task. */
   metadataCreators(options: CreatorSyncMetadataOptions = {}): CreatorSyncMetadataPage {
-    const { page, limit } = pageOptions(options), cohort = this.cohort(options);
+    const { page, limit } = pageOptions(options);
     if (options.status !== undefined && options.status !== 'no_task' && !METADATA_STATUSES.includes(options.status)) {
       throw new Error('来源检查任务状态无效。');
     }
-    const statusClause = options.status === 'no_task' ? ' AND metadata_task_id IS NULL'
-      : options.status ? ' AND metadata_status=?' : '';
-    const values = options.status && options.status !== 'no_task' ? [...cohort.values, options.status] : cohort.values;
-    const scope = `${cohort.sql}, metadata_scope AS (SELECT * FROM cohort
-      WHERE (source_works>0 OR metadata_task_id IS NOT NULL)${statusClause})`;
     return this.read(() => {
+      const cohort = this.cohort(options);
+      const statusClause = options.status === 'no_task' ? ' AND metadata_task_id IS NULL'
+        : options.status ? ' AND metadata_status=?' : '';
+      const values = options.status && options.status !== 'no_task' ? [...cohort.values, options.status] : cohort.values;
+      const scope = `${cohort.sql}, metadata_scope AS (SELECT * FROM cohort
+        WHERE (source_works>0 OR metadata_task_id IS NOT NULL)${statusClause})`;
       const counts = this.database.prepare(`${scope} SELECT COUNT(*) AS total,
         COALESCE(SUM(CASE WHEN source_works>0 THEN 1 ELSE 0 END),0) AS sourceCreators,
         COALESCE(SUM(source_collections),0) AS sourceCollections FROM metadata_scope`)
@@ -350,8 +362,9 @@ export class CreatorSyncQueryService {
 
   downloadCreators(options: CreatorSyncDownloadCreatorOptions = {}): CreatorSyncPage<CreatorSyncDownloadCreator> & { summary: ArchiveDownloadTaskSummary; taskTotal: number } {
     if (options.sort !== undefined && options.sort !== 'recent' && options.sort !== 'name') throw new Error('博主排序无效。');
-    const { page, limit } = pageOptions(options), scope = this.taskScope(options);
+    const { page, limit } = pageOptions(options);
     return this.read(() => {
+      const scope = this.taskScope(options);
       const grouped = this.database.prepare(`${scope.sql} SELECT creator_id, status,COUNT(*) AS count FROM task_scope GROUP BY creator_id,status`)
         .all(...scope.values) as Array<{ creator_id: number; status: ArchiveDownloadTaskStatus; count: number }>;
       const byCreator = new Map<number, Array<{ status: string; count: number }>>();
@@ -367,7 +380,7 @@ export class CreatorSyncQueryService {
       // use their current timestamp until their next write preserves it.
       // Older ingested rows without evidence fall back to source observation.
       // Activity is creator-wide even when the displayed tasks are status-filtered.
-      const activitySql = `${scope.sql}, activity_tasks AS (
+      const activitySql = `${scope.sql}, activity_tasks AS MATERIALIZED (
         SELECT tasks.*,work.creator_id,julianday(staging.value) AS staged_event FROM archive_catalog_download_tasks tasks
         JOIN archive_catalog_source_works source ON source.id=tasks.source_work_id
         JOIN archive_catalog_works work ON work.id=source.work_id
@@ -427,8 +440,9 @@ export class CreatorSyncQueryService {
 
   downloadTaskPage(options: CreatorSyncDownloadOptions & { creatorId: number }): CreatorSyncPage<ArchiveDownloadTask> & { summary: ArchiveDownloadTaskSummary } {
     if (!options || !Number.isSafeInteger(options.creatorId) || options.creatorId <= 0) throw new Error('任务明细必须指定有效的规范 creatorId。');
-    const { page, limit } = pageOptions(options), scope = this.taskScope(options, options.creatorId);
+    const { page, limit } = pageOptions(options);
     return this.read(() => {
+      const scope = this.taskScope(options, options.creatorId);
       const creator = this.database.prepare('SELECT id FROM archive_catalog_creators WHERE id=?').get(options.creatorId);
       if (!creator) throw new Error('规范博主不存在，不能将查询失败显示为 0 条。');
       const counts = summary(DOWNLOAD_STATUSES, this.database.prepare(`${scope.sql} SELECT status,COUNT(*) AS count FROM task_scope GROUP BY status`)
