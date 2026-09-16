@@ -161,7 +161,7 @@ function repairIncorrectFolderSharesMigrationMarker(database: DatabaseSync): voi
   );
 }
 
-function repairInterruptedPostsMigrationMarker(database: DatabaseSync): void {
+function repairInterruptedPostsMigrationMarker(database: DatabaseSync, validateBeforeMigration: ((database: DatabaseSync) => void) | null): void {
   if (!migrationVersionExists(database, POSTS_MIGRATION_VERSION)) {
     return;
   }
@@ -184,7 +184,9 @@ function repairInterruptedPostsMigrationMarker(database: DatabaseSync): void {
     collectionItemsUsePostId;
 
   if (migrationComplete) {
-    validatePostsMigrationCompleteness(database);
+    // With no pending migration the final validation below is sufficient. Never
+    // reuse a pre-migration result across a schema/data-changing migration.
+    validateBeforeMigration?.(database);
     return;
   }
 
@@ -244,19 +246,28 @@ function repairInterruptedPostsMigrationMarker(database: DatabaseSync): void {
   log.info('Reset an interrupted migration 000005 marker so the posts migration can resume');
 }
 
-function repairKnownIncompleteMigrationMarkers(databasePath: string): void {
+function repairKnownIncompleteMigrationMarkers(databasePath: string, options: StartupMigrationOptions, validate: (database: DatabaseSync) => void): string[] {
   const database = new DatabaseSync(databasePath);
 
   try {
     if (!tableExists(database, 'schema_migrations')) {
-      return;
+      return [];
     }
 
     repairIncorrectFolderSharesMigrationMarker(database);
-    repairInterruptedPostsMigrationMarker(database);
+    const versions = appliedMigrationVersions(database);
+    const pending = fs.readdirSync(options.migrationsDirectory ?? defaultMigrationsDirectory())
+      .some(name => { const version = /^(\d+)_.*\.sql$/.exec(name)?.[1]; return version !== undefined && !versions.includes(version); });
+    repairInterruptedPostsMigrationMarker(database, pending ? validate : null);
+    return appliedMigrationVersions(database);
   } finally {
     database.close();
   }
+}
+
+function appliedMigrationVersions(database: DatabaseSync): string[] {
+  if (!tableExists(database, 'schema_migrations')) return [];
+  return (database.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as {version:string}[]).map(row => row.version);
 }
 
 export function baselineExistingDatabaseIfNeeded(databasePath: string, options: StartupMigrationOptions = {}): BaselineResult {
@@ -496,6 +507,15 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     return;
   }
 
+  let stage = 'structure';
+  let started = performance.now();
+  let completed = false;
+  const nextStage = (next: string) => {
+    log.diagnostic('Startup database validation stage', { stage, durationMs: Number((performance.now() - started).toFixed(2)), status: 'ok' });
+    stage = next; started = performance.now();
+  };
+  try {
+
   const hasCosGalleryMigration = migrationVersionExists(database, COS_GALLERY_MIGRATION_VERSION);
   const hasCreatorRatingsMigration = migrationVersionExists(database, CREATOR_RATINGS_MIGRATION_VERSION);
 
@@ -632,6 +652,7 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     );
   }
 
+  nextStage('relationships');
   assertNoRows(
     database,
     'SELECT COUNT(*) AS count FROM posts WHERE posts.is_deleted = 0 AND NOT EXISTS (SELECT 1 FROM post_items WHERE post_items.post_id = posts.id AND post_items.position = 1)',
@@ -672,18 +693,24 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     'active normal media item(s) lack post membership'
   );
 
+  nextStage('foreign_keys');
   const foreignKeyErrors = database.prepare('PRAGMA foreign_key_check').all();
   if (foreignKeyErrors.length > 0) {
     throw new Error(
       `Migration 000005 integrity check failed: foreign_key_check found ${foreignKeyErrors.length} violation(s).`
     );
   }
+  nextStage('integrity');
   const integrityRows = database.prepare('PRAGMA integrity_check').all() as Array<Record<string, unknown>>;
   const integrityMessages = integrityRows.flatMap((row) => Object.values(row).map(String));
   if (integrityMessages.length !== 1 || integrityMessages[0].toLowerCase() !== 'ok') {
     throw new Error(
       `Migration 000005 integrity check failed: integrity_check returned ${integrityMessages.join('; ') || 'no result'}.`
     );
+  }
+  completed = true;
+  } finally {
+    log.diagnostic('Startup database validation stage', { stage, durationMs: Number((performance.now() - started).toFixed(2)), status: completed ? 'ok' : 'failed' });
   }
 }
 
@@ -698,15 +725,28 @@ export function runStartupMigrations(options: StartupMigrationOptions = {}): Sta
     };
   }
 
+  let validationRuns = 0;
+  const validate = (database: DatabaseSync) => {
+    if (migrationVersionExists(database, POSTS_MIGRATION_VERSION)) validationRuns++;
+    validatePostsMigrationCompleteness(database);
+  };
   const baselineResult = baselineExistingDatabaseIfNeeded(databasePath, options);
-  repairKnownIncompleteMigrationMarkers(databasePath);
-  runDbmateUp(databasePath, options);
+  const before = repairKnownIncompleteMigrationMarkers(databasePath, options, validate);
+  const migrationStarted = performance.now();
+  try { runDbmateUp(databasePath, options); }
+  catch (error) {
+    log.diagnostic('Startup migration phase', { status: 'failed', durationMs: Number((performance.now() - migrationStarted).toFixed(2)), validationRuns });
+    throw error;
+  }
 
   const database = new DatabaseSync(databasePath);
   try {
-    validatePostsMigrationCompleteness(database);
+    const applied = appliedMigrationVersions(database).filter(version => !before.includes(version));
+    log.diagnostic('Startup migration phase', { status: 'ok', migrationsApplied: applied, migrationExecuted: applied.length > 0, durationMs: Number((performance.now() - migrationStarted).toFixed(2)) });
+    validate(database);
     completeManagedCreatorMigration(database, appConfig.galleryRoot);
   } finally {
+    log.diagnostic('Startup database validation summary', { validationRuns });
     database.close();
   }
 

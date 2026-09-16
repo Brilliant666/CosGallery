@@ -194,6 +194,65 @@ describe.sequential('dbmate startup migrations', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it('runs one real full check per unchanged startup, and checks again on the next startup', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const result = runStartupMigrations();
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+    const stdout = vi.spyOn(console, 'log');
+    const diagnostics = vi.spyOn(console, 'error');
+    for (let startup = 0; startup < 2; startup++) {
+      prepare.mockClear();
+      runStartupMigrations({ databasePath: result.databasePath });
+      expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA integrity_check')).toHaveLength(1);
+      expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA foreign_key_check')).toHaveLength(1);
+    }
+    expect(stdout.mock.calls.some(args => String(args[0]).includes('Startup database validation'))).toBe(false);
+    expect(stdout.mock.calls.some(args => String(args[0]).includes('Startup migration phase'))).toBe(false);
+    expect(diagnostics.mock.calls.some(args => String(args[0]).includes('Startup database validation summary'))).toBe(true);
+    expect(diagnostics.mock.calls.some(args => String(args[0]).includes('Startup migration phase'))).toBe(true);
+  });
+
+  it('runs two real full checks when a pending migration changes the schema', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const result = runStartupMigrations();
+    const migrationsDirectory = await createTestMigrationsDirectory(tempRoot, [[
+      '900001_test_index.sql', '-- migrate:up\nCREATE INDEX test_startup_image_filename ON images(filename);\n-- migrate:down\nDROP INDEX test_startup_image_filename;'
+    ]]);
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+    runStartupMigrations({ databasePath: result.databasePath, migrationsDirectory });
+    expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA integrity_check')).toHaveLength(2);
+    expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA foreign_key_check')).toHaveLength(2);
+  });
+
+  it('retains checks before and after a pending migration and detects its relationship damage', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const result = runStartupMigrations();
+    const database = new DatabaseSync(result.databasePath);
+    insertPostValidationFolder(database, 9901, 'Check boundary');
+    insertPostValidationImage(database, 9901, 9901, 'Check boundary/1.jpg');
+    insertPostValidationPost(database, 9901, 9901, 'Check boundary/1.jpg');
+    database.prepare('INSERT INTO post_items(post_id,image_id,position) VALUES(?,?,1)').run(9901,9901);
+    database.close();
+    const migrationsDirectory = await createTestMigrationsDirectory(tempRoot, [[
+      '900001_test_damage.sql', '-- migrate:up\nDELETE FROM post_items WHERE post_id=9901;\n-- migrate:down\nSELECT 1;'
+    ]]);
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+    expect(() => runStartupMigrations({ databasePath: result.databasePath, migrationsDirectory })).toThrow('lack a representative position 1 item');
+    // Pre-migration integrity really ran; the final relationship check must not
+    // reuse that success after the migration changed the database.
+    expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA integrity_check')).toHaveLength(1);
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes('post_items.position = 1)'))).toHaveLength(2);
+  });
+
+  it('does not reuse an earlier startup success after an external schema change', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const result = runStartupMigrations();
+    const database = new DatabaseSync(result.databasePath);
+    database.exec('DROP INDEX idx_posts_folder_visible_sort');
+    database.close();
+    expect(() => runStartupMigrations({ databasePath: result.databasePath })).toThrow('missing required index idx_posts_folder_visible_sort');
+  });
+
   it('runs the baseline migration for a fresh database', async () => {
     const { BASELINE_MIGRATION_VERSION, runStartupMigrations } = await importMigrationModule();
 
