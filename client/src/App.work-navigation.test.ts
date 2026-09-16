@@ -35,7 +35,7 @@ describe('work gallery route modal history and background', () => {
     setActivePinia(createPinia());
     vi.mocked(fetchImage).mockReset().mockResolvedValue(workDetail());
     vi.mocked(fetchCanonicalCreatorWork).mockReset().mockResolvedValue(workDetail(mixedOrientationItems(500)));
-    vi.mocked(fetchCanonicalCreator).mockReset().mockResolvedValue({ creator: { name: 'lunana' } } as Awaited<ReturnType<typeof fetchCanonicalCreator>>);
+    vi.mocked(fetchCanonicalCreator).mockReset().mockResolvedValue({ creator: { id: 166, canonicalCreatorId: 166, identityType: 'creator', name: 'lunana' } } as Awaited<ReturnType<typeof fetchCanonicalCreator>>);
     vi.mocked(fetchFolder).mockResolvedValue({ canonicalCreatorId: null } as Awaited<ReturnType<typeof fetchFolder>>);
     useAuthStore().ready = true;
     vi.spyOn(useAppStore(), 'fetchStats').mockResolvedValue();

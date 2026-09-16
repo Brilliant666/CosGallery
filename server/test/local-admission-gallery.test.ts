@@ -64,6 +64,7 @@ describe.sequential('admitted Work primary-copy gallery projection', () => {
     expect(repos.canonicalCreatorGalleryRepository.countVisibleWorks(1)).toBe(2);
     expect(repos.canonicalCreatorGalleryRepository.getVisibleMediaSummary(1).imageCount).toBe(2);
     const candidate = repos.canonicalCreatorGalleryRepository.listFolderCandidates()[0]!;
+    expect(repos.canonicalCreatorGalleryRepository.listFolderCandidates(1)).toEqual([candidate]);
     expect(candidate.workCount).toBe(2);
     const cover = repos.postRepository.findById(independent)!;
     expect(candidate.latestWorkAt).toBe(cover.sort_timestamp);
@@ -87,6 +88,8 @@ describe.sequential('admitted Work primary-copy gallery projection', () => {
     expect(gallery.getCanonicalCreator(1)).toMatchObject({ workCount: 0, imageCount: 0 });
     db.connection.prepare('UPDATE archive_catalog_local_creator_folders SET is_active=0 WHERE id=1').run();
     expect(gallery.getCanonicalCreator(1)?.unavailablePrimaryWorks).toHaveLength(1);
+    expect(repos.canonicalCreatorGalleryRepository.listFolderCandidates(1)).toEqual(
+      repos.canonicalCreatorGalleryRepository.listFolderCandidates().filter(item => item.canonicalCreatorId === 1));
     expect(repos.postRepository.findById(secondary)).toBeDefined();
   });
 });

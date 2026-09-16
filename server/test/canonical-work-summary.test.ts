@@ -29,7 +29,10 @@ describe.sequential('canonical creator work summaries', () => {
     ({ galleryService: gallery } = await import('../src/services/gallery-service.js'));
     app = (await import('../src/app.js')).createApp();
     db.connection.exec(`INSERT INTO archive_catalog_creators (id,canonical_name,normalized_name,seed_source,seed_source_creator_id)
-      VALUES (1,'Synthetic','synthetic','test','synthetic'), (2,'Unrelated','unrelated','test','unrelated');`);
+      VALUES (1,'Synthetic','synthetic','test','synthetic'), (2,'Unrelated','unrelated','test','unrelated');
+      INSERT INTO archive_catalog_creator_aliases (creator_id,alias,normalized_alias,source)
+      VALUES (1,'First alias','first alias','test'), (2,'Other alias','other alias','test');
+      UPDATE archive_catalog_creators SET preference='kept',effective_rating='R18' WHERE id=1;`);
     const owners = ['First', 'Second'].map((name, index) => {
       const folder = repos.folderRepository.upsert({ slug: name.toLowerCase(), name, folderPath: name });
       db.connection.prepare(`INSERT INTO archive_catalog_local_creator_folders
@@ -85,6 +88,59 @@ describe.sequential('canonical creator work summaries', () => {
         expect(item).not.toHaveProperty('mediaItems');
       }
     } finally { hydrate.mockRestore(); prepare.mockRestore(); }
+  });
+
+  it('projects only the requested creator with the same complete multi-folder metadata as the gallery', () => {
+    const full = gallery.getCosGalleryCreators(1, 100).items.find(item => item.id === 1)!;
+    const candidates = vi.spyOn(repos.canonicalCreatorGalleryRepository, 'listFolderCandidates');
+    const aliases = vi.spyOn(repos.canonicalCreatorGalleryRepository, 'listAliases');
+    try {
+      expect(gallery.getCanonicalCreator(1)).toMatchObject(full);
+      expect(gallery.getCanonicalCreator(1)).toMatchObject({ aliases: ['First alias'], preference: 'kept', contentRating: 'R18' });
+      expect(candidates).toHaveBeenCalledWith(1);
+      expect(aliases).toHaveBeenCalledWith(1);
+      expect(repos.canonicalCreatorGalleryRepository.listFolderCandidates(1)).toEqual(
+        repos.canonicalCreatorGalleryRepository.listFolderCandidates().filter(item => item.canonicalCreatorId === 1));
+      expect(gallery.getCanonicalCreator(2)).toBeNull();
+      expect(gallery.getCanonicalCreator(999)).toBeNull();
+      db.connection.prepare('UPDATE archive_catalog_creators SET is_active=0 WHERE id=1').run();
+      expect(gallery.getCanonicalCreator(1)?.rosterStatus).toBe('inactive');
+    } finally {
+      db.connection.prepare('UPDATE archive_catalog_creators SET is_active=1 WHERE id=1').run();
+      candidates.mockRestore(); aliases.mockRestore();
+    }
+  });
+
+  it('scopes SQL before aggregation and uses existing creator and post indexes', () => {
+    const prepare = vi.spyOn(db.connection, 'prepare');
+    repos.canonicalCreatorGalleryRepository.listFolderCandidates(1);
+    const sql = prepare.mock.calls[0]![0];
+    prepare.mockRestore();
+    const plan = db.connection.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(1, 1) as Array<{ detail: string }>;
+    const details = plan.map(row => row.detail).join('\n');
+    expect(details).toMatch(/SEARCH archive_catalog_local_creator_folders USING .*INDEX .*\(creator_id=\?\)/);
+    expect(details).toMatch(/SEARCH posts USING .*INDEX .*\(folder_id=\?/);
+    expect(sql).toContain('AND posts.folder_id IN (SELECT gallery_folder_id FROM selected_folders)');
+  });
+
+  it('does not make an ambiguous legacy folder readable by filtering away its other owner', () => {
+    const folder = repos.folderRepository.getBySlug('first')!;
+    // Isolated damaged-legacy fixture: production keeps this unique index.
+    db.connection.exec('DROP INDEX idx_catalog_folder_gallery_active');
+    const inserted = db.connection.prepare(`INSERT INTO archive_catalog_local_creator_folders
+      (creator_id,gallery_folder_id,root_path,relative_path,absolute_path,folder_name,match_status,scanned_at)
+      VALUES (2,?,?,'Ambiguous',?,'Ambiguous','matched','2026-01-01')`).run(folder.id, root, path.join(root, 'Ambiguous'));
+    try {
+      expect(repos.canonicalCreatorGalleryRepository.listFolderCandidates(1)).toEqual(
+        repos.canonicalCreatorGalleryRepository.listFolderCandidates().filter(item => item.canonicalCreatorId === 1));
+      expect(gallery.getCanonicalCreator(1)?.folderIds).not.toContain(folder.id);
+      expect(gallery.getCanonicalCreatorWork(1, postIds[0]!)).toBeNull();
+      expect(gallery.getCanonicalCreatorWork(2, postIds[0]!)).toBeNull();
+      expect(gallery.getCanonicalCreator(2)).toBeNull();
+    } finally {
+      db.connection.prepare('DELETE FROM archive_catalog_local_creator_folders WHERE id=?').run(Number(inserted.lastInsertRowid));
+      db.connection.exec('CREATE UNIQUE INDEX idx_catalog_folder_gallery_active ON archive_catalog_local_creator_folders(gallery_folder_id) WHERE is_active=1 AND gallery_folder_id IS NOT NULL');
+    }
   });
 
   it('preserves same-page IDs, stable ordering, cover fields, labels, counts and mixed details across physical folders', async () => {

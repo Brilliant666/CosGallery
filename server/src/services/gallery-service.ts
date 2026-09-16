@@ -950,10 +950,10 @@ function chooseCanonicalCreatorCover<T extends {
   })[0]!;
 }
 
-function buildCosGalleryIdentityItems(): CosGalleryIdentityItem[] {
-  const candidates = canonicalCreatorGalleryRepository.listFolderCandidates();
+function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityItem[] {
+  const candidates = canonicalCreatorGalleryRepository.listFolderCandidates(creatorId);
   const aliasesByCreator = new Map<number, string[]>();
-  for (const row of canonicalCreatorGalleryRepository.listAliases()) {
+  for (const row of canonicalCreatorGalleryRepository.listAliases(creatorId)) {
     const aliases = aliasesByCreator.get(row.creatorId) ?? [];
     if (!aliases.includes(row.alias)) aliases.push(row.alias);
     aliasesByCreator.set(row.creatorId, aliases);
@@ -1511,7 +1511,7 @@ export const galleryService = {
 
   getCanonicalCreator(id: number) {
     if (!storageService.getState().libraryAvailable) return null;
-    const creator = buildCosGalleryIdentityItems().find(item => item.identityType === 'creator' && item.id === id);
+    const creator = buildCosGalleryIdentityItems(id)[0];
     return creator ? {
       ...creator,
       ...canonicalCreatorGalleryRepository.getVisibleMediaSummary(id),
