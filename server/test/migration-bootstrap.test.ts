@@ -194,6 +194,65 @@ describe.sequential('dbmate startup migrations', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it('runs one real full check per unchanged startup, and checks again on the next startup', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const result = runStartupMigrations();
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+    const stdout = vi.spyOn(console, 'log');
+    const diagnostics = vi.spyOn(console, 'error');
+    for (let startup = 0; startup < 2; startup++) {
+      prepare.mockClear();
+      runStartupMigrations({ databasePath: result.databasePath });
+      expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA integrity_check')).toHaveLength(1);
+      expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA foreign_key_check')).toHaveLength(1);
+    }
+    expect(stdout.mock.calls.some(args => String(args[0]).includes('Startup database validation'))).toBe(false);
+    expect(stdout.mock.calls.some(args => String(args[0]).includes('Startup migration phase'))).toBe(false);
+    expect(diagnostics.mock.calls.some(args => String(args[0]).includes('Startup database validation summary'))).toBe(true);
+    expect(diagnostics.mock.calls.some(args => String(args[0]).includes('Startup migration phase'))).toBe(true);
+  });
+
+  it('runs two real full checks when a pending migration changes the schema', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const result = runStartupMigrations();
+    const migrationsDirectory = await createTestMigrationsDirectory(tempRoot, [[
+      '900001_test_index.sql', '-- migrate:up\nCREATE INDEX test_startup_image_filename ON images(filename);\n-- migrate:down\nDROP INDEX test_startup_image_filename;'
+    ]]);
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+    runStartupMigrations({ databasePath: result.databasePath, migrationsDirectory });
+    expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA integrity_check')).toHaveLength(2);
+    expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA foreign_key_check')).toHaveLength(2);
+  });
+
+  it('retains checks before and after a pending migration and detects its relationship damage', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const result = runStartupMigrations();
+    const database = new DatabaseSync(result.databasePath);
+    insertPostValidationFolder(database, 9901, 'Check boundary');
+    insertPostValidationImage(database, 9901, 9901, 'Check boundary/1.jpg');
+    insertPostValidationPost(database, 9901, 9901, 'Check boundary/1.jpg');
+    database.prepare('INSERT INTO post_items(post_id,image_id,position) VALUES(?,?,1)').run(9901,9901);
+    database.close();
+    const migrationsDirectory = await createTestMigrationsDirectory(tempRoot, [[
+      '900001_test_damage.sql', '-- migrate:up\nDELETE FROM post_items WHERE post_id=9901;\n-- migrate:down\nSELECT 1;'
+    ]]);
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+    expect(() => runStartupMigrations({ databasePath: result.databasePath, migrationsDirectory })).toThrow('lack a representative position 1 item');
+    // Pre-migration integrity really ran; the final relationship check must not
+    // reuse that success after the migration changed the database.
+    expect(prepare.mock.calls.filter(([sql]) => sql === 'PRAGMA integrity_check')).toHaveLength(1);
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes('post_items.position = 1)'))).toHaveLength(2);
+  });
+
+  it('does not reuse an earlier startup success after an external schema change', async () => {
+    const { runStartupMigrations } = await importMigrationModule();
+    const result = runStartupMigrations();
+    const database = new DatabaseSync(result.databasePath);
+    database.exec('DROP INDEX idx_posts_folder_visible_sort');
+    database.close();
+    expect(() => runStartupMigrations({ databasePath: result.databasePath })).toThrow('missing required index idx_posts_folder_visible_sort');
+  });
+
   it('runs the baseline migration for a fresh database', async () => {
     const { BASELINE_MIGRATION_VERSION, runStartupMigrations } = await importMigrationModule();
 
@@ -214,7 +273,7 @@ describe.sequential('dbmate startup migrations', () => {
       expect(tableHasColumn(database, 'collection_items', 'post_id')).toBe(true);
       expect(tableHasColumn(database, 'scan_runs', 'warning_count')).toBe(true);
       expect(tableHasColumn(database, 'scan_runs', 'warning_text')).toBe(true);
-      expect(listAppliedVersions(database)).toEqual([BASELINE_MIGRATION_VERSION, '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020']);
+      expect(listAppliedVersions(database)).toEqual([BASELINE_MIGRATION_VERSION, '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020', '000021']);
       expect(tableExists(database, 'archive_catalog_creators')).toBe(true);
     } finally {
       database.close();
@@ -225,6 +284,7 @@ describe.sequential('dbmate startup migrations', () => {
     const { runStartupMigrations } = await importMigrationModule();
     const through000019 = await createTestMigrationsDirectory(path.join(tempRoot, 'through-000019'));
     await fs.rm(path.join(through000019, '000020_add_image_derivative_path_indexes.sql'));
+    await fs.rm(path.join(through000019, '000021_add_acquisition_read_indexes.sql'));
     const databasePath = path.join(tempRoot, 'db', 'upgrade-000020.sqlite');
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     runStartupMigrations({ databasePath, migrationsDirectory: through000019 });
@@ -241,10 +301,11 @@ describe.sequential('dbmate startup migrations', () => {
       items: database.prepare('SELECT * FROM post_items ORDER BY post_id, position').all()
     });
     const before = readBusinessRows(previousDatabase);
+    try {
     expect(listAppliedVersions(previousDatabase).at(-1)).toBe('000019');
     expect(previousDatabase.prepare("SELECT name FROM sqlite_master WHERE name = 'idx_images_thumbnail_path'").get())
       .toBeUndefined();
-    previousDatabase.close();
+    } finally { previousDatabase.close(); }
 
     runStartupMigrations({ databasePath });
     runStartupMigrations({ databasePath });
@@ -355,7 +416,7 @@ describe.sequential('dbmate startup migrations', () => {
     const database = new DatabaseSync(databasePath);
 
     try {
-      expect(listAppliedVersions(database)).toEqual([BASELINE_MIGRATION_VERSION, '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020']);
+      expect(listAppliedVersions(database)).toEqual([BASELINE_MIGRATION_VERSION, '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020', '000021']);
       expect(tableExists(database, 'collections')).toBe(true);
       expect(tableHasColumn(database, 'folders', 'avatar_image_id')).toBe(true);
       expect(tableHasColumn(database, 'folders', 'avatar_source')).toBe(true);
@@ -465,7 +526,7 @@ describe.sequential('dbmate startup migrations', () => {
       expect(tableExists(database, 'folder_share_links')).toBe(true);
       expect(tableExists(database, 'folder_share_passwords')).toBe(true);
       expect(tableHasColumn(database, 'folders', 'share_password_version')).toBe(true);
-      expect(listAppliedVersions(database)).toEqual(['000001', '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020']);
+      expect(listAppliedVersions(database)).toEqual(['000001', '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020', '000021']);
     } finally {
       database.close();
     }
@@ -498,7 +559,7 @@ ALTER TABLE images ADD COLUMN migration_note TEXT NULL;
 
     try {
       expect(tableHasColumn(database, 'images', 'migration_note')).toBe(true);
-      expect(listAppliedVersions(database)).toEqual([BASELINE_MIGRATION_VERSION, '000002', '000003', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020']);
+      expect(listAppliedVersions(database)).toEqual([BASELINE_MIGRATION_VERSION, '000002', '000003', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020', '000021']);
     } finally {
       database.close();
     }
@@ -606,7 +667,7 @@ ALTER TABLE images ADD COLUMN migration_note TEXT NULL;
     const database = new DatabaseSync(databasePath);
 
     try {
-      expect(listAppliedVersions(database)).toEqual(['000001', '000002', '000004', '000005', '000006', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020']);
+      expect(listAppliedVersions(database)).toEqual(['000001', '000002', '000004', '000005', '000006', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020', '000021']);
       expect(tableHasColumn(database, 'images', 'migration_note')).toBe(true);
       expect(tableHasColumn(database, 'images', 'caption')).toBe(true);
       expect(database.prepare('SELECT playback_strategy AS playbackStrategy FROM images WHERE id = 1').get()).toEqual({
@@ -641,8 +702,8 @@ ALTER TABLE images ADD COLUMN migration_note TEXT NULL;
     const database = new DatabaseSync(databasePath);
 
     try {
-      expect(listAppliedVersions(database)).toEqual(['000001', '000002', '000003', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020']);
-      expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 19 });
+      expect(listAppliedVersions(database)).toEqual(['000001', '000002', '000003', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020', '000021']);
+      expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 20 });
     } finally {
       database.close();
     }
@@ -659,6 +720,7 @@ ALTER TABLE images ADD COLUMN migration_note TEXT NULL;
     await fs.rm(path.join(through000014, '000018_add_image_move_signature_index.sql'));
     await fs.rm(path.join(through000014, '000019_local_work_identity.sql'));
     await fs.rm(path.join(through000014, '000020_add_image_derivative_path_indexes.sql'));
+    await fs.rm(path.join(through000014, '000021_add_acquisition_read_indexes.sql'));
     runStartupMigrations({ databasePath, migrationsDirectory: through000014 });
 
     const database = new DatabaseSync(databasePath);
@@ -754,7 +816,7 @@ ALTER TABLE images ADD COLUMN migration_note TEXT NULL;
       expect(tableExists(repairedDatabase, 'folder_share_links')).toBe(true);
       expect(tableExists(repairedDatabase, 'folder_share_passwords')).toBe(true);
       expect(tableHasColumn(repairedDatabase, 'folders', 'share_password_version')).toBe(true);
-      expect(listAppliedVersions(repairedDatabase)).toEqual(['000001', '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020']);
+      expect(listAppliedVersions(repairedDatabase)).toEqual(['000001', '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020', '000021']);
     } finally {
       repairedDatabase.close();
     }
@@ -776,6 +838,7 @@ ALTER TABLE images ADD COLUMN migration_note TEXT NULL;
     await fs.rm(path.join(throughFolderSharesMigrations, '000018_add_image_move_signature_index.sql'));
     await fs.rm(path.join(throughFolderSharesMigrations, '000019_local_work_identity.sql'));
     await fs.rm(path.join(throughFolderSharesMigrations, '000020_add_image_derivative_path_indexes.sql'));
+    await fs.rm(path.join(throughFolderSharesMigrations, '000021_add_acquisition_read_indexes.sql'));
 
     runStartupMigrations({
       databasePath,
@@ -804,7 +867,7 @@ ALTER TABLE images ADD COLUMN migration_note TEXT NULL;
       expect(tableHasColumn(repairedDatabase, 'folders', 'carousel_owner_folder_id')).toBe(true);
       expect(tableHasColumn(repairedDatabase, 'scan_runs', 'warning_count')).toBe(true);
       expect(tableHasColumn(repairedDatabase, 'scan_runs', 'warning_text')).toBe(true);
-      expect(listAppliedVersions(repairedDatabase)).toEqual(['000001', '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020']);
+      expect(listAppliedVersions(repairedDatabase)).toEqual(['000001', '000002', '000004', '000005', '000007', '000008', '000009', '000010', '000011', '000012', '000013', '000014', '000015', '000016', '000017', '000018', '000019', '000020', '000021']);
     } finally {
       repairedDatabase.close();
     }
@@ -992,6 +1055,7 @@ THIS IS NOT VALID SQL;
     await fs.rm(path.join(throughFolderSharesMigrations, '000018_add_image_move_signature_index.sql'));
     await fs.rm(path.join(throughFolderSharesMigrations, '000019_local_work_identity.sql'));
     await fs.rm(path.join(throughFolderSharesMigrations, '000020_add_image_derivative_path_indexes.sql'));
+    await fs.rm(path.join(throughFolderSharesMigrations, '000021_add_acquisition_read_indexes.sql'));
     runStartupMigrations({ databasePath, migrationsDirectory: throughFolderSharesMigrations });
 
     const legacyDatabase = new DatabaseSync(databasePath);

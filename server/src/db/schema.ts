@@ -579,6 +579,8 @@ CREATE INDEX IF NOT EXISTS idx_archive_catalog_source_works_order ON archive_cat
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_source_works_creator ON archive_catalog_source_works(work_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_local_folders_creator ON archive_catalog_local_creator_folders(creator_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_local_works_work ON archive_catalog_local_works(work_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_archive_fulfillments_source_work_state ON archive_catalog_local_fulfillments(source_work_id, work_id, state);
+CREATE INDEX IF NOT EXISTS idx_archive_decisions_local_work ON archive_catalog_work_decisions(local_work_id);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_local_works_folder ON archive_catalog_local_works(local_creator_folder_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_import_runs_source ON archive_catalog_import_runs(source, imported_at DESC);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_download_tasks_status ON archive_catalog_download_tasks(status, provider, id);

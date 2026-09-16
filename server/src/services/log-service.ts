@@ -197,6 +197,10 @@ function write(method: LogMethod, message: string, meta?: unknown, tone: LogTone
 }
 
 export const log = {
+  /** Diagnostics may run during module initialization, before a CLI can reserve stdout. */
+  diagnostic(message: string, meta?: unknown): void {
+    write('error', message, meta, 'info');
+  },
   info(message: string, meta?: unknown): void {
     write('log', message, meta, 'info');
   },

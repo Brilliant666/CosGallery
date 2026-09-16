@@ -29,6 +29,32 @@ function fixture(){
  return {db,tasks,accept,clean(){db.close();rmSync(dir,{recursive:true,force:true});}};
 }
 describe('explicit local acquisition satisfaction',()=>{
+ it.each([
+  "UPDATE images SET checksum_or_fingerprint='different' WHERE id=1",
+  "UPDATE images SET mtime_ms=2 WHERE id=1",
+  "UPDATE images SET relative_path='changed.jpg' WHERE id=1",
+  "UPDATE images SET file_size=2 WHERE id=1",
+  "UPDATE images SET is_trashed=1 WHERE id=1",
+  "UPDATE post_items SET position=2 WHERE image_id=1",
+  "UPDATE posts SET source_path='different' WHERE id=1",
+  "UPDATE posts SET is_deleted=1 WHERE id=1",
+  "UPDATE archive_catalog_source_works SET source_title='new declaration' WHERE id=1",
+  "UPDATE archive_catalog_source_works SET source_order=31 WHERE id=1",
+  "UPDATE archive_catalog_source_works SET metadata_json='{}' WHERE id=1",
+  "UPDATE archive_catalog_work_decisions SET state='revoked' WHERE kind='accept_version'"
+ ])('re-evaluates full acceptance evidence on the next request: %s',(mutation)=>{
+  const f=fixture();try{
+   f.accept();const query=new CreatorSyncQueryService(f.db);
+   expect(query.metadataCreators().items[0].missingWorks).toBe(0);
+   expect(query.downloadTaskPage({creatorId:1}).items[0].acquisitionState).toBe('local_satisfied');
+   const history=f.db.prepare('SELECT * FROM archive_catalog_download_tasks').all();
+   f.db.exec(mutation);
+   expect(query.metadataCreators().items[0].missingWorks).toBe(1);
+   expect(query.stats().works.missing).toBe(1);
+   expect(query.downloadTaskPage({creatorId:1}).items[0].acquisitionState).toBe('review_required');
+   expect(f.db.prepare('SELECT * FROM archive_catalog_download_tasks').all()).toEqual(history);
+  }finally{f.clean();}
+ });
  it('revokes only fulfillment derived from the exact source binding, preserving staged execution history',()=>{
   const f=fixture();try{
    const identity=new WorkIdentityService(f.db);
