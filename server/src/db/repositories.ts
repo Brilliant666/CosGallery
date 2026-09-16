@@ -2368,13 +2368,15 @@ export const canonicalCreatorGalleryRepository = {
   },
 
   getVisibleMediaSummary(creatorId: number) {
+    // SQLite otherwise prefers the global media visibility index on real libraries.
+    // Keep the bounded Post scope as the driver, then visit only its members by PK.
     return database.prepare(`SELECT
       COUNT(DISTINCT CASE WHEN media.media_type='image' THEN media.id END) AS imageCount,
       COUNT(DISTINCT CASE WHEN media.media_type='video' THEN media.id END) AS videoCount,
       MAX(media.mtime_ms) AS latestImageMtimeMs
       FROM posts JOIN folders ON folders.id=posts.folder_id
-      JOIN post_items ON post_items.post_id=posts.id
-      JOIN images media ON media.id=post_items.image_id
+      CROSS JOIN post_items ON post_items.post_id=posts.id
+      CROSS JOIN images media ON media.id=post_items.image_id
       WHERE posts.folder_id IN (${CANONICAL_CREATOR_FOLDER_IDS_SQL}) AND ${VISIBLE_POST_WHERE_SQL}
         AND media.is_deleted=0 AND media.is_trashed=0`).get(creatorId) as {
           imageCount: number; videoCount: number; latestImageMtimeMs: number | null;
@@ -2459,7 +2461,7 @@ export const canonicalCreatorGalleryRepository = {
           ),
           (
             SELECT cover.id
-            FROM images AS cover
+            FROM images AS cover ${scoped ? 'INDEXED BY idx_images_folder_visible_sort' : ''}
             WHERE cover.folder_id = folders.id
               AND cover.is_deleted = 0
               AND cover.is_trashed = 0
@@ -2470,8 +2472,8 @@ export const canonicalCreatorGalleryRepository = {
           (
             SELECT media.id
             FROM visible_works AS candidate_works
-            INNER JOIN post_items AS candidate_items ON candidate_items.post_id = candidate_works.id
-            INNER JOIN images AS media ON media.id = candidate_items.image_id
+            ${scoped ? 'CROSS' : 'INNER'} JOIN post_items AS candidate_items ON candidate_items.post_id = candidate_works.id
+            ${scoped ? 'CROSS' : 'INNER'} JOIN images AS media ON media.id = candidate_items.image_id
             WHERE candidate_works.folder_id = folders.id
               AND media.is_deleted = 0
               AND media.is_trashed = 0

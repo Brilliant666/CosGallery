@@ -121,6 +121,24 @@ describe.sequential('canonical creator work summaries', () => {
     expect(details).toMatch(/SEARCH archive_catalog_local_creator_folders USING .*INDEX .*\(creator_id=\?\)/);
     expect(details).toMatch(/SEARCH posts USING .*INDEX .*\(folder_id=\?/);
     expect(sql).toContain('AND posts.folder_id IN (SELECT gallery_folder_id FROM selected_folders)');
+    expect(details).toMatch(/SEARCH media USING INTEGER PRIMARY KEY/);
+    expect(details).not.toMatch(/SEARCH media USING .*idx_images_media_visible_sort/);
+    expect(details).toMatch(/SEARCH cover USING INDEX idx_images_folder_visible_sort \(folder_id=\?/);
+  });
+
+  it('drives media statistics from scoped Posts instead of all visible media without changing the aggregate', () => {
+    const prepare = vi.spyOn(db.connection, 'prepare');
+    const current = repos.canonicalCreatorGalleryRepository.getVisibleMediaSummary(1);
+    const sql = prepare.mock.calls[0]![0];
+    prepare.mockRestore();
+    const legacy = db.connection.prepare(sql.replaceAll('CROSS JOIN', 'JOIN')).get(1);
+    expect(current).toEqual(legacy);
+    const plan = db.connection.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(1) as Array<{ detail: string }>;
+    const details = plan.map(row => row.detail).join('\n');
+    expect(details).toMatch(/SEARCH posts USING .*INDEX .*\(folder_id=\?/);
+    expect(details).toMatch(/SEARCH post_items USING .*INDEX .*\(post_id=\?/);
+    expect(details).toMatch(/SEARCH media USING INTEGER PRIMARY KEY/);
+    expect(details).not.toMatch(/SEARCH media USING .*idx_images_(trashed_listing|visibility_flags)/);
   });
 
   it('does not make an ambiguous legacy folder readable by filtering away its other owner', () => {
