@@ -93,8 +93,12 @@ const VISIBLE_POST_WHERE_SQL = `${READABLE_POST_WHERE_SQL} AND ${DEFAULT_WORK_CO
 const CANONICAL_CREATOR_FOLDER_IDS_SQL = `
   SELECT gallery_folder_id FROM archive_catalog_local_creator_folders
   WHERE is_active=1 AND match_status='matched' AND creator_id IS NOT NULL
+    AND gallery_folder_id IN (
+      SELECT gallery_folder_id FROM archive_catalog_local_creator_folders
+      WHERE creator_id=? AND is_active=1 AND match_status='matched'
+    )
   GROUP BY gallery_folder_id
-  HAVING COUNT(DISTINCT creator_id)=1 AND MIN(creator_id)=?
+  HAVING COUNT(DISTINCT creator_id)=1
 `;
 const VISIBLE_POST_WHERE_UNSCOPED_SQL =
   `is_deleted = 0 AND is_trashed = 0 AND folder_id IN (${NORMAL_FOLDER_ID_SUBQUERY_SQL}) AND ${NOT_EXPLICIT_FOLDER_COVER_SQL} AND ${DEFAULT_WORK_COPY_SQL}`;
@@ -2364,13 +2368,15 @@ export const canonicalCreatorGalleryRepository = {
   },
 
   getVisibleMediaSummary(creatorId: number) {
+    // SQLite otherwise prefers the global media visibility index on real libraries.
+    // Keep the bounded Post scope as the driver, then visit only its members by PK.
     return database.prepare(`SELECT
       COUNT(DISTINCT CASE WHEN media.media_type='image' THEN media.id END) AS imageCount,
       COUNT(DISTINCT CASE WHEN media.media_type='video' THEN media.id END) AS videoCount,
       MAX(media.mtime_ms) AS latestImageMtimeMs
       FROM posts JOIN folders ON folders.id=posts.folder_id
-      JOIN post_items ON post_items.post_id=posts.id
-      JOIN images media ON media.id=post_items.image_id
+      CROSS JOIN post_items ON post_items.post_id=posts.id
+      CROSS JOIN images media ON media.id=post_items.image_id
       WHERE posts.folder_id IN (${CANONICAL_CREATOR_FOLDER_IDS_SQL}) AND ${VISIBLE_POST_WHERE_SQL}
         AND media.is_deleted=0 AND media.is_trashed=0`).get(creatorId) as {
           imageCount: number; videoCount: number; latestImageMtimeMs: number | null;
@@ -2387,10 +2393,16 @@ export const canonicalCreatorGalleryRepository = {
     return row?.creatorId ?? null;
   },
 
-  listFolderCandidates(): CosGalleryFolderCandidateRecord[] {
+  listFolderCandidates(creatorId?: number): CosGalleryFolderCandidateRecord[] {
+    // Scope before aggregating Posts/media, not after projecting the full gallery.
+    // Keep all owners of the selected folders in the ownership grouping below:
+    // filtering that grouping to creatorId would hide ambiguous legacy ownership.
+    const scoped = creatorId !== undefined;
     return database.prepare(
       `
-      WITH visible_works AS (
+      WITH ${scoped ? `selected_folders AS (
+        SELECT DISTINCT gallery_folder_id FROM archive_catalog_local_creator_folders WHERE creator_id=?
+      ),` : ''} visible_works AS (
         SELECT
           posts.id,
           posts.folder_id,
@@ -2401,6 +2413,7 @@ export const canonicalCreatorGalleryRepository = {
           AND posts.is_trashed = 0
           AND ${DEFAULT_WORK_COPY_SQL}
           AND folders.role = 'normal'
+          ${scoped ? 'AND posts.folder_id IN (SELECT gallery_folder_id FROM selected_folders)' : ''}
           AND NOT EXISTS (
             SELECT 1
             FROM post_items AS cover_items
@@ -2448,7 +2461,7 @@ export const canonicalCreatorGalleryRepository = {
           ),
           (
             SELECT cover.id
-            FROM images AS cover
+            FROM images AS cover ${scoped ? 'INDEXED BY idx_images_folder_visible_sort' : ''}
             WHERE cover.folder_id = folders.id
               AND cover.is_deleted = 0
               AND cover.is_trashed = 0
@@ -2459,8 +2472,8 @@ export const canonicalCreatorGalleryRepository = {
           (
             SELECT media.id
             FROM visible_works AS candidate_works
-            INNER JOIN post_items AS candidate_items ON candidate_items.post_id = candidate_works.id
-            INNER JOIN images AS media ON media.id = candidate_items.image_id
+            ${scoped ? 'CROSS' : 'INNER'} JOIN post_items AS candidate_items ON candidate_items.post_id = candidate_works.id
+            ${scoped ? 'CROSS' : 'INNER'} JOIN images AS media ON media.id = candidate_items.image_id
             WHERE candidate_works.folder_id = folders.id
               AND media.is_deleted = 0
               AND media.is_trashed = 0
@@ -2490,7 +2503,8 @@ export const canonicalCreatorGalleryRepository = {
       LEFT JOIN (
         SELECT gallery_folder_id, MIN(creator_id) AS creator_id
         FROM archive_catalog_local_creator_folders
-        WHERE match_status='matched' AND creator_id IS NOT NULL AND (is_active=1 OR EXISTS (
+        WHERE ${scoped ? 'gallery_folder_id IN (SELECT gallery_folder_id FROM selected_folders) AND' : ''}
+          match_status='matched' AND creator_id IS NOT NULL AND (is_active=1 OR EXISTS (
           SELECT 1 FROM archive_catalog_works known_work JOIN archive_catalog_local_works known_copy
             ON known_copy.id=known_work.primary_local_work_id
           WHERE known_copy.local_creator_folder_id=archive_catalog_local_creator_folders.id
@@ -2500,6 +2514,7 @@ export const canonicalCreatorGalleryRepository = {
         ON local.gallery_folder_id = folders.id
       LEFT JOIN archive_catalog_creators AS creators ON creators.id = local.creator_id
       WHERE folders.role = 'normal'
+        ${scoped ? 'AND folders.id IN (SELECT gallery_folder_id FROM selected_folders) AND creators.id=?' : ''}
         AND (folder_totals.work_count>0 OR EXISTS (
           SELECT 1 FROM archive_catalog_works primary_work
           JOIN archive_catalog_local_works primary_copy ON primary_copy.id=primary_work.primary_local_work_id
@@ -2508,15 +2523,16 @@ export const canonicalCreatorGalleryRepository = {
         ))
       ORDER BY folder_totals.latest_work_at DESC, folders.id ASC
       `
-    ).all() as unknown as CosGalleryFolderCandidateRecord[];
+    ).all(...(scoped ? [creatorId, creatorId] : [])) as unknown as CosGalleryFolderCandidateRecord[];
   },
 
-  listAliases(): CosGalleryCreatorAliasRecord[] {
+  listAliases(creatorId?: number): CosGalleryCreatorAliasRecord[] {
     return database.prepare(
       `SELECT creator_id AS creatorId, alias
        FROM archive_catalog_creator_aliases
+       ${creatorId === undefined ? '' : 'WHERE creator_id=?'}
        ORDER BY creator_id, alias COLLATE NOCASE`
-    ).all() as unknown as CosGalleryCreatorAliasRecord[];
+    ).all(...(creatorId === undefined ? [] : [creatorId])) as unknown as CosGalleryCreatorAliasRecord[];
   },
 
   listVisibleWorks(

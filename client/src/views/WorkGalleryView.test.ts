@@ -11,6 +11,7 @@ import PostView from './PostView.vue';
 import { useAuthStore } from '../stores/auth';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 import type { AppStatus, CanonicalWorkSummary } from '../types/api';
+import { RequestError } from '../api/http';
 
 vi.mock('../api/gallery', () => ({
   fetchFolder: vi.fn().mockResolvedValue({ canonicalCreatorId: null }),
@@ -65,6 +66,115 @@ describe('WorkGalleryView', () => {
     await flushPromises();
     return { wrapper, router };
   }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  }
+
+  it('shows real media and a non-first Viewer before delayed auxiliary creator data', async () => {
+    const name = deferred<Awaited<ReturnType<typeof fetchCanonicalCreator>>>();
+    fetchCanonicalCreatorMock.mockReturnValueOnce(name.promise);
+    const { wrapper } = await renderCanonical('/library/166', '704');
+    expect(wrapper.findAll('article')).toHaveLength(5);
+    expect(wrapper.attributes('aria-busy')).toBe('false');
+    expect(wrapper.getComponent(PostView).props('authorizedWork')?.mediaItems).toHaveLength(5);
+    const grid = wrapper.get('.work-gallery__grid').element;
+    name.resolve({ creator: { id: 166, canonicalCreatorId: 166, identityType: 'creator', name: 'Resolved name' } } as Awaited<ReturnType<typeof fetchCanonicalCreator>>);
+    await flushPromises();
+    expect(wrapper.get('.work-gallery__creator').text()).toBe('Resolved name');
+    expect(wrapper.get('.work-gallery__grid').element).toBe(grid);
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([new Error('Offline'), new RequestError('Temporary server failure', 500)])('keeps valid detail after ordinary auxiliary failure: %s', async cause => {
+    fetchCanonicalCreatorMock.mockRejectedValueOnce(cause);
+    const { wrapper } = await renderCanonical();
+    expect(wrapper.findAll('article')).toHaveLength(5);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+  });
+
+  it.each([401, 403, 404, 503])('does not downgrade authoritative creator error %i after detail is visible', async status => {
+    const name = deferred<Awaited<ReturnType<typeof fetchCanonicalCreator>>>();
+    fetchCanonicalCreatorMock.mockReturnValueOnce(name.promise);
+    const { wrapper } = await renderCanonical();
+    expect(wrapper.findAll('article')).toHaveLength(5);
+    name.reject(new RequestError('Authoritative failure', status));
+    await flushPromises();
+    expect(wrapper.findAll('article')).toHaveLength(0);
+    expect(wrapper.text()).toContain('Authoritative failure');
+  });
+
+  it('does not let a late detail overwrite an earlier authoritative creator rejection', async () => {
+    const detail = deferred<Awaited<ReturnType<typeof fetchCanonicalCreatorWork>>>();
+    fetchCanonicalWorkMock.mockReturnValueOnce(detail.promise);
+    fetchCanonicalCreatorMock.mockRejectedValueOnce(new RequestError('Creator unavailable', 404));
+    const { wrapper } = await renderCanonical();
+    detail.resolve(workDetail());
+    await flushPromises();
+    expect(wrapper.findAll('article')).toHaveLength(0);
+    expect(wrapper.text()).toContain('Creator unavailable');
+  });
+
+  it.each(['name', 'error', 'detail'])('isolates late A %s when switching to creator B', async late => {
+    const name = deferred<Awaited<ReturnType<typeof fetchCanonicalCreator>>>();
+    const detail = deferred<Awaited<ReturnType<typeof fetchCanonicalCreatorWork>>>();
+    fetchCanonicalCreatorMock.mockReturnValueOnce(name.promise);
+    if (late === 'detail') fetchCanonicalWorkMock.mockReturnValueOnce(detail.promise);
+    const { wrapper } = await renderCanonical();
+    fetchCanonicalCreatorMock.mockResolvedValueOnce({ creator: { id: 167, canonicalCreatorId: 167, identityType: 'creator', name: 'Creator B' } } as Awaited<ReturnType<typeof fetchCanonicalCreator>>);
+    fetchCanonicalWorkMock.mockResolvedValueOnce({ ...workDetail(), id: 124, caption: 'Work B' });
+    await wrapper.setProps({ creatorId: '167', postId: '124' });
+    await flushPromises();
+    if (late === 'error') name.reject(new RequestError('Old forbidden', 403));
+    else name.resolve({ creator: { id: 166, canonicalCreatorId: 166, identityType: 'creator', name: 'Old A' } } as Awaited<ReturnType<typeof fetchCanonicalCreator>>);
+    detail.resolve(workDetail());
+    await flushPromises();
+    expect(wrapper.get('.work-gallery__creator').text()).toBe('Creator B');
+    expect(wrapper.get('h1').text()).toBe('Work B');
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+  });
+
+  it('invalidates a saved display name without refetching the complete work', async () => {
+    const { creator } = await fetchCanonicalCreator(166);
+    fetchCanonicalCreatorMock.mockClear();
+    useCreatorReadingStore().save('166', { creator, items: [], total: 0, nextPage: 1, hasMore: false, scrollY: 0 });
+    const { wrapper } = await renderCanonical();
+    expect(fetchCanonicalCreatorMock).not.toHaveBeenCalled();
+    const grid = wrapper.get('.work-gallery__grid').element;
+    useCreatorReadingStore().invalidate();
+    await flushPromises();
+    expect(fetchCanonicalCreatorMock).toHaveBeenCalledExactlyOnceWith(166);
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('.work-gallery__grid').element).toBe(grid);
+  });
+
+  it('discards a name response from the previous reading generation', async () => {
+    const old = deferred<Awaited<ReturnType<typeof fetchCanonicalCreator>>>();
+    fetchCanonicalCreatorMock.mockReturnValueOnce(old.promise);
+    const { wrapper } = await renderCanonical();
+    useCreatorReadingStore().invalidate();
+    await flushPromises();
+    old.reject(new RequestError('Stale denial', 403));
+    await flushPromises();
+    expect(wrapper.get('.work-gallery__creator').text()).toBe('lunana');
+    expect(wrapper.findAll('article')).toHaveLength(5);
+    expect(fetchCanonicalWorkMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles a late auxiliary rejection after unmount without changing another page', async () => {
+    const old = deferred<Awaited<ReturnType<typeof fetchCanonicalCreator>>>();
+    fetchCanonicalCreatorMock.mockReturnValueOnce(old.promise);
+    const { wrapper } = await renderCanonical();
+    wrapper.unmount();
+    const next = await renderCanonical();
+    old.reject(new RequestError('Unmounted denial', 403));
+    await flushPromises();
+    expect(next.wrapper.findAll('article')).toHaveLength(5);
+    expect(next.wrapper.text()).not.toContain('Unmounted denial');
+  });
 
   it('uses the canonical display name while retaining the original directory identity', async () => {
     fetchCanonicalWorkMock.mockResolvedValue({ ...workDetail(), caption: null,
@@ -139,6 +249,7 @@ describe('WorkGalleryView', () => {
     const { wrapper, router } = await renderCanonical('/library/166?loaded=2', '704');
     expect(fetchCanonicalWorkMock).toHaveBeenCalledExactlyOnceWith(166, 123);
     expect(wrapper.findAll('article')).toHaveLength(5);
+    expect(fetchCanonicalCreatorMock).not.toHaveBeenCalled();
     expect(wrapper.getComponent(PostView).props('authorizedWork')?.mediaItems).toHaveLength(5);
     expect(router.currentRoute.value.query.media).toBe('704');
     const grid = wrapper.get('.work-gallery__grid').element;

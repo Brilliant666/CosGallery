@@ -50,11 +50,13 @@ import { useI18n } from 'vue-i18n';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 
 import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage, fetchFolder } from '../api/gallery';
+import { RequestError } from '../api/http';
 import WorkMediaCard from '../components/WorkMediaCard.vue';
 import PostView from './PostView.vue';
 import { useAuthStore } from '../stores/auth';
 import { useAppStore } from '../stores/app';
 import { useFoldersStore } from '../stores/folders';
+import { useCreatorReadingStore } from '../stores/creator-reading';
 import type { ImageDetail } from '../types/api';
 import { canonicalCreatorRoute, canonicalWorkGalleryRoute, libraryReadingQuery, orderedMediaItems, parsePositiveId, workTitle } from '../utils/work-gallery';
 
@@ -65,12 +67,14 @@ const router = useRouter();
 const appStore = useAppStore();
 const foldersStore = useFoldersStore();
 const authStore = useAuthStore();
+const reading = useCreatorReadingStore();
 // Independent page state keeps the background DOM and thumbnails alive while PostView uses the viewer store.
 const work = shallowRef<ImageDetail | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const canonicalCreatorName = ref<string | null>(null);
 let loadToken = 0;
+let nameToken = 0;
 const mediaItems = computed(() => orderedMediaItems(work.value?.mediaItems));
 const imageCount = computed(() => mediaItems.value.filter((item) => item.mediaType === 'image').length);
 const videoCount = computed(() => mediaItems.value.length - imageCount.value);
@@ -110,8 +114,40 @@ const backRoute = computed(() => {
   return { name: 'folder', params: { slug: props.slug ?? '' } };
 });
 
+// Display data is not ownership evidence. The selected-work endpoint remains authoritative.
+async function loadCreatorName(creatorId: number, token: number) {
+  const requestToken = ++nameToken;
+  const generation = reading.generation;
+  canonicalCreatorName.value = null;
+  const cached = reading.pages[String(creatorId)]?.creator;
+  if (cached?.identityType === 'creator' && cached.id === creatorId && cached.canonicalCreatorId === creatorId) {
+    canonicalCreatorName.value = cached.name;
+    return;
+  }
+  const isCurrent = () => token === loadToken && requestToken === nameToken && generation === reading.generation;
+  try {
+    const { creator } = await fetchCanonicalCreator(creatorId);
+    if (!isCurrent()) return;
+    if (creator.id !== creatorId || creator.identityType !== 'creator' || creator.canonicalCreatorId !== creatorId) {
+      throw new RequestError(t('workGallery.notFound'), 404);
+    }
+    canonicalCreatorName.value = creator.name;
+  } catch (cause) {
+    if (!isCurrent()) return;
+    // Never downgrade authoritative access/not-found/storage failures into a name fallback.
+    if (cause instanceof RequestError && [401, 403, 404, 503].includes(cause.status)) {
+      work.value = null;
+      error.value = cause.message;
+      loading.value = false;
+    }
+    // An ordinary auxiliary network failure leaves the independently authorized detail usable.
+  }
+}
+
 async function loadWork() {
   const token = ++loadToken;
+  nameToken += 1;
+  canonicalCreatorName.value = null;
   work.value = null;
   error.value = null;
   const postId = parsePositiveId(props.postId);
@@ -127,13 +163,13 @@ async function loadWork() {
   loading.value = true;
   try {
     const canonicalCreatorId = canonicalId.value;
-    const [detail, creatorPayload] = canonicalCreatorId === null
-      ? [await fetchImage(postId), null]
-      : await Promise.all([
-          fetchCanonicalCreatorWork(canonicalCreatorId, postId),
-          fetchCanonicalCreator(canonicalCreatorId)
-        ]);
-    if (token !== loadToken) return;
+    // Start the detail first; a slow display-name request must not gate the media grid/Viewer.
+    const detailRequest = canonicalCreatorId === null
+      ? fetchImage(postId)
+      : fetchCanonicalCreatorWork(canonicalCreatorId, postId);
+    if (canonicalCreatorId !== null) void loadCreatorName(canonicalCreatorId, token);
+    const detail = await detailRequest;
+    if (token !== loadToken || error.value) return;
     // Both legacy Folder routes and canonical creator routes verify ownership.
     if (detail.id !== postId || (canonicalCreatorId === null && detail.folderSlug !== props.slug)) {
       error.value = t('workGallery.notFound');
@@ -147,7 +183,6 @@ async function loadWork() {
         return;
       }
     }
-    canonicalCreatorName.value = creatorPayload?.creator.name ?? null;
     work.value = detail;
   } catch (cause) {
     if (token === loadToken) error.value = cause instanceof Error ? cause.message : t('workGallery.loadFailed');
@@ -157,6 +192,9 @@ async function loadWork() {
 }
 
 watch(() => [props.slug, props.creatorId, props.postId] as const, loadWork, { immediate: true });
+watch(() => reading.generation, () => {
+  if (canonicalId.value !== null && !appStore.isLibraryUnavailable) void loadCreatorName(canonicalId.value, loadToken);
+});
 watch(() => [authStore.authenticated, authStore.role, appStore.stats?.indexedPosts, appStore.stats?.scan.lastCompletedScan?.id, appStore.isLibraryUnavailable] as const,
   (values, previous) => {
     if (values.every((value, index) => value === previous[index])) return;
@@ -164,7 +202,7 @@ watch(() => [authStore.authenticated, authStore.role, appStore.stats?.indexedPos
       && values[4] === previous[4]) return;
     void loadWork();
   });
-onBeforeUnmount(() => { loadToken += 1; window.removeEventListener('keydown', onEscape); });
+onBeforeUnmount(() => { loadToken += 1; nameToken += 1; window.removeEventListener('keydown', onEscape); });
 </script>
 
 <style scoped>
