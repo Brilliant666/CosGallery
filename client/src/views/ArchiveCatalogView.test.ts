@@ -1,6 +1,7 @@
 vi.mock('../components/ManagedCreatorRoster.vue', () => ({default:{template:'<div data-test="managed-roster-slot" />'}}));
 vi.mock('../components/FirstCollectionSelector.vue', () => ({default:{template:'<button data-test="first-collection-slot" @click="$emit(\'planned\', [123])">从博主库选择</button>',emits:['planned']}}));
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 enableAutoUnmount(afterEach);
 
@@ -453,6 +454,35 @@ describe('ArchiveCatalogView', () => {
     expect(scanLocalIngestInbox).not.toHaveBeenCalled();
     expect(runLocalIngestBatch).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="ingest-settings"]').attributes('open')).toBeUndefined();
+  });
+
+  it('shares resource entry with durable query navigation and keeps the roster instance on return', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/archive-catalog', component: ArchiveCatalogView }] });
+    await router.push('/archive-catalog');
+    await router.isReady();
+    const wrapper = mount(ArchiveCatalogView, { global: { plugins: [router], stubs: { ResourceCatalog: { props: ['creatorId'], template: '<section data-test="resource-stub">{{ creatorId }}</section>' } } } });
+    await flushPromises();
+    expect(wrapper.find('[data-test="resource-stub"]').exists()).toBe(false);
+    const roster = wrapper.findComponent({ name: 'ManagedCreatorRoster' });
+    const rosterElement = wrapper.get('[data-test="managed-roster-slot"]').element;
+    // The existing roster remains mounted; its internal filter/page state is not discarded.
+    const instance = roster.exists() ? roster : wrapper.findAllComponents({}).find(c => c.find('[data-test="managed-roster-slot"]').exists())!;
+    instance.vm.$emit('resource-catalog', 35);
+    await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({ workspace: 'resources', creatorId: '35' });
+    expect(wrapper.get('[data-test="resource-stub"]').text()).toBe('35');
+    await wrapper.get('[data-test="workspace-roster"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="managed-roster-slot"]').element).toBe(rosterElement);
+    expect(wrapper.find('[data-test="resource-stub"]').exists()).toBe(false);
+    router.back();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await flushPromises();
+    expect(wrapper.get('[data-test="resource-stub"]').text()).toBe('35');
+    wrapper.unmount();
+    const refreshed = mount(ArchiveCatalogView, { global: { plugins: [router], stubs: { ResourceCatalog: { props: ['creatorId'], template: '<section data-test="resource-stub">{{ creatorId }}</section>' } } } });
+    await flushPromises();
+    expect(refreshed.get('[data-test="resource-stub"]').text()).toBe('35');
   });
 
   it('generates per-creator download tasks under the isolated inbox root', async () => {
