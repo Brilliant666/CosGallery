@@ -175,18 +175,43 @@ describe.sequential('read-only own resource catalog', () => {
     const first = service.list(1);
     const last = service.list(1, { page: 21 });
     expect(first.summary.numberedWorks).toBe(1005);
-    expect(first.items[0]!.no).toBe('NO.001');
-    expect(last.items.at(-1)!.no).toBe('NO.1005');
+    expect(first.items[0]!.no).toBe('NO.1005');
+    expect(last.items.at(-1)!.no).toBe('NO.001');
     expect(service.list(2).items[0]!.no).toBe('NO.001');
     expect(service.list(1, { q: 'NO.1005' }).items).toEqual([
-      last.items.at(-1),
+      first.items[0],
     ]);
     const two = service.list(1, { q: 'Same title' }).items;
     expect(two).toHaveLength(2);
     expect(two[0]!.workId).not.toBe(two[1]!.workId);
     expect(
       service.list(1, { page: 2, revision: first.revision }).items[0]!.no,
-    ).toBe('NO.051');
+    ).toBe('NO.955');
+  });
+  it('keeps chronological NOs across display directions, tied times and exports', () => {
+    const newest = service.list(1, { q: 'Same title' });
+    expect(newest.items.map(row => [row.workId, row.no])).toEqual([
+      [samples[1]!.work, 'NO.002'],
+      [samples[0]!.work, 'NO.001'],
+    ]);
+    const newestText = service.export(1, 'txt', 'filtered', { q: 'Same title' });
+    const newestCsv = service.export(1, 'csv', 'filtered', { q: 'Same title' });
+    expect(newestText).toContain('编目顺序：按已有排序时间从早到晚编号');
+    expect(newestText).toContain('展示顺序：最新优先');
+    expect(newestText.indexOf('NO.002')).toBeLessThan(newestText.indexOf('NO.001'));
+    repos.appSettingsRepository.set('folder.default_image_order', 'oldest');
+    try {
+      const oldest = service.list(1, { q: 'Same title' });
+      expect(oldest.items).toEqual([...newest.items].reverse());
+      expect(service.list(1, { page: 2 }).items[0]!.no).toBe('NO.051');
+      const oldestCsv = service.export(1, 'csv', 'filtered', { q: 'Same title' });
+      expect(oldestCsv.split('\r\n').slice(1)).toEqual(newestCsv.split('\r\n').slice(1).reverse());
+      expect(service.detail(1, samples[0]!.work).item.no).toBe('NO.001');
+      expect(service.export(1, 'txt', 'filtered', { q: 'Same title' })).toContain('展示顺序：最早优先');
+      expect(() => service.list(1, { revision: newest.revision })).toThrow('作品数据已更新');
+    } finally {
+      repos.appSettingsRepository.set('folder.default_image_order', 'newest');
+    }
   });
   it('reads old Costuan matched copies via exact scoped source path without writing postId', () => {
     const sample = samples[0]!;
@@ -325,11 +350,14 @@ describe.sequential('read-only own resource catalog', () => {
     const previous = service.detail(1, samples[7]!.work).item.no;
     const newer = add(1, 'Inserted', 99999);
     expect(service.list(1).items[0]!.workId).toBe(newer.work);
-    expect(service.detail(1, samples[7]!.work).item.no).not.toBe(previous);
+    expect(service.detail(1, samples[7]!.work).item.no).toBe(previous);
+    const newestNo = service.detail(1, newer.work).item.no;
     repos.appSettingsRepository.set('folder.default_image_order', 'oldest');
     const a = service.list(1);
     expect(a.sortOrder).toBe('oldest');
     expect(a.items[0]!.workId).toBe(samples[0]!.work);
+    expect(service.detail(1, samples[7]!.work).item.no).toBe(previous);
+    expect(service.detail(1, newer.work).item.no).toBe(newestNo);
     const prepare = vi.spyOn(db.connection, 'prepare');
     const hydrate = vi.spyOn(repos.postRepository, 'hydratePostItems');
     service.list(1);

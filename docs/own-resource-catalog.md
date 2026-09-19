@@ -16,10 +16,15 @@ create Works, plan downloads or rename local directories.
 - Existing legacy local records can resolve their indexed Post by the unique
   exact creator-directory/work-relative path relationship. This does not persist
   a new binding and is not a title/NO-based source match.
-- Catalog order follows the persisted gallery folder order: `sort_timestamp`
+- Catalog display order follows the persisted gallery folder order: `sort_timestamp`
   and Post ID, both ascending for oldest-first or descending for newest-first.
   Missing reliable sort evidence is not replaced with the current time or an
   external source date.
+- Numbering always uses ascending `sort_timestamp`, then ascending Post ID and
+  Work ID as deterministic tie breakers, independently of display direction.
+  Changing oldest/newest display order does not change a Work's NO. Unarranged
+  rows remain unnumbered at the end in either direction. TXT labels numbering
+  and display order separately; CSV and filtered exports retain the same NOs.
 - Numbering runs over the creator's entire eligible collection before search,
   status filtering and pagination. Minimum three digits, with no truncation past
   999. A filtered result keeps its original number. New insertions may shift NOs,

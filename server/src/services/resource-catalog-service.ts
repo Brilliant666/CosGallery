@@ -433,27 +433,33 @@ export class ResourceCatalogService {
           }),
         );
       }
-      rows.sort((a, b) => {
+      const compareRows = (
+        a: ResourceCatalogRow,
+        b: ResourceCatalogRow,
+        sign: number,
+      ) => {
         if (a.sortTimestamp === null || b.sortTimestamp === null)
           return a.sortTimestamp === b.sortTimestamp
             ? a.workId - b.workId
             : a.sortTimestamp === null
               ? 1
               : -1;
-        const sign = sortOrder === 'oldest' ? 1 : -1;
         return (
           sign *
             (a.sortTimestamp - b.sortTimestamp ||
               (a.primaryPostId ?? 0) - (b.primaryPostId ?? 0)) ||
           a.workId - b.workId
         );
-      });
+      };
+      // Number the complete collection chronologically, independently of display order.
+      rows.sort((a, b) => compareRows(a, b, 1));
       let numberedWorks = 0;
       for (const row of rows) {
         if (row.sortTimestamp !== null)
           row.no = `NO.${String(++numberedWorks).padStart(3, '0')}`;
         row.text = resourceCatalogText(creator.canonicalName, row);
       }
+      if (sortOrder === 'newest') rows.sort((a, b) => compareRows(a, b, -1));
       const summary = {
         totalWorks: rows.length,
         numberedWorks,
@@ -586,7 +592,8 @@ export class ResourceCatalogService {
         'CosGallery资源目录',
         `博主：${plain(snapshot.page.creator.canonicalName)}`,
         `生成时间：${snapshot.page.generatedAt}`,
-        `编目顺序：${snapshot.page.sortOrder === 'oldest' ? '最早优先' : '最新优先'}`,
+        '编目顺序：按已有排序时间从早到晚编号',
+        `展示顺序：${snapshot.page.sortOrder === 'oldest' ? '最早优先' : '最新优先'}`,
         `导出范围：${scope === 'all' ? '完整目录' : '当前筛选结果'}`,
         'NO是该时点目录序号，本地文件名未修改。',
         '',
