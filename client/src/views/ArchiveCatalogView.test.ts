@@ -485,6 +485,33 @@ describe('ArchiveCatalogView', () => {
     expect(refreshed.get('[data-test="resource-stub"]').text()).toBe('35');
   });
 
+  it('requires an explicit all scope and never turns invalid creator links into global scope', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/archive-catalog', component: ArchiveCatalogView }] });
+    await router.push('/archive-catalog?workspace=resources');
+    await router.isReady();
+    const wrapper = mount(ArchiveCatalogView, { global: { plugins: [router], stubs: { ResourceCatalog: { name: 'ResourceCatalogTestStub', props: ['creatorId', 'globalScope'], template: '<section data-test="resource-stub" :data-global="globalScope">{{ creatorId }}</section>' } } } });
+    await flushPromises();
+    expect(wrapper.get('[data-test="resource-stub"]').attributes('data-global')).toBe('false');
+    await router.push('/archive-catalog?workspace=resources&scope=all');
+    await flushPromises();
+    expect(wrapper.get('[data-test="resource-stub"]').attributes('data-global')).toBe('true');
+    for (const invalid of ['invalid', '0', '-2', '1.5', '']) {
+      await router.push(`/archive-catalog?workspace=resources&scope=all&creatorId=${invalid}`);
+      await flushPromises();
+      expect(wrapper.get('[data-test="resource-stub"]').attributes('data-global')).toBe('false');
+      expect(wrapper.get('[data-test="resource-stub"]').text()).toBe('');
+    }
+    await router.push('/archive-catalog?workspace=resources&creatorId=35');
+    await flushPromises();
+    const catalog = wrapper.findComponent({ name: 'ResourceCatalogTestStub' });
+    catalog.vm.$emit('all');
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ workspace: 'resources', scope: 'all' });
+    catalog.vm.$emit('select', null);
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ workspace: 'resources' });
+  });
+
   it('generates per-creator download tasks under the isolated inbox root', async () => {
     const wrapper = mount(ArchiveCatalogView);
     await flushPromises();

@@ -23,7 +23,7 @@
     </div>
 
     <div v-show="workspace === 'roster'"><ManagedCreatorRoster ref="managedRoster" @changed="loadCatalog()" @source-planned="refreshSourceRegions" @plan-downloads="planCreatorDownloads" @resource-catalog="openResourceCatalog" /></div>
-    <ResourceCatalog v-if="workspace === 'resources'" :creator-id="resourceCreatorId" @select="openResourceCatalog" />
+    <ResourceCatalog v-if="workspace === 'resources'" :creator-id="resourceCreatorId" :global-scope="resourceGlobalScope" @select="openResourceCatalog" @all="openAllResources" @back="workspace = 'roster'" />
 
     <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="博主元数据采集队列" v-show="workspace === 'source'">
       <div class="flex flex-wrap items-start justify-between gap-4">
@@ -299,6 +299,7 @@ const route = useRoute();
 const router = useRouter();
 const workspace = ref<Workspace>('roster');
 const resourceCreatorId = ref<number | null>(null);
+const resourceGlobalScope = ref(false);
 watch(
   () => route?.query,
   query => {
@@ -306,8 +307,9 @@ watch(
     workspace.value = workspaces.some(tab => tab.id === requested)
       ? requested as Workspace
       : 'roster';
-    const value = Number(query?.creatorId);
+    const value = typeof query?.creatorId === 'string' && /^\d+$/.test(query.creatorId) ? Number(query.creatorId) : NaN;
     resourceCreatorId.value = Number.isSafeInteger(value) && value > 0 ? value : null;
+    resourceGlobalScope.value = query?.creatorId === undefined && query?.scope === 'all';
   },
   { immediate: true }
 );
@@ -317,11 +319,16 @@ watch(workspace, value => {
 });
 function openResourceCatalog(id: number | null) {
   if (router && route) {
-    void router.push({ query: { ...route.query, workspace: 'resources', creatorId: id === null ? undefined : String(id) } });
+    void router.push({ query: { ...route.query, workspace: 'resources', creatorId: id === null ? undefined : String(id), scope: undefined } });
   } else {
     resourceCreatorId.value = id;
+    resourceGlobalScope.value = false;
     workspace.value = 'resources';
   }
+}
+function openAllResources() {
+  if (router && route) void router.push({ query: { ...route.query, workspace: 'resources', creatorId: undefined, scope: 'all' } });
+  else { resourceCreatorId.value = null; resourceGlobalScope.value = true; workspace.value = 'resources'; }
 }
 async function planCreatorDownloads(id:number) { workspace.value='staging'; await planDownloads(id); }
 import { useRoute, useRouter } from 'vue-router';

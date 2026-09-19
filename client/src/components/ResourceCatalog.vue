@@ -1,18 +1,17 @@
 <template>
   <section class="resource-catalog" aria-label="资源目录">
-    <header>
+    <header v-if="!payload">
       <h2>资源目录</h2>
-      <p>CosGallery 已确认的本地作品目录，不代表该博主的全网作品已全部收集。</p>
     </header>
-    <form class="creator-search" @submit.prevent="searchCreators">
+    <form v-if="!hasScope" class="creator-search" @submit.prevent="searchCreators">
       <label
         >规范博主名称或别名<input
           v-model="creatorQuery"
           type="search"
           placeholder="搜索并选择博主" /></label
-      ><button>查找博主</button><button type="button" @click="emit('select', null)">全部博主</button>
+      ><button>查找博主</button>
     </form>
-    <div v-if="choices.length" class="choices">
+    <div v-if="!hasScope && choices.length" class="choices">
       <button
         v-for="choice in choices"
         :key="choice.id"
@@ -22,19 +21,25 @@
         }}{{ choice.enabled ? '' : '（停用）' }}
       </button>
     </div>
-    <p v-if="searchNotice" role="status">{{ searchNotice }}</p>
+    <p v-if="!hasScope && searchNotice" role="status">{{ searchNotice }}</p>
+    <p v-if="!hasScope" class="hint">请选择一位博主查看资源目录。</p>
+    <button v-if="!hasScope" class="secondary-entry" data-test="view-all" @click="emit('all')">查看全部作品</button>
+    <div v-if="hasScope" class="navigation">
+      <button @click="emit('back')">返回博主库</button>
+      <button @click="emit('select', null)">更换博主</button>
+    </div>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <p v-if="loading" role="status">正在读取资源目录…</p>
     <template v-if="payload">
       <header class="catalog-heading">
         <h3>
           {{ payload.creator?.canonicalName ?? '全部博主' }}
-          <small v-if="payload.creator">#{{ payload.creator.id }}</small>
+          <small>{{ payload.summary.totalWorks }} 套独立作品</small>
         </h3>
         <a v-if="payload.creator" :href="`/library/${payload.creator.id}`">查看图库</a
         ><button data-test="refresh" @click="refresh">刷新目录</button>
       </header>
-      <p class="hint" role="status" data-test="read-model-status">
+      <p v-if="payload.readModel.status !== 'ready' || !payload.readModel.complete" class="hint" role="status" data-test="read-model-status">
         {{ modelStatus }} · 已初始化 {{ payload.readModel.initializedCreators }}/{{ payload.readModel.totalCreators }} 位博主
         <template v-if="!payload.readModel.complete">；当前目录尚不完整，暂不可导出。</template>
         <template v-else-if="payload.readModel.status !== 'ready'">；当前展示上一份完整版本。</template>
@@ -42,6 +47,7 @@
       <p v-if="stale" role="status" class="stale">
         作品数据已更新，请刷新资源目录；当前保留原编排。
       </p>
+      <details class="catalog-notes"><summary>目录说明与统计</summary>
       <p class="stats">
         独立作品 {{ payload.summary.totalWorks }} · 已编目
         {{ payload.summary.numberedWorks }} · 未编排/待核对
@@ -77,16 +83,19 @@
           </li>
         </ul>
       </details>
+      </details>
+      <p v-if="payload.summary.unavailableWorks || payload.summary.unarrangedWorks || payload.summary.legacyPosts" class="hint" data-test="catalog-warning">部分作品不可用或待核对，请展开目录说明查看。</p>
       <form class="filters" @submit.prevent="applyFilters">
         <label
           >作品搜索<input
             :value="filters.q"
             type="search"
-            placeholder="作品、博主/别名、NO 或原目录名"
+            :placeholder="creatorId ? '作品、NO 或原目录名' : '作品、博主/别名、NO 或原目录名'"
             @input="queryInput"
             @compositionstart="composing = true"
-            @compositionend="compositionEnd" /></label
-        ><label
+            @compositionend="compositionEnd" /></label>
+        <label>展示方向<select v-model="filters.order" @change="applyFilters"><option value="oldest">从早到晚</option><option value="newest">从晚到早</option></select></label>
+        <details class="filter-panel"><summary>筛选</summary><div class="filter-fields"><label
           >本地状态<select v-model="filters.localState" @change="applyFilters">
             <option value="all">全部状态</option>
             <option value="indexed">已索引</option>
@@ -99,8 +108,9 @@
             <option value="linked">已关联来源</option>
             <option value="unlinked">未关联来源</option>
           </select></label
-        ><label>展示方向<select v-model="filters.order" @change="applyFilters"><option value="oldest">从早到晚</option><option value="newest">从晚到早</option></select></label>
+        ></div></details>
       </form>
+      <details class="export-panel"><summary>复制/导出</summary>
       <div class="exports">
         <label
           >复制/导出范围<select v-model="scope" data-test="export-scope">
@@ -120,6 +130,7 @@
       </div>
       <p v-if="notice" role="status">{{ notice }}</p>
       <p v-if="metadataDownload"><a :href="metadataDownload.url" :download="metadataDownload.name">下载本次 CSV 的配套元信息</a>（与 CSV 一同保存）</p>
+      </details>
       <div class="table-scroll">
         <table>
           <thead>
@@ -154,18 +165,7 @@
                   }}<small>{{ item.reason }}</small>
                 </td>
                 <td>
-                  <template v-if="item.sources.length"
-                    ><span
-                      v-for="source in item.sources"
-                      :key="source.sourceWorkId"
-                      class="source-summary"
-                      >{{ source.platform }}
-                      {{
-                        source.sourceOrderLabel ?? source.sourceOrder ?? ''
-                      }}
-                      · {{ source.title }}</span
-                    ></template
-                  ><span v-else>未关联来源</span>
+                  {{ item.sources.length ? `已关联 ${item.sources.length} 条来源` : '未关联来源' }}
                 </td>
                 <td>
                   <div class="row-actions">
@@ -295,8 +295,9 @@ import {
   type ResourcePage,
   type ResourceRow
 } from '../api/resource-catalog';
-const props = defineProps<{ creatorId: number | null }>();
-const emit = defineEmits<{ select: [id: number | null] }>();
+const props = defineProps<{ creatorId: number | null; globalScope?: boolean }>();
+const emit = defineEmits<{ select: [id: number | null]; all: []; back: [] }>();
+const hasScope = computed(() => props.creatorId !== null || props.globalScope === true);
 const reading = useCreatorReadingStore();
 const payload = ref<ResourcePage | null>(null),
   creatorQuery = ref(''),
@@ -359,7 +360,7 @@ async function searchCreators() {
   }
 }
 async function loadPage(page = 1, refreshRevision = false, background = false) {
-  if (disposed || (stale.value && !refreshRevision)) return;
+  if (disposed || !hasScope.value || (stale.value && !refreshRevision)) return;
   clearTimeout(pollTimer);
   const id = props.creatorId,
     current = ++token;
@@ -428,11 +429,12 @@ function compositionEnd(event: Event) {
   queryInput(event);
 }
 watch(
-  () => props.creatorId,
+  () => [props.creatorId, props.globalScope],
   () => {
     ++token;
     ++detailToken;
     ++exportToken;
+    ++searchToken;
     clearTimeout(timer);
     clearTimeout(pollTimer);
     clearMetadataDownload();
@@ -443,10 +445,14 @@ watch(
     error.value = '';
     notice.value = '';
     busy.value = false;
+    loading.value = false;
+    detailLoading.value = false;
+    polling = false;
+    searchNotice.value = '';
     filters.q = '';
     filters.localState = 'all';
     filters.source = 'all';
-    void loadPage(1, true);
+    if (hasScope.value) void loadPage(1, true);
   },
   { immediate: true }
 );
@@ -704,6 +710,20 @@ th {
 footer {
   justify-content: center;
 }
+.navigation, .filter-fields {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.secondary-entry {
+  color: var(--color-muted, #667085);
+  background: transparent;
+  font-size: 0.85rem;
+}
+summary { cursor: pointer; }
+.catalog-notes, .export-panel { margin: 0.8rem 0; }
+.catalog-notes summary { color: var(--color-muted, #667085); font-size: 0.85rem; }
+.filter-fields { padding-top: 0.75rem; }
 .stats {
   line-height: 1.8;
 }
