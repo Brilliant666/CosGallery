@@ -8,8 +8,10 @@ export function createResourceCatalogRouter() {
   const router = Router();
   const service = new ResourceCatalogService();
   const id = z.coerce.number().int().positive();
+  const scopeId = (value: string) => value === 'all' ? null : id.parse(value);
   const filters = z.object({
     q: z.string().max(500).optional(),
+    order: z.enum(['oldest', 'newest']).optional(),
     localState: z
       .enum(['all', 'indexed', 'unavailable', 'unarranged'])
       .optional(),
@@ -37,7 +39,7 @@ export function createResourceCatalogRouter() {
   });
   router.get('/:creatorId/export', (req, res, next) => {
     try {
-      const creatorId = id.parse(req.params.creatorId);
+      const creatorId = scopeId(req.params.creatorId);
       const format = z.enum(['txt', 'csv']).parse(req.query.format);
       const scope = z.enum(['all', 'filtered']).parse(req.query.scope);
       const filter = filters
@@ -45,15 +47,17 @@ export function createResourceCatalogRouter() {
         .parse(req.query);
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="cosgallery-creator-${creatorId}.${format}"`,
+        `attachment; filename="cosgallery-${creatorId === null ? 'all-creators' : `creator-${creatorId}`}.${format}"`,
       );
+      const bundle = service.exportBundle(creatorId, format, scope, filter);
+      res.setHeader('X-Resource-Catalog-Metadata', encodeURIComponent(JSON.stringify(bundle.metadata)));
       res
         .type(
           format === 'txt'
             ? 'text/plain; charset=utf-8'
             : 'text/csv; charset=utf-8',
         )
-        .send(service.export(creatorId, format, scope, filter));
+        .send(bundle.body);
     } catch (error) {
       next(error);
     }
@@ -65,6 +69,7 @@ export function createResourceCatalogRouter() {
           id.parse(req.params.creatorId),
           id.parse(req.params.workId),
           filters.parse(req.query).revision,
+          z.enum(['all', 'creator']).parse(req.query.revisionScope ?? 'creator'),
         ),
       );
     } catch (error) {
@@ -74,7 +79,7 @@ export function createResourceCatalogRouter() {
   router.get('/:creatorId', (req, res, next) => {
     try {
       res.json(
-        service.list(id.parse(req.params.creatorId), filters.parse(req.query)),
+        service.list(scopeId(req.params.creatorId), filters.parse(req.query)),
       );
     } catch (error) {
       next(error);

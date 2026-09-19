@@ -10,6 +10,8 @@ export interface ResourceCatalogSource {
   active: boolean;
 }
 export interface ResourceCatalogRow {
+  creatorId: number;
+  creatorName: string;
   workId: number;
   no: string | null;
   title: string;
@@ -43,7 +45,8 @@ export interface ResourceCatalogPage {
   creator: {
     id: number;
     canonicalName: string;
-  };
+  } | null;
+  readModel: ResourceCatalogReadStatus;
   revision: string;
   generatedAt: string;
   sortOrder: 'newest' | 'oldest';
@@ -68,6 +71,7 @@ export interface ResourceCatalogPage {
   }>;
 }
 export interface ResourceCatalogFilter {
+  order?: 'oldest' | 'newest';
   q?: string;
   localState?: 'all' | ResourceCatalogState;
   source?: 'all' | 'linked' | 'unlinked';
@@ -80,4 +84,15 @@ export interface ResourceCatalogDetail {
   item: ResourceCatalogRow;
   copies: ResourceCatalogCopy[];
   notes: string[];
+  readModel: ResourceCatalogReadStatus;
+}
+
+export interface ResourceCatalogReadStatus {
+  status: 'ready' | 'updating' | 'uninitialized' | 'failed';
+  complete: boolean;
+  pendingCreators: number;
+  failedCreators: number;
+  initializedCreators: number;
+  totalCreators: number;
+  updatedAt: string | null;
 }

@@ -28,6 +28,7 @@ import { runLocalIngestStartup } from "./services/local-ingest-startup.js";
 import { permanentDeletionService } from "./services/permanent-deletion-service.js";
 import { scannerService } from "./services/scanner-service.js";
 import { watcherService } from "./services/watcher-service.js";
+import { startResourceCatalogUpdater, stopResourceCatalogUpdater } from "./services/resource-catalog-updater.js";
 
 function logServerReady(): void {
   if (!appConfig.isDevelopment) {
@@ -77,6 +78,7 @@ async function bootstrap(): Promise<void> {
 
   server.listen(appConfig.port, appConfig.host, () => {
     logServerReady();
+    startResourceCatalogUpdater();
     const startupAction = scannerService.handleStartup("startup");
     if (startupAction === "blocked") {
       log.info("Gallery watcher deferred until the library rebuild completes");
@@ -102,6 +104,7 @@ async function bootstrap(): Promise<void> {
 
   async function shutdown(signal: string): Promise<void> {
     log.info(`Received ${signal}, shutting down`);
+    await stopResourceCatalogUpdater();
     await watcherService.stop();
     server.close(() => process.exit(0));
   }
