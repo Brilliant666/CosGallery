@@ -1,3 +1,5 @@
+import { resourceCatalogSchemaSql } from './resource-catalog-schema.js';
+
 export const schemaSql = `
 PRAGMA foreign_keys = ON;
 
@@ -601,4 +603,5 @@ CREATE INDEX IF NOT EXISTS idx_local_ingest_jobs_claim
 CREATE INDEX IF NOT EXISTS idx_local_ingest_file_observations_creator
   ON local_ingest_file_observations(creator_id, last_observed_at);
 
+${resourceCatalogSchemaSql}
 `;
