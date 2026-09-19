@@ -12,6 +12,8 @@ vi.mock('../api/resource-catalog', () => ({
   exportResourceCatalog: vi.fn()
 }));
 const row: api.ResourceRow = {
+  creatorId: 1,
+  creatorName: '博主1',
   workId: 22,
   no: 'NO.051',
   title: '同名作品',
@@ -30,6 +32,7 @@ const row: api.ResourceRow = {
   text: '博主 NO.051 同名作品 [31P-1MiB]'
 };
 const page = (id = 1): api.ResourcePage => ({
+  readModel: { status: 'ready', complete: true, pendingCreators: 0, failedCreators: 0, initializedCreators: 1, totalCreators: 1, updatedAt: '2026-09-19' },
   creator: { id, canonicalName: `博主${id}` },
   revision: `r${id}`,
   generatedAt: '2026-09-19',
@@ -45,12 +48,13 @@ const page = (id = 1): api.ResourcePage => ({
     excludedDeletedWorks: 1
   },
   legacyGaps: [{ postId: 90, title: '历史图集', reason: '缺少可靠作品关系' }],
-  items: [{ ...row }],
+  items: [{ ...row, creatorId: id, creatorName: `博主${id}` }],
   page: 1,
   pageSize: 50,
   total: 101
 });
 const detail: api.ResourceDetail = {
+  readModel: page().readModel,
   revision: 'r1',
   item: row,
   copies: [
@@ -98,17 +102,18 @@ describe('resource catalog', () => {
       ],
       total: 1
     });
-    vi.mocked(api.exportResourceCatalog).mockResolvedValue('全部101行');
+    vi.mocked(api.exportResourceCatalog).mockResolvedValue({ text: '全部101行', metadata: null });
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) }
     });
   });
   afterEach(() => vi.useRealTimers());
-  it('does not load any works before creator selection; resolves names/aliases explicitly', async () => {
+  it('loads global scope without prefetching details and resolves names/aliases explicitly', async () => {
     const w = mount(ResourceCatalog, { props: { creatorId: null } });
     await flushPromises();
-    expect(api.fetchResourceCatalog).not.toHaveBeenCalled();
+    expect(api.fetchResourceCatalog).toHaveBeenCalledWith(null, expect.any(Object), 1, undefined);
+    expect(api.fetchResourceDetail).not.toHaveBeenCalled();
     expect(api.findResourceCreators).not.toHaveBeenCalled();
     await w.get('.creator-search input').setValue('别名');
     await w.get('.creator-search').trigger('submit');
@@ -132,7 +137,7 @@ describe('resource catalog', () => {
     );
     await button(w, '展开详情').trigger('click');
     await flushPromises();
-    expect(api.fetchResourceDetail).toHaveBeenCalledWith(1, 22, 'r1');
+    expect(api.fetchResourceDetail).toHaveBeenCalledWith(1, 22, 'r1', undefined);
     expect(w.text()).toContain('原目录 NO.003');
     expect(w.text()).toContain('保留原件不包含');
     expect(w.find('a[href="/library/1/works/33"]').exists()).toBe(true);
@@ -205,7 +210,7 @@ describe('resource catalog', () => {
     await flushPromises();
     expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(
       1,
-      { q: '中', localState: 'all', source: 'all' },
+      { q: '中', localState: 'all', source: 'all', order: 'oldest' },
       1,
       'r1'
     );
@@ -257,7 +262,102 @@ describe('resource catalog', () => {
     expect(w.text()).toContain('容量未知');
     await button(w, '复制单条').trigger('click');
     await flushPromises();
-    expect(api.fetchResourceDetail).toHaveBeenCalledWith(1, 22, 'r1');
+    expect(api.fetchResourceDetail).toHaveBeenCalledWith(1, 22, 'r1', undefined);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(row.text);
+  });
+  it('global rows keep their own creator links and global revision on detail reads', async () => {
+    const p = page(2);
+    p.creator = null;
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
+    const w = mount(ResourceCatalog, { props: { creatorId: null } });
+    await flushPromises();
+    expect(w.text()).toContain('全部博主');
+    expect(w.find('a[href="/library/2/works/33"]').exists()).toBe(true);
+    expect(api.fetchResourceDetail).not.toHaveBeenCalled();
+    await button(w, '展开详情').trigger('click');
+    await flushPromises();
+    expect(api.fetchResourceDetail).toHaveBeenCalledWith(2, 22, 'r2', 'all');
+    await button(w, '全部博主').trigger('click');
+    expect(w.emitted('select')).toEqual([[null]]);
+  });
+  it('discloses incomplete initialization, blocks export, and polls a new revision without overlapping requests', async () => {
+    vi.useFakeTimers();
+    const p = page();
+    p.readModel = { ...p.readModel, status: 'uninitialized', complete: false, pendingCreators: 2, initializedCreators: 0, totalCreators: 2 };
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValueOnce(p);
+    const w = mount(ResourceCatalog, { props: { creatorId: null } });
+    await flushPromises();
+    expect(w.text()).toContain('当前目录尚不完整');
+    expect(button(w, '导出 TXT').attributes('disabled')).toBeDefined();
+    const pending = deferred<api.ResourcePage>();
+    vi.mocked(api.fetchResourceCatalog).mockReturnValueOnce(pending.promise);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(null, expect.any(Object), 1, undefined);
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(2);
+    pending.resolve(page());
+    await flushPromises();
+    expect(button(w, '导出 TXT').attributes('disabled')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(2);
+  });
+  it('cancels pending polling when the workspace is unmounted', async () => {
+    vi.useFakeTimers();
+    const p = page();
+    p.readModel.status = 'failed';
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    expect(w.text()).toContain('目录更新失败');
+    w.unmount();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(1);
+  });
+  it('polls the same page without resetting expanded detail, then marks a new version for explicit refresh', async () => {
+    vi.useFakeTimers();
+    const p = page();
+    p.page = 2;
+    p.readModel.status = 'updating';
+    vi.mocked(api.fetchResourceCatalog).mockImplementation(async () => structuredClone(p));
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    await button(w, '展开详情').trigger('click');
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushPromises();
+    expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(1, expect.any(Object), 2, undefined);
+    expect(button(w, '收起').exists()).toBe(true);
+    expect(api.fetchResourceDetail).toHaveBeenCalledTimes(1);
+    const changed = page();
+    changed.revision = 'r-new';
+    changed.items[0]!.no = 'NO.099';
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValue(changed);
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushPromises();
+    expect(w.text()).toContain('NO.051');
+    expect(w.text()).not.toContain('NO.099');
+    expect(w.text()).toContain('目录版本已变化');
+    expect(button(w, '导出 TXT').attributes('disabled')).toBeDefined();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(3);
+    await button(w, '刷新目录').trigger('click');
+    await flushPromises();
+    expect(w.text()).toContain('NO.099');
+  });
+  it('downloads CSV and its received metadata together with a matching revision filename', async () => {
+    const metadata = { revision: 'r1', creatorId: 1, rowCount: 101 };
+    vi.mocked(api.exportResourceCatalog).mockResolvedValue({ text: 'csv', metadata });
+    const create = vi.fn().mockReturnValue('blob:test');
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: create });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const names: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () { names.push(this.download); });
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    await button(w, '导出 CSV').trigger('click');
+    await flushPromises();
+    expect(names).toEqual(['CosGallery-1-r1.csv', 'CosGallery-1-r1.metadata.json']);
+    expect(create).toHaveBeenCalledTimes(2);
+    click.mockRestore();
   });
 });

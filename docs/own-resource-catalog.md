@@ -30,7 +30,8 @@ create Works, plan downloads or rename local directories.
   999. A filtered result keeps its original number. New insertions may shift NOs,
   never Work/LocalWork/Post/Image IDs or paths.
 - A NO is a presentation value, not a source key, filename, task identifier or
-  durable catalog record. No sequence table or per-Work numbering writes exist.
+  permanent identity. Migration 000022 saves this rebuildable value only in the
+  derived catalog rows; it never writes numbering into Work or source records.
 
 ## Local facts and source facts
 
@@ -56,19 +57,37 @@ The selected creator is addressable through ledger query parameters. The roster
 stays mounted so its current filters and page survive workspace navigation.
 Resource reads are lazy: other workspaces do not fetch a resource catalog.
 
-One complete lightweight creator read establishes order, statistics and a content
-revision. Pagination, expanded details and exports carry the revision; a mismatch
-requires refresh rather than combining two numbering states. Existing update
-signals mark the view stale without silently renumbering visible rows. There is
-no persistent snapshot platform, polling job or process-wide long-lived cache.
+The default workspace shows all creators; the roster action limits the same page
+to one creator. Global search matches title, creator name/aliases and original
+copy directory names. Each creator retains its own NO namespace.
+
+Migration 000022 adds a persistent, rebuildable read model. SQLite triggers mark
+affected creator generations in the same transaction as the facts. A single
+background worker reads one consistent generation and atomically publishes its
+lightweight rows, copy details and summaries. Ordinary requests read completed
+rows; they do not generate catalogs or aggregate media. Restart resumes pending
+updates and reuses completed rows. See [invalidation coverage](resource-catalog-invalidation.md).
+
+Pagination, expanded details and exports carry a version token; a mismatch
+requires refresh rather than combining numbering states. The UI distinguishes
+ready, updating, uninitialized and failed states, and only polls while pending.
+It retains an already displayed version when a newer version is found. Exports
+require a complete current scope. A failed update keeps previous completed data
+and is retried without a maintenance button. Live deletion/ownership guards may
+hide a now-invalid row before its replacement publication; pending summaries are
+explicitly still the last completed summaries, not a new complete snapshot.
 
 ## Copy and export
 
-The UI distinguishes full creator catalog from the current filtered result; neither
+The UI distinguishes full scoped catalog from the current filtered result; neither
 means the current page only. Text includes creator, NO, canonical title and local
 media counts/capacity. Unknown values and unarranged entries are explicit.
 TXT adds generation time, order, scope and the dynamic-NO explanation. CSV retains
 stable IDs, byte values, original directory names and saved source summaries.
+Global exports include creator name/ID and stable Work ID. The CSV download also
+delivers its matching `.metadata.json` with revision, scope, order, generation time
+and row count; a visible metadata download link remains if the browser blocks a
+second automatic download. Save both files together.
 
 CSV cells are quoted/escaped and formula-leading values are made inert. Management
 paths, credentials, extraction codes and passwords are not export fields. Source
@@ -91,20 +110,28 @@ unmerged, undeployed review PR.
 - `ArchiveCatalogView` mounts `ResourceCatalog` only for the resource workspace.
   Both the roster action and workspace tab use
   `/archive-catalog?workspace=resources&creatorId=...`.
-- `ResourceCatalogService` owns the creator-scoped read snapshot, copy selection,
-  numbering, filters and exports. It does not call the fulfillment evaluator or
-  `hydratePostItems`, and does not enumerate media files on disk.
+- `ResourceCatalogBuilder` owns scoped generation, copy selection and numbering.
+  `ResourceCatalogReadModel` captures fact generations and atomically publishes.
+  `ResourceCatalogService` reads published rows, filters and exports. None calls
+  the fulfillment evaluator, `hydratePostItems`, or enumerates media on disk.
 - The management-capability-protected API prefix is
   `/api/admin/archive-catalog/resource-catalog`:
-  `GET /creators`, `GET /:creatorId`, `GET /:creatorId/works/:workId`, and
-  `GET /:creatorId/export?format=txt|csv&scope=all|filtered`.
-- Subsequent pages, details and exports carry the current SHA-256 content revision.
+  `GET /creators`, `GET /all`, `GET /:creatorId`, `GET /:creatorId/works/:workId`,
+  and `GET /all|:creatorId/export?format=txt|csv&scope=all|filtered`.
+  Global detail reads include `revisionScope=all`; direction is `order=oldest|newest`.
+- Subsequent pages, details and exports carry a SHA-256 token of small version
+  identifiers, not a freshly computed content hash.
   Export requires it. A changed snapshot returns HTTP 409
   `RESOURCE_CATALOG_CHANGED`; invalid transport parameters return 400.
-- The existing database schema and indexes are reused. There is no migration,
-  new numbering column, write endpoint or background job.
+- Migration 000022 creates three derived tables, their indexes and fact-change
+  triggers. No public write endpoint or new business task is added. The background
+  worker writes only rebuildable projections. It never changes acquisition evidence.
 
-## Validation scope
+## Original PR30 validation (historical)
+
+The following records describe the original on-demand implementation, not the
+current steady-state read model. Current real-scale results are recorded in
+`resource-catalog-read-model-performance.md`.
 
 The isolated browser fixture uses over 1,000 local Works for one creator, a second
 creator, old matched records without an explicit Post ID, duplicate titles,
