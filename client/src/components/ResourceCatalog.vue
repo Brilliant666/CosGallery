@@ -10,7 +10,7 @@
           v-model="creatorQuery"
           type="search"
           placeholder="搜索并选择博主" /></label
-      ><button>查找博主</button>
+      ><button>查找博主</button><button type="button" @click="emit('select', null)">全部博主</button>
     </form>
     <div v-if="choices.length" class="choices">
       <button
@@ -23,18 +23,22 @@
       </button>
     </div>
     <p v-if="searchNotice" role="status">{{ searchNotice }}</p>
-    <p v-if="!creatorId">请先选择一位博主；不会预载全库作品。</p>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <p v-if="loading" role="status">正在读取资源目录…</p>
     <template v-if="payload">
       <header class="catalog-heading">
         <h3>
-          {{ payload.creator.canonicalName }}
-          <small>#{{ payload.creator.id }}</small>
+          {{ payload.creator?.canonicalName ?? '全部博主' }}
+          <small v-if="payload.creator">#{{ payload.creator.id }}</small>
         </h3>
-        <a :href="`/library/${payload.creator.id}`">查看图库</a
+        <a v-if="payload.creator" :href="`/library/${payload.creator.id}`">查看图库</a
         ><button data-test="refresh" @click="refresh">刷新目录</button>
       </header>
+      <p class="hint" role="status" data-test="read-model-status">
+        {{ modelStatus }} · 已初始化 {{ payload.readModel.initializedCreators }}/{{ payload.readModel.totalCreators }} 位博主
+        <template v-if="!payload.readModel.complete">；当前目录尚不完整，暂不可导出。</template>
+        <template v-else-if="payload.readModel.status !== 'ready'">；当前展示上一份完整版本。</template>
+      </p>
       <p v-if="stale" role="status" class="stale">
         作品数据已更新，请刷新资源目录；当前保留原编排。
       </p>
@@ -68,8 +72,8 @@
       <details v-if="payload.legacyGaps.length" class="hint">
         <summary>历史作品关系缺口（未编 NO，未自动补建身份）</summary>
         <ul>
-          <li v-for="gap in payload.legacyGaps" :key="gap.postId">
-            Post #{{ gap.postId }} · {{ gap.title }} · {{ gap.reason }}
+          <li v-for="gap in payload.legacyGaps" :key="`${gap.creatorId ?? creatorId}:${gap.postId}`">
+            <template v-if="!creatorId">{{ gap.creatorName ?? '博主' }} #{{ gap.creatorId }} · </template>Post #{{ gap.postId }} · {{ gap.title }} · {{ gap.reason }}
           </li>
         </ul>
       </details>
@@ -78,7 +82,7 @@
           >作品搜索<input
             :value="filters.q"
             type="search"
-            placeholder="名称、NO 或原目录名"
+            placeholder="作品、博主/别名、NO 或原目录名"
             @input="queryInput"
             @compositionstart="composing = true"
             @compositionend="compositionEnd" /></label
@@ -95,7 +99,7 @@
             <option value="linked">已关联来源</option>
             <option value="unlinked">未关联来源</option>
           </select></label
-        >
+        ><label>展示方向<select v-model="filters.order" @change="applyFilters"><option value="oldest">从早到晚</option><option value="newest">从晚到早</option></select></label>
       </form>
       <div class="exports">
         <label
@@ -104,21 +108,23 @@
             <option value="filtered">当前筛选结果（全部分页）</option>
           </select></label
         ><button
-          :disabled="busy || stale || loading"
+          :disabled="exportDisabled"
           @click="exportAll('copy')"
         >
           复制目录</button
-        ><button :disabled="busy || stale || loading" @click="exportAll('txt')">
+        ><button :disabled="exportDisabled" @click="exportAll('txt')">
           导出 TXT</button
-        ><button :disabled="busy || stale || loading" @click="exportAll('csv')">
+        ><button :disabled="exportDisabled" @click="exportAll('csv')">
           导出 CSV
         </button>
       </div>
       <p v-if="notice" role="status">{{ notice }}</p>
+      <p v-if="metadataDownload"><a :href="metadataDownload.url" :download="metadataDownload.name">下载本次 CSV 的配套元信息</a>（与 CSV 一同保存）</p>
       <div class="table-scroll">
         <table>
           <thead>
             <tr>
+              <th v-if="!creatorId">博主</th>
               <th>CosGallery NO / 作品</th>
               <th>排序时间</th>
               <th>主副本媒体</th>
@@ -130,6 +136,7 @@
           <tbody>
             <template v-for="item in payload.items" :key="item.workId"
               ><tr>
+                <td v-if="!creatorId"><button @click="emit('select', item.creatorId)">{{ item.creatorName }}</button></td>
                 <td>
                   <strong>{{ item.no ?? '未编排' }}</strong> {{ item.title }}
                 </td>
@@ -164,7 +171,7 @@
                   <div class="row-actions">
                     <a
                       v-if="item.primaryPostId && item.localState === 'indexed'"
-                      :href="`/library/${payload.creator.id}/works/${item.primaryPostId}`"
+                      :href="`/library/${item.creatorId}/works/${item.primaryPostId}`"
                       >查看图集</a
                     ><button
                       :disabled="stale || loading"
@@ -183,7 +190,7 @@
                 </td>
               </tr>
               <tr v-if="expanded === item.workId">
-                <td colspan="6" class="detail">
+                <td :colspan="creatorId ? 6 : 7" class="detail">
                   <p v-if="detailLoading">正在读取详情…</p>
                   <template v-else-if="details[item.workId]"
                     ><p>
@@ -212,7 +219,7 @@
                         {{ copy.retainedOriginalCount ?? '未知' }}
                         <a
                           v-if="copy.postId && copy.indexedAvailable"
-                          :href="`/library/${payload.creator.id}/works/${copy.postId}`"
+                          :href="`/library/${item.creatorId}/works/${copy.postId}`"
                           >查看副本</a
                         >
                       </li>
@@ -275,7 +282,7 @@
   </section>
 </template>
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 import { RequestError } from '../api/http';
 import {
@@ -289,7 +296,7 @@ import {
   type ResourceRow
 } from '../api/resource-catalog';
 const props = defineProps<{ creatorId: number | null }>();
-const emit = defineEmits<{ select: [id: number] }>();
+const emit = defineEmits<{ select: [id: number | null] }>();
 const reading = useCreatorReadingStore();
 const payload = ref<ResourcePage | null>(null),
   creatorQuery = ref(''),
@@ -303,7 +310,14 @@ const loading = ref(false),
   expanded = ref<number | null>(null),
   detailLoading = ref(false);
 const details = ref<Record<number, ResourceDetail>>({});
-const filters = reactive({ q: '', localState: 'all', source: 'all' });
+const metadataDownload = ref<{ url: string; name: string } | null>(null);
+function clearMetadataDownload() {
+  if (metadataDownload.value) URL.revokeObjectURL(metadataDownload.value.url);
+  metadataDownload.value = null;
+}
+const filters = reactive({ q: '', localState: 'all', source: 'all', order: 'oldest' as 'oldest' | 'newest' });
+const exportDisabled = computed(() => busy.value || stale.value || loading.value || !payload.value?.readModel.complete || payload.value.readModel.status !== 'ready');
+const modelStatus = computed(() => ({ ready: '当前完成版本', updating: '正在更新目录', uninitialized: '目录尚未初始化', failed: '目录更新失败，将自动重试' })[payload.value?.readModel.status ?? 'uninitialized']);
 const scope = ref<'all' | 'filtered'>('all');
 let token = 0,
   searchToken = 0,
@@ -311,6 +325,16 @@ let token = 0,
   exportToken = 0,
   timer: ReturnType<typeof setTimeout> | undefined;
 let composing = false;
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+let disposed = false;
+let polling = false;
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  if (disposed || stale.value || document.visibilityState === 'hidden' || !payload.value || payload.value.readModel.status === 'ready') return;
+  pollTimer = setTimeout(() => { if (!loading.value && !polling) void loadPage(payload.value?.page ?? 1, true, true); else schedulePoll(); }, 3000);
+}
+function visibilityChanged() { schedulePoll(); }
+onMounted(() => document.addEventListener('visibilitychange', visibilityChanged));
 function failure(value: unknown) {
   if (value instanceof RequestError && value.status === 409) {
     stale.value = true;
@@ -334,15 +358,19 @@ async function searchCreators() {
     if (current === searchToken) failure(e);
   }
 }
-async function loadPage(page = 1, refreshRevision = false) {
-  if (!props.creatorId || (stale.value && !refreshRevision)) return;
+async function loadPage(page = 1, refreshRevision = false, background = false) {
+  if (disposed || (stale.value && !refreshRevision)) return;
+  clearTimeout(pollTimer);
   const id = props.creatorId,
     current = ++token;
-  ++detailToken;
-  expanded.value = null;
-  detailLoading.value = false;
-  loading.value = true;
-  error.value = '';
+  if (background) polling = true;
+  else {
+    ++detailToken;
+    expanded.value = null;
+    detailLoading.value = false;
+    loading.value = true;
+    error.value = '';
+  }
   try {
     const result = await fetchResourceCatalog(
       id,
@@ -351,13 +379,35 @@ async function loadPage(page = 1, refreshRevision = false) {
       refreshRevision ? undefined : payload.value?.revision
     );
     if (current !== token) return;
+    if (background && payload.value) {
+      if (payload.value.revision === result.revision) {
+        // Polling reports build progress without closing a selected detail or moving pages.
+        payload.value.readModel = result.readModel;
+        return;
+      }
+      if (payload.value.readModel.complete || payload.value.page > 1) {
+        stale.value = true;
+        ++detailToken;
+        ++exportToken;
+        busy.value = false;
+        detailLoading.value = false;
+        notice.value = '目录版本已变化，请刷新后查看；当前页和编号保持原版本。';
+        return;
+      }
+    }
+    if (background) {
+      ++detailToken;
+      expanded.value = null;
+      detailLoading.value = false;
+    }
     payload.value = result;
     stale.value = false;
     details.value = {};
   } catch (e) {
     if (current === token) failure(e);
   } finally {
-    if (current === token) loading.value = false;
+    if (background) polling = false;
+    if (current === token) { loading.value = false; schedulePoll(); }
   }
 }
 function refresh() {
@@ -384,6 +434,8 @@ watch(
     ++detailToken;
     ++exportToken;
     clearTimeout(timer);
+    clearTimeout(pollTimer);
+    clearMetadataDownload();
     payload.value = null;
     details.value = {};
     expanded.value = null;
@@ -420,7 +472,7 @@ async function toggleDetail(workId: number) {
   if (!payload.value || stale.value) return;
   expanded.value = workId;
   const current = ++detailToken,
-    id = payload.value.creator.id,
+    id = payload.value.items.find(item => item.workId === workId)!.creatorId,
     revision = payload.value.revision;
   if (details.value[workId]) {
     detailLoading.value = false;
@@ -428,7 +480,7 @@ async function toggleDetail(workId: number) {
   }
   detailLoading.value = true;
   try {
-    const result = await fetchResourceDetail(id, workId, revision);
+    const result = await fetchResourceDetail(id, workId, revision, props.creatorId === null ? 'all' : undefined);
     if (current === detailToken) details.value[workId] = result;
   } catch (e) {
     if (current === detailToken) failure(e);
@@ -442,9 +494,10 @@ async function copyOne(item: ResourceRow) {
     snapshot = payload.value;
   try {
     const result = await fetchResourceDetail(
-      snapshot.creator.id,
+      item.creatorId,
       item.workId,
-      snapshot.revision
+      snapshot.revision,
+      props.creatorId === null ? 'all' : undefined
     );
     if (current !== exportToken) return;
     await navigator.clipboard.writeText(result.item.text);
@@ -454,14 +507,14 @@ async function copyOne(item: ResourceRow) {
   }
 }
 async function exportAll(action: 'copy' | 'txt' | 'csv') {
-  if (!payload.value || stale.value) return;
+  if (!payload.value || exportDisabled.value) return;
   const snapshot = payload.value,
     current = ++exportToken;
   busy.value = true;
   error.value = '';
   try {
-    const text = await exportResourceCatalog(
-      snapshot.creator.id,
+    const result = await exportResourceCatalog(
+      snapshot.creator?.id ?? null,
       { ...filters },
       snapshot.revision,
       scope.value,
@@ -472,10 +525,10 @@ async function exportAll(action: 'copy' | 'txt' | 'csv') {
       payload.value?.revision !== snapshot.revision
     )
       return;
-    if (action === 'copy') await navigator.clipboard.writeText(text);
+    if (action === 'copy') await navigator.clipboard.writeText(result.text);
     else {
       const url = URL.createObjectURL(
-        new Blob([text], {
+        new Blob([result.text], {
           type:
             action === 'csv'
               ? 'text/csv;charset=utf-8'
@@ -484,14 +537,23 @@ async function exportAll(action: 'copy' | 'txt' | 'csv') {
       );
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = `CosGallery-${snapshot.creator.id}.${action}`;
+      anchor.download = `CosGallery-${snapshot.creator?.id ?? 'all'}-${snapshot.revision.slice(0, 12)}.${action}`;
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 0);
+      if (action === 'csv' && result.metadata) {
+        clearMetadataDownload();
+        const metadataUrl = URL.createObjectURL(new Blob([JSON.stringify(result.metadata, null, 2)], { type: 'application/json;charset=utf-8' }));
+        const metadataAnchor = document.createElement('a');
+        metadataAnchor.href = metadataUrl;
+        metadataAnchor.download = anchor.download.replace(/\.csv$/, '.metadata.json');
+        metadataDownload.value = { url: metadataUrl, name: metadataAnchor.download };
+        metadataAnchor.click();
+      }
     }
     notice.value =
       action === 'copy'
         ? '已复制所选范围的全部目录（不限当前页）。'
-        : '已导出所选范围的全部目录（不限当前页）。';
+        : action === 'csv' ? '已下载 CSV 及同版本 metadata.json，请保留两份文件（浏览器可能需要允许多文件下载）。' : '已导出所选范围的全部目录（不限当前页）。';
   } catch (e) {
     if (current === exportToken) failure(e);
   } finally {
@@ -526,6 +588,10 @@ function safeUrl(value: string | null) {
   }
 }
 onBeforeUnmount(() => {
+  disposed = true;
+  clearMetadataDownload();
+  clearTimeout(pollTimer);
+  document.removeEventListener('visibilitychange', visibilityChanged);
   ++token;
   ++searchToken;
   ++detailToken;

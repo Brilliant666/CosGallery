@@ -315,9 +315,9 @@ watch(workspace, value => {
   if (!router || !route || (route.query.workspace ?? 'roster') === value) return;
   void router.push({ query: { ...route.query, workspace: value } });
 });
-function openResourceCatalog(id: number) {
+function openResourceCatalog(id: number | null) {
   if (router && route) {
-    void router.push({ query: { ...route.query, workspace: 'resources', creatorId: String(id) } });
+    void router.push({ query: { ...route.query, workspace: 'resources', creatorId: id === null ? undefined : String(id) } });
   } else {
     resourceCreatorId.value = id;
     workspace.value = 'resources';

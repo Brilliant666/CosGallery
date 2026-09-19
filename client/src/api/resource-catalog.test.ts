@@ -8,6 +8,21 @@ import {
 import { AUTH_REQUIRED_EVENT } from './http';
 afterEach(() => vi.unstubAllGlobals());
 describe('resource catalog reads', () => {
+  it('uses global routes and pins global detail revision scope', async () => {
+    const fetcher = vi.fn().mockImplementation(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetcher);
+    await fetchResourceCatalog(null, { q: '别名', localState: 'all', source: 'all', order: 'newest' }, 1);
+    expect(fetcher.mock.calls[0]![0]).toContain('/resource-catalog/all?');
+    expect(fetcher.mock.calls[0]![0]).toContain('order=newest');
+    await fetchResourceDetail(35, 77, 'global', 'all');
+    expect(fetcher.mock.calls[1]![0]).toContain('revision=global&revisionScope=all');
+  });
+  it('refuses CSV without matching metadata rather than saving an unversioned data file', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('csv')));
+    await expect(exportResourceCatalog(null, { q: '', localState: 'all', source: 'all' }, 'r', 'all', 'csv')).rejects.toThrow('元信息');
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('csv', { headers: { 'X-Resource-Catalog-Metadata': encodeURIComponent(JSON.stringify({ revision: 'other', scope: 'all', creatorId: null, generatedAt: 'today', rowCount: 1 })) } })));
+    await expect(exportResourceCatalog(null, { q: '', localState: 'all', source: 'all' }, 'r', 'all', 'csv')).rejects.toThrow('元信息');
+  });
   it('encodes names and pins page/detail requests to the selected revision', async () => {
     const fetcher = vi
       .fn()
@@ -34,7 +49,7 @@ describe('resource catalog reads', () => {
   it('exports UTF-8 content using explicit all-pages scope, authenticated read and no-store', async () => {
     const fetcher = vi
       .fn()
-      .mockResolvedValue(new Response('中文,"引用"\n', { status: 200 }));
+      .mockResolvedValue(new Response('中文,"引用"\n', { status: 200, headers: { 'X-Resource-Catalog-Metadata': encodeURIComponent(JSON.stringify({ revision: 'revision', scope: 'filtered', creatorId: 35, generatedAt: '2026-09-19', rowCount: 1 })) } }));
     vi.stubGlobal('fetch', fetcher);
     expect(
       await exportResourceCatalog(
@@ -44,7 +59,7 @@ describe('resource catalog reads', () => {
         'filtered',
         'csv'
       )
-    ).toBe('中文,"引用"\n');
+    ).toMatchObject({ text: '中文,"引用"\n', metadata: { revision: 'revision', rowCount: 1 } });
     expect(String(fetcher.mock.calls[0]![0])).toContain(
       'scope=filtered&format=csv'
     );

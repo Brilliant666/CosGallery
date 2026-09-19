@@ -9,8 +9,11 @@ describe.sequential('read-only own resource catalog', () => {
   let db: (typeof import('../src/db/database.js'))['databaseManager'];
   let repos: typeof import('../src/db/repositories.js');
   let service: import('../src/services/resource-catalog-service.js').ResourceCatalogService;
+  let publishedService: import('../src/services/resource-catalog-service.js').ResourceCatalogService;
   let app: express.Application;
   let auth: (typeof import('../src/services/auth-service.js'))['authService'];
+  let generate: (creatorId: number) => void;
+  let flush: () => void;
   const samples: Array<{
     work: number;
     local: number;
@@ -43,7 +46,25 @@ describe.sequential('read-only own resource catalog', () => {
     repos = await import('../src/db/repositories.js');
     const { ResourceCatalogService } =
       await import('../src/services/resource-catalog-service.js');
-    service = new ResourceCatalogService();
+    const { ResourceCatalogBuilder } = await import('../src/services/resource-catalog-builder.js');
+    const { ResourceCatalogReadModel } = await import('../src/services/resource-catalog-read-model.js');
+    generate = creatorId => { new ResourceCatalogBuilder(db.connection).generate(creatorId); };
+    // These legacy contract tests explicitly finish background publication after
+    // fixture writes. Production reads never generate; lifecycle tests cover stale reads.
+    flush = () => {
+      const model = new ResourceCatalogReadModel(db.connection);
+      for (const creator of model.pending(10000)) model.rebuildCreator(creator);
+    };
+    const reader = new ResourceCatalogService();
+    publishedService = reader;
+    service = new Proxy(reader, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function'
+          ? (...args: unknown[]) => { flush(); return value.apply(target, args); }
+          : value;
+      },
+    });
     ({ authService: auth } = await import('../src/services/auth-service.js'));
     app = (await import('../src/app.js')).createApp();
     db.connection
@@ -170,6 +191,12 @@ describe.sequential('read-only own resource catalog', () => {
     vi.resetModules();
     await fs.rm(root, { recursive: true, force: true });
   });
+  it('reports uninitialized scope without generating rows or exporting a partial catalog', () => {
+    const page = publishedService.list(null);
+    expect(page.items).toEqual([]);
+    expect(page.readModel).toMatchObject({ status: 'uninitialized', complete: false, initializedCreators: 0, totalCreators: 2 });
+    expect(() => publishedService.export(null, 'txt', 'all')).toThrow('目录尚未完成更新');
+  });
   it('numbers full collection before paging/filtering and handles >999 without identity writes', () => {
     expect(service.searchCreators('测试').items[0]?.enabled).toBe(true);
     const first = service.list(1);
@@ -250,6 +277,9 @@ describe.sequential('read-only own resource catalog', () => {
       primaryPostId: first.post,
     });
     expect(detail.copies.map((c) => c.primary)).toEqual([true, false]);
+    db.connection.prepare('UPDATE posts SET is_trashed=1 WHERE id=?').run(secondary.post);
+    expect(publishedService.detail(1, first.work).copies[1]).toMatchObject({ postId: null, indexedAvailable: false });
+    db.connection.prepare('UPDATE posts SET is_trashed=0 WHERE id=?').run(secondary.post);
     db.connection
       .prepare('UPDATE archive_catalog_local_works SET is_active=0 WHERE id=?')
       .run(first.local);
@@ -373,9 +403,11 @@ describe.sequential('read-only own resource catalog', () => {
     hydrate.mockRestore();
   });
   it('enforces management access for directory, detail and export, and validates revision transport', async () => {
+    flush();
     const capability = vi.spyOn(auth, 'hasCapability').mockReturnValue(false);
     for (const url of [
       '/1',
+      '/all',
       '/1/works/1',
       '/1/export?format=txt&scope=all',
       '/creators',
@@ -409,6 +441,13 @@ describe.sequential('read-only own resource catalog', () => {
         )
       ).status,
     ).toBe(200);
+    const all = await requestTestApp(app, 'GET', '/api/admin/archive-catalog/resource-catalog/all');
+    expect(all.status).toBe(200);
+    const csv = await requestTestApp(app, 'GET',
+      `/api/admin/archive-catalog/resource-catalog/all/export?format=csv&scope=all&revision=${all.body.revision}`);
+    expect(csv.status).toBe(200);
+    const metadata = JSON.parse(decodeURIComponent(String(csv.headers.get('x-resource-catalog-metadata'))));
+    expect(metadata).toMatchObject({ revision: all.body.revision, creatorId: null, rowCount: all.body.total });
   });
   it('does not treat ambiguous local ownership or a cross-work primary as confirmed', () => {
     const sample = samples[8]!;
@@ -516,13 +555,21 @@ describe.sequential('read-only own resource catalog', () => {
   });
   it('uses creator-scoped joins and unique source-path/primary-key lookup rather than scanning all Posts', () => {
     const prepare = vi.spyOn(db.connection, 'prepare');
-    service.list(1);
+    generate(1);
     const statements = prepare.mock.calls.map(([sql]) => sql);
     prepare.mockRestore();
     const localSql = statements.find((sql) =>
       sql.includes('AS localMatchStatus'),
     )!;
     const mediaSql = statements.find((sql) => sql.includes('AS memberCount'))!;
+    const gapsSql = statements.find(sql => sql.includes('SELECT DISTINCT p.id AS postId'))!;
+    const gapPlan = db.connection.prepare(`EXPLAIN QUERY PLAN ${gapsSql}`).all(1).map(row => String(row.detail));
+    expect(gapPlan.some(row => /SEARCH pi USING.*post_id=\?/.test(row))).toBe(true);
+    expect(gapPlan.some(row => /SEARCH i USING INTEGER PRIMARY KEY/.test(row))).toBe(true);
+    // SQLite may choose a covering visibility index, but only with the member's
+    // rowid bound; scanning all visible images for every Post is the regression.
+    expect(gapPlan.filter(row => /SEARCH i USING/.test(row)).every(row => row.includes('rowid=?')),
+      gapPlan.join('\n')).toBe(true);
     for (const sql of [localSql, mediaSql]) {
       const plan = db.connection
         .prepare(`EXPLAIN QUERY PLAN ${sql}`)
@@ -583,5 +630,56 @@ describe.sequential('read-only own resource catalog', () => {
     expect(detail.copies[0]!.retainedOriginalCount).toBe(2);
     expect(detail.item.mediaBytes).toBe(1234);
     expect(JSON.stringify(detail)).not.toContain('private');
+  });
+  it('reads global published rows by creator alias, title and original name without generation or media hydration', () => {
+    db.connection.exec(`INSERT INTO archive_catalog_creator_aliases(creator_id,source,alias,normalized_alias)
+      VALUES(2,'manual','别名二','别名二')`);
+    flush();
+    const prepare = vi.spyOn(db.connection, 'prepare');
+    const global = publishedService.list(null, { order: 'oldest' });
+    expect(global.creator).toBeNull();
+    expect(global.readModel).toMatchObject({ complete: true, status: 'ready', pendingCreators: 0 });
+    const alias = publishedService.list(null, { q: '别名二' });
+    expect(alias.items).toHaveLength(1);
+    expect(alias.items[0]).toMatchObject({ creatorId: 2, title: 'Separate', no: 'NO.001' });
+    expect(publishedService.list(null, { q: 'Separate' }).items).toEqual(alias.items);
+    expect(publishedService.list(null, { q: alias.items[0]!.originalDirectory! }).items).toEqual(alias.items);
+    expect(publishedService.detail(2, alias.items[0]!.workId, global.revision, 'all').item).toEqual(alias.items[0]);
+    expect(publishedService.list(null, { page: 2, revision: global.revision }).items).toHaveLength(50);
+    const exported = publishedService.exportBundle(null, 'txt', 'filtered', { q: '别名二', revision: global.revision });
+    expect(exported.metadata).toMatchObject({ creatorId: null, rowCount: 1 });
+    expect(exported.body).toContain('Other');
+    expect(exported.body).toContain(`Work #${alias.items[0]!.workId}`);
+    const queries = prepare.mock.calls.map(([sql]) => sql);
+    prepare.mockRestore();
+    expect(queries.some(sql => /\b(post_items|images|archive_catalog_local_works)\b/.test(sql))).toBe(false);
+    expect(queries.some(sql => /\b(INSERT|UPDATE|DELETE)\b/.test(sql))).toBe(false);
+  });
+  it('exposes pending completion and stale-page conflicts while enforcing deletion before publication', () => {
+    flush();
+    const sample = samples[12]!;
+    const before = publishedService.list(null);
+    const title = publishedService.detail(1, sample.work).item.title;
+    db.connection.prepare('UPDATE archive_catalog_works SET display_title=? WHERE id=?').run('Changed in another entry', sample.work);
+    expect(publishedService.list(null).readModel).toMatchObject({ status: 'updating', complete: false, pendingCreators: 1 });
+    expect(publishedService.detail(1, sample.work).item.title).toBe(title);
+    expect(() => publishedService.list(null, { page: 2, revision: before.revision })).toThrow('作品数据已更新');
+    expect(() => publishedService.export(null, 'csv', 'all')).toThrow('目录尚未完成更新');
+    db.connection.prepare('UPDATE posts SET is_trashed=1 WHERE id=?').run(sample.post);
+    expect(() => publishedService.detail(1, sample.work)).toThrow('该作品不在当前本地目录中');
+    db.connection.prepare('UPDATE posts SET is_trashed=0 WHERE id=?').run(sample.post);
+    flush();
+    expect(publishedService.detail(1, sample.work).item.title).toBe('Changed in another entry');
+    expect(publishedService.list(null).readModel.complete).toBe(true);
+  });
+  it('does not parse a publication from a newer incompatible rule version', () => {
+    flush();
+    db.connection.exec('UPDATE resource_catalog_state SET rule_version=2 WHERE creator_id=1');
+    try {
+      expect(() => publishedService.list(null)).toThrow('目录已由较新版本生成');
+      expect(() => publishedService.detail(1, samples[12]!.work)).toThrow('目录已由较新版本生成');
+    } finally {
+      db.connection.exec('UPDATE resource_catalog_state SET rule_version=1 WHERE creator_id=1');
+    }
   });
 });
