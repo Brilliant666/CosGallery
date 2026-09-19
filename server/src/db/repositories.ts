@@ -1,4 +1,5 @@
 import { databaseManager } from './database.js';
+import { effectivePostSortSql } from './work-sort-sql.js';
 import { SHARE_SESSION_SECRET_SETTING_KEY } from '../constants/app-setting-keys.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
 import { resolveUniqueSlug, slugifyFolderName } from '../utils/slug.js';
@@ -2550,10 +2551,10 @@ export const canonicalCreatorGalleryRepository = {
       : [creatorId, limit, offset];
     const posts = database.prepare(
       `
-      ${BASE_POST_SELECT_SQL}
+      ${BASE_POST_SELECT_SQL.replace('posts.sort_timestamp AS sortTimestamp', `${effectivePostSortSql()} AS sortTimestamp`)}
       WHERE posts.folder_id IN (${CANONICAL_CREATOR_FOLDER_IDS_SQL})
         AND ${VISIBLE_POST_WHERE_SQL}${mediaTypeClause}
-      ORDER BY posts.sort_timestamp ${direction}, posts.id ${direction}
+      ORDER BY sortTimestamp ${direction}, posts.id ${direction}
       LIMIT ? OFFSET ?
       `
     ).all(...params) as unknown as Omit<FeedPost, 'mediaItems'>[];
@@ -2600,6 +2601,12 @@ export const canonicalCreatorGalleryRepository = {
          AND ${VISIBLE_POST_WHERE_SQL}${mediaTypeClause}`
     ).get(...(mediaType ? [creatorId, mediaType] : [creatorId])) as { count: number };
     return Number(row.count);
+  },
+
+  effectiveSortTimestamp(postId: number): number | undefined {
+    const row = database.prepare(`SELECT ${effectivePostSortSql()} AS value FROM posts WHERE posts.id=?`)
+      .get(postId) as { value: number } | undefined;
+    return row?.value;
   },
 
   ownsVisiblePost(creatorId: number, postId: number): boolean {

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { effectiveWorkSortSql } from '../db/work-sort-sql.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { FOLDER_IMAGE_DEFAULT_ORDER_SETTING_KEY } from '../constants/app-setting-keys.js';
 import type {
@@ -127,7 +128,7 @@ export class ResourceCatalogBuilder {
           `SELECT l.id,l.work_id AS workId,p.id AS postId,l.folder_name AS directoryName,l.is_active AS active,
         f.is_active AS folderActive,f.creator_id AS ownerId,f.match_status AS matchStatus,l.match_status AS localMatchStatus,
         gallery_folder.role AS folderRole,f.gallery_folder_id AS folderId,
-        p.folder_id AS postFolderId,p.sort_timestamp AS sortTimestamp,p.is_deleted AS deleted,p.is_trashed AS trashed,
+        p.folder_id AS postFolderId,${effectiveWorkSortSql('w.id', 'p.sort_timestamp')} AS sortTimestamp,p.is_deleted AS deleted,p.is_trashed AS trashed,
         l.other_file_count AS otherFileCount,
         CASE WHEN first_image.folder_id=p.folder_id AND lower(first_image.filename) IN ('cover.jpg','cover.jpeg','cover.png','cover.webp','cover.avif','cover.gif') THEN 1 ELSE 0 END AS explicitCover
         FROM archive_catalog_works w JOIN archive_catalog_local_works l ON l.work_id=w.id

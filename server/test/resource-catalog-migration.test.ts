@@ -34,7 +34,9 @@ describe('persistent resource catalog migration and transactional dirty markers'
 
   it('fresh schema and upgrade SQL are identical and repeat is a no-op', () => {
     const sql = fs.readFileSync(new URL('../db/migrations/000022_resource_catalog_read_model.sql', import.meta.url), 'utf8').split('-- migrate:down')[0].replace('-- migrate:up', '').trim();
-    expect(sql).toBe(resourceCatalogSchemaSql.trim());
+    // TypeScript normalizes template-literal newlines; a Windows checkout may
+    // keep CRLF in the SQL file. Compare the actual SQL apart from line endings.
+    expect(sql.replaceAll('\r\n', '\n')).toBe(resourceCatalogSchemaSql.trim().replaceAll('\r\n', '\n'));
     const before = db.prepare('SELECT * FROM resource_catalog_state ORDER BY creator_id').all();
     db.exec(sql); db.exec(sql);
     expect(db.prepare('SELECT * FROM resource_catalog_state ORDER BY creator_id').all()).toEqual(before);
