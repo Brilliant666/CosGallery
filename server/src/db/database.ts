@@ -30,6 +30,10 @@ class DatabaseManager {
       assertNoLegacySchema(db);
     }
 
+    // The catalog worker publishes through an independent SQLite connection.
+    // Wait for short writer transactions instead of failing ordinary app writes
+    // immediately. Keep contention bounded; genuine failures still propagate.
+    db.exec('PRAGMA busy_timeout=5000');
     globalObj[GLOBAL_DB_KEY] = db;
     return db;
   }
