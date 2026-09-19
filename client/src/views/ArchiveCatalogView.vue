@@ -22,7 +22,8 @@
       </article>
     </div>
 
-    <div v-show="workspace === 'roster'"><ManagedCreatorRoster ref="managedRoster" @changed="loadCatalog()" @source-planned="refreshSourceRegions" @plan-downloads="planCreatorDownloads" /></div>
+    <div v-show="workspace === 'roster'"><ManagedCreatorRoster ref="managedRoster" @changed="loadCatalog()" @source-planned="refreshSourceRegions" @plan-downloads="planCreatorDownloads" @resource-catalog="openResourceCatalog" /></div>
+    <ResourceCatalog v-if="workspace === 'resources'" :creator-id="resourceCreatorId" @select="openResourceCatalog" />
 
     <section class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="博主元数据采集队列" v-show="workspace === 'source'">
       <div class="flex flex-wrap items-start justify-between gap-4">
@@ -286,15 +287,51 @@
 </template>
 
 <script setup lang="ts">
-const workspaces = [{id:'roster',label:'博主库'},{id:'source',label:'来源检查'},{id:'staging',label:'网盘暂存'},{id:'ingest',label:'本地入库'}] as const;
-const workspace = ref<'roster'|'source'|'staging'|'ingest'>('roster');
+const workspaces = [
+  { id: 'roster', label: '博主库' },
+  { id: 'resources', label: '资源目录' },
+  { id: 'source', label: '来源检查' },
+  { id: 'staging', label: '网盘暂存' },
+  { id: 'ingest', label: '本地入库' }
+] as const;
+type Workspace = typeof workspaces[number]['id'];
+const route = useRoute();
+const router = useRouter();
+const workspace = ref<Workspace>('roster');
+const resourceCreatorId = ref<number | null>(null);
+watch(
+  () => route?.query,
+  query => {
+    const requested = query?.workspace;
+    workspace.value = workspaces.some(tab => tab.id === requested)
+      ? requested as Workspace
+      : 'roster';
+    const value = Number(query?.creatorId);
+    resourceCreatorId.value = Number.isSafeInteger(value) && value > 0 ? value : null;
+  },
+  { immediate: true }
+);
+watch(workspace, value => {
+  if (!router || !route || (route.query.workspace ?? 'roster') === value) return;
+  void router.push({ query: { ...route.query, workspace: value } });
+});
+function openResourceCatalog(id: number) {
+  if (router && route) {
+    void router.push({ query: { ...route.query, workspace: 'resources', creatorId: String(id) } });
+  } else {
+    resourceCreatorId.value = id;
+    workspace.value = 'resources';
+  }
+}
 async function planCreatorDownloads(id:number) { workspace.value='staging'; await planDownloads(id); }
+import { useRoute, useRouter } from 'vue-router';
+import ResourceCatalog from '../components/ResourceCatalog.vue';
 import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
 import IngestPerformance from '../components/IngestPerformance.vue';
 import FirstCollectionSelector from '../components/FirstCollectionSelector.vue';
 import Stage2CreatorQueue from '../components/Stage2CreatorQueue.vue';
 import SourceReuseReview from '../components/SourceReuseReview.vue';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import {
   fetchArchiveBridgeStatus,

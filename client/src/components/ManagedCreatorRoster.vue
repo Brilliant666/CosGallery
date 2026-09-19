@@ -26,7 +26,7 @@
         <div class="card-metric"><small>本地作品</small><strong>{{ creator.localWorks }}</strong></div>
         <div class="card-metric"><small>已关联</small><strong>{{ creator.matchedWorks }}</strong></div>
         <div class="card-metric" :class="{missing:creator.missingWorks > 0}"><small>待收录</small><strong>{{ creator.missingWorks }}</strong></div>
-        <div class="card-actions"><button type="button" @click="openCreator(creator.id, 'ledger')">查看账本</button><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理资料</button></div>
+        <div class="card-actions"><button type="button" @click="openCreator(creator.id, 'ledger')">查看账本</button><button type="button" @click="emit('resource-catalog', creator.id)">资源目录</button><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理资料</button></div>
       </article>
     </div>
     <p v-if="payload && !payload.items.length">没有符合条件的博主。</p>
@@ -132,7 +132,7 @@ import { RequestError } from '../api/http';
 import * as api from '../api/managed-creators';
 import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ArchiveCatalogState, ContentRating, LocalIngestDestinationPreference } from '../types/api';
 
-const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]]; 'plan-downloads': [creatorId: number] }>();
+const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]]; 'plan-downloads': [creatorId: number]; 'resource-catalog': [creatorId: number] }>();
 const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
 const listTop = ref<HTMLElement | null>(null);
 const detail = ref<ArchiveCatalogCreatorDetail | null>(null);
