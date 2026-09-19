@@ -52,6 +52,16 @@ function logServerReady(): void {
   );
 }
 
+function startCatalogUpdates(): void {
+  try {
+    startResourceCatalogUpdater();
+  } catch (error: unknown) {
+    // A derived-data worker must not crash the HTTP listening callback or turn
+    // local startup's handled rejection into an unhandled promise rejection.
+    log.error("Resource catalog updater could not start; pending generations retained", error);
+  }
+}
+
 async function bootstrap(): Promise<void> {
   await permanentDeletionService.recoverPendingDeletions();
   const app = createApp();
@@ -76,12 +86,16 @@ async function bootstrap(): Promise<void> {
     process.exitCode = 1;
   });
 
+  // This includes synchronous settings writes even when scanning is disabled.
+  // Finish before starting the independent catalog writer or announcing ready;
+  // failures must reach bootstrap's error handler, not escape an event callback.
+  const startupAction = scannerService.handleStartup("startup");
+
   server.listen(appConfig.port, appConfig.host, () => {
     logServerReady();
-    startResourceCatalogUpdater();
-    const startupAction = scannerService.handleStartup("startup");
     if (startupAction === "blocked") {
       log.info("Gallery watcher deferred until the library rebuild completes");
+      startCatalogUpdates();
       return;
     }
 
@@ -99,6 +113,10 @@ async function bootstrap(): Promise<void> {
       logInfo: (message) => log.info(message)
     }).catch((error: unknown) => {
       log.info("Local ingest startup recovery or compensation scan could not complete", error instanceof Error ? error.message : String(error));
+    }).finally(() => {
+      // Preserve local recovery's existing failure behavior while keeping its
+      // startup writes ahead of catalog publication. HTTP need not await scans.
+      startCatalogUpdates();
     });
   });
 
