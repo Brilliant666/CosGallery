@@ -46,7 +46,8 @@
         {{ payload.summary.unavailableWorks }}
       </p>
       <p class="hint">
-        {{ payload.sortOrder === 'newest' ? '最新作品在前' : '最早作品在前' }} ·
+        NO 按已有排序时间从早到晚编号 ·
+        {{ payload.sortOrder === 'newest' ? '最新作品在前（NO 降序）' : '最早作品在前（NO 升序）' }} ·
         按已索引数据，不实时检查磁盘。目录 NO 会随编排更新，本地文件名未修改。
       </p>
       <p
