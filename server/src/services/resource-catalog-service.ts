@@ -4,6 +4,7 @@ import { databaseManager } from '../db/database.js';
 import { FOLDER_IMAGE_DEFAULT_ORDER_SETTING_KEY } from '../constants/app-setting-keys.js';
 import { ResourceCatalogError } from './resource-catalog-builder.js';
 import { RESOURCE_CATALOG_RULE_VERSION } from './resource-catalog-read-model.js';
+import { estimateNote, estimateDescription } from './work-sort-estimate.js';
 import type { ResourceCatalogCopy, ResourceCatalogDetail, ResourceCatalogFilter, ResourceCatalogPage, ResourceCatalogReadStatus, ResourceCatalogRow } from '../types/resource-catalog.js';
 export { ResourceCatalogError, resourceCatalogText, safeResourceSourceUrl } from './resource-catalog-builder.js';
 
@@ -110,11 +111,12 @@ export class ResourceCatalogService {
       const visible = new Set(db.prepare(`SELECT p.id FROM posts p
         JOIN json_each(?) copy ON p.id=json_extract(copy.value,'$.postId')
         WHERE p.is_deleted=0 AND p.is_trashed=0`).all(String(row.copies_json)).map(post => Number(post.id)));
-      return { revision: context.revision, item: JSON.parse(String(row.row_json)),
+      const item = JSON.parse(String(row.row_json)) as ResourceCatalogRow;
+      return { revision: context.revision, item,
         copies: copies.map(copy => copy.postId !== null && !visible.has(copy.postId)
           ? { ...copy, postId: null, indexedAvailable: false } : copy),
         readModel: context.readModel, notes: ['本地统计仅包含有效已索引媒体；来源声明独立保留，不代表文件逐字节一致。',
-          '其他附件及保留原件不计入媒体容量；本次未检查磁盘。'] };
+          '其他附件及保留原件不计入媒体容量；本次未检查磁盘。', ...(item.sortEstimate ? [estimateDescription(item.sortEstimate)] : [])] };
     });
   }
   exportBundle(creatorId: number | null, format: 'txt' | 'csv', scope: 'all' | 'filtered', filter: ResourceCatalogFilter = {}) {
@@ -125,6 +127,7 @@ export class ResourceCatalogService {
       const rows = db.prepare(`SELECT r.row_json ${sql} ${this.ordering(context.sortOrder)}`).all(...args)
         .map(row => JSON.parse(String(row.row_json)) as ResourceCatalogRow);
       const metadata = { revision: context.revision, generatedAt: new Date().toISOString(), numberingOrder: 'oldest',
+        estimatedSortTimeNote: estimateNote,
         displayOrder: context.sortOrder, scope, creatorId, creatorName: context.creator?.canonicalName ?? null,
         filters: scope === 'filtered' ? { q: filter.q ?? '', localState: filter.localState ?? 'all', source: filter.source ?? 'all' } : null,
         rowCount: rows.length, dynamicNumberingNote: 'NO属于各自博主，按已有排序时间从早到晚编号；新增作品可使NO重排，不改变稳定Work ID或本地文件名。' };
@@ -132,12 +135,12 @@ export class ResourceCatalogService {
         `博主：${plain(context.creator?.canonicalName ?? '全部博主')}`, `生成时间：${metadata.generatedAt}`, `版本：${metadata.revision}`,
         '编目顺序：按已有排序时间从早到晚编号', `展示顺序：${context.sortOrder === 'oldest' ? '最早优先' : '最新优先'}`,
         `导出范围：${scope === 'all' ? '完整目录' : '当前筛选结果'}`, metadata.dynamicNumberingNote, '',
-        ...rows.map(row => `${creatorId === null ? `[${plain(row.creatorName)} / #${row.creatorId}] ` : ''}${row.text} (Work #${row.workId})`)].join('\r\n') };
+        ...rows.map(row => `${creatorId === null ? `[${plain(row.creatorName)} / #${row.creatorId}] ` : ''}${row.text} (Work #${row.workId})${row.sortEstimate ? ` [${estimateDescription(row.sortEstimate)}]` : ''}`)].join('\r\n') };
       const headers = ['creatorId', 'workId', 'no', 'title', 'sortTimestamp', 'primaryPostId', 'primaryLocalWorkId',
-        'imageCount', 'videoCount', 'mediaBytes', 'originalDirectory', 'localState', 'statisticsBasis', 'sources', 'creatorName'];
+        'imageCount', 'videoCount', 'mediaBytes', 'originalDirectory', 'localState', 'statisticsBasis', 'sources', 'creatorName', 'sortEstimate'];
       return { metadata, body: '\uFEFF' + [headers.map(csvCell).join(','), ...rows.map(row => [row.creatorId, row.workId, row.no,
         row.title, row.sortTimestamp, row.primaryPostId, row.primaryLocalWorkId, row.imageCount, row.videoCount, row.mediaBytes,
-        row.originalDirectory, row.localState, row.statisticsBasis, JSON.stringify(row.sources), row.creatorName].map(csvCell).join(','))].join('\r\n') };
+        row.originalDirectory, row.localState, row.statisticsBasis, JSON.stringify(row.sources), row.creatorName, row.sortEstimate ? JSON.stringify(row.sortEstimate) : ''].map(csvCell).join(','))].join('\r\n') };
     });
   }
   export(creatorId: number | null, format: 'txt' | 'csv', scope: 'all' | 'filtered', filter: ResourceCatalogFilter = {}) {

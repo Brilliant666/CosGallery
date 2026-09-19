@@ -73,6 +73,31 @@ Capture every eligible original media member at its original location first;
 do not substitute copied-file creation time or silently fall back to mtime.
 Private paths and per-file evidence belong in local ignored reports only.
 
+## Source-order estimates (current preview rule)
+
+The initial filesystem-creation candidates are retained as evidence but are no
+longer the adopted rule for this preview. Explicitly revoked decisions remain
+stored. Missing source evidence leaves the original value unchanged.
+
+An estimate uses an already identified Costuan collection and reliable original
+Work times on both sides. External order is only relative position, never a date
+or a CosGallery NO. One anomalous Work takes the midpoint; a reviewed anomalous
+group takes equal rank intervals between the two fixed anchors. Missing external
+numbers are not invented as Works. No target or prior estimate may be an anchor.
+Equal, reversed, unavailable or changed anchors are rejected; no birthtime,
+current-time or one-neighbor fallback is performed.
+
+The evidence object includes `method: "source-order-interpolation"`,
+`collectionId`, `sourceOrder`, `originalTimestamp`, and `lower` / `upper` objects
+with `workId`, `sourceOrder`, and `timestamp`. The apply command validates the
+existing source relationships and original anchor facts. The chosen value is
+saved once, not recalculated during refresh or reads.
+
+Published rows carry only the whitelisted `sortEstimate` fields. The list marks
+the time as estimated; details and TXT/CSV exports carry its reference basis and
+the warning that it is not a release or shooting date. Raw private evidence is
+never serialized. This uses the existing Draft's 000023 table, not a new migration.
+
 The existing numbering tie-break and independent display directions remain:
 number the full creator collection oldest first, then filter/page/reverse.
 Other Work timestamps are untouched even when their NO shifts.

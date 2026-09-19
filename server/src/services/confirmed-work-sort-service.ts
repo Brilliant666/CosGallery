@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { ResourceCatalogBuilder } from './resource-catalog-builder.js';
+import { sortEstimateSchema } from './work-sort-estimate.js';
 
 const timestamp = z.number().finite().positive().max(8640000000000000);
 const decisionSchema = z.object({
@@ -51,6 +52,34 @@ export class ConfirmedWorkSortService {
         }
         if (this.db.prepare("SELECT 1 FROM archive_catalog_work_sort_confirmations WHERE work_id=? AND state='confirmed'").get(decision.workId))
           throw new Error('Work already has a confirmed sort timestamp; revoke explicitly before replacing');
+        if (decision.evidence.method === 'source-order-interpolation') {
+          const estimate = sortEstimateSchema.parse(decision.evidence);
+          const collectionId = z.number().int().positive().parse(decision.evidence.collectionId);
+          if (estimate.originalTimestamp !== decision.originalTimestamp || estimate.lower.timestamp >= estimate.upper.timestamp)
+            throw new Error('Invalid estimate anchor times');
+          const sameGroup = plan.decisions.filter(d => d.evidence.method === estimate.method && d.evidence.collectionId === collectionId &&
+            JSON.stringify(d.evidence.lower) === JSON.stringify(decision.evidence.lower) && JSON.stringify(d.evidence.upper) === JSON.stringify(decision.evidence.upper))
+            .sort((a,b) => Number(a.evidence.sourceOrder)-Number(b.evidence.sourceOrder));
+          const expected = estimate.lower.timestamp + (estimate.upper.timestamp-estimate.lower.timestamp) * (sameGroup.indexOf(decision)+1)/(sameGroup.length+1);
+          if (decision.adoptedTimestamp !== expected) throw new Error('Estimate must use ordered equal intervals between fixed anchors');
+          const snapshot = new ResourceCatalogBuilder(this.db).generate(decision.creatorId);
+          for (const ref of [{workId:decision.workId,sourceOrder:estimate.sourceOrder},estimate.lower,estimate.upper]) {
+            const sources = this.db.prepare(`SELECT s.work_id FROM archive_catalog_source_works s
+              JOIN archive_catalog_collections c ON c.id=s.collection_id JOIN archive_catalog_works w ON w.id=s.work_id
+              WHERE s.collection_id=? AND s.source='costuan' AND s.is_active=1 AND s.source_order=?
+                AND c.creator_id=? AND w.creator_id=?`).all(collectionId,ref.sourceOrder,decision.creatorId,decision.creatorId);
+            if (sources.length !== 1 || sources[0]?.work_id !== ref.workId) throw new Error('Estimate source order is missing or ambiguous');
+            if ('timestamp' in ref) {
+              if (plan.decisions.some(d=>d.workId===ref.workId) || this.db.prepare("SELECT 1 FROM archive_catalog_work_sort_confirmations WHERE work_id=? AND state='confirmed'").get(ref.workId))
+                throw new Error('Estimated or pending works cannot be anchors');
+              const anchor = snapshot.page.items.find(r=>r.workId===ref.workId);
+              if (anchor?.localState !== 'indexed' || anchor.sortTimestamp !== ref.timestamp || !Number.isFinite(ref.timestamp) || ref.timestamp > Date.now())
+                throw new Error('Estimate anchor facts changed or unavailable');
+            }
+          }
+          if (!(estimate.lower.sourceOrder < estimate.sourceOrder && estimate.sourceOrder < estimate.upper.sourceOrder))
+            throw new Error('Estimate must lie within source order anchors');
+        }
         const snapshot = new ResourceCatalogBuilder(this.db).generate(decision.creatorId);
         const row = snapshot.page.items.find(item => item.workId === decision.workId);
         if (!row || row.primaryLocalWorkId !== decision.primaryLocalWorkId || row.primaryPostId !== decision.primaryPostId ||

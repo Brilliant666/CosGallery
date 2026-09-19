@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { effectiveWorkSortSql } from '../db/work-sort-sql.js';
+import { publicSortEstimate } from './work-sort-estimate.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { FOLDER_IMAGE_DEFAULT_ORDER_SETTING_KEY } from '../constants/app-setting-keys.js';
 import type {
@@ -21,6 +22,7 @@ type Work = {
   id: number;
   title: string;
   primaryId: number | null;
+  sortEvidence: string | null;
 };
 type Copy = {
   id: number;
@@ -120,9 +122,12 @@ export class ResourceCatalogBuilder {
       const sortOrder = order === 'oldest' ? 'oldest' : 'newest';
       const works = db
         .prepare(
-          `SELECT id,display_title AS title,primary_local_work_id AS primaryId FROM archive_catalog_works WHERE creator_id=? ORDER BY id`,
+          `SELECT w.id,w.display_title AS title,w.primary_local_work_id AS primaryId,c.evidence_json AS sortEvidence
+          FROM archive_catalog_works w LEFT JOIN archive_catalog_work_sort_confirmations c ON c.work_id=w.id AND c.state='confirmed'
+          WHERE w.creator_id=? ORDER BY w.id`,
         )
         .all(creatorId) as unknown as Work[];
+      const estimates = new Map(works.map(work => [work.id, work.sortEvidence ? publicSortEstimate(work.sortEvidence) : undefined]));
       const locals = db
         .prepare(
           `SELECT l.id,l.work_id AS workId,p.id AS postId,l.folder_name AS directoryName,l.is_active AS active,
@@ -351,6 +356,7 @@ export class ResourceCatalogBuilder {
           no: null,
           title: work.title,
           sortTimestamp: sortable ? primary!.sortTimestamp : null,
+          ...(sortable && estimates.get(work.id) ? { sortEstimate: estimates.get(work.id) } : {}),
           primaryPostId: owned ? primary!.postId : null,
           primaryLocalWorkId: primary?.id ?? null,
           imageCount: stats?.imageCount ?? null,

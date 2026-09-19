@@ -7,6 +7,7 @@ import { workSortSchemaSql } from '../src/db/work-sort-schema.js';
 import { ConfirmedWorkSortService } from '../src/services/confirmed-work-sort-service.js';
 import { ResourceCatalogBuilder } from '../src/services/resource-catalog-builder.js';
 import { ResourceCatalogReadModel } from '../src/services/resource-catalog-read-model.js';
+import { ResourceCatalogService } from '../src/services/resource-catalog-service.js';
 import { ArchiveLocalFulfillmentService, localVersionSql, fulfillmentValidSql, sourceNeedsAcquisitionSql } from '../src/services/archive-local-fulfillment-service.js';
 
 describe.sequential('confirmed work sort timestamp', () => {
@@ -169,5 +170,50 @@ describe.sequential('confirmed work sort timestamp', () => {
     } finally { reader.close(); }
     db.exec(workSortSchemaSql);
     expect(generation()).toBe(before);
+  });
+
+  function estimatePlan() {
+    db.exec(`INSERT INTO archive_catalog_collections(id,creator_id,source,source_collection_id,title,observed_at)
+      VALUES(1,1,'costuan','set','Set','now');
+      INSERT INTO archive_catalog_source_works(id,work_id,collection_id,source,source_work_id,source_order,source_title,first_seen_at,last_seen_at)
+      VALUES(1,1,1,'costuan','a',2,'Target','now','now'),(2,2,1,'costuan','b',1,'Before','now','now'),(3,3,1,'costuan','c',3,'After','now','now');`);
+    return {confirmed:true,decisions:[{...plan().decisions[0],decisionKey:'estimated',adoptedTimestamp:1002.5,
+      evidence:{method:'source-order-interpolation',collectionId:1,sourceOrder:2,originalTimestamp:1001,
+        lower:{workId:2,sourceOrder:1,timestamp:1002},upper:{workId:3,sourceOrder:3,timestamp:1003},privatePath:'SECRET_PATH'}}]};
+  }
+  it('stores a fixed midpoint and exposes only safe estimate evidence in detail and exports', () => {
+    const input=estimatePlan(),service=new ConfirmedWorkSortService(db),before=facts();
+    service.apply(input); expect(facts()).toEqual(before);
+    const model=new ResourceCatalogReadModel(db);model.rebuildCreator(1);
+    const catalog=new ResourceCatalogService(()=>db),row=catalog.detail(1,1).item;
+    expect(row.sortTimestamp).toBe(1002.5);expect(row.sortEstimate?.lower.workId).toBe(2);
+    expect(JSON.stringify(row)).not.toContain('SECRET_PATH');
+    expect(catalog.export(1,'txt','all')).toContain('估算');
+    const csv=catalog.exportBundle(1,'csv','all');expect(csv.body).toContain('source-order-interpolation');
+    expect(csv.metadata.estimatedSortTimeNote).toContain('不是发布日期');
+    db.exec("UPDATE posts SET sort_timestamp=7000 WHERE id=3; UPDATE archive_catalog_source_works SET source_title='Refresh' WHERE id=1");
+    model.rebuildCreator(1);expect(catalog.detail(1,1).item.sortTimestamp).toBe(1002.5);
+    expect(service.apply(input).unchanged).toHaveLength(1);
+  });
+  it('rejects missing source order, equal/reversed or changed anchors and pending anchors', () => {
+    const input=estimatePlan(),service=new ConfirmedWorkSortService(db);
+    const altered=(change:object)=>({...input,decisions:[{...input.decisions[0],evidence:{...input.decisions[0]!.evidence,...change}}]});
+    expect(()=>service.apply(altered({sourceOrder:99}))).toThrow(/source order/);
+    expect(()=>service.apply(altered({upper:{workId:3,sourceOrder:3,timestamp:1002}}))).toThrow(/anchor times/);
+    db.exec('UPDATE posts SET sort_timestamp=2000 WHERE id=3');expect(()=>service.apply(input)).toThrow(/anchor facts/);
+    db.exec('UPDATE posts SET sort_timestamp=1003 WHERE id=3');
+    expect(()=>service.apply({...input,decisions:[...input.decisions,{...plan().decisions[0],workId:2}]})).toThrow(/pending works/);
+    expect(db.prepare('SELECT * FROM archive_catalog_work_sort_confirmations').all()).toEqual([]);
+  });
+  it('distributes a consecutive anomalous group without using a new estimate as an anchor', () => {
+    const input=estimatePlan();
+    db.exec(`UPDATE archive_catalog_source_works SET source_order=4 WHERE id=3;
+      INSERT INTO archive_catalog_source_works(id,work_id,collection_id,source,source_work_id,source_order,source_title,first_seen_at,last_seen_at)
+      VALUES(4,4,1,'costuan','d',3,'Second target','now','now');`);
+    const first=input.decisions[0]!;first.evidence.upper.sourceOrder=4;first.adoptedTimestamp=1002+1/3;
+    const second={...first,decisionKey:'estimated-second',workId:4,primaryLocalWorkId:4,primaryPostId:4,originalTimestamp:1004,adoptedTimestamp:1002+2/3,
+      evidence:{...first.evidence,sourceOrder:3,originalTimestamp:1004}};
+    new ConfirmedWorkSortService(db).apply({...input,decisions:[first,second]});
+    expect(repo.effectiveSortTimestamp(1)).toBe(1002+1/3);expect(repo.effectiveSortTimestamp(4)).toBe(1002+2/3);
   });
 });

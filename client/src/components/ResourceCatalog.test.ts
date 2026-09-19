@@ -178,6 +178,46 @@ describe('resource catalog', () => {
     await flushPromises();
     expect(api.fetchResourceDetail).toHaveBeenCalledTimes(1);
   });
+  it('labels only estimated rows and loads source-order evidence inside details on demand', async () => {
+    const estimate: api.ResourceSortEstimate = {
+      method: 'source-order-interpolation', sourceOrder: 51,
+      originalTimestamp: 1200000000000,
+      lower: { workId: 20, sourceOrder: 50, timestamp: 1690000000000 },
+      upper: { workId: 25, sourceOrder: 53, timestamp: 1720000000000 }
+    };
+    const estimated = { ...row, sortEstimate: estimate };
+    const p = page();
+    p.items = [estimated, { ...row, workId: 23 }];
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
+    vi.mocked(api.fetchResourceDetail).mockResolvedValue({ ...detail, item: estimated });
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    expect(w.findAll('[data-test="sort-estimate"]')).toHaveLength(1);
+    expect(w.find('[data-test="sort-estimate-basis"]').exists()).toBe(false);
+    expect(api.fetchResourceDetail).not.toHaveBeenCalled();
+    await button(w, '展开详情').trigger('click');
+    await flushPromises();
+    const basis = w.get('[data-test="sort-estimate-basis"]');
+    expect(basis.text()).toContain('来源 NO.51');
+    expect(basis.text()).toContain('前参照 Work #20（来源 NO.50');
+    expect(basis.text()).toContain('后参照 Work #25（来源 NO.53');
+    for (const timestamp of [row.sortTimestamp!, estimate.originalTimestamp, estimate.lower.timestamp, estimate.upper.timestamp]) {
+      expect(basis.text()).toContain(new Date(timestamp).toLocaleString());
+    }
+    expect(basis.text()).toContain('不是已证实的发布日期或拍摄时间');
+    expect(basis.text()).toContain('不随浏览重新插值');
+    await button(w, '收起').trigger('click');
+    expect(w.find('[data-test="sort-estimate-basis"]').exists()).toBe(false);
+    expect(w.findAll('[data-test="sort-estimate"]')).toHaveLength(1);
+  });
+  it('does not describe an ordinary or legacy confirmed time as an estimate', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    await button(w, '展开详情').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-test="sort-estimate"]').exists()).toBe(false);
+    expect(w.find('[data-test="sort-estimate-basis"]').exists()).toBe(false);
+  });
   it('ignores late creator/detail failures after switching creator', async () => {
     const slow = deferred<api.ResourcePage>();
     vi.mocked(api.fetchResourceCatalog).mockReturnValueOnce(slow.promise);

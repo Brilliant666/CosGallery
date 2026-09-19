@@ -151,7 +151,7 @@
                 <td>
                   <strong>{{ item.no ?? '未编排' }}</strong> {{ item.title }}
                 </td>
-                <td>{{ date(item.sortTimestamp) }}</td>
+                <td>{{ date(item.sortTimestamp) }} <span v-if="item.sortEstimate" class="estimate-badge" data-test="sort-estimate" title="按来源顺序估算的排序时间，详细依据见展开详情">估算</span></td>
                 <td>
                   {{ item.imageCount ?? '未知' }} P /
                   {{ item.videoCount ?? '未知' }} V<br />{{
@@ -199,6 +199,11 @@
                       }}
                       · 主 LocalWork #{{ item.primaryLocalWorkId ?? '未知' }}
                     </p>
+                    <div v-if="details[item.workId]!.item.sortEstimate" class="sort-estimate-basis" data-test="sort-estimate-basis">
+                      <p>按来源顺序估算的排序时间：{{ date(details[item.workId]!.item.sortTimestamp) }}；原值：{{ date(details[item.workId]!.item.sortEstimate!.originalTimestamp) }}。</p>
+                      <p>来源 NO.{{ details[item.workId]!.item.sortEstimate!.sourceOrder }}；前参照 Work #{{ details[item.workId]!.item.sortEstimate!.lower.workId }}（来源 NO.{{ details[item.workId]!.item.sortEstimate!.lower.sourceOrder }}，{{ date(details[item.workId]!.item.sortEstimate!.lower.timestamp) }}）；后参照 Work #{{ details[item.workId]!.item.sortEstimate!.upper.workId }}（来源 NO.{{ details[item.workId]!.item.sortEstimate!.upper.sourceOrder }}，{{ date(details[item.workId]!.item.sortEstimate!.upper.timestamp) }}）。</p>
+                      <p>确认后固定保存，不随浏览重新插值；不是已证实的发布日期或拍摄时间。</p>
+                    </div>
                     <ul>
                       <li
                         v-for="copy in details[item.workId]!.copies"
@@ -698,6 +703,15 @@ th {
 }
 .detail li {
   margin: 0.5rem 0;
+}
+.estimate-badge {
+  display: inline-block;
+  color: var(--color-muted, #667085);
+  border: 1px solid var(--color-border, #ddd);
+  border-radius: 0.3rem;
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
 }
 .error {
   color: #b42318;

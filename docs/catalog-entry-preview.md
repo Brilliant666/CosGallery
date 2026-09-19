@@ -40,3 +40,18 @@ Private reports and screenshots are retained only in ignored local evidence.
 This does not claim final full-regression, production deployment or user UI
 acceptance. Final candidate verification follows explicit user closure of this
 iteration. Existing ambiguous legacy ownership is not repaired by this feature.
+
+## Feedback iteration: source-order estimates
+
+Filesystem birthtime is no longer the adopted rule for the selected anomalies.
+The isolated preview retains its captured evidence and revoked decisions. Five
+works now use fixed source-order estimates; two lack reliable source sequence
+and retain their original times. Equal-interval groups never use each other as
+anchors, and no missing source entry is invented.
+
+The concise list marks estimated times; expanded details and export evidence
+explain their fixed anchors and non-publication-date meaning. The relevant
+server suites pass 28 tests, client component passes 17 tests, types/builds pass,
+and actual browser badge/detail checks pass. Isolated comparison verifies
+catalog/card/detail agreement, unchanged business facts and idempotent replay.
+The same Draft and preview remain unmerged and undeployed.
