@@ -585,8 +585,9 @@ export class ArchiveMetadataTaskService {
     const task=this.requireClaim(options.id,options.workerId,options.expectedAttempt);
     if (task.creatorId!==options.canonicalCreatorId) throw new ArchiveMetadataTaskError('规范博主身份与任务不一致。');
     if (!task.checkRoundId) throw new ArchiveMetadataTaskError('该任务没有本轮检查身份，请从规范博主选择器发起新的明确检查。',409);
-    const {requiredFilenames,sourceFilenames,supplementalContents,canonicalWorks,canonicalDirectoryVerification,acceptedDirectoryRevisions,localSourceReuse}=new ArchiveCatalogService(this.database).validateCompleteCostuanDirectory(options.record,task.creatorId);
-    return {task,requiredFilenames,sourceFilenames,supplementalContents,canonicalWorks,canonicalDirectoryVerification,acceptedDirectoryRevisions,localSourceReuse};
+    const {requiredFilenames,sourceFilenames,supplementalContents,canonicalWorks,canonicalDirectoryVerification,acceptedDirectoryRevisions,localSourceReuse,reviewedRangePolicy}=new ArchiveCatalogService(this.database).validateCompleteCostuanDirectory(options.record,task.creatorId);
+    return {task,requiredFilenames,sourceFilenames,supplementalContents,canonicalWorks,canonicalDirectoryVerification,acceptedDirectoryRevisions,localSourceReuse,
+      ...(reviewedRangePolicy ? {reviewedRangePolicy} : {})};
   }
 
   async finalizeSelected<T>(options:MetadataFinalizeOptions, action:(creatorIds:number[])=>Promise<T>):Promise<T> {

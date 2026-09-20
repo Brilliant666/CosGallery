@@ -24,6 +24,19 @@ describe('Costuan mixed-numbering metadata import', () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it.each(['','混合博主 NO.001 单套 [1P-1MB]'])('refuses a range hidden in offline works with raw text %s',async text=>{
+    const input=path.join(tempRoot,'range.json');
+    seedCreators(database,[{name:'混合博主',preference:'liked',rating:'R15'}]);
+    const before=JSON.stringify(database.prepare('SELECT * FROM archive_catalog_works').all());
+    await fs.writeFile(input,JSON.stringify({format:'costuan-archive-metadata',version:1,records:{'costuan:range':{
+      creatorName:'混合博主',aliases:[],costuan:{postId:'range',title:'混合博主COSPLAY写真合集[3套][持续更新]',collectionCount:3,
+        resourceDirectoryText:text,works:[{sourceOrder:'NO.001-NO.003',label:'合计',rawTitle:'混合博主 NO.001 单套'}]}
+    }}}));
+    await expect(new ArchiveCatalogService(database).importCostuanArchive(input)).rejects.toThrow(/范围声明/);
+    expect(JSON.stringify(database.prepare('SELECT * FROM archive_catalog_works').all())).toBe(before);
+    expect(database.prepare('SELECT COUNT(*) AS n FROM archive_catalog_source_works').get()).toEqual({n:0});
+  });
+
   it('rebuilds an empty lossy works array from raw VOL/NO text without duplicates', async () => {
     const costuanPath = path.join(tempRoot, 'costuan.json');
     seedCreators(database, [{"name":"混合博主","preference":"liked","rating":"R15"}]);

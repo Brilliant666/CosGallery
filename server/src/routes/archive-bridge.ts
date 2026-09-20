@@ -1,5 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
+import { CostuanRangeDirectoryReviewRequired } from '../services/costuan-directory-coverage.js';
 
 import { ArchiveBridgeService, isLoopbackAddress } from '../services/archive-bridge-service.js';
 import {
@@ -157,7 +158,15 @@ router.post('/metadata-tasks/:id/validate-directory', (request, response) => {
   const { id } = idSchema.parse(request.params);
   const body = z.object({ workerId:z.string().trim().min(1).max(120), canonicalCreatorId:z.number().int().positive(),
     expectedAttempt:z.number().int().positive(), record:z.record(z.unknown()) }).strict().parse(request.body);
-  response.json({ ok:true, ...new ArchiveMetadataTaskService().validateDirectory({id,...body}) });
+  try {
+    response.json({ ok:true, ...new ArchiveMetadataTaskService().validateDirectory({id,...body}) });
+  } catch (error) {
+    if (error instanceof CostuanRangeDirectoryReviewRequired) {
+      response.status(400).json({ok:false,message:error.message,code:error.code,coverage:error.coverage});
+      return;
+    }
+    throw error;
+  }
 });
 
 router.post('/metadata-tasks/finalize-selected', async (request, response) => {
