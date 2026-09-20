@@ -71,8 +71,18 @@ describe.sequential('local-first admission reuses source identity through applic
     expect(manager.connection.prepare('SELECT * FROM archive_catalog_local_works WHERE work_id=?').all(workId)).toEqual(localBefore);
     expect(downloads.planMissing({ creatorIds: [creator], targetRoot: input }).created).toBe(1);
     expect(downloads.list({ creatorId: creator }).items.map(t => t.targetFilename)).toEqual(['002.7z']);
-    const before = works(); catalog.importCostuanRecord(r, { expectedCreatorId: creator });
-    await admission.apply(p); expect(works()).toEqual(before);
+    const before = works();
+    // Import legitimately refreshes auto-title updated_at; do not rely on both
+    // imports happening within the same SQLite CURRENT_TIMESTAMP second.
+    const refreshTime = '2030-01-02 03:04:05';
+    manager.connection.function('current_timestamp', () => refreshTime);
+    try { catalog.importCostuanRecord(r, { expectedCreatorId: creator }); }
+    finally {
+      manager.connection.function('current_timestamp', () => new Date().toISOString().slice(0, 19).replace('T', ' '));
+    }
+    const refreshed = works();
+    expect(refreshed).toEqual(before.map(work => work.title_policy === 'auto' ? { ...work, updated_at: refreshTime } : work));
+    await admission.apply(p); expect(works()).toEqual(refreshed);
     expect(catalog.validateCompleteCostuanDirectory(r, creator).requiredFilenames).toEqual(['002.7z']);
   });
 
