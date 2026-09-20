@@ -16,6 +16,7 @@ export interface ResourceCatalogRow {
   no: string | null;
   title: string;
   sortTimestamp: number | null;
+  sortEstimate?: import('../services/work-sort-estimate.js').SortEstimate;
   primaryPostId: number | null;
   primaryLocalWorkId: number | null;
   imageCount: number | null;

@@ -109,10 +109,16 @@ describe('resource catalog', () => {
     });
   });
   afterEach(() => vi.useRealTimers());
-  it('loads global scope without prefetching details and resolves names/aliases explicitly', async () => {
+  it('defaults to a picker without requesting global data and resolves names/aliases explicitly', async () => {
     const w = mount(ResourceCatalog, { props: { creatorId: null } });
     await flushPromises();
-    expect(api.fetchResourceCatalog).toHaveBeenCalledWith(null, expect.any(Object), 1, undefined);
+    expect(api.fetchResourceCatalog).not.toHaveBeenCalled();
+    expect(api.exportResourceCatalog).not.toHaveBeenCalled();
+    expect(w.find('table').exists()).toBe(false);
+    expect(w.find('.filters').exists()).toBe(false);
+    expect(w.text()).toContain('请选择一位博主');
+    await button(w, '查看全部作品').trigger('click');
+    expect(w.emitted('all')).toEqual([[]]);
     expect(api.fetchResourceDetail).not.toHaveBeenCalled();
     expect(api.findResourceCreators).not.toHaveBeenCalled();
     await w.get('.creator-search input').setValue('别名');
@@ -121,6 +127,32 @@ describe('resource catalog', () => {
     expect(api.findResourceCreators).toHaveBeenCalledWith('别名');
     await button(w, '#2 别名对应博主').trigger('click');
     expect(w.emitted('select')).toEqual([[2]]);
+  });
+  it('clearing selection isolates late global results and performs no new global read', async () => {
+    const slow = deferred<api.ResourcePage>();
+    vi.mocked(api.fetchResourceCatalog).mockReturnValueOnce(slow.promise);
+    const w = mount(ResourceCatalog, { props: { creatorId: null, globalScope: true } });
+    await w.setProps({ creatorId: 2, globalScope: false });
+    await flushPromises();
+    slow.resolve({ ...page(), creator: null });
+    await flushPromises();
+    expect(w.text()).not.toContain('全部博主');
+    await w.setProps({ creatorId: null });
+    await flushPromises();
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(2);
+    expect(w.find('table').exists()).toBe(false);
+    expect(w.text()).toContain('请选择一位博主');
+  });
+  it('keeps secondary controls collapsed without hiding read-model failures', async () => {
+    const p = page();
+    p.readModel.status = 'failed';
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    expect(w.get('.filter-panel').attributes('open')).toBeUndefined();
+    expect(w.get('.export-panel').attributes('open')).toBeUndefined();
+    expect(w.text()).toContain('目录更新失败');
+    expect(button(w, '导出 CSV').attributes('disabled')).toBeDefined();
   });
   it('keeps full-catalog NO across filters and pagination and requests details only on demand', async () => {
     const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
@@ -145,6 +177,46 @@ describe('resource catalog', () => {
     await button(w, '展开详情').trigger('click');
     await flushPromises();
     expect(api.fetchResourceDetail).toHaveBeenCalledTimes(1);
+  });
+  it('labels only estimated rows and loads source-order evidence inside details on demand', async () => {
+    const estimate: api.ResourceSortEstimate = {
+      method: 'source-order-interpolation', sourceOrder: 51,
+      originalTimestamp: 1200000000000,
+      lower: { workId: 20, sourceOrder: 50, timestamp: 1690000000000 },
+      upper: { workId: 25, sourceOrder: 53, timestamp: 1720000000000 }
+    };
+    const estimated = { ...row, sortEstimate: estimate };
+    const p = page();
+    p.items = [estimated, { ...row, workId: 23 }];
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
+    vi.mocked(api.fetchResourceDetail).mockResolvedValue({ ...detail, item: estimated });
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    expect(w.findAll('[data-test="sort-estimate"]')).toHaveLength(1);
+    expect(w.find('[data-test="sort-estimate-basis"]').exists()).toBe(false);
+    expect(api.fetchResourceDetail).not.toHaveBeenCalled();
+    await button(w, '展开详情').trigger('click');
+    await flushPromises();
+    const basis = w.get('[data-test="sort-estimate-basis"]');
+    expect(basis.text()).toContain('来源 NO.51');
+    expect(basis.text()).toContain('前参照 Work #20（来源 NO.50');
+    expect(basis.text()).toContain('后参照 Work #25（来源 NO.53');
+    for (const timestamp of [row.sortTimestamp!, estimate.originalTimestamp, estimate.lower.timestamp, estimate.upper.timestamp]) {
+      expect(basis.text()).toContain(new Date(timestamp).toLocaleString());
+    }
+    expect(basis.text()).toContain('不是已证实的发布日期或拍摄时间');
+    expect(basis.text()).toContain('不随浏览重新插值');
+    await button(w, '收起').trigger('click');
+    expect(w.find('[data-test="sort-estimate-basis"]').exists()).toBe(false);
+    expect(w.findAll('[data-test="sort-estimate"]')).toHaveLength(1);
+  });
+  it('does not describe an ordinary or legacy confirmed time as an estimate', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    await button(w, '展开详情').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-test="sort-estimate"]').exists()).toBe(false);
+    expect(w.find('[data-test="sort-estimate-basis"]').exists()).toBe(false);
   });
   it('ignores late creator/detail failures after switching creator', async () => {
     const slow = deferred<api.ResourcePage>();
@@ -269,7 +341,7 @@ describe('resource catalog', () => {
     const p = page(2);
     p.creator = null;
     vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
-    const w = mount(ResourceCatalog, { props: { creatorId: null } });
+    const w = mount(ResourceCatalog, { props: { creatorId: null, globalScope: true } });
     await flushPromises();
     expect(w.text()).toContain('全部博主');
     expect(w.find('a[href="/library/2/works/33"]').exists()).toBe(true);
@@ -277,7 +349,7 @@ describe('resource catalog', () => {
     await button(w, '展开详情').trigger('click');
     await flushPromises();
     expect(api.fetchResourceDetail).toHaveBeenCalledWith(2, 22, 'r2', 'all');
-    await button(w, '全部博主').trigger('click');
+    await button(w, '更换博主').trigger('click');
     expect(w.emitted('select')).toEqual([[null]]);
   });
   it('discloses incomplete initialization, blocks export, and polls a new revision without overlapping requests', async () => {
@@ -285,7 +357,7 @@ describe('resource catalog', () => {
     const p = page();
     p.readModel = { ...p.readModel, status: 'uninitialized', complete: false, pendingCreators: 2, initializedCreators: 0, totalCreators: 2 };
     vi.mocked(api.fetchResourceCatalog).mockResolvedValueOnce(p);
-    const w = mount(ResourceCatalog, { props: { creatorId: null } });
+    const w = mount(ResourceCatalog, { props: { creatorId: null, globalScope: true } });
     await flushPromises();
     expect(w.text()).toContain('当前目录尚不完整');
     expect(button(w, '导出 TXT').attributes('disabled')).toBeDefined();

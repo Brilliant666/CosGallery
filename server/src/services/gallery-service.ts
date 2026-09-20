@@ -1547,7 +1547,9 @@ export const galleryService = {
 
   getCanonicalCreatorWork(id: number, postId: number, mediaType?: MediaType) {
     if (!storageService.getState().libraryAvailable || !canonicalCreatorGalleryRepository.ownsVisiblePost(id, postId)) return null;
-    return this.getImageDetail(postId, mediaType);
+    const detail = this.getImageDetail(postId, mediaType);
+    if (!detail) return null;
+    return { ...detail, sortTimestamp: canonicalCreatorGalleryRepository.effectiveSortTimestamp(postId) ?? detail.sortTimestamp };
   },
 
   getCosGalleryWorks(

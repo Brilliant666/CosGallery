@@ -10,6 +10,13 @@ export interface ResourceSource {
   url: string | null;
   active: boolean;
 }
+export interface ResourceSortEstimate {
+  method: 'source-order-interpolation';
+  sourceOrder: number;
+  lower: { workId: number; sourceOrder: number; timestamp: number };
+  upper: { workId: number; sourceOrder: number; timestamp: number };
+  originalTimestamp: number;
+}
 export interface ResourceRow {
   creatorId: number;
   creatorName: string;
@@ -17,6 +24,7 @@ export interface ResourceRow {
   no: string | null;
   title: string;
   sortTimestamp: number | null;
+  sortEstimate?: ResourceSortEstimate;
   primaryPostId: number | null;
   primaryLocalWorkId: number | null;
   imageCount: number | null;

@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { effectiveWorkSortSql } from '../db/work-sort-sql.js';
+import { publicSortEstimate } from './work-sort-estimate.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { FOLDER_IMAGE_DEFAULT_ORDER_SETTING_KEY } from '../constants/app-setting-keys.js';
 import type {
@@ -20,6 +22,7 @@ type Work = {
   id: number;
   title: string;
   primaryId: number | null;
+  sortEvidence: string | null;
 };
 type Copy = {
   id: number;
@@ -119,15 +122,18 @@ export class ResourceCatalogBuilder {
       const sortOrder = order === 'oldest' ? 'oldest' : 'newest';
       const works = db
         .prepare(
-          `SELECT id,display_title AS title,primary_local_work_id AS primaryId FROM archive_catalog_works WHERE creator_id=? ORDER BY id`,
+          `SELECT w.id,w.display_title AS title,w.primary_local_work_id AS primaryId,c.evidence_json AS sortEvidence
+          FROM archive_catalog_works w LEFT JOIN archive_catalog_work_sort_confirmations c ON c.work_id=w.id AND c.state='confirmed'
+          WHERE w.creator_id=? ORDER BY w.id`,
         )
         .all(creatorId) as unknown as Work[];
+      const estimates = new Map(works.map(work => [work.id, work.sortEvidence ? publicSortEstimate(work.sortEvidence) : undefined]));
       const locals = db
         .prepare(
           `SELECT l.id,l.work_id AS workId,p.id AS postId,l.folder_name AS directoryName,l.is_active AS active,
         f.is_active AS folderActive,f.creator_id AS ownerId,f.match_status AS matchStatus,l.match_status AS localMatchStatus,
         gallery_folder.role AS folderRole,f.gallery_folder_id AS folderId,
-        p.folder_id AS postFolderId,p.sort_timestamp AS sortTimestamp,p.is_deleted AS deleted,p.is_trashed AS trashed,
+        p.folder_id AS postFolderId,${effectiveWorkSortSql('w.id', 'p.sort_timestamp')} AS sortTimestamp,p.is_deleted AS deleted,p.is_trashed AS trashed,
         l.other_file_count AS otherFileCount,
         CASE WHEN first_image.folder_id=p.folder_id AND lower(first_image.filename) IN ('cover.jpg','cover.jpeg','cover.png','cover.webp','cover.avif','cover.gif') THEN 1 ELSE 0 END AS explicitCover
         FROM archive_catalog_works w JOIN archive_catalog_local_works l ON l.work_id=w.id
@@ -350,6 +356,7 @@ export class ResourceCatalogBuilder {
           no: null,
           title: work.title,
           sortTimestamp: sortable ? primary!.sortTimestamp : null,
+          ...(sortable && estimates.get(work.id) ? { sortEstimate: estimates.get(work.id) } : {}),
           primaryPostId: owned ? primary!.postId : null,
           primaryLocalWorkId: primary?.id ?? null,
           imageCount: stats?.imageCount ?? null,
