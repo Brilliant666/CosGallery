@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/local-ingest-paths.js';
 import { LocalIngestDestinationService } from './local-ingest-destination-service.js';
 import { WorkIdentityService } from './work-identity-service.js';
+import { SourceEvidenceService } from './source-evidence-service.js';
 import { runAdmissionExclusive } from './local-admission-lock.js';
 import { extractWorkDisplayTitle } from '../utils/work-title.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
@@ -21,6 +22,7 @@ const itemSchema = z.object({ key:z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), so
   acceptVersions:z.array(z.object({sourceWorkId:z.number().int().positive(),taskIds:z.array(z.number().int().positive()),reason:z.string().trim().min(1)}).strict()).default([])
 });
 export const admissionPlanSchema=z.object({ version:z.literal(1),planId:z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),confirmed:z.literal(true),creatorId:z.number().int().positive(),
+  sourceEvidenceId:z.number().int().positive().optional(),
   inputRoot:z.string().min(1),galleryRoot:z.string().min(1),creatorDirectory:leaf,items:z.array(itemSchema).min(1).max(500) }).strict();
 export type AdmissionPlan=z.infer<typeof admissionPlanSchema>;
 type Entry=z.infer<typeof entrySchema>;
@@ -61,8 +63,10 @@ type ItemState={state:string;local_work_id:number|null;work_id:number|null;manif
 export class LocalFolderAdmissionService {
   constructor(private readonly db:DatabaseSync,private readonly galleryRoot:string){}
 
-  async preview(input:{creatorId:number;inputRoot:string;directories:string[]}) {
+  async preview(input:{creatorId:number;inputRoot:string;directories:string[];sourceEvidenceId?:number;acceptExistingVersion?:boolean}) {
     if(!Number.isSafeInteger(input.creatorId)||input.creatorId<=0||!Array.isArray(input.directories)||!input.directories.length)throw Error('Explicit creator and non-empty directory scope required');
+    if(input.acceptExistingVersion!==undefined&&typeof input.acceptExistingVersion!=='boolean')throw Error('acceptExistingVersion must be an explicit boolean');
+    if(input.sourceEvidenceId!==undefined)new SourceEvidenceService(this.db).assertAdmissionReference(input.sourceEvidenceId,input.creatorId);
     if(new Set(input.directories.map(cmp)).size!==input.directories.length)throw Error('Duplicate scope');
     if(!path.isAbsolute(input.inputRoot))throw Error('inputRoot must be absolute');
     await regularDirectory(input.inputRoot);
@@ -89,14 +93,15 @@ export class LocalFolderAdmissionService {
         .map(r=>({...r,tasks:this.db.prepare('SELECT id,status,attempt_count FROM archive_catalog_download_tasks WHERE source_work_id=? ORDER BY id').all(r.sourceWorkId)}));
       const existingRelations=this.db.prepare(`SELECT l.id localWorkId,l.work_id workId,l.post_id postId,l.identity_policy identityPolicy,w.display_title canonicalTitle
         FROM archive_catalog_local_works l LEFT JOIN archive_catalog_works w ON w.id=l.work_id WHERE l.absolute_path=?`).all(targetPath);
-      items.push({key:randomUUID(),sourceRelativePath:name,targetPath,displayTitle,manifest,identity:{kind:'new'},reason:'',localOnly:false,acceptExistingVersion:false,excludeSourceIds:[],primary:false,approvedAds:[],
+      items.push({key:randomUUID(),sourceRelativePath:name,targetPath,displayTitle,manifest,identity:{kind:'new'},reason:'',localOnly:false,acceptExistingVersion:input.acceptExistingVersion??false,excludeSourceIds:[],primary:false,approvedAds:[],
         review:{candidates,existingRelations,conflicts:await exists(targetPath)?['target exists']:[],summary:{images:manifest.filter(x=>x.kind==='image').length,videos:manifest.filter(x=>x.kind==='video').length,other:manifest.filter(x=>x.kind==='other').length,bytes:manifest.reduce((n,x)=>n+x.size,0)}}});
     }
-    return {version:1,planId:randomUUID(),confirmed:false,creatorId:input.creatorId,inputRoot:path.resolve(input.inputRoot),galleryRoot:path.resolve(this.galleryRoot),creatorDirectory,items};
+    return {version:1,planId:randomUUID(),confirmed:false,creatorId:input.creatorId,...(input.sourceEvidenceId!==undefined?{sourceEvidenceId:input.sourceEvidenceId}:{}),inputRoot:path.resolve(input.inputRoot),galleryRoot:path.resolve(this.galleryRoot),creatorDirectory,items};
   }
 
   private validate(raw:unknown):AdmissionPlan {
     const plan=admissionPlanSchema.parse(raw);
+    if(plan.sourceEvidenceId!==undefined)new SourceEvidenceService(this.db).assertAdmissionReference(plan.sourceEvidenceId,plan.creatorId);
     if(cmp(path.resolve(plan.galleryRoot))!==cmp(path.resolve(this.galleryRoot)))throw Error('Plan gallery differs from configured gallery');
     if(!path.isAbsolute(plan.inputRoot)||!path.isAbsolute(plan.galleryRoot))throw Error('Absolute roots required');
     if(isSameOrNestedPath(plan.inputRoot,plan.galleryRoot)||isSameOrNestedPath(plan.galleryRoot,plan.inputRoot))throw Error('Roots overlap');
@@ -367,6 +372,12 @@ export class LocalFolderAdmissionService {
           if(item.primary)identity.choosePrimary(state.local_work_id!,item.reason);
           const {ArchiveLocalFulfillmentService}=await import('./archive-local-fulfillment-service.js');
           for(const acceptance of item.acceptVersions)new ArchiveLocalFulfillmentService(this.db).accept({decisionKey:`${plan.planId}:${item.key}:accept:${acceptance.sourceWorkId}`,localWorkId:state.local_work_id!,...acceptance});
+          // Provenance is not a source binding or a fulfillment. If this step fails,
+          // leave the indexed checkpoint intact; replay links it without moving again.
+          if(plan.sourceEvidenceId!==undefined)new SourceEvidenceService(this.db).linkAdmission({
+            observationId:plan.sourceEvidenceId,creatorId:plan.creatorId,workId:state.work_id!,localWorkId:state.local_work_id!,
+            planId:plan.planId,itemKey:item.key,reason:item.reason,key:`admission-evidence:${plan.planId}:${item.key}`
+          });
           this.db.prepare("UPDATE archive_local_admission_items SET state='completed',last_error=NULL WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='completed';
         }
         const approvedRemovals=this.removals(plan,item);

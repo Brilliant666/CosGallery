@@ -8,8 +8,10 @@ const help=`Local folder admission (Node 24)
   local-folder-admission resume <absolute-confirmed-plan.json>
   local-folder-admission recover <absolute-confirmed-removals.json>
   local-folder-admission decide <absolute-decision.json>
-Scope: {creatorId,inputRoot,directories:["original directory name"]}
-Decisions: bind-source | exclude-source | accept-version | primary | revoke.
+Scope: {creatorId,inputRoot,directories:["original directory name"],sourceEvidenceId?,acceptExistingVersion?}
+sourceEvidenceId records batch provenance only; it never satisfies acquisition.
+Decisions: bind-source | exclude-source | accept-version | primary | revoke | link-evidence.
+link-evidence records post-admission provenance without changing an old plan.
 All commands require explicit DATA_ROOT, DB_DIR, GALLERY_ROOT, THUMBNAILS_DIR,
 PREVIEWS_DIR. Preview opens the existing database read-only and prints JSON.
 Apply/resume never start queues; only the selected directories are indexed.
@@ -40,6 +42,7 @@ async function main(){
       const identity=new WorkIdentityService(db);
       const {z}=await import('zod');const id=z.number().int().positive();const reason=z.string().trim().min(1);
       switch(input.kind){
+        case 'link-evidence':{const {SourceEvidenceService}=await import('../services/source-evidence-service.js');result=new SourceEvidenceService(db).linkAdmission(z.object({observationId:id,creatorId:id,workId:id,localWorkId:id.optional(),reason,key:reason}).parse(input));break;}
         case 'bind-source':result={decisionId:identity.bindSource(z.object({workId:id,collectionId:id,sourceWorkId:reason,reason,key:reason}).parse(input))};break;
         case 'exclude-source':{const d=z.object({localWorkId:id,sourceWorkId:id,reason,key:reason}).parse(input);result={decisionId:identity.excludeSource(d.localWorkId,d.sourceWorkId,d.reason,d.key)};break;}
         case 'primary':{const d=z.object({localWorkId:id,reason}).parse(input);identity.choosePrimary(d.localWorkId,d.reason);result={completed:true};break;}
