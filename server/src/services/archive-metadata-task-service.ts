@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { databaseManager } from '../db/database.js';
+import { SourceEvidenceService } from './source-evidence-service.js';
 import {directShareMetadata,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
 import type { CostuanIdentityInput } from './costuan-identity-evidence.js';
 import {
@@ -571,6 +572,21 @@ export class ArchiveMetadataTaskService {
         .run(timestamp,timestamp,current.id);
       this.saveContext(current.id,{...context,receipt:{workerId:options.workerId,receiptId:options.receiptId ?? 'legacy',checksum,importResult}});
       return {task:this.get(current.id)!,importResult};
+    });
+  }
+
+  recordSourceEvidence(options:{id:number;workerId:string;canonicalCreatorId:number;expectedAttempt:number;requestId:string;record:unknown}) {
+    // An evidence receipt never completes/releases this claim or imports a
+    // catalog. The existing failure/success protocol remains authoritative.
+    return this.transaction(()=>{
+      const task=this.requireClaim(options.id,options.workerId,options.expectedAttempt);
+      if(task.creatorId!==options.canonicalCreatorId)throw new ArchiveMetadataTaskError('规范博主身份与任务不一致。',409);
+      if(!task.checkRoundId)throw new ArchiveMetadataTaskError('缺少明确的来源检查轮次。',409);
+      const record=options.record as {method?:unknown;platform?:unknown}|null;
+      if(!record||record.method!=='plugin'||record.platform!=='costuan')throw new ArchiveMetadataTaskError('桥接资料必须来自当前Costuan插件检查。');
+      const observation=new SourceEvidenceService(this.database).save({creatorId:task.creatorId,requestId:options.requestId,record},
+        `metadata:${task.id}:${task.checkRoundId}:${task.attemptCount}:${options.workerId}`);
+      return {recorded:true,observation};
     });
   }
 

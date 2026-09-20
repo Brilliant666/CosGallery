@@ -24,6 +24,10 @@ export function applyApiNoStoreHeaders(response: Pick<express.Response, 'setHead
 export function createApp() {
   const app = express();
 
+  // Only bounded source-evidence text needs more than the default JSON limit.
+  // The service separately caps raw text, lines, URLs and diagnostics; no uploads.
+  app.use('/api/admin/archive-catalog/source-evidence', express.json({ limit: '1mb' }));
+  app.use('/api/archive-bridge/metadata-tasks/:id/source-evidence', express.json({ limit: '1mb' }));
   app.use(express.json());
 
   if (appConfig.derivativeMode === 'lazy') {
