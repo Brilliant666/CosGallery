@@ -70,7 +70,7 @@ V1 不支持在运行时切换正式图库根目录。管理页会显示：“V1
 
 第一层必须恰好包含一个可识别的内层 `.7zz` 或已恢复的 `.7z`。原始内层名称、工作名称和第一层原始输出会在改名前写入任务摘要，以便中断恢复。第二层之后仍含归档会进入 `NESTED_DEPTH_EXCEEDED`，不会递归继续。
 
-正式媒体：JPG、JPEG、PNG、GIF、MP4、MOV、MKV。图片由 Sharp 解码验证，视频由 ffprobe 探测。TXT/HTML 只计入广告数并留在工作目录；EXE、LNK、URL、未知二进制、零字节或不可读取媒体都会阻止提交。单一包装目录可自动识别，但作品内部“图片/视频”等结构和原文件名保持不变。
+正式媒体：JPG、JPEG、PNG、GIF、WebP、MP4、MOV、MKV。图片由 Sharp 按原有安全限制解码验证，视频由 ffprobe 探测。未知二进制、零字节或不可读取媒体仍阻止提交；附件沿用既有分类，不因增加 WebP 放宽。单一包装目录可自动识别，但作品内部“图片/视频”等结构和原文件名保持不变。
 
 预览记录博主、source work、下载任务、原始标题、源路径、SHA-256、两层归档名称、媒体计数、广告数、未知文件、声明计数、声明体积、实际体积、警告和目标目录。声明数量不一致只产生 warning；声明体积与实际体积差以字节记录。
 
@@ -115,6 +115,45 @@ pnpm --dir server exec tsx src/scripts/local-ingest.ts jobs
 
 所有写操作 API 都要求图库管理权限；读取设置与任务也要求设置访问权限。
 
-## 第一版边界
+## 已解压待审核任务的精确恢复（PR38 候选）
+
+普通 `run`/批处理继续跳过 `awaiting_review`，不会因为更新版本就自动放行历史任务。新的本机入口只接受已经完成两层解压、在媒体验证阶段暂停的原 job，不重新创建接纳计划，也不直接修改 SQL 状态。
+
+在服务端工作目录使用同一候选编译的 `dist/scripts/local-ingest.js`：
+
+```text
+<Node24> dist/scripts/local-ingest.js preview-review <absolute-request.json>
+<Node24> dist/scripts/local-ingest.js resume-review <absolute-confirmed-plan.json>
+```
+
+两个入口要求显式设置绝对 `DATA_ROOT`、`DB_DIR`、`GALLERY_ROOT`、`THUMBNAILS_DIR`、`PREVIEWS_DIR`，以及既有 Stage3 密码/工具运行配置。`--help` 不导入数据库。`preview-review` 使用只读数据库连接，不迁移、不创建存储目录、不解压、不移动文件；会读取并校验本任务的源压缩包和已解压文件，输出包含本机路径的 `confirmed:false` JSON，只能保存到本机忽略目录。
+
+请求的最小形状（以下均为合成示例，不是实际执行授权）：
+
+```json
+{
+  "jobId": 123,
+  "removedFiles": [{ "relativePath": "wrapper/empty.jpg", "size": 0 }],
+  "retainedFiles": [{ "relativePath": "wrapper/book.pdf", "reason": "attachment" }],
+  "note": "逐项确认的审核依据"
+}
+```
+
+路径相对本 job 的 `level-2`，必须明确到文件，不支持通配符、目录批准或“忽略全部差异”。移除项必须已由用户授权、通过其他明确操作移除；该入口不自行删除或回收它们。原包 `7z l -slt` 的路径、Size、CRC 必须能证明缺少的恰是批准项，其余文件逐一验证，额外、缺失、同大小内容变化均拒绝。旧暂停记录没有完整 manifest 时，也必须由原外层 SHA、内层 CRC/SHA 和归档成员补足证据，不能盲目信任当前文件树。
+
+可保留类型限于逐文件明确批准的：
+
+- `pixel_limit`：仅 JPEG，默认 Sharp 必须实际报告像素限制。正常 JPEG 或其他解码损坏不能借此绕过；不关闭或提高像素安全上限。
+- `attachment`：仅 PDF，作为附件完整保留，不转换成图片、不算广告。
+
+以上沿用 `_未支持格式原件` 和现有索引排除机制，不另建原件库。图片原件计入 `retainedOriginalCount`；PDF 单列 `retainedAttachmentCount`，不计入可展示图片/视频、媒体字节或未支持图片数量。原有 HEIC/HEIF/TIFF 自动保留和旧手工保留记录兼容，不重新解释旧决定。
+
+人工核对预览后只把该完整计划的 `confirmed` 改为 `true` 再提交。服务重新核对源包、身份映射、路径、解压标记和文件清单；首次接受后把版本 1 的不可变 payload、hash、原失败及确认时间写入原 job 的 `summary_json.reviewRecovery`，无需新增迁移。重试必须使用同一 payload，不允许补写新例外覆盖原确认。
+
+恢复复用原校验、提交、单作品索引及账本对账。审核恢复使用绑定 planId 的副本 staging，保留原解压现场直到提交和校验完成；复制中断后只复用 checksum 完全相符的已完成文件，截断或额外文件仍暂停且不自动覆盖/删除。目标目录存在不等于提交成功，还须匹配本计划的目录身份及完整清单。索引失败保留 `reconciling`，同计划重试不解包、不重复移动、不改其他作品。成功的同计划再次调用为 no-op；后续清理仍使用原 `cleanup`，回收前再次核对目标、源包、解压清单及原件校验和。
+
+相关下载活动 claim、同博主 Stage3 执行、当前 job 活动 claim 和接纳互斥仍阻止恢复。已接受同一计划的进程退出后，可在取得跨进程互斥且原 heartbeat 确已过期时沿用既有 lease 接管，不清除活动所有权。索引后的审核对账只更新原下载任务，不调用整博主缺失规划；最终活动状态核对与更新位于同一 SQLite 写事务，保留暂存、worker、attempt、download 等真实历史。该功能不是解除任意审核失败的通用开关；不支持的文件/状态保持暂停。
+
+## 第一版边界（历史范围）
 
 本版本只解决本地已下载 Costuan 归档的入库闭环。不修改 CostuanArchiveManager，不处理 83 套特殊编号，不引入作品级 R15/R18，也不包含云端、NAS、对象存储、跨平台去重或自动下载。

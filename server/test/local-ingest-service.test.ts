@@ -454,6 +454,39 @@ async function seedCommittedReconciliationBatch(fixture: Fixture, count: number)
 }
 
 describe.sequential('LocalIngestService', () => {
+  it.runIf(process.platform === 'win32')('verifies real encrypted 7z inventories and retains only the explicitly approved PDF', async () => {
+    fixture = await createFixture({ retainedExtensions: ['.pdf'], recycleAfterIngest: false });
+    await discoverStable(fixture);
+    expect((await fixture.service.runJob(1)).errorCode).toBe('UNKNOWN_FILE_TYPE');
+    const plan = await fixture.service.previewReview({ jobId: 1, removedFiles: [],
+      retainedFiles: [{ relativePath: 'originals/original.pdf', reason: 'attachment' }], note: 'Synthetic PDF approval' });
+    expect(plan.confirmed).toBe(false);
+    expect(plan.files.every(file => /^[A-F\d]{8}$/.test(file.crc32))).toBe(true);
+    const result = await fixture.service.resumeReview({ ...plan, confirmed: true });
+    expect(result.status, result.errorDetail ?? '').toBe('ingested');
+    expect(result.summary).toMatchObject({ imageCount: 1, retainedOriginalCount: 0, retainedAttachmentCount: 1 });
+    expect(await fs.readFile(path.join(result.targetPath!, '_未支持格式原件', 'originals', 'original.pdf'), 'utf8'))
+      .toBe('synthetic original .pdf');
+    expect(fixture.recycleCalls).toEqual([]);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('uses the real archive to authorize only an absent nested member without re-extracting it', async () => {
+    fixture = await createFixture({ includeNestedArchive: true, recycleAfterIngest: false });
+    await discoverStable(fixture);
+    const before = await fixture.service.runJob(1);
+    expect(before.errorCode).toBe('NESTED_DEPTH_EXCEEDED');
+    const file = path.join(before.processingPath!, 'level-2', 'leftover.7z');
+    const size = (await fs.stat(file)).size;
+    await fs.rename(file, path.join(fixture.recycleRoot, 'approved-nested.7z'));
+    const plan = await fixture.service.previewReview({ jobId: 1, removedFiles: [{ relativePath: 'leftover.7z', size }],
+      retainedFiles: [], note: 'Exact synthetic member moved to recoverable test directory' });
+    const result = await fixture.service.resumeReview({ ...plan, confirmed: true });
+    expect(result.status, result.errorDetail ?? '').toBe('ingested');
+    expect(existsSync(file)).toBe(false);
+    expect((await fs.stat(path.join(fixture.recycleRoot, 'approved-nested.7z'))).size).toBe(size);
+    expect(result.id).toBe(before.id);
+  }, 60_000);
+
   let fixture: Fixture | null = null;
 
   beforeEach(() => {

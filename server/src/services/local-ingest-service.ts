@@ -5,6 +5,9 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 
 import sharp from 'sharp';
+import { inspectReviewFiles, matchReviewInventory, normalizeReviewPath, parseReviewArchiveInventory } from './local-ingest-review-inventory.js';
+import { readReviewRecovery, reviewHash, reviewPlanHash, reviewPlanSchema, reviewRequestSchema, type LocalIngestReviewPlan, type LocalIngestReviewRequest } from './local-ingest-review-plan.js';
+import { runWithAdmissionBarrier } from './local-admission-lock.js';
 
 import { appConfig } from '../config/env.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
@@ -37,7 +40,7 @@ import {
 
 const SOURCE_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip']);
 const NESTED_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip', '.rar', '.tar', '.gz', '.bz2', '.xz']);
-const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif']);
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv']);
 const ADVERTISEMENT_EXTENSIONS = new Set(['.txt', '.html', '.htm', '.url']);
 const TEMPORARY_SUFFIXES = ['.crdownload', '.tmp', '.downloading', '.part'];
@@ -157,7 +160,8 @@ export async function runCreatorScopedLocalIngestReconciliation(
   libraryRoot: string,
   creatorId: number,
   creatorFolderName: string,
-  workFolderName?: string
+  workFolderName?: string,
+  reviewDownloadTaskId?: number
 ): Promise<LocalIngestRescanResult> {
   // ScannerService reads the database when its singleton is constructed.
   // Load it only for a real reconciliation run so importing LocalIngest in
@@ -176,7 +180,8 @@ export async function runCreatorScopedLocalIngestReconciliation(
     galleryRoot: libraryRoot,
     creatorId,
     creatorFolderName,
-    ...(workFolderName ? { workFolderName } : {})
+    ...(workFolderName ? { workFolderName } : {}),
+    ...(reviewDownloadTaskId ? { reviewDownloadTaskId } : {})
   });
   return {
     scanRunId: scan.id,
@@ -338,14 +343,18 @@ export type LocalIngestInboxCreatorsResult = {
 
 type ValidationSummary = {
   retainedOriginalCount?: number;
+  retainedAttachmentCount?: number;
   retainedOriginalDirectory?: string;
   retainedOriginals?: {
     automaticPolicy: 1;
     directory: string;
     count: number;
-    files: Array<{ relativePath: string; size: number; sha256: string }>;
+    files: Array<{ relativePath: string; size: number; sha256: string; reason?: 'pixel_limit' | 'attachment' }>;
     verifiedAt: string;
   };
+  reviewRecovery?: { plan: LocalIngestReviewPlan; hash: string; acceptedAt: string };
+  reviewContentRoot?: string;
+  reviewCommit?: { hash: string; dev: string; ino: string };
   creator: string;
   sourceWorkId: number;
   archiveDownloadTaskId: number;
@@ -646,7 +655,8 @@ export class LocalIngestService {
       libraryRoot: string,
       creatorId: number,
       creatorFolderName: string,
-      workFolderName?: string
+      workFolderName?: string,
+      reviewDownloadTaskId?: number
     ) => Promise<LocalIngestRescanResult | void> = runCreatorScopedLocalIngestReconciliation,
     dependencies: LocalIngestRuntimeDependencies = {}
   ) {
@@ -1788,6 +1798,187 @@ export class LocalIngestService {
     return row;
   }
 
+  private assertReviewIdle(job: LocalIngestJobRow, ownClaim = false, allowExpiredClaim = false): void {
+    const active = this.database.prepare(`SELECT id FROM archive_catalog_download_tasks
+      WHERE source_work_id=? AND status IN ('claimed','downloading') LIMIT 1`).get(job.source_work_id);
+    const other = this.database.prepare(`SELECT id FROM local_ingest_jobs WHERE creator_id=? AND id<>?
+      AND (status IN ('running','reconciling') OR claim_token IS NOT NULL) LIMIT 1`).get(job.creator_id, job.id);
+    const cutoff = new Date(this.now().getTime() - this.claimLeaseMs).toISOString();
+    const expired = allowExpiredClaim && Boolean(job.claim_heartbeat_at)
+      && Number.isFinite(Date.parse(job.claim_heartbeat_at!)) && job.claim_heartbeat_at! < cutoff
+      && Boolean(readReviewRecovery(safeJsonParse(job.summary_json)));
+    if (active || other || (!ownClaim && ((job.claim_token && !expired) || this.inFlightJobs.has(job.id)))) {
+      throw new LocalIngestFailure('REVIEW_RECOVERY_ACTIVE', 'Related download, ingest or claim is active; no recovery performed', true);
+    }
+  }
+
+  private async assertReviewBinding(job: LocalIngestJobRow, plan: LocalIngestReviewPlan): Promise<void> {
+    const mapping = this.mappingForJob(job);
+    const samePath = async (actual: string | null, expected: string) => Boolean(actual)
+      && filesystemPathKey(await canonicalizeLocalIngestPath(actual!)) === filesystemPathKey(await canonicalizeLocalIngestPath(expected));
+    if (job.id !== plan.request.jobId || job.creator_id !== plan.creatorId || job.source_work_id !== plan.sourceWorkId
+      || job.archive_download_task_id !== plan.downloadTaskId || mapping.work_id !== plan.workId
+      || !await samePath(job.target_path, plan.targetPath) || !await samePath(job.processing_path, plan.processingPath)
+      || reviewHash(mapping) !== plan.targetPlanHash
+      || !await samePath(job.source_archive_path, plan.sourceArchive.path) || job.source_archive_size !== plan.sourceArchive.size
+      || job.source_archive_mtime !== plan.sourceArchive.mtimeMs || job.source_archive_sha256.toUpperCase() !== plan.sourceArchive.sha256) {
+      throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Original job, target, identity or archive binding changed', true);
+    }
+  }
+
+  /** Read-only inventory of this previously extracted review job, never a new admission. */
+  async previewReview(input: LocalIngestReviewRequest): Promise<LocalIngestReviewPlan> {
+    const request = reviewRequestSchema.parse(input);
+    const job = this.getJobRow(request.jobId);
+    this.assertReviewIdle(job);
+    if (job.status !== 'awaiting_review' || job.phase !== 'validating' || job.attempt_count < 1
+      || !['MEDIA_UNREADABLE', 'UNKNOWN_FILE_TYPE', 'NESTED_DEPTH_EXCEEDED', 'UNSAFE_OR_EMPTY_FILE'].includes(job.error_code ?? '')
+      || readReviewRecovery(safeJsonParse(job.summary_json))) {
+      throw new LocalIngestFailure('REVIEW_RECOVERY_STATE', 'Only an uncommitted validation-review job can create a recovery plan', true);
+    }
+    const plan = await this.inspectReview(job, request);
+    if (await pathExists(path.join(plan.processingPath, 'ready')) || await pathExists(path.join(plan.processingPath, STAGING_MOVE_MANIFEST))) {
+      throw new LocalIngestFailure('REVIEW_RECOVERY_STATE', 'An existing staging checkpoint requires its original recovery, not a new review plan', true);
+    }
+    return plan;
+  }
+
+  private async inspectReview(job: LocalIngestJobRow, request: LocalIngestReviewRequest): Promise<LocalIngestReviewPlan> {
+    const fail = (message: string): never => { throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', message, true); };
+    const settings = await this.checkedSettings(), mapping = this.mappingForJob(job);
+    if (!this.resolveAllowedCreatorIds(settings.allowlist).has(job.creator_id)) fail('Creator is not allowed');
+    await this.validatePersistedTarget(job, mapping, settings);
+    if (job.target_path && await pathExists(job.target_path)) fail('Target already exists; no review plan may adopt it');
+    await this.assertSourcePath(job, mapping, settings);
+    const source = await fs.lstat(job.source_archive_path);
+    if (!source.isFile() || source.isSymbolicLink() || source.size !== job.source_archive_size || source.mtimeMs !== job.source_archive_mtime
+      || (await this.hashFile(job.source_archive_path)).toUpperCase() !== job.source_archive_sha256.toUpperCase()) fail('Source archive changed');
+    const processingPath = await canonicalizeLocalIngestPath(path.join(settings.processingRoot, String(job.id)));
+    if (!job.processing_path || filesystemPathKey(await canonicalizeLocalIngestPath(job.processing_path)) !== filesystemPathKey(processingPath)) fail('Processing checkpoint does not belong to this job');
+    await this.assertInside(settings.processingRoot, processingPath, 'REVIEW_RECOVERY_CHANGED', 'Review processing directory', { directChild: true });
+    const markers = [];
+    for (const name of ['.level-1-complete', '.level-2-complete']) {
+      const file = path.join(processingPath, name), stat = await fs.lstat(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) fail('Completed extraction marker is invalid');
+      markers.push((await this.hashFile(file)).toUpperCase());
+    }
+    const levelOne = path.join(processingPath, 'level-1'), levelTwo = path.join(processingPath, 'level-2');
+    await this.assertInside(processingPath, levelOne, 'REVIEW_RECOVERY_CHANGED', 'First extraction', { directChild: true });
+    await this.assertInside(processingPath, levelTwo, 'REVIEW_RECOVERY_CHANGED', 'Second extraction', { directChild: true });
+    const summary = safeJsonParse(job.summary_json) ?? {};
+    const innerName = normalizeReviewPath(String(summary.innerWorkingName ?? ''));
+    const originalName = normalizeReviewPath(String(summary.innerOriginalName ?? ''));
+    const first = await inspectReviewFiles(levelOne);
+    const inner = first.find(file => file.relativePath === innerName);
+    if (!inner) fail('Recorded inner archive is missing');
+    const outerListing = parseReviewArchiveInventory((await this.runSevenZip(job.id, 'list', job.source_archive_path)).stdout);
+    const outerInner = outerListing.find(file => file.relativePath === originalName);
+    if (!outerInner || outerInner.size !== inner!.size || outerInner.crc32 !== inner!.crc32) fail('Inner archive differs from original outer archive');
+    const archive = parseReviewArchiveInventory((await this.runSevenZip(job.id, 'list', path.join(levelOne, innerName))).stdout);
+    const files = await inspectReviewFiles(levelTwo);
+    matchReviewInventory(archive, files, request.removedFiles);
+    const contentRoot = await discoverContentRoot(levelTwo);
+    const contentPrefix = path.relative(levelTwo, contentRoot).replace(/\\/g, '/');
+    const retained = new Set<string>();
+    for (const item of request.retainedFiles) {
+      const key = comparableRelativePath(item.relativePath), file = files.find(f => comparableRelativePath(f.relativePath) === key);
+      if (!file || file.size <= 0 || retained.has(key)) fail('Retained file is missing, empty or repeated');
+      if (contentPrefix && !file!.relativePath.startsWith(contentPrefix + '/')) fail('Approved retained file is outside the discovered content root');
+      retained.add(key);
+      const extension = path.extname(file!.relativePath).toLowerCase();
+      if (item.reason === 'attachment') {
+        if (extension !== '.pdf') fail('Only an explicitly retained PDF attachment is supported');
+      } else {
+        if (!['.jpg', '.jpeg'].includes(extension)) fail('Pixel-limit retention requires a JPEG');
+        let pixelLimit = false;
+        try { await sharp(path.join(levelTwo, file!.relativePath), { failOn: 'error' }).metadata(); }
+        catch (error) { pixelLimit = error instanceof Error && /Input image exceeds pixel limit/i.test(error.message); }
+        if (!pixelLimit) fail('Default decoder did not confirm the pixel safety limit; no decode exception granted');
+      }
+    }
+    const afterSource = await fs.stat(job.source_archive_path);
+    if (afterSource.size !== source.size || afterSource.mtimeMs !== source.mtimeMs) fail('Source changed during preview');
+    return reviewPlanSchema.parse({ version: 1, planId: randomUUID(), confirmed: false, request,
+      creatorId: job.creator_id, sourceWorkId: job.source_work_id, downloadTaskId: job.archive_download_task_id, workId: mapping.work_id,
+      targetPath: await canonicalizeLocalIngestPath(job.target_path!), processingPath, targetPlanHash: reviewHash(mapping),
+      sourceArchive: { path: await canonicalizeLocalIngestPath(job.source_archive_path), size: job.source_archive_size, mtimeMs: job.source_archive_mtime, sha256: job.source_archive_sha256 },
+      innerArchive: { relativePath: innerName, size: inner!.size, sha256: inner!.sha256 }, extractionMarkers: markers,
+      originalFailure: { code: job.error_code ?? '', detail: job.error_detail ?? '', phase: 'validating', attemptCount: job.attempt_count },
+      files, removedFiles: request.removedFiles.map(item => archive.find(file => comparableRelativePath(file.relativePath) === comparableRelativePath(item.relativePath))),
+      archiveInventoryHash: reviewHash(archive) });
+  }
+
+  async resumeReview(input: LocalIngestReviewPlan): Promise<LocalIngestJob> {
+    const plan = reviewPlanSchema.parse(input);
+    if (!plan.confirmed) throw new LocalIngestFailure('REVIEW_RECOVERY_CONFIRMATION', 'Recovery requires this exact confirmed plan', true);
+    const jobId = plan.request.jobId, hash = reviewPlanHash(plan);
+    return runWithAdmissionBarrier(this.database, async () => {
+      let job = this.getJobRow(jobId);
+      this.assertReviewIdle(job, false, true);
+      await this.assertReviewBinding(job, plan);
+      let recorded = readReviewRecovery(safeJsonParse(job.summary_json));
+      if (recorded && recorded.hash !== hash) throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'An accepted recovery payload cannot be replaced', true);
+      if (recorded && job.status === 'ingested') return this.getJob(jobId);
+      const result = await this.runWithClaimOutcome(jobId, async () => {
+        job = this.getJobRow(jobId);
+        this.assertReviewIdle(job, true);
+        await this.assertReviewBinding(job, plan);
+        if (!recorded) {
+          if (job.status !== 'awaiting_review' || job.phase !== 'validating') throw new LocalIngestFailure('REVIEW_RECOVERY_STATE', 'Review state changed', true);
+          const fresh = await this.inspectReview(job, plan.request);
+          if (reviewPlanHash({ ...fresh, planId: plan.planId }) !== hash) throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Preview facts or approved file inventory changed', true);
+          if (await pathExists(path.join(plan.processingPath, 'ready')) || await pathExists(path.join(plan.processingPath, STAGING_MOVE_MANIFEST))) throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Unexpected staging checkpoint', true);
+          if (await pathExists(plan.targetPath)) throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Target appeared before recovery approval', true);
+          this.assertReviewIdle(this.getJobRow(jobId), true);
+          const summary = safeJsonParse(this.getJobRow(jobId).summary_json) ?? {};
+          this.updateJob(jobId, { summaryJson: JSON.stringify({ ...summary, reviewRecovery: { plan: { ...plan, confirmed: false }, hash, acceptedAt: this.timestamp() } }) });
+          recorded = readReviewRecovery(safeJsonParse(this.getJobRow(jobId).summary_json));
+        }
+        // The stored original error and manifest stay immutable. No re-extraction/reset/new job.
+        if (job.status !== 'reconciling') this.updateJob(jobId, { status: 'failed' });
+        return this.withPerformance(jobId, 'run', () => this.runClaimedJob(jobId));
+      });
+      if (result.ownership !== 'acquired') throw new LocalIngestFailure('REVIEW_RECOVERY_ACTIVE', 'Recovery did not acquire this job', true);
+      return result.job;
+    });
+  }
+
+  private async verifyReviewStage(root: string, summary: Record<string, unknown>, allowIncomplete = false): Promise<void> {
+    const recovery = readReviewRecovery(summary);
+    if (!recovery) return;
+    if (typeof summary.reviewContentRoot !== 'string') throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Staging content-root evidence missing', true);
+    const prefix = summary.reviewContentRoot ? normalizeReviewPath(summary.reviewContentRoot) + '/' : '';
+    const retained = new Set(recovery.plan.request.retainedFiles.map(f => comparableRelativePath(f.relativePath)));
+    if (recovery.plan.request.retainedFiles.some(file => !comparableRelativePath(file.relativePath).startsWith(comparableRelativePath(prefix)))) {
+      throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Approved retained file is outside the staged content root', true);
+    }
+    const expected = recovery.plan.files.flatMap(file => {
+      if (!file.relativePath.startsWith(prefix)) return [];
+      const relativePath = file.relativePath.slice(prefix.length), extension = path.extname(relativePath).toLowerCase();
+      const original = retained.has(comparableRelativePath(file.relativePath)) || ['.heic', '.heif', '.tif', '.tiff'].includes(extension);
+      if (!original && !IMAGE_EXTENSIONS.has(extension) && !VIDEO_EXTENSIONS.has(extension)) return [];
+      return [{ relativePath: original ? `${RETAINED_ORIGINALS_DIRECTORY}/${relativePath}` : relativePath, size: file.size, sha256: file.sha256 }];
+    });
+    const actual = (await inspectReviewFiles(root)).map(({ relativePath, size, sha256 }) => ({ relativePath, size, sha256: sha256.toUpperCase() }));
+    const sorted = (files: typeof expected) => files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, 'en'));
+    const allowed = allowIncomplete ? expected.filter(file => actual.some(current => current.relativePath === file.relativePath)) : expected;
+    if (reviewHash(sorted(allowed)) !== reviewHash(sorted(actual))) throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Staged/committed inventory differs from approved recovery', true);
+  }
+
+  private async verifyReviewCommit(job: LocalIngestJobRow, summary: Record<string, unknown>): Promise<void> {
+    const recovery = readReviewRecovery(summary);
+    if (!recovery) return;
+    await this.assertReviewBinding(job, recovery.plan);
+    this.assertReviewIdle(job, true);
+    const witness = summary.reviewCommit as ValidationSummary['reviewCommit'];
+    if (!witness || witness.hash !== recovery.hash || !job.target_path) throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Target exists without this recovery commit checkpoint', true);
+    const stat = await fs.lstat(job.target_path, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev.toString() !== witness.dev || stat.ino.toString() !== witness.ino) {
+      throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Target directory identity differs from the committed staging directory', true);
+    }
+    await this.verifyReviewStage(job.target_path, summary);
+  }
+
   private async runSevenZip(jobId: number, operation: 'list' | 'test' | 'extract', archivePath: string, outputPath?: string): Promise<SevenZipResult> {
     const settings = this.settingsService.get();
     const secret = this.settingsService.getArchivePassword();
@@ -1880,6 +2071,8 @@ export class LocalIngestService {
     const contentRoot = await discoverContentRoot(levelTwoRoot);
     await this.assertInside(levelTwoRoot, contentRoot, 'UNSAFE_ARCHIVE_PATH', 'Extracted content root', { allowRoot: true });
     const tree = await listTree(contentRoot);
+    const reviewed = readReviewRecovery(safeJsonParse(this.getJobRow(job.id).summary_json));
+    const retainedApprovals = new Map(reviewed?.plan.request.retainedFiles.map(file => [comparableRelativePath(file.relativePath), file.reason]) ?? []);
     const media: typeof tree = [];
     const ads: typeof tree = [];
     const unknown: typeof tree = [];
@@ -1897,7 +2090,10 @@ export class LocalIngestService {
         throw new LocalIngestFailure('UNSAFE_OR_EMPTY_FILE', `File requires review: ${entry.relativePath}`, true);
       }
       const extension = path.extname(entry.relativePath).toLocaleLowerCase();
-      if (IMAGE_EXTENSIONS.has(extension)) {
+      const approval = retainedApprovals.get(comparableRelativePath(path.relative(levelTwoRoot, entry.absolutePath)));
+      if (approval) {
+        originals.push(entry);
+      } else if (IMAGE_EXTENSIONS.has(extension)) {
         await validateImage(entry.absolutePath);
         imageCount += 1;
         totalBytes += entry.size;
@@ -1927,11 +2123,13 @@ export class LocalIngestService {
     const originalFiles = [];
     for (const entry of originals) {
       originalFiles.push({ relativePath: entry.relativePath.replace(/\\/g, '/'), size: entry.size,
-        sha256: (await this.hashFile(entry.absolutePath)).toUpperCase() });
+        sha256: (await this.hashFile(entry.absolutePath)).toUpperCase(),
+        ...(retainedApprovals.has(comparableRelativePath(path.relative(levelTwoRoot, entry.absolutePath)))
+          ? { reason: retainedApprovals.get(comparableRelativePath(path.relative(levelTwoRoot, entry.absolutePath)))! } : {}) });
     }
     stopValidation();
 
-    const readyBuildPath = path.join(processingPath, `ready-building-${randomUUID()}`);
+    const readyBuildPath = path.join(processingPath, reviewed ? `ready-building-review-${reviewed.plan.planId}` : `ready-building-${randomUUID()}`);
     const readyPath = path.join(processingPath, 'ready');
     await this.assertInside(processingPath, readyBuildPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready build directory', { directChild: true });
     await this.assertInside(processingPath, readyPath, 'PROCESSING_PATH_OUTSIDE_ALLOWED_ROOT', 'Ready directory', { directChild: true });
@@ -1942,12 +2140,16 @@ export class LocalIngestService {
     const declaredImages = /(?<!\d)(\d+)P(?=\d+V\b|\b)/i.exec(declared);
     const declaredVideos = /(?<!\d)(\d+)V\b/i.exec(declared);
     const declaredSize = /(?<![\d.])(\d+(?:\.\d+)?)\s*(KB|K|MB|M|GB|G)\b/i.exec(declared);
-    if (declaredImages && Number(declaredImages[1]) !== imageCount + originals.length) {
+    const retainedAttachments = originalFiles.filter(file => file.reason === 'attachment').length;
+    const retainedImages = originals.length - retainedAttachments;
+    if (declaredImages && Number(declaredImages[1]) !== imageCount + retainedImages) {
       warnings.push(originals.length
-        ? `来源声明${declaredImages[1]}张；可展示${imageCount}张，另保留${originals.length}张未支持原件，数量与声明不符`
+        ? `来源声明${declaredImages[1]}张；可展示${imageCount}张，另保留${retainedImages}张未支持原件，数量与声明不符`
         : `Declared ${declaredImages[1]} images; extracted ${imageCount}`);
     }
-    if (originals.length) warnings.push(`${originals.length}张 HEIC/HEIF/TIFF 原件已保留，暂不支持展示`);
+    if (retainedImages) warnings.push(reviewed ? `${retainedImages}张未支持格式或经明确批准的超限图片原件已保留，暂不支持展示` : `${retainedImages}张 HEIC/HEIF/TIFF 原件已保留，暂不支持展示`);
+    if (retainedAttachments) warnings.push(`${retainedAttachments}个经明确批准的PDF附件已保留，不计入图片/视频或未支持图片数量`);
+    if (reviewed?.plan.request.removedFiles.length) warnings.push(`${reviewed.plan.request.removedFiles.length}项已明确批准移除的文件保持缺席，未重新解包恢复`);
     if (declaredVideos && Number(declaredVideos[1]) !== videoCount) warnings.push(`Declared ${declaredVideos[1]} videos; extracted ${videoCount}`);
     const declaredSizeMultiplier = declaredSize
       ? declaredSize[2].toLocaleUpperCase().startsWith('G') ? 1024 ** 3
@@ -1959,6 +2161,7 @@ export class LocalIngestService {
       : undefined;
     const summary: ValidationSummary = {
       ...existingSummary,
+      ...(reviewed ? { reviewContentRoot: path.relative(levelTwoRoot, contentRoot).replace(/\\/g, '/') } : {}),
       creator: mapping.creator_name,
       sourceWorkId: mapping.source_work_id,
       archiveDownloadTaskId: mapping.archive_download_task_id,
@@ -1989,14 +2192,14 @@ export class LocalIngestService {
     };
     if (originalFiles.length) {
       const directory = path.join(targetPath, RETAINED_ORIGINALS_DIRECTORY);
-      Object.assign(summary, { retainedOriginalCount: originalFiles.length, retainedOriginalDirectory: directory,
+      Object.assign(summary, { retainedOriginalCount: retainedImages, ...(reviewed ? { retainedAttachmentCount: retainedAttachments } : {}), retainedOriginalDirectory: directory,
         retainedOriginals: { automaticPolicy: 1, directory, count: originalFiles.length, files: originalFiles, verifiedAt: this.timestamp() } });
     }
     if (!(await pathExists(readyPath))) {
       const { performance: _previousPerformance, ...manifestSummary } = summary as unknown as Record<string, unknown>;
       // Mixed unsupported originals use copy staging: keep their complete source
       // inventory until destination hashes are verified. Ordinary media still move.
-      const manifest = originals.length ? null : await createStagingMoveManifest(binding, contentRoot, tree.filter((entry) => !entry.directory).map((entry) => ({
+      const manifest = originals.length || reviewed ? null : await createStagingMoveManifest(binding, contentRoot, tree.filter((entry) => !entry.directory).map((entry) => ({
         relativePath: entry.relativePath, size: entry.size,
         kind: IMAGE_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'image' as const
           : VIDEO_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'video' as const
@@ -2007,20 +2210,24 @@ export class LocalIngestService {
       } else {
         const stopStaging = this.startTiming(job.id, 'staging_copy');
         await fs.mkdir(readyBuildPath, { recursive: true });
+        // A previous copy may have stopped between files. Only an exact subset
+        // of this immutable plan can be reused; damaged/extra files remain review errors.
+        if (reviewed) await this.verifyReviewStage(readyBuildPath, summary as unknown as Record<string, unknown>, true);
         for (const entry of media) {
           const relativePath = path.relative(contentRoot, entry.absolutePath);
           const destination = path.join(readyBuildPath, relativePath);
           if (!isPathWithin(readyBuildPath, destination)) throw new LocalIngestFailure('UNSAFE_ARCHIVE_PATH', 'Media path escapes the staging directory', true);
           await fs.mkdir(path.dirname(destination), { recursive: true });
-          await fs.copyFile(entry.absolutePath, destination, fs.constants.COPYFILE_EXCL);
+          if (!reviewed || !await pathExists(destination)) await fs.copyFile(entry.absolutePath, destination, fs.constants.COPYFILE_EXCL);
         }
         for (const entry of originals) {
           const destination = path.join(readyBuildPath, RETAINED_ORIGINALS_DIRECTORY, entry.relativePath);
           if (!isPathWithin(readyBuildPath, destination)) throw new LocalIngestFailure('UNSAFE_ARCHIVE_PATH', 'Original path escapes staging', true);
           await fs.mkdir(path.dirname(destination), { recursive: true });
-          await fs.copyFile(entry.absolutePath, destination, constants.COPYFILE_EXCL);
+          if (!reviewed || !await pathExists(destination)) await fs.copyFile(entry.absolutePath, destination, constants.COPYFILE_EXCL);
         }
         await this.verifyAutomaticOriginals(readyBuildPath, summary);
+        await this.verifyReviewStage(readyBuildPath, summary as unknown as Record<string, unknown>);
         for (const file of originalFiles) {
           if ((await this.hashFile(path.join(contentRoot, file.relativePath))).toUpperCase() !== file.sha256) {
             throw new LocalIngestFailure('RETAINED_ORIGINALS_INVALID', 'Original changed during staging', true);
@@ -2031,6 +2238,7 @@ export class LocalIngestService {
       }
     }
     await this.verifyAutomaticOriginals(readyPath, summary);
+    await this.verifyReviewStage(readyPath, summary as unknown as Record<string, unknown>);
     this.updateJob(job.id, {
       status: 'running',
       phase: 'awaiting_commit',
@@ -2043,7 +2251,7 @@ export class LocalIngestService {
     return summary;
   }
 
-  private async verifyAutomaticOriginals(root: string, summary: { retainedOriginals?: unknown }): Promise<void> {
+  private async verifyAutomaticOriginals(root: string, summary: { retainedOriginals?: unknown; reviewRecovery?: unknown; reviewContentRoot?: unknown }): Promise<void> {
     const evidence = summary.retainedOriginals as ValidationSummary['retainedOriginals'];
     if (!evidence || evidence.automaticPolicy !== 1) return; // Historical manual retention keeps its explicit policy.
     const fail = (): never => { throw new LocalIngestFailure('RETAINED_ORIGINALS_INVALID', 'Retained original inventory or checksum changed; cleanup is blocked', true); };
@@ -2058,12 +2266,20 @@ export class LocalIngestService {
     if (inventory.some((entry) => entry.symbolic)) fail();
     const actual = inventory.filter((entry) => !entry.directory);
     const keys = new Set<string>();
+    const reviewed = readReviewRecovery(summary);
     if (actual.length !== evidence.files.length) fail();
     for (const file of evidence.files) {
       if (!file || typeof file.relativePath !== 'string' || path.isAbsolute(file.relativePath) || path.win32.isAbsolute(file.relativePath)
         || file.relativePath.replace(/\\/g, '/').split('/').some((part) => !part || part === '.' || part === '..' || /[:\x00]/.test(part))
-        || !['.heic', '.heif', '.tif', '.tiff'].includes(path.extname(file.relativePath).toLowerCase())
         || !Number.isSafeInteger(file.size) || file.size <= 0 || typeof file.sha256 !== 'string') fail();
+      const extension = path.extname(file.relativePath).toLowerCase();
+      if (!['.heic', '.heif', '.tif', '.tiff'].includes(extension)) {
+        const reviewedPath = [summary.reviewContentRoot, file.relativePath].filter(Boolean).join('/');
+        const approval = reviewed?.plan.request.retainedFiles.find(item => comparableRelativePath(item.relativePath) === comparableRelativePath(reviewedPath));
+        const original = reviewed?.plan.files.find(item => comparableRelativePath(item.relativePath) === comparableRelativePath(reviewedPath));
+        if (!approval || !original || original.sha256 !== file.sha256.toUpperCase() || original.size !== file.size || file.reason !== approval.reason
+          || (approval.reason === 'attachment' ? extension !== '.pdf' : !['.jpg', '.jpeg'].includes(extension))) fail();
+      }
       const key = comparableRelativePath(file.relativePath);
       if (keys.has(key)) fail();
       keys.add(key);
@@ -2558,6 +2774,8 @@ export class LocalIngestService {
       throw new LocalIngestFailure('TARGET_MISSING_AFTER_COMMIT', 'The committed target directory cannot be found');
     }
     const targetPlan = await this.validatePersistedTarget(job, mapping, settings, true);
+    const reviewSummary = safeJsonParse(job.summary_json) ?? {};
+    await this.verifyReviewCommit(job, reviewSummary);
     await this.verifyAutomaticOriginals(job.target_path, safeJsonParse(job.summary_json) ?? {});
     this.updateJob(jobId, { status: 'reconciling', phase: 'rescanning' });
     const creatorFolderName = path.basename(targetPlan.creatorDirectory);
@@ -2566,8 +2784,10 @@ export class LocalIngestService {
       settings.libraryRoot,
       mapping.creator_id,
       creatorFolderName,
-      ...(newlyCommitted ? [path.basename(job.target_path!)] : [])
+      ...(newlyCommitted || readReviewRecovery(reviewSummary) ? [path.basename(job.target_path!)] : []),
+      ...(readReviewRecovery(reviewSummary) ? [mapping.archive_download_task_id] : [])
     ));
+    if (readReviewRecovery(reviewSummary)) this.assertReviewIdle(this.getJobRow(jobId), true);
     if (rescanResult && Number.isFinite(rescanResult.galleryIndexMs) && Number.isFinite(rescanResult.ledgerReconciliationMs)) {
       const run = this.performanceRuns.get(jobId);
       if (run) {
@@ -2579,7 +2799,7 @@ export class LocalIngestService {
     this.updateJob(jobId, { status: 'reconciling', phase: 'reconciling' });
     const summary = safeJsonParse(job.summary_json) ?? {};
     if (rescanResult) {
-      const targetRelativePath = path.relative(path.resolve(settings.libraryRoot), path.resolve(job.target_path)).replace(/\\/g, '/');
+      const targetRelativePath = path.relative(await canonicalizeLocalIngestPath(settings.libraryRoot), await canonicalizeLocalIngestPath(job.target_path)).replace(/\\/g, '/');
       if (!targetRelativePath || targetRelativePath.startsWith('../') || path.isAbsolute(targetRelativePath)) {
         throw new LocalIngestFailure('GALLERY_INDEX_INCOMPLETE', 'The committed target is outside the configured gallery root');
       }
@@ -2712,6 +2932,17 @@ export class LocalIngestService {
     }
     if (job.status === 'awaiting_review' || job.phase === 'waiting_stable') return this.getJob(id);
     try {
+      const reviewed = readReviewRecovery(safeJsonParse(job.summary_json));
+      if (reviewed) {
+        this.assertReviewIdle(job, true);
+        await this.assertReviewBinding(job, reviewed.plan);
+        if (!job.target_path || !(await pathExists(job.target_path))) {
+          const current = await this.inspectReview(job, reviewed.plan.request);
+          if (reviewPlanHash({ ...current, planId: reviewed.plan.planId, originalFailure: reviewed.plan.originalFailure }) !== reviewed.hash) {
+            throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Extraction checkpoint changed after recovery approval', true);
+          }
+        } else await this.verifyReviewCommit(job, safeJsonParse(job.summary_json) ?? {});
+      }
       const committedOrReconciling = job.status === 'reconciling'
         || Boolean(job.target_path && await pathExists(job.target_path));
       if (job.source_work_id === null || job.archive_download_task_id === null) {
@@ -2850,6 +3081,15 @@ export class LocalIngestService {
       await fs.mkdir(commitPlan.creatorDirectory, { recursive: true });
       this.updateJob(id, { phase: 'committing' });
       await this.verifyAutomaticOriginals(summary.readyPath, summary);
+      if (reviewed) {
+        this.assertReviewIdle(this.getJobRow(id), true);
+        await this.assertReviewBinding(this.getJobRow(id), reviewed.plan);
+        await this.verifyReviewStage(summary.readyPath, summary as unknown as Record<string, unknown>);
+        const stat = await fs.lstat(summary.readyPath, { bigint: true });
+        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.ino === 0n) throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Ready directory identity unavailable', true);
+        summary.reviewCommit = { hash: reviewed.hash, dev: stat.dev.toString(), ino: stat.ino.toString() };
+        this.updateJob(id, { summaryJson: JSON.stringify(summary) });
+      }
       await this.timed(id, 'final_commit', () => fs.rename(summary.readyPath, summary.plannedTargetPath));
       this.updateJob(id, { status: 'reconciling', phase: 'rescanning', targetPath: summary.plannedTargetPath });
       return await this.reconcile(id, true);
@@ -2947,6 +3187,22 @@ export class LocalIngestService {
           : null;
         if (comparedTarget === comparedSource || comparedTarget === comparedProcessing) {
           throw new LocalIngestFailure('RECYCLE_PATH_OUTSIDE_ALLOWED_ROOT', 'Cleanup may not recycle the committed gallery target', true);
+        }
+      }
+      await this.verifyReviewCommit(job, summary);
+      const reviewedCleanup = readReviewRecovery(summary);
+      if (reviewedCleanup && await pathExists(job.source_archive_path)) {
+        const currentSource = await fs.lstat(job.source_archive_path);
+        const expectedSource = reviewedCleanup.plan.sourceArchive;
+        if (currentSource.size !== expectedSource.size || currentSource.mtimeMs !== expectedSource.mtimeMs
+          || (await this.hashFile(job.source_archive_path)).toUpperCase() !== expectedSource.sha256) {
+          throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Source archive changed after commit; cleanup is blocked', true);
+        }
+      }
+      if (reviewedCleanup && job.processing_path && await pathExists(job.processing_path)) {
+        const currentFiles = await inspectReviewFiles(path.join(job.processing_path, 'level-2'));
+        if (reviewHash(currentFiles.map(file => ({ ...file, sha256: file.sha256.toUpperCase() }))) !== reviewHash(reviewedCleanup.plan.files)) {
+          throw new LocalIngestFailure('REVIEW_RECOVERY_CHANGED', 'Extraction inventory changed after commit; cleanup is blocked', true);
         }
       }
       if (summary.retainedOriginals) {

@@ -19,6 +19,21 @@ describe('LocalIngest creator-scoped reconciliation boundary', () => {
     scanCosCreatorsMock.mockReset();
   });
 
+  it('passes the exact reviewed task to ledger settlement after the same single-work scan', async () => {
+    const database = new DatabaseSync(':memory:');
+    scanCosCreatorsMock.mockResolvedValue({ id: 43, status: 'completed', error_text: null });
+    const refresh = vi.spyOn(ArchiveCatalogPipelineService.prototype, 'refreshAfterCreatorGalleryScan')
+      .mockResolvedValue({} as never);
+    try {
+      await runCreatorScopedLocalIngestReconciliation(database, 'G:\\synthetic', 39, 'Synthetic Creator', 'NO.001', 123);
+      expect(scanCosCreatorsMock).toHaveBeenCalledWith(['Synthetic Creator'], 'local-ingest', {
+        repairUnchangedDerivatives: false, allowDerivativeMigration: false, workFolderName: 'NO.001'
+      });
+      expect(refresh).toHaveBeenCalledWith({ galleryRoot: 'G:\\synthetic', creatorId: 39,
+        creatorFolderName: 'Synthetic Creator', workFolderName: 'NO.001', reviewDownloadTaskId: 123 });
+    } finally { database.close(); }
+  });
+
   it('limits a newly committed work to the same scanner and ledger scope', async () => {
     const database = new DatabaseSync(':memory:');
     scanCosCreatorsMock.mockResolvedValue({ id: 43, status: 'completed', error_text: null });

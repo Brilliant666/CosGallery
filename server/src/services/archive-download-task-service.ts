@@ -333,6 +333,64 @@ export class ArchiveDownloadTaskService {
     };
   }
 
+  /** Explicit Stage3 review recovery settles only its original task, never a creator-wide plan. */
+  reconcileReviewedLocalTask(taskId: number, creatorId: number): number {
+    if (![taskId, creatorId].every(value => Number.isSafeInteger(value) && value > 0)) {
+      throw new Error('审核恢复需要精确的下载任务和博主身份。');
+    }
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const task = this.database.prepare(
+        `SELECT tasks.source_work_id, tasks.status
+         FROM archive_catalog_download_tasks tasks
+         JOIN archive_catalog_source_works source_works ON source_works.id=tasks.source_work_id
+         JOIN archive_catalog_works works ON works.id=source_works.work_id
+         JOIN archive_catalog_collections collections ON collections.id=source_works.collection_id
+         JOIN archive_catalog_creators creators ON creators.id=works.creator_id
+         WHERE tasks.id=? AND works.creator_id=? AND collections.creator_id=works.creator_id
+           AND tasks.provider='baidu' AND source_works.is_active=1 AND collections.is_active=1 AND creators.is_active=1`
+      ).get(taskId, creatorId) as { source_work_id: number; status: ArchiveDownloadTaskStatus } | undefined;
+      if (!task) throw new Error('审核恢复的任务、来源或博主关系已变化。');
+      if (task.status === 'claimed' || task.status === 'downloading') {
+        throw new Error('审核恢复的下载任务已被领取或正在下载，保留活动 claim。');
+      }
+      if (!['pending', 'failed', 'staged', 'downloaded', 'ingested'].includes(task.status)) {
+        throw new Error('审核恢复不能修改当前下载任务状态。');
+      }
+      const local = this.database.prepare(
+        `SELECT 1 AS present
+         FROM archive_catalog_source_works source_works
+         JOIN archive_catalog_works works ON works.id=source_works.work_id
+         JOIN archive_catalog_local_works local_works ON local_works.work_id=works.id
+         JOIN archive_catalog_local_creator_folders local_folders ON local_folders.id=local_works.local_creator_folder_id
+         WHERE source_works.id=? AND works.creator_id=? AND local_folders.creator_id=works.creator_id
+           AND local_works.is_active=1 AND local_folders.is_active=1
+           AND NOT EXISTS (SELECT 1 FROM archive_catalog_work_decisions manual WHERE manual.local_work_id=local_works.id)
+           AND NOT ${acquisitionHeldSql('source_works')}
+         LIMIT 1`
+      ).get(task.source_work_id, creatorId);
+      if (!local) throw new Error('审核恢复的来源尚未关联到可用的精确本地作品，或存在人工决定需保留。');
+      if (task.status === 'ingested') {
+        this.database.exec('COMMIT');
+        return 0;
+      }
+      // A real staged timestamp is saved before the status transition. Existing
+      // worker, claim, attempts, download and error history are not rewritten.
+      preserveDownloadStagedAt(this.database, { taskId });
+      const result = this.database.prepare(
+        `UPDATE archive_catalog_download_tasks
+         SET status='ingested', completed_at=COALESCE(completed_at, ?), updated_at=?
+         WHERE id=? AND source_work_id=? AND status IN ('pending','failed','staged','downloaded')`
+      ).run(nowIso(), nowIso(), taskId, task.source_work_id);
+      if (Number(result.changes) !== 1) throw new Error('审核恢复的任务状态已变化，未完成精确对账。');
+      this.database.exec('COMMIT');
+      return 1;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   private reconcileAlreadyLocalTasks(
     provider: string,
     creatorIds: number[] | null = null,
