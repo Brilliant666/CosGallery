@@ -296,6 +296,10 @@ export function parseCostuanCollectionCreator(title:string):string|null {
 // label/key for review; this does not authorize staging the appendix itself.
 export const WEIBO_SUPPLEMENT_LABELS = ['微博图', '微博散图', '微博配图', '微薄散图', '微博杂图'] as const;
 
+export function hasCostuanWeiboSupplementDeclaration(title:string):boolean {
+  return /\[\d+\s*套\s*\+\s*(?:微博图|微博散图|微博配图|微薄散图|微博杂图)\s*\]/u.test(title.normalize('NFKC'));
+}
+
 /** Split only an explicitly advertised, unnumbered appendix; never relax numbered validation. */
 export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWork[], text:string|undefined) {
   const merged=mergeCostuanDirectoryWorks(works,text);
@@ -305,7 +309,7 @@ export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWo
     return numbering && numbering.order!==null;
   });
   const extras=merged.filter(work=>!numbered.includes(work));
-  const declaration=title.normalize('NFKC').match(/\[\d+\s*套\s*\+\s*(?:微博图|微博散图|微博配图|微薄散图|微博杂图)\s*\]/u);
+  const declaration=hasCostuanWeiboSupplementDeclaration(title);
   if (!extras.length && !declaration) return {works:merged,supplementalContents};
   const creator=parseCostuanCollectionCreator(title);
   const lines=String(text??'').split(/\r?\n/u).flatMap(line=>parseCostuanDirectoryText(line));

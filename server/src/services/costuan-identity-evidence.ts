@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
-import { parseCostuanDirectoryText, parseCostuanNumbering, WEIBO_SUPPLEMENT_LABELS } from './costuan-numbering-service.js';
+import { parseCostuanDirectoryText, parseCostuanNumbering, WEIBO_SUPPLEMENT_LABELS, hasCostuanWeiboSupplementDeclaration } from './costuan-numbering-service.js';
 
 export const costuanIdentityEvidenceSchema = z.object({
   version: z.literal(1),
@@ -74,7 +74,7 @@ export function completeIdentityDirectory(text: string | undefined, title: strin
     // An explicitly advertised appendix participates in creator-name evidence,
     // never in numbered coverage or executable Works.
     if (!order && works.length === 1 && works[0].mediaSummary
-      && WEIBO_SUPPLEMENT_LABELS.some(label => title.normalize('NFKC').includes(`+${label}]`))) {
+      && hasCostuanWeiboSupplementDeclaration(title)) {
       const label=WEIBO_SUPPLEMENT_LABELS.find(label => works[0].label.endsWith(label));
       const name=label ? works[0].label.slice(0,-label.length).trim() : '';
       if (name) { names.set(normalizeCreatorIdentity(name),name); continue; }

@@ -13,6 +13,7 @@ describe('source directory range evidence', () => {
     expect(analyzeCostuanDirectoryCoverage(text,142)).toMatchObject({rawEntryCount:134,numberedEntryCount:133,singleEntryCount:131,
       rangeEntryCount:2,uniqueNumberCount:142,numberingComplete:true});
     expect(completeIdentityDirectory(text,'Fixture COSPLAY写真合集[142套+微薄散图][持续更新]')).toBe('Fixture');
+    expect(completeIdentityDirectory(text,'Fixture COSPLAY写真合集[142套 + 微薄散图 ][持续更新]')).toBe('Fixture');
     expect(()=>completeIdentityDirectory(text.replace('Fixture 微博杂图','Other 微博杂图'),'Fixture COSPLAY写真合集[142套+微薄散图][持续更新]')).toThrow(/名称写法不一致/);
   });
   it.each(['','Fixture NO.001 正常 [1P-1MB]',undefined])('does not hide ranges in works behind raw text %s', text=>{
