@@ -40,6 +40,8 @@ jobs:
         run: pnpm build:docs
 
       - name: Publish to foldergram.github.io
+        # Forks still build docs, but must not publish to the upstream owner's site.
+        if: github.repository_owner == 'foldergram'
         uses: peaceiris/actions-gh-pages@v4
         with:
           personal_token: ${{ secrets.FOLDERGRAM_DOCS_DEPLOY_TOKEN }}
