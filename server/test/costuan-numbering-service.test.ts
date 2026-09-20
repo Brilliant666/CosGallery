@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { songHanaDirectory } from './fixtures/costuan-song-hana-directory.js';
 
 import {
   mergeCostuanDirectoryWorks,
@@ -11,6 +12,31 @@ import {
 } from '../src/services/costuan-numbering-service.js';
 
 describe('Costuan numbering parser', () => {
+  it('preserves all 23 public mixed rows and their outer collection identities',()=>{
+    const works=parseCostuanDirectoryText(songHanaDirectory);
+    expect(works.map(work=>work.sourceOrderKey)).toEqual(Array.from({length:23},(_,i)=>`NO:${String(i+1).padStart(3,'0')}`));
+    expect(works[19]).toMatchObject({sourceOrder:'NO.020',label:'[Bimilstory] Vol.02 Micro bikini'});
+  });
+
+  it.each(['Song Hana','Example Creator','예시 이름','Example\tCreator'])('prioritizes a bounded multiword creator prefix: %s', name=>{
+    const works=parseCostuanDirectoryText(`${name} 020 [Publisher] Vol.02 First\n${name} 021 [Publisher] Vol.02 Second`);
+    expect(works.map(work=>work.sourceOrderKey)).toEqual(['NO:020','NO:021']);
+    expect(works.map(work=>work.label)).toEqual(['[Publisher] Vol.02 First','[Publisher] Vol.02 Second']);
+    expect(parseCostuanNumbering(`${name} 1001 [Publisher] Vol.02 First`)?.key).toBe('NO:1001');
+  });
+
+  it.each([
+    ['Song Hana VOL 020 Title','VOL:020'],
+    ['Song Hana NO 020 Title','NO:020'],
+    ['Song Hana VOL.020 021 Title','VOL:020'],
+    ['VOL 020 Title','VOL:020'],
+    ['[Bimilstory] Vol.02 Title','VOL:002'],
+    ['2023.07.14更新：',undefined],
+    ['[200P-1GB]',undefined],
+    ['Song\nHana 020 [Publisher] Vol.02 Title','VOL:002']
+  ])('does not absorb explicit numbers, dates, sizes or cross-line names: %s',(text,key)=>{
+    expect(parseCostuanNumbering(text)?.key).toBe(key);
+  });
   it('preserves embedded volume labels when comparing source titles',()=>{
     for(const title of ['自分撮りvol.47','自撮Vol.76','自撮り VOL.63','自摄Vol.102']){
       expect(areCostuanTitlesCompatible(`白银81 NO.065 ${title}[121P3V-789MB]`,title,['白银81'])).toBe(true);

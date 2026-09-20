@@ -1,3 +1,5 @@
+import { hasNamedCostuanNumberPrefix } from './costuan-numbering-prefix.js';
+
 /** A directory range is a coverage declaration, not a list of Works or files. */
 export type CostuanNumberRange = {
   scheme: 'NO' | 'VOL'; first: number; last: number; count: number;
@@ -15,7 +17,8 @@ function findRange(text: string): RegExpExecArray | null {
   // An already selected collection number wins over publisher numbering inside
   // the title (e.g. Maruemon 001 [ARTGRAVIA] Vol.150-151).
   const hasPriorNumber = /(?:^|[^A-Za-z0-9])(?:NO|VOL)[\s._]*\d+/iu.test(prefix)
-    || /^(?:[\p{L}][\p{L}\p{N}_.·-]*\s+)?\d{3,4}(?=\s|[.\[【])/u.test(prefix);
+    || /^(?:[\p{L}][\p{L}\p{N}_.·-]*\s+)?\d{3,4}(?=\s|[.\[【])/u.test(prefix)
+    || hasNamedCostuanNumberPrefix(text,true);
   if (hasPriorNumber) {
     // Only a recognized publisher label makes the later VOL content metadata.
     // Another collection NO (or an unlabeled VOL) must never vanish silently.

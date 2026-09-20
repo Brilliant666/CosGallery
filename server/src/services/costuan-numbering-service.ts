@@ -1,4 +1,5 @@
 import { parseCostuanNumberRange, type CostuanNumberRange } from './costuan-numbering-range.js';
+import { hasNamedCostuanNumberPrefix } from './costuan-numbering-prefix.js';
 
 export type CostuanNumberingScheme = 'NO' | 'VOL' | 'SPECIAL';
 
@@ -141,7 +142,7 @@ export function parseCostuanNumbering(value: string): ParsedCostuanNumbering | n
     canonicalLabel: range.canonicalLabel, rawLabel: range.rawLabel, qualifier: null,
     start: range.start, end: range.end, style: 'explicit', range };
   // The creator-prefixed collection number wins over publisher Vol./No. in the title.
-  const named=/^(?!NO\s|VOL\s)[\p{L}][\p{L}\p{N}_.·-]*\s+\d{3}\s+\S/iu.test(normalized);
+  const named=hasNamedCostuanNumberPrefix(normalized);
   return (named ? legacyNumericMatch(normalized) : null) ?? explicitMatch(normalized) ?? specialMatch(normalized) ?? legacyNumericMatch(normalized);
 }
 
