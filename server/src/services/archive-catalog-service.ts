@@ -665,6 +665,12 @@ export class ArchiveCatalogService {
       if(ids.length>1 || ids.some(id=>id!==expectedCreatorId)) fail(`页面身份冲突或歧义：“${name}”对应 ${describe(ids)}`);
     }
     const result=(method:CostuanIdentityVerification['method'],message:string):CostuanIdentityVerification=>({method,creatorId:expectedCreatorId,postId,titleName:alias,message});
+    // Only an independently registered article tag can replace missing row names.
+    // A candidate Latin-name variant or an unknown alternate name cannot do so.
+    const hasExactArticleTag=(name:string)=>{
+      const ids=this.findCreatorIdsByAliases([name]);
+      return ids.length===1 && ids[0]===expectedCreatorId;
+    };
     // Descriptive title prefixes generate candidates, never aliases or an
     // identity shortcut. Keep this vocabulary bounded and article-local.
     const describedName=alias?.normalize('NFKC').match(/^(?:韩国妹子|韩国模特)\s*([\p{L}\p{N}_·.\-]{2,64})$/u);
@@ -675,10 +681,10 @@ export class ArchiveCatalogService {
       const permitted=new Set([alias!,name].map(normalizeCreatorIdentity));
       const accepts=(value:string)=>permitted.has(normalizeCreatorIdentity(value))
         && this.findCreatorIdsByAliases([value]).every(id=>id===expectedCreatorId);
-      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,accepts);
       const tag=evidence.creatorTags[0];
       if(!accepts(tag.name)) return fail('描述前缀身份证据不一致：本篇标签不支持标题中的博主名称');
-      return {...result('title-directory-tags',`描述前缀已核验：“${alias}”的名称“${name}”及完整目录、本篇标签对应 ${target}；未新增别名。`),directoryName,tagNames:[tag.name]};
+      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,accepts,{allowUnnamedEntries:hasExactArticleTag(tag.name)});
+      return {...result('title-directory-tags',`描述前缀已核验：“${alias}”的名称“${name}”及本篇标签对应 ${target}；目录编号完整，未新增别名。`),...(directoryName ? {directoryName} : {}),tagNames:[tag.name]};
     }
     // Parentheses declare candidate names only. Require an exact identity
     // anchor and article evidence; never register or discard the second name.
@@ -696,10 +702,10 @@ export class ArchiveCatalogService {
         const ids=this.findCreatorIdsByAliases([name]);
         return localNames.has(normalizeCreatorIdentity(name)) && ids.every(id=>id===expectedCreatorId);
       };
-      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,validLocalName);
       const tag=evidence.creatorTags[0];
       if(!validLocalName(tag.name)) return fail('括注双名称证据不一致：本篇标签不属于标题明确声明的名称');
-      return {...result('title-directory-tags',`括注双名称已核验：“${alias}”及完整目录、本篇标签对应 ${target}；未新增通用别名。`),directoryName,tagNames:[tag.name]};
+      const directoryName=completeIdentityDirectory(input.resourceDirectoryText,title,validLocalName,{allowUnnamedEntries:hasExactArticleTag(tag.name)});
+      return {...result('title-directory-tags',`括注双名称已核验：“${alias}”及本篇标签对应 ${target}；目录编号完整，未新增通用别名。`),...(directoryName ? {directoryName} : {}),tagNames:[tag.name]};
     }
     if(dualNames) {
       if(!dualMatches.some(ids=>ids.length===1 && ids[0]===expectedCreatorId)) return fail('双名称证据不足：标题须包含当前博主唯一对应的完整规范名称或已登记别名');

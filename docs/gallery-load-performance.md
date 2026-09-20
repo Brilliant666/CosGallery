@@ -275,16 +275,16 @@ dependencies. Build both clients/servers into their own source directories.
 2. `gallery-runtime.mjs <baseline-built-source> <before-data-root> <isolated-port>`
    starts only the read-only benchmark HTTP host (never port 4141).
 3. Set `GALLERY_BENCH_FFMPEG` to the verified local ffmpeg absolute path, then run
-   `gallery-samples.mjs <evidence-root> <production-repo> <url> <ordinary-id>
-   <multi-id> <large-id>`. Selection and generated derivatives stay isolated.
+   `gallery-samples.mjs <evidence-root> <production-repo> <url> <ordinary-id> <multi-id> <large-id>`.
+   Selection and generated derivatives stay isolated.
 4. `gallery-measure.mjs <baseline-built-source> <evidence-root> before <url>`
    records query plans, SQL/service timings, JSON bytes and HTTP timings.
 5. Set `BROWSER_NODE_MODULES` to a directory containing the existing Playwright
-   installation. Run `gallery-browser.mjs --url=<url> --samples=<ignored-samples>
-   --out=<evidence-root>/before-browser.json`. No builds/tests run concurrently
+   installation. Run `gallery-browser.mjs --url=<url> --samples=<ignored-samples> --out=<evidence-root>/before-browser.json`.
+   No builds/tests run concurrently
    with accepted measurements. A failed warmup stops instead of publishing timing.
-6. Send `stop` to the isolated host's stdin. Run `gallery-index-size.mjs
-   <evidence-root>` once on a disposable snapshot copy, then start the after host
+6. Send `stop` to the isolated host's stdin. Run `gallery-index-size.mjs <evidence-root>`
+   once on a disposable snapshot copy, then start the after host
    with this branch's built source and the after data root on the same port.
    Normal migration applies only to that isolated database.
 7. Repeat steps 4–5 with label/output `after` and exactly the same samples/cache.
