@@ -688,16 +688,21 @@ export class ArchiveCatalogService {
     }
     // Parentheses declare candidate names only. Require an exact identity
     // anchor and article evidence; never register or discard the second name.
-    const parenthetical=alias?.normalize('NFKC').match(/^(?:韩国模特\s*)?([\p{L}\p{N}_·.\-\s]{1,64})\s*\(([\p{L}\p{N}_·.\-\s]{1,64})\)$/u);
+    const parenthetical=alias?.normalize('NFKC').match(/^([\p{L}\p{N}_·.\-\s]{1,64})\s*\(([\p{L}\p{N}_·.\-\s]{1,64})\)$/u);
     if (parenthetical) {
-      const first=parenthetical[1].trim(), second=parenthetical[2].trim();
+      const rawFirst=parenthetical[1].trim(), second=parenthetical[2].trim();
+      // Compose bounded descriptive prefixes with parentheses, article-locally.
+      // Keep the raw form for conflict checks; never turn this into a global alias.
+      const first=rawFirst.replace(/^(?:韩国妹子|韩国模特|韩国)\s*/u,'').trim();
       const components=[first,second];
       const componentIds=components.map(name=>this.findCreatorIdsByAliases([name]));
+      const declaredNames=[alias!,rawFirst,first,second,`${first}(${second})`];
+      const declaredIds=declaredNames.map(name=>this.findCreatorIdsByAliases([name]));
       if(components.some(name=>!normalizeCreatorIdentity(name)) || normalizeCreatorIdentity(first)===normalizeCreatorIdentity(second)
         || !componentIds.some(ids=>ids.length===1 && ids[0]===expectedCreatorId)
-        || componentIds.some(ids=>ids.length>1 || ids.some(id=>id!==expectedCreatorId))) return fail('括注双名称身份冲突或证据不足：至少一个完整名称须唯一对应当前博主，另一名称不得存在歧义或对应其他博主');
+        || declaredIds.some(ids=>ids.length>1 || ids.some(id=>id!==expectedCreatorId))) return fail('括注双名称身份冲突或证据不足：至少一个完整名称须唯一对应当前博主，另一名称不得存在歧义或对应其他博主');
       if(!evidence || evidence.creatorTags.length!==1) return fail('括注双名称证据不足：缺少本篇文章唯一的博主标签');
-      const localNames=new Set([alias!,first,second,`${first}(${second})`].map(normalizeCreatorIdentity));
+      const localNames=new Set(declaredNames.map(normalizeCreatorIdentity));
       const validLocalName=(name:string)=>{
         const ids=this.findCreatorIdsByAliases([name]);
         return localNames.has(normalizeCreatorIdentity(name)) && ids.every(id=>id===expectedCreatorId);

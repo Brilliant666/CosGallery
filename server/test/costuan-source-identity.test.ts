@@ -4,9 +4,11 @@ import { schemaSql } from '../src/db/schema.js';
 import { ArchiveCatalogService } from '../src/services/archive-catalog-service.js';
 import { ArchiveMetadataTaskService } from '../src/services/archive-metadata-task-service.js';
 import { normalizeCreatorIdentity } from '../src/utils/creator-identity.js';
+import { parseCostuanDirectoryText } from '../src/services/costuan-numbering-service.js';
+import { songHanaDirectory, songHanaTitle } from './fixtures/costuan-song-hana-directory.js';
 
-// Synthetic article-sized directories only: no live website, production DB,
-// media directory, download, or fixture copied from an account is involved.
+// In-memory identities and static public/synthetic directories only: no live
+// website, production DB, media directory, download or account export involved.
 describe('Costuan multi-evidence creator identity', () => {
   let db: DatabaseSync;
   let catalog: ArchiveCatalogService;
@@ -65,6 +67,50 @@ describe('Costuan multi-evidence creator identity', () => {
     return proof;
   };
   const songTitle='韩国Song Hana(송하나)写真图片包合集[3套][持续更新]';
+
+  it.each(['韩国','韩国模特','韩国妹子'])('validates the public mixed 23-row directory with tag Song Hana and prefix %s, without writes', prefix=>{
+    const proof=songProof();
+    proof.identityEvidence.creatorTags[0].name='Song Hana';
+    proof.resourceDirectoryText=songHanaDirectory;
+    const before=snapshot(), changes=db.prepare('SELECT total_changes() AS n').get();
+    const result=catalog.validateCompleteCostuanDirectory({creatorName:'SongHana',aliases:[],costuan:{
+      ...proof,postId,title:songHanaTitle.replace(/^韩国/u,prefix),collectionCount:23,
+      works:parseCostuanDirectoryText(songHanaDirectory),
+      directoryVerification:{complete:true,checkedAt:'2026-09-20T00:00:00Z',parsedWorkCount:23}
+    }},id);
+    expect(result.record.costuan.identityVerification).toMatchObject({method:'title-directory-tags',tagNames:['Song Hana']});
+    expect(result.canonicalWorks.map(work=>work.sourceOrder)).toEqual(Array.from({length:23},(_,i)=>`NO.${String(i+1).padStart(3,'0')}`));
+    expect(result.canonicalWorks[19]).toMatchObject({label:'[Bimilstory] Vol.02 Micro bikini',sourceOrderKey:'NO:020',declaredImageCount:85});
+    expect(result.sourceFilenames).toEqual(Array.from({length:23},(_,i)=>`${String(i+1).padStart(3,'0')}.7z`));
+    expect(snapshot()).toBe(before);
+    expect(db.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+  });
+
+  it.each(['韩国Song Hana','Song Hana','Song Hana(송하나)','송하나'])('does not strip or compose away a conflicting registered title component: %s', conflict=>{
+    const proof=songProof();
+    creator(62,conflict);
+    proof.identityEvidence.creatorTags[0].name='송하나';
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,songTitle,proof));
+  });
+
+  it('rejects a mixed directory whose named row is not a declared article identity',()=>{
+    const proof=songProof();
+    proof.identityEvidence.creatorTags[0].name='Song Hana';
+    proof.resourceDirectoryText=songHanaDirectory.replace('Song Hana 019','Other Person 019');
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,songHanaTitle,proof));
+  });
+
+  it('rejects an old client payload that still labels the twentieth collection entry as publisher VOL.002',()=>{
+    const proof=songProof();
+    proof.identityEvidence.creatorTags[0].name='Song Hana';
+    proof.resourceDirectoryText=songHanaDirectory;
+    const works=parseCostuanDirectoryText(songHanaDirectory);
+    works[19]={...works[19],order:2,sourceOrder:'VOL.002',sourceOrderKey:'VOL:002',sourceOrderScheme:'VOL',sourceOrderRaw:'Vol.02'};
+    rejectsWithoutWrites(()=>catalog.validateCompleteCostuanDirectory({creatorName:'SongHana',aliases:[],costuan:{
+      ...proof,postId,title:songHanaTitle,collectionCount:23,works,
+      directoryVerification:{complete:true,checkedAt:'2026-09-20T00:00:00Z',parsedWorkCount:23}
+    }},id));
+  });
 
   it('accepts numbered publisher titles without row names using a registered article identity, without writes',()=>{
     const proof=songProof(), before=snapshot();

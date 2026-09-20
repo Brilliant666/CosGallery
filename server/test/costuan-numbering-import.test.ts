@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { schemaSql } from '../src/db/schema.js';
 import { ArchiveCatalogService } from '../src/services/archive-catalog-service.js';
+import { parseCostuanDirectoryText } from '../src/services/costuan-numbering-service.js';
+import { songHanaDirectory, songHanaTitle } from './fixtures/costuan-song-hana-directory.js';
 
 describe('Costuan mixed-numbering metadata import', () => {
   let database: DatabaseSync;
@@ -22,6 +24,25 @@ describe('Costuan mixed-numbering metadata import', () => {
   afterEach(async () => {
     database.close();
     await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it('imports the mixed 23-row article into an isolated catalog idempotently without publisher-volume collisions',()=>{
+    seedCreators(database,[{name:'SongHana',preference:'liked',rating:'R15'}]);
+    const {id}=database.prepare('SELECT id FROM archive_catalog_creators WHERE normalized_name=?').get('songhana') as {id:number};
+    const service=new ArchiveCatalogService(database);
+    const record={creatorName:'SongHana',aliases:[],costuan:{postId:'623',title:songHanaTitle,collectionCount:23,
+      resourceDirectoryText:songHanaDirectory,works:parseCostuanDirectoryText(songHanaDirectory),
+      identityEvidence:{version:1,pageUrl:'https://www.costuan.com/623.html',creatorTags:[{name:'Song Hana',url:'https://www.costuan.com/tag/142'}]},
+      directoryVerification:{complete:true,checkedAt:'2026-09-20T00:00:00Z',parsedWorkCount:23}
+    }};
+    const validated=service.validateCompleteCostuanDirectory(record,id);
+    expect(service.importCostuanRecord(validated.record,{expectedCreatorId:id})).toMatchObject({addedWorks:23,importedWorks:23});
+    const before=database.prepare('SELECT id,work_id,source_work_id,raw_title FROM archive_catalog_source_works ORDER BY id').all();
+    expect(service.importCostuanRecord(validated.record,{expectedCreatorId:id})).toMatchObject({addedWorks:0,importedWorks:23});
+    expect(database.prepare('SELECT id,work_id,source_work_id,raw_title FROM archive_catalog_source_works ORDER BY id').all()).toEqual(before);
+    expect(before.map(work=>work.source_work_id)).toEqual(Array.from({length:23},(_,i)=>`NO.${String(i+1).padStart(3,'0')}`));
+    expect(before[19].raw_title).toContain('Vol.02 Micro bikini');
+    expect(database.prepare('SELECT COUNT(*) AS n FROM archive_catalog_works').get()).toEqual({n:23});
   });
 
   it.each(['','混合博主 NO.001 单套 [1P-1MB]'])('refuses a range hidden in offline works with raw text %s',async text=>{

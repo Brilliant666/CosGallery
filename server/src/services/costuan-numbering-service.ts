@@ -1,4 +1,5 @@
 import { parseCostuanNumberRange, type CostuanNumberRange } from './costuan-numbering-range.js';
+import { matchNamedCostuanNumberPrefix } from './costuan-numbering-prefix.js';
 
 export type CostuanNumberingScheme = 'NO' | 'VOL' | 'SPECIAL';
 
@@ -141,8 +142,13 @@ export function parseCostuanNumbering(value: string): ParsedCostuanNumbering | n
     canonicalLabel: range.canonicalLabel, rawLabel: range.rawLabel, qualifier: null,
     start: range.start, end: range.end, style: 'explicit', range };
   // The creator-prefixed collection number wins over publisher Vol./No. in the title.
-  const named=/^(?!NO\s|VOL\s)[\p{L}][\p{L}\p{N}_.·-]*\s+\d{3}\s+\S/iu.test(normalized);
-  return (named ? legacyNumericMatch(normalized) : null) ?? explicitMatch(normalized) ?? specialMatch(normalized) ?? legacyNumericMatch(normalized);
+  const named=matchNamedCostuanNumberPrefix(normalized);
+  if (named) {
+    const order=Number(named.rawLabel);
+    // Use the selected outer token, not an earlier numeric suffix in the name.
+    return {...named,scheme:'NO',order,key:`NO:${padOrder(order)}`,canonicalLabel:`NO.${padOrder(order)}`,qualifier:null,style:'implicit'};
+  }
+  return explicitMatch(normalized) ?? specialMatch(normalized) ?? legacyNumericMatch(normalized);
 }
 
 function parseMediaDeclaration(rawTitle: string, mediaSummary: string): {
