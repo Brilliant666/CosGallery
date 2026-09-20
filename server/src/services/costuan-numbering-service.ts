@@ -1,3 +1,5 @@
+import { parseCostuanNumberRange, type CostuanNumberRange } from './costuan-numbering-range.js';
+
 export type CostuanNumberingScheme = 'NO' | 'VOL' | 'SPECIAL';
 
 export type ParsedCostuanNumbering = {
@@ -10,6 +12,7 @@ export type ParsedCostuanNumbering = {
   start: number;
   end: number;
   style: 'explicit' | 'implicit' | 'leading' | 'special';
+  range?: CostuanNumberRange;
 };
 
 export type ParsedCostuanDirectoryWork = {
@@ -24,6 +27,7 @@ export type ParsedCostuanDirectoryWork = {
   declaredImageCount: number | null;
   declaredVideoCount: number | null;
   declaredSize: string | null;
+  range?: CostuanNumberRange;
 };
 
 type ExistingCostuanWork = {
@@ -132,6 +136,10 @@ export function parseCostuanNumbering(value: string): ParsedCostuanNumbering | n
   const normalized = String(value ?? '')
     .normalize('NFKC')
     .replace(/\u00a0/gu, ' ');
+  const range = parseCostuanNumberRange(normalized);
+  if (range) return { scheme: range.scheme, order: null, key: range.key,
+    canonicalLabel: range.canonicalLabel, rawLabel: range.rawLabel, qualifier: null,
+    start: range.start, end: range.end, style: 'explicit', range };
   // The creator-prefixed collection number wins over publisher Vol./No. in the title.
   const named=/^(?!NO\s|VOL\s)[\p{L}][\p{L}\p{N}_.·-]*\s+\d{3}\s+\S/iu.test(normalized);
   return (named ? legacyNumericMatch(normalized) : null) ?? explicitMatch(normalized) ?? specialMatch(normalized) ?? legacyNumericMatch(normalized);
@@ -198,6 +206,7 @@ export function parseCostuanDirectoryText(text: string): ParsedCostuanDirectoryW
     if (!label && numbering.scheme === 'SPECIAL') {
       label = rawTitle.replace(/\s*[\[【][^\]】]+[\]】]\s*$/u, '').trim();
     }
+    if (!label && numbering.range) label = '来源未提供标题';
     if (!label) continue;
 
     const media = parseMediaDeclaration(rawTitle, mediaSummary);
@@ -211,6 +220,7 @@ export function parseCostuanDirectoryText(text: string): ParsedCostuanDirectoryW
       mediaSummary,
       ...media
     };
+    if (numbering.range) work.range = numbering.range;
     if (numbering.order !== null) work.order = numbering.order;
     // Costuan sometimes repeats an identifier in a later update. The last entry is authoritative.
     byKey.set(numbering.key, work);
@@ -227,7 +237,7 @@ function canonicalizeExistingWork(work: ExistingCostuanWork): ExistingCostuanWor
   const media = parseMediaDeclaration(work.rawTitle ?? work.label, mediaSummary);
   return {
     ...work,
-    ...(numbering.order === null ? {} : { order: numbering.order }),
+    ...(numbering.range ? { order: undefined, range: numbering.range } : numbering.order === null ? {} : { order: numbering.order }),
     sourceOrder: numbering.canonicalLabel,
     sourceOrderRaw: work.sourceOrderRaw ?? numbering.rawLabel,
     sourceOrderScheme: numbering.scheme,
@@ -284,7 +294,7 @@ export function parseCostuanCollectionCreator(title:string):string|null {
 // Costuan uses these names for the same unnumbered Weibo appendix, including
 // different names in the collection title and resource directory. Keep the raw
 // label/key for review; this does not authorize staging the appendix itself.
-const WEIBO_SUPPLEMENT_LABELS = ['微博图', '微博散图', '微博配图'] as const;
+export const WEIBO_SUPPLEMENT_LABELS = ['微博图', '微博散图', '微博配图', '微薄散图', '微博杂图'] as const;
 
 /** Split only an explicitly advertised, unnumbered appendix; never relax numbered validation. */
 export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWork[], text:string|undefined) {
@@ -295,7 +305,7 @@ export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWo
     return numbering && numbering.order!==null;
   });
   const extras=merged.filter(work=>!numbered.includes(work));
-  const declaration=title.normalize('NFKC').match(/\[\d+\s*套\s*\+\s*(?:微博图|微博散图|微博配图)\s*\]/u);
+  const declaration=title.normalize('NFKC').match(/\[\d+\s*套\s*\+\s*(?:微博图|微博散图|微博配图|微薄散图|微博杂图)\s*\]/u);
   if (!extras.length && !declaration) return {works:merged,supplementalContents};
   const creator=parseCostuanCollectionCreator(title);
   const lines=String(text??'').split(/\r?\n/u).flatMap(line=>parseCostuanDirectoryText(line));

@@ -89,6 +89,22 @@ describe('Costuan retracted directory evidence is audit-only', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it('reports complete range coverage without fabricating Works or file plans', () => {
+    const task=claim('range-evidence');
+    const payload=request(task,['Fixture NO.001-NO.003 合集 [155P-368M]','Fixture NO.004 单套 [20P-157M]']);
+    payload.record.costuan.title='Fixture COS写真图片包合集[4套][持续更新]';
+    payload.record.costuan.collectionCount=4;
+    const before=snapshot();
+    try {
+      service.validateDirectory(payload);
+      expect.fail('range must not become an executable file plan');
+    } catch(error) {
+      expect(error).toMatchObject({code:'COSTUAN_RANGE_DIRECTORY_REVIEW_REQUIRED',coverage:{numberingComplete:true,rawEntryCount:2,uniqueNumberCount:4}});
+    }
+    expect(snapshot()).toBe(before);
+    expectRejectedWithoutWrites(payload,/范围声明/u);
+  });
+
   it('persists all 63 raw lines and both exclusions, while accepting and planning only the 61 effective works', () => {
     const task = claim('effective-directory');
     const payload = request(task);

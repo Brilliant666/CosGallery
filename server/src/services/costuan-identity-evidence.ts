@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
-import { parseCostuanDirectoryText, parseCostuanNumbering } from './costuan-numbering-service.js';
+import { parseCostuanDirectoryText, parseCostuanNumbering, WEIBO_SUPPLEMENT_LABELS } from './costuan-numbering-service.js';
 
 export const costuanIdentityEvidenceSchema = z.object({
   version: z.literal(1),
@@ -71,14 +71,27 @@ export function completeIdentityDirectory(text: string | undefined, title: strin
     if (!line || /^\d{4}[./-]\d{1,2}[./-]\d{1,2}更新\s*[:：]?$/u.test(line)) continue;
     const order = parseCostuanNumbering(line);
     const works = parseCostuanDirectoryText(line);
-    if (order?.order !== null && order?.order !== undefined && orders.has(order.order)) throw fail(`编号重复：${order.key}`);
-    if (!order || !['explicit','implicit'].includes(order.style) || order.start < 1 || order.order === null || order.qualifier
-      || !['NO', 'VOL'].includes(order.scheme) || order.order < 1 || order.order > count || orders.has(order.order)
+    // An explicitly advertised appendix participates in creator-name evidence,
+    // never in numbered coverage or executable Works.
+    if (!order && works.length === 1 && works[0].mediaSummary
+      && WEIBO_SUPPLEMENT_LABELS.some(label => title.normalize('NFKC').includes(`+${label}]`))) {
+      const label=WEIBO_SUPPLEMENT_LABELS.find(label => works[0].label.endsWith(label));
+      const name=label ? works[0].label.slice(0,-label.length).trim() : '';
+      if (name) { names.set(normalizeCreatorIdentity(name),name); continue; }
+    }
+    const first=order?.range?.first ?? order?.order;
+    const last=order?.range?.last ?? order?.order;
+    if (!order || !['explicit','implicit'].includes(order.style) || order.start < 1 || first == null || last == null || order.qualifier
+      || !['NO', 'VOL'].includes(order.scheme) || first < 1 || last > count
       || works.length !== 1 || works[0].sourceOrderKey !== order.key) throw fail(`条目格式或编号不符合要求：${line.slice(0, 100)}`);
+    for(let number=first;number<=last;number++) {
+      if(orders.has(number)) throw fail(`编号重复：${order.key}`);
+      orders.add(number);
+    }
     // A separated dash immediately before NO/VOL is layout punctuation, not a name.
     const name = line.slice(0, order.start).trim().replace(/\s+[-–—]\s*$/u, '').trim(), normalized = normalizeCreatorIdentity(name);
     if (!normalized) throw fail();
-    names.set(normalized, name); orders.add(order.order); schemes.add(order.scheme);
+    names.set(normalized, name); schemes.add(order.scheme);
   }
   if (orders.size !== count) throw fail(`标题声明 ${count} 套，有效编号 ${orders.size} 套；缺少编号：${Array.from({length:count},(_,i)=>i+1).filter(n=>!orders.has(n)).slice(0,20).join('、')}`);
   if (schemes.size !== 1) throw fail('目录混用了 NO 与 VOL 编号体系');

@@ -3,6 +3,7 @@ import {it,expect} from 'vitest';
 import {schemaSql} from '../src/db/schema.js';
 import {elyRangeDirectory} from '../src/services/ely-range-directory.js';
 import {ArchiveCatalogService} from '../src/services/archive-catalog-service.js';
+import {ArchiveMetadataTaskService} from '../src/services/archive-metadata-task-service.js';
 import {parseCostuanDirectoryText} from '../src/services/costuan-numbering-service.js';
 const title='ElyEE子COSPLAY写真作品合集[225套][持续更新]';
 const text=['NO.001-NO.066',...Array.from({length:159},(_,i)=>`ElyEE子 NO.${String(i+67).padStart(3,'0')} 示例作品`)].join('\n');
@@ -33,11 +34,19 @@ it('preflight is read-only; completion requires every actual range file, not jus
     expect(proof.canonicalWorks).toHaveLength(225);
     expect(proof.requiredFilenames).toContain('066.7z');
     expect(db.prepare('SELECT total_changes() n').get()).toEqual(before);
+    expect(proof.reviewedRangePolicy).toBe('ely-638-v1');
+    const metadata=new ArchiveMetadataTaskService(db);
+    const plan=metadata.planSelected({creatorIds:[54],requestId:'ely-compatibility'});
+    const planned=plan.items[0].task!;
+    const task=metadata.claim({workerId:'fixture',taskIds:plan.taskIds,rounds:[{taskId:planned.id,checkRoundId:planned.checkRoundId!}]})[0];
+    const beforeMetadata=db.prepare('SELECT total_changes() n').get();
+    expect(metadata.validateDirectory({id:task.id,workerId:'fixture',expectedAttempt:task.attemptCount,canonicalCreatorId:54,record}).reviewedRangePolicy).toBe('ely-638-v1');
+    expect(db.prepare('SELECT total_changes() n').get()).toEqual(beforeMetadata);
     const files=Array.from({length:225},(_,i)=>`${String(i+1).padStart(3,'0')}.7z`);
     const full={...proof.record,baidu:{transport:'direct-share',status:'share-verified',shareUrl:'https://pan.baidu.com/s/1synthetic',sourceFolderName:'638',verification:{method:'share-read',complete:true,checkRoundId:'round',checkedAt:'2026-09-12T00:00:00Z',files}}};
     expect(()=>service.validateCompleteCostuanCheck(full,54,'round')).not.toThrow();
     full.baidu.verification.files=files.slice(1);
     expect(()=>service.validateCompleteCostuanCheck(full,54,'round')).toThrow(/唯一核验/);
-    expect(db.prepare('SELECT total_changes() n').get()).toEqual(before);
+    expect(db.prepare('SELECT total_changes() n').get()).toEqual(beforeMetadata);
   } finally {db.close();}
 });

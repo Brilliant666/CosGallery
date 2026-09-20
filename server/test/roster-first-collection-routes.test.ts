@@ -83,6 +83,21 @@ describe.sequential('roster first-collection HTTP contract',()=>{
       directoryVerification:{complete:true,checkedAt:'2026-09-08T00:00:00Z',parsedWorkCount:1}},
       baidu:{status:'saved',sourceFolderName:'fixture-http',destinationPath:'我的网盘/cos图集',verification:{method:'saved',checkedAt:'2026-09-08T00:00:00Z',sourceDirectory:'我的网盘/cos图集/fixture-http',checkRoundId,files:['001.7z']}}};
     const before=snapshot();
+    const rangeRecord={...record,costuan:{...record.costuan,title:'HttpFirst COS写真合集[4套][持续更新]',collectionCount:4,
+      resourceDirectoryText:'HttpFirst NO.001-NO.003 合集 [30P-20MB]\nHttpFirst NO.004 One [1P-1MB]',
+      works:[{sourceOrder:'NO.001-NO.003',label:'合集'},{sourceOrder:'NO.004',label:'One',order:4}]}};
+    const rangeRequest={workerId:'new',canonicalCreatorId:id,expectedAttempt:1,record:rangeRecord};
+    const rangeResponse=await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-directory`,bridgeHeaders,rangeRequest);
+    expect(rangeResponse.status).toBe(400);
+    expect(rangeResponse.body).toMatchObject({ok:false,code:'COSTUAN_RANGE_DIRECTORY_REVIEW_REQUIRED',coverage:{rawEntryCount:2,
+      numberedEntryCount:2,singleEntryCount:1,rangeEntryCount:1,uniqueNumberCount:4,numberingComplete:true,
+      ranges:[{sourceOrder:'NO.001-NO.003',count:3,declaredImageCount:30}]}});
+    expect(rangeResponse.body).not.toHaveProperty('requiredFilenames');
+    const wrongWorker=await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-directory`,bridgeHeaders,{...rangeRequest,workerId:'wrong'});
+    expect(wrongWorker.status).not.toBe(200);
+    expect(wrongWorker.body).not.toHaveProperty('coverage');
+    expect((await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-directory`,{},rangeRequest)).status).toBe(401);
+    expect(snapshot()).toBe(before);
     const directory=await requestTestApp(app,'POST',bridge+`/metadata-tasks/${taskId}/validate-directory`,bridgeHeaders,{workerId:'new',canonicalCreatorId:id,expectedAttempt:1,record});
     expect(directory.status).toBe(200);expect(directory.body.requiredFilenames).toEqual(['001.7z']);
     expect(snapshot()).toBe(before);

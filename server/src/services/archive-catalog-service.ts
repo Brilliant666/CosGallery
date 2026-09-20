@@ -15,6 +15,7 @@ import { checkedIdentityEvidence, completeIdentityDirectory, directoryCreatorNam
   type CostuanIdentityInput, type CostuanIdentityVerification } from './costuan-identity-evidence.js';
 import {directShareDeliverySchema} from './archive-baidu-delivery.js';
 import {elyRangeDirectory} from './ely-range-directory.js';
+import { analyzeCostuanRangeInput, CostuanRangeDirectoryReviewRequired } from './costuan-directory-coverage.js';
 import {applyCostuanDirectoryReview,costuanDirectoryReviewSchema,directoryReviewKey} from './costuan-directory-review.js';
 import {
   areCostuanTitlesCompatible,
@@ -464,6 +465,9 @@ export class ArchiveCatalogService {
     record.costuan.identityVerification=this.validateCostuanIdentity(creatorId,record.costuan.postId,record.costuan.title,record.costuan);
     const savedReview=this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(directoryReviewKey(creatorId)) as {value:string}|undefined;
     const rangeReviewed=elyRangeDirectory(creatorId,record.costuan.postId,record.costuan.title,record.costuan.resourceDirectoryText);
+    const coverage=analyzeCostuanRangeInput(record.costuan.resourceDirectoryText,record.costuan.works,
+      record.costuan.collectionCount ?? (Number(record.costuan.title.match(/[\[【](\d+)\s*套/u)?.[1]) || null));
+    if (!rangeReviewed && coverage) throw new CostuanRangeDirectoryReviewRequired(coverage);
     const reviewed=rangeReviewed ?? (savedReview?applyCostuanDirectoryReview(costuanDirectoryReviewSchema.parse(JSON.parse(savedReview.value)),
       record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText):null);
     // The effective directory must remain unique even if a caller supplied a
@@ -548,6 +552,7 @@ export class ArchiveCatalogService {
     const canonicalDirectoryVerification={complete:true,checkedAt:proof.data.checkedAt,parsedWorkCount:works.length};
     return {record:{...record,costuan:{...record.costuan,works,supplementalContents,acceptedDirectoryRevisions,directoryVerification:canonicalDirectoryVerification}},
       supplementalContents,acceptedDirectoryRevisions,canonicalWorks:works,canonicalDirectoryVerification,sourceFilenames:[...filenames],localSourceReuse,
+      ...(rangeReviewed ? {reviewedRangePolicy:'ely-638-v1' as const} : {}),
       requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename) || (rangeReviewed && Number(filename.slice(0,-3))<=66))};
   }
 
@@ -755,6 +760,13 @@ export class ArchiveCatalogService {
 
     withTransaction(this.database, () => {
       for (const record of records) {
+        // Unvalidated/offline imports must not turn a range into one Work (or
+        // guessed numbered packages). The reviewed legacy path is canonicalized
+        // by complete validation before reaching this boundary.
+        if (!importMetadata.validatedCompleteCheck) {
+          const coverage=analyzeCostuanRangeInput(record.costuan.resourceDirectoryText,record.costuan.works,record.costuan.collectionCount ?? null);
+          if (coverage) throw new CostuanRangeDirectoryReviewRequired(coverage);
+        }
         const titleAlias = collectionCreatorAlias(record.costuan.title);
         const candidateNames = [
           record.creatorName,
