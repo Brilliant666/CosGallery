@@ -52,6 +52,7 @@
         <button class="primary" :disabled="busy">{{ busy ? '正在保存…' : detail ? '保存博主' : '创建博主' }}</button>
       </form>
       <template v-if="detail">
+        <SourceEvidencePanel v-if="dialogOpen" :key="detail.id" :creator="detail" />
         <section aria-label="作品账本"><h3>作品账本</h3>
           <p>本地 {{ detail.localWorks }} 套 · 来源 {{ detail.remoteWorks }} 套 · 已关联 {{ detail.matchedWorks }} 套 · 已知缺失 {{ detail.missingWorks }} 套 · 待核查 {{ detail.unresolvedLocalWorks }} 套</p>
           <p class="hint">来源与本地账本的比较结果；查看详情不会检查来源、规划任务或扫描文件。</p>
@@ -127,6 +128,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref } from 'vue';
 import FirstCollectionSelector from './FirstCollectionSelector.vue';
+import SourceEvidencePanel from './SourceEvidencePanel.vue';
 import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
 import { RequestError } from '../api/http';
 import * as api from '../api/managed-creators';
