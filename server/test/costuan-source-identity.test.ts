@@ -55,6 +55,68 @@ describe('Costuan multi-evidence creator identity', () => {
   });
   afterEach(() => db.close());
 
+  const unnamedDirectory = () => 'NO.001 [DJAWA] Happy Hana Life\nNO.002 [ARTGRAVIA] Vol.150\nNO.003 Summer [31P-20MB]';
+  const songProof = () => {
+    db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('SongHana','songhana',id);
+    alias(id,'송하나');
+    const proof=evidence();
+    proof.resourceDirectoryText=unnamedDirectory();
+    proof.identityEvidence.creatorTags[0].name='송하나';
+    return proof;
+  };
+  const songTitle='韩国Song Hana(송하나)写真图片包合集[3套][持续更新]';
+
+  it('accepts numbered publisher titles without row names using a registered article identity, without writes',()=>{
+    const proof=songProof(), before=snapshot();
+    const result=catalog.validateCostuanIdentity(id,postId,songTitle,proof);
+    expect(result).toMatchObject({creatorId:id,method:'title-directory-tags',tagNames:['송하나']});
+    expect(result).not.toHaveProperty('directoryName');
+    expect(snapshot()).toBe(before);
+  });
+
+  it('still validates explicit names when named and unnamed entries coexist',()=>{
+    const proof=songProof();
+    proof.resourceDirectoryText=proof.resourceDirectoryText.replace('NO.002','송하나 NO.002');
+    expect(catalog.validateCostuanIdentity(id,postId,songTitle,proof).directoryName).toBe('송하나');
+  });
+
+  it('validates an article-sized 23-entry synthetic directory without inventing media declarations',()=>{
+    const proof=songProof();
+    proof.resourceDirectoryText=Array.from({length:23},(_,i)=>`NO.${String(i+1).padStart(3,'0')} [DJAWA] Synthetic title ${i+1}`).join('\n');
+    const before=snapshot();
+    expect(catalog.validateCostuanIdentity(id,postId,songTitle.replace('[3套]','[23套]'),proof)).toMatchObject({creatorId:id});
+    expect(snapshot()).toBe(before);
+  });
+
+  it.each(['missing-tag','unknown-tag','wrong-page','conflicting-tag','foreign-row','unknown-row','missing-number','duplicate-number','outside-number','mixed-scheme','owner-conflict'])(
+    'rejects unsafe unnamed directory: %s without writes',mode=>{
+      const proof=songProof();
+      if(mode==='missing-tag') proof.identityEvidence.creatorTags=[];
+      if(mode==='unknown-tag') proof.identityEvidence.creatorTags[0].name='韩国Song Hana';
+      if(mode==='wrong-page') proof.identityEvidence.pageUrl='https://www.costuan.com/999.html';
+      if(mode==='conflicting-tag') {creator(62,'송하나');}
+      if(mode==='foreign-row') {creator(62,'Other');proof.resourceDirectoryText=proof.resourceDirectoryText.replace('NO.002','Other NO.002');}
+      if(mode==='unknown-row') proof.resourceDirectoryText=proof.resourceDirectoryText.replace('NO.002','Unknown NO.002');
+      if(mode==='missing-number') proof.resourceDirectoryText=proof.resourceDirectoryText.split('\n').slice(0,2).join('\n');
+      if(mode==='duplicate-number') proof.resourceDirectoryText=proof.resourceDirectoryText.replace('NO.003','NO.002');
+      if(mode==='outside-number') proof.resourceDirectoryText=proof.resourceDirectoryText.replace('NO.003','NO.004');
+      if(mode==='mixed-scheme') proof.resourceDirectoryText=proof.resourceDirectoryText.replace('NO.003','VOL.003');
+      if(mode==='owner-conflict') {creator(62,'Other');bind(62);}
+      rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,songTitle,proof));
+    });
+
+  it('does not let an unregistered name variant replace directory identity evidence',()=>{
+    const proof=evidence();
+    proof.resourceDirectoryText=unnamedDirectory();
+    rejectsWithoutWrites(()=>catalog.validateCostuanIdentity(id,postId,articleTitle(),proof));
+  });
+
+  it('allows descriptive titles with an exact registered tag and unnamed numbered entries',()=>{
+    const proof=evidence();
+    proof.resourceDirectoryText=unnamedDirectory();
+    expect(catalog.validateCostuanIdentity(id,postId,articleTitle(`韩国妹子${name}`),proof)).toMatchObject({creatorId:id,method:'title-directory-tags'});
+  });
+
   it.each(['韩国妹子','韩国模特'])('verifies bounded descriptive prefix %s without writes', prefix=>{
     db.prepare('UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=? WHERE id=?').run('Maruemon','maruemon',id);
     const proof=evidence();
