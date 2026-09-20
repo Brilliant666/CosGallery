@@ -10,10 +10,11 @@ describe('000016 reversible managed-creator migration',()=>{
     const sql=fs.readFileSync(new URL('../db/migrations/000016_managed_creator_roster_and_folder_bridge.sql',import.meta.url),'utf8');
     const [up,down]=sql.split('-- migrate:down');
     const catalogDown=fs.readFileSync(new URL('../db/migrations/000022_resource_catalog_read_model.sql',import.meta.url),'utf8').split('-- migrate:down')[1]!;
+    const sortDown=fs.readFileSync(new URL('../db/migrations/000023_work_sort_confirmations.sql',import.meta.url),'utf8').split('-- migrate:down')[1]!;
     try {
-      // Reconstruct the older fixture in reverse dependency order; 000022
-      // triggers intentionally reference fields introduced by 000016.
-      db.exec(schemaSql);db.exec(catalogDown);db.exec(down);
+      // Reconstruct the older fixture in reverse dependency order: 000023
+      // references 000022 state, whose triggers reference 000016 fields.
+      db.exec(schemaSql);db.exec(sortDown);db.exec(catalogDown);db.exec(down);
       db.exec(`INSERT INTO archive_catalog_creators(id,canonical_name,normalized_name,preference,effective_rating,seed_source,seed_source_creator_id,created_at,updated_at)
         VALUES(42,'Historical','historical','liked','R18','hentaiclub','old-name','old-created','old-updated');
         INSERT INTO archive_catalog_creator_sources(creator_id,source,source_creator_id,source_display_name,metadata_json,first_seen_at,last_seen_at)
