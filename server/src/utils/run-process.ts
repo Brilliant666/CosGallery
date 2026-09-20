@@ -80,8 +80,12 @@ export function runProcessWithTimeout(
       });
     };
 
-    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
-    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    // Keep incomplete UTF-8 characters between pipe chunks instead of decoding
+    // each Buffer separately (archive member names may cross a chunk boundary).
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
     child.once('error', (error) => {
       if (settled) return;
       clearTimeout(timer);

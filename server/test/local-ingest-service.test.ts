@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
+import { crc32 } from 'node:zlib';
 
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -34,6 +35,7 @@ type FixtureOptions = {
   corruptImage?: boolean;
   zeroByteMedia?: boolean;
   useMediaSubdirectories?: boolean;
+  chineseReviewMembers?: boolean;
   mediaSummary?: string;
   recent?: boolean;
   temporarySibling?: boolean;
@@ -174,9 +176,10 @@ async function makeNestedArchive(
   const payload = path.join(root, 'payload');
   await fs.mkdir(payload, { recursive: true });
   if (options.includeImage !== false) {
-    const imageDirectory = options.useMediaSubdirectories ? path.join(payload, '图片') : payload;
+    const imageDirectory = options.chineseReviewMembers ? path.join(payload, '中文作品', '正片')
+      : options.useMediaSubdirectories ? path.join(payload, '图片') : payload;
     await fs.mkdir(imageDirectory, { recursive: true });
-    const imagePath = path.join(imageDirectory, 'cover.jpg');
+    const imagePath = path.join(imageDirectory, options.chineseReviewMembers ? '封面图.jpg' : 'cover.jpg');
     if (options.zeroByteMedia) await fs.writeFile(imagePath, '');
     else if (options.corruptImage) await fs.writeFile(imagePath, 'not-an-image');
     else {
@@ -200,8 +203,10 @@ async function makeNestedArchive(
   }
   if (options.includeUnknown) await fs.writeFile(path.join(payload, 'unknown.exe'), 'fixture');
   for (const extension of options.retainedExtensions ?? []) {
-    await fs.mkdir(path.join(payload, 'originals'), { recursive: true });
-    await fs.writeFile(path.join(payload, 'originals', `original${extension}`), `synthetic original ${extension}`);
+    const originalDirectory = options.chineseReviewMembers ? path.join(payload, '中文作品', '附件')
+      : path.join(payload, 'originals');
+    await fs.mkdir(originalDirectory, { recursive: true });
+    await fs.writeFile(path.join(originalDirectory, `${options.chineseReviewMembers ? '原件说明' : 'original'}${extension}`), `synthetic original ${extension}`);
   }
   if (options.includeNestedArchive) {
     const nestedSource = path.join(root, 'nested-source');
@@ -454,6 +459,35 @@ async function seedCommittedReconciliationBatch(fixture: Fixture, count: number)
 }
 
 describe.sequential('LocalIngestService', () => {
+  it.runIf(process.platform === 'win32')('previews real encrypted 7z Chinese nested members with exact size and CRC without changing checkpoints', async () => {
+    fixture = await createFixture({ chineseReviewMembers: true, retainedExtensions: ['.pdf'], recycleAfterIngest: false });
+    await discoverStable(fixture);
+    const review = await fixture.service.runJob(1);
+    expect(review.errorCode).toBe('UNKNOWN_FILE_TYPE');
+    const beforeJob = fixture.database.prepare('SELECT * FROM local_ingest_jobs WHERE id = 1').get();
+    const beforeTask = fixture.database.prepare('SELECT * FROM archive_catalog_download_tasks WHERE id = 1').get();
+    const markerNames = ['.level-1-complete', '.level-2-complete'];
+    const beforeMarkers = await Promise.all(markerNames.map(name => fs.readFile(path.join(review.processingPath!, name))));
+
+    const plan = await fixture.service.previewReview({ jobId: 1, removedFiles: [],
+      retainedFiles: [{ relativePath: '中文作品/附件/原件说明.pdf', reason: 'attachment' }], note: 'Synthetic Chinese archive members' });
+    expect(plan.confirmed).toBe(false);
+    const expectedPaths = ['advertisement.txt', '中文作品/正片/封面图.jpg', '中文作品/附件/原件说明.pdf'];
+    expect(plan.files.map(file => file.relativePath).sort()).toEqual(expectedPaths.sort());
+    for (const file of plan.files) {
+      const payload = await fs.readFile(path.join(fixture.root, 'payload', file.relativePath));
+      expect(file).toMatchObject({ size: payload.length,
+        crc32: crc32(payload).toString(16).padStart(8, '0').toUpperCase() });
+      expect(await fs.readFile(path.join(review.processingPath!, 'level-2', file.relativePath))).toEqual(payload);
+    }
+    expect(fixture.database.prepare('SELECT * FROM local_ingest_jobs WHERE id = 1').get()).toEqual(beforeJob);
+    expect(fixture.database.prepare('SELECT * FROM archive_catalog_download_tasks WHERE id = 1').get()).toEqual(beforeTask);
+    expect(await Promise.all(markerNames.map(name => fs.readFile(path.join(review.processingPath!, name))))).toEqual(beforeMarkers);
+    expect(fixture.rescanCalls).toBe(0);
+    expect(fixture.recycleCalls).toEqual([]);
+    expect(await fs.readdir(fixture.libraryRoot)).toEqual([]);
+  }, 60_000);
+
   it.runIf(process.platform === 'win32')('verifies real encrypted 7z inventories and retains only the explicitly approved PDF', async () => {
     fixture = await createFixture({ retainedExtensions: ['.pdf'], recycleAfterIngest: false });
     await discoverStable(fixture);

@@ -55,8 +55,10 @@ async function makeFixture(members: Record<string, Buffer>, options: { scanFailu
     getArchivePassword: () => 'synthetic-password'
   } as unknown as LocalIngestSettingsService;
   const counts = { list: 0, test: 0, outer: 0, inner: 0, scan: 0, recycle: 0 };
+  const sevenZipCalls: string[][] = [];
   let clock = Date.now(), remainingScanFailures = options.scanFailures ?? 0;
   const runCommand: NonNullable<LocalIngestRuntimeDependencies['runCommand']> = async (_command, args) => {
+    sevenZipCalls.push([...args]);
     const action = args[0], archive = args.at(-1)!;
     if (action === 'l') {
       counts.list++;
@@ -171,7 +173,7 @@ async function makeFixture(members: Record<string, Buffer>, options: { scanFailu
     removedFiles: [], retainedFiles: [], note: 'User approved only the exact synthetic recovery scope', ...overrides });
   const row = () => database.prepare('SELECT * FROM local_ingest_jobs WHERE id=?').get(jobId)!;
   return { root, libraryRoot, inboxRoot, processingRoot, sourcePath, database, service, restart, jobId,
-    processing, levelTwo, members, counts, recycled, rescan, request, row };
+    processing, levelTwo, members, counts, sevenZipCalls, recycled, rescan, request, row };
 }
 
 afterEach(async () => {
@@ -200,6 +202,10 @@ describe.sequential('explicit Stage3 review recovery', () => {
     await fs.rm(path.join(f.levelTwo, 'broken.jpg'));
     const plan = await f.service.previewReview(f.request({ removedFiles: [{ relativePath: 'broken.jpg', size: 0 }] }));
     expect(plan).toMatchObject({ version: 1, confirmed: false, creatorId: 1, sourceWorkId: 1, downloadTaskId: 1, workId: 1 });
+    // The child output is decoded as UTF-8 on every platform, including Windows
+    // machines whose 7-Zip console default is a different code page.
+    expect(new Set(f.sevenZipCalls.map(args => args[0]))).toEqual(new Set(['l', 't', 'x']));
+    expect(f.sevenZipCalls.every(args => args.filter(arg => arg === '-sccUTF-8').length === 1)).toBe(true);
     expect(f.row()).toEqual(before);
     const result = await f.service.resumeReview(accepted(plan));
     expect(result.status, result.errorDetail ?? '').toBe('ingested');

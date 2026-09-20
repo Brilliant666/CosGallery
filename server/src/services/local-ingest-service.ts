@@ -1983,7 +1983,9 @@ export class LocalIngestService {
     const settings = this.settingsService.get();
     const secret = this.settingsService.getArchivePassword();
     const action = operation === 'list' ? 'l' : operation === 'test' ? 't' : 'x';
-    const args = [action, '-y', `-p${secret}`];
+    // The process reader decodes UTF-8. Windows 7-Zip otherwise defaults to
+    // a local console code page and corrupts non-ASCII inventory paths.
+    const args = [action, '-y', '-sccUTF-8', `-p${secret}`];
     if (operation === 'list') args.push('-slt');
     if (operation === 'extract' && outputPath) args.push(`-o${outputPath}`, '-aoa');
     args.push(archivePath);
