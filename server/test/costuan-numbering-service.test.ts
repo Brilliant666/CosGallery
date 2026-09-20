@@ -18,7 +18,7 @@ describe('Costuan numbering parser', () => {
     expect(works[19]).toMatchObject({sourceOrder:'NO.020',label:'[Bimilstory] Vol.02 Micro bikini'});
   });
 
-  it.each(['Song Hana','Example Creator','예시 이름','Example\tCreator'])('prioritizes a bounded multiword creator prefix: %s', name=>{
+  it.each(['Song Hana','Example Creator','예시 이름','Example\tCreator','Example_123 Person','Example-123'])('prioritizes a bounded multiword creator prefix: %s', name=>{
     const works=parseCostuanDirectoryText(`${name} 020 [Publisher] Vol.02 First\n${name} 021 [Publisher] Vol.02 Second`);
     expect(works.map(work=>work.sourceOrderKey)).toEqual(['NO:020','NO:021']);
     expect(works.map(work=>work.label)).toEqual(['[Publisher] Vol.02 First','[Publisher] Vol.02 Second']);
