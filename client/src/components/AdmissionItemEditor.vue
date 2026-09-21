@@ -10,6 +10,7 @@
         <div class="actions"><button type="button" @click="showPicker=!showPicker">{{ selectedWork?'改选已有作品':'查找已有作品' }}</button><button v-for="candidate in item.candidates" :key="candidate.workId" @click="selectWork(candidate)">候选：{{ candidate.title }} · {{ candidate.images }} 图 / {{ candidate.videos }} 视频</button></div>
         <AdmissionWorkPicker v-if="showPicker" :creator-id="creatorId" @select="selectWork" @close="showPicker=false" />
         <div v-if="selectedWork" class="work-selection"><img v-if="selectedWork.thumbnailUrl" :src="selectedWork.thumbnailUrl" alt="所选作品封面" loading="lazy" /><div><strong>对应：{{ selectedWork.title }}</strong><p>{{ selectedWork.images }} 图 · {{ selectedWork.videos }} 视频 · {{ selectedWork.originalDirectories.join(' / ') }}</p></div></div>
+        <p v-else-if="model.workId" class="hint">对应作品 #{{ model.workId }}（展示资料未缓存；原选择不变）</p>
         <label class="check"><input v-model="model.primary" type="checkbox" />本目录作为主副本（不选则保留已有主副本）</label>
         <div v-if="acceptExistingVersion&&selectedWork?.sources.length"><p>本次明确以本地副本满足以下来源的获取需求（仅限勾选项，不证明内容完整或相同）：</p><label v-for="source in selectedWork.sources" :key="source.sourceWorkId" class="check"><input v-model="model.acceptSourceIds" type="checkbox" :value="source.sourceWorkId" />{{ source.sourceOrder }} {{ source.title }} · {{ source.mediaSummary||'来源数量未声明' }}</label></div>
       </template>

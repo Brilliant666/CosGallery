@@ -12,6 +12,9 @@ This is local-server file handling, not browser media upload or a cloud sync ser
 2. Finish manual copying/extraction first. Browse the configured extracted waiting
    root, choose the creator parent, then select its direct work directories.
    Browsing lists one layer only. Preview inventories just the selected scope.
+   There is no additional copy-complete checkbox before preview: a short notice
+   explains the requirement, and the final execution confirmation still asks that
+   the files are no longer being written. Server manifest/target/claim checks remain.
 3. Review new independent works, possible existing works, known local copies and
    unresolved conflicts. Suggestions are not confirmations. Search this creator's
    Works by title, catalogue NO or original directory, using names/covers/counts.
@@ -36,7 +39,12 @@ This is local-server file handling, not browser media upload or a cloud sync ser
    checks and the fulfillment service, without rewriting staged history.
 6. Follow real stages and results. Recent batches and URL restoration survive
    refresh/new tabs. A lost response is retried with the same receipt. Closing the
-   page does not cancel a submitted operation.
+   page does not cancel a submitted operation. In the same browser tab, the general
+   local-admission entry restores the last opened collection after visiting an album;
+   **选择新批次** explicitly starts a fresh scope. The remembered ID never starts or
+   resumes work: status is fetched with normal authorization. Unavailable batches
+   report an error rather than displaying cached success. New tabs can use the exact
+   collection URL or recent history; no cross-browser navigation promise is made.
 7. An unfinished item opens **查看并处理** or continues the original plan. Eligible
    Stage3 reviews open the shared panel from the existing Stage3 list and remain
    Stage3 jobs; they never become folder-admission plans.
@@ -111,6 +119,19 @@ they are never silently combined or omitted. The submit check validates all sele
 manifests and targets before atomically saving every child confirmation. The existing
 engine validates again when each child actually starts. A collection child cannot be
 submitted or resumed independently through an old single-creator URL.
+
+On the first multi-creator review, clear new-work candidates are preselected once,
+but never submitted. **补选可直接入库的作品** explicitly fills remaining deferred,
+conflict-free new-work choices. Existing/same-work/title/primary/skip choices are not
+overwritten. Status refresh does not repeat the initial selection. One tab's ten most
+recent unsent draft choices may be restored after fetching the same authorized server draft;
+changed summary evidence is deferred for review. Original pending execution receipts
+always take precedence, including their historical acquisition policy.
+
+Status refresh reads the saved batch, not newly edited filesystem content. After
+rearranging, renaming or changing directories, use **选择新批次** to obtain a fresh
+preview; the supplement button cannot make old conflicts disappear. Polling never
+creates previews or rewrites confirmed plans.
 
 Only clear new-work candidates can be selected together. Existing Work reuse,
 same-work copies, source acceptance and exceptions remain explicit, creator-scoped

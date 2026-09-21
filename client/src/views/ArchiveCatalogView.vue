@@ -12,7 +12,6 @@
 
     <nav aria-label="账本工作区" class="mb-5 flex flex-wrap gap-2">
       <button v-for="tab in workspaces" :key="tab.id" type="button" :data-test="'workspace-'+tab.id" :aria-pressed="workspace === tab.id" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="workspace === tab.id ? 'bg-accent text-white border-accent' : 'bg-surface border-border'" @click="workspace = tab.id">{{ tab.label }}</button>
-      <a href="/local-admission" class="rounded-xl border border-border bg-surface px-5 py-3 text-sm font-semibold">本地入库</a>
     </nav>
 
     <div v-if="summary" v-show="workspace === 'roster'" class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6" aria-label="账本概览">

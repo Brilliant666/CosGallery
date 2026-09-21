@@ -19,8 +19,78 @@ const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('bu
 async function render(query=''){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-admission',name:'local-admission-workspace',component:LocalAdmissionWorkspace},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}}]});await router.push(`/local-admission${query}`);const wrapper=mount(LocalAdmissionWorkspace,{global:{plugins:[router]}});await flushPromises();return {wrapper,router};}
 describe('independent multi-creator admission workspace',()=>{
   enableAutoUnmount(afterEach);
-  beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
+  beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();sessionStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
   afterEach(()=>vi.useRealTimers());
+  it('preselects safe items once, preserves manual defer on refresh/return, and only reselects on explicit request',async()=>{
+    const {wrapper}=await render('?collection=collection-one');
+    expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('new');
+    expect(wrapper.get('[data-test=admission-item-a-candidate] select').element.value).toBe('defer');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+    await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
+    await button(wrapper,'刷新状态').trigger('click');await flushPromises();
+    expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
+    expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
+    wrapper.unmount();const returned=await render();
+    expect(returned.router.currentRoute.value.query.collection).toBe('collection-one');
+    expect(returned.wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
+    await button(returned.wrapper,'补选可直接入库的作品').trigger('click');
+    expect(returned.wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('new');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('returns from an album to the same result via the bare workspace entry without replaying',async()=>{
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection('completed'));
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('done'),postId:123,state:'completed'}],total:1,page:1,pageSize:100});
+    const {wrapper,router}=await render('?collection=collection-one');
+    await wrapper.findAll('a').find(link=>link.text()==='查看图集')!.trigger('click');await flushPromises();
+    expect(router.currentRoute.value.name).toBe('canonical-work-gallery');wrapper.unmount();
+    const returned=await render();expect(returned.router.currentRoute.value.query.collection).toBe('collection-one');
+    expect(returned.wrapper.text()).toContain('本批处理完成');expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+    const reads=vi.mocked(api.fetchAdmissionWorkspace).mock.calls.length;
+    await button(returned.wrapper,'选择新批次').trigger('click');await flushPromises();
+    expect(api.fetchAdmissionWorkspace).toHaveBeenCalledTimes(reads+1);
+    expect(returned.router.currentRoute.value.query.collection).toBeUndefined();expect(returned.wrapper.text()).toContain('选择这次要收录的范围');
+    returned.wrapper.unmount();const fresh=await render();expect(fresh.router.currentRoute.value.query.collection).toBeUndefined();
+  });
+  it('discards an unavailable remembered batch without falling back to cached results or looping',async()=>{
+    sessionStorage.setItem('cosgallery:admission:last-collection','missing');
+    vi.mocked(api.fetchAdmissionCollection).mockRejectedValue(new RequestError('批次不存在',404));
+    const {wrapper}=await render();expect(wrapper.text()).toContain('批次不存在');expect(wrapper.text()).toContain('选择这次要收录的范围');
+    expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(1);expect(sessionStorage.getItem('cosgallery:admission:last-collection')).toBeNull();
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('preserves manual choices across two drafts and leaving during a refresh',async()=>{
+    vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>({...collection(),id}));
+    const {wrapper,router}=await render('?collection=first');
+    await wrapper.get('[data-test=admission-item-a-first] select').setValue('skip');
+    await router.push('/local-admission?collection=second');await flushPromises();
+    await router.push('/local-admission?collection=first');await flushPromises();
+    expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('skip');
+    await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
+    let release!:(value:Awaited<ReturnType<typeof api.fetchAdmissionItems>>)=>void;
+    vi.mocked(api.fetchAdmissionItems).mockReturnValueOnce(new Promise(done=>release=done));
+    await button(wrapper,'刷新状态').trigger('click');await flushPromises();wrapper.unmount();
+    const returned=await render('?collection=first');expect(returned.wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
+    release({items:[item('late')],total:1,page:1,pageSize:100});await flushPromises();
+    expect(returned.wrapper.find('[data-test=admission-item-late]').exists()).toBe(false);
+  });
+  it('shows the actual pending Work id rather than an older cached draft Work on retry',async()=>{
+    const work={workId:91,title:'旧展示作品',catalogNo:1,images:2,videos:0,thumbnailUrl:null,primaryLocalWorkId:19,localState:'available',originalDirectories:['原目录'],sources:[]};
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('a-first','B'),candidates:[work]}],total:1,page:1,pageSize:100});
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});
+    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-a-first] select').setValue('existing');await button(wrapper,'候选：旧展示作品 · 2 图 / 0 视频').trigger('click');wrapper.unmount();
+    const original={requestKey:'old-receipt',confirmed:true,batches:[{batchId:'a',acceptExistingVersion:false,actions:[{key:'a-first',action:'existing',workId:92,approvedAds:[],acceptSourceIds:[]}]}]};
+    localStorage.setItem('cosgallery:admission:collection:collection-one',JSON.stringify(original));
+    const returned=await render('?collection=collection-one');expect(returned.wrapper.text()).toContain('对应作品 #92');expect(returned.wrapper.text()).not.toContain('对应：旧展示作品');
+    await returned.wrapper.get('[data-test=collection-confirm]').trigger('click');expect(returned.wrapper.get('[role=dialog]').text()).toContain('作品 #92');expect(returned.wrapper.get('[role=dialog]').text()).not.toContain('旧展示作品');
+    await returned.wrapper.get('[role=dialog] input').setValue(true);await returned.wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();expect(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]).toEqual(original);
+  });
+  it('does not default-select suspicious A metadata or overwrite original pending actions',async()=>{
+    const records=[{...item('boundary'),needsBoundaryReview:true},{...item('conflict'),conflicts:['目标存在']},{...item('suggested'),suggestedAction:{key:'suggested',action:'defer' as const,approvedAds:[],acceptSourceIds:[]}},item('safe')];
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:4,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one');
+    expect(['boundary','conflict','suggested','safe'].map(key=>wrapper.get(`[data-test=admission-item-${key}] select`).element.value)).toEqual(['defer','defer','defer','new']);
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false);
+  });
   it('fills only undecided safe A items without overwriting manual identities, skips, titles, primary choices or ads',async()=>{
     const work={workId:91,title:'已选作品',catalogNo:1,images:2,videos:0,thumbnailUrl:null,primaryLocalWorkId:19,localState:'available',originalDirectories:['原目录'],sources:[]};
     const records=[{...item('existing'),candidates:[work]},item('skip'),{...item('edited'),suggestedAction:{key:'edited',action:'new' as const,displayTitle:'上次名称',primary:true,approvedAds:['492.jpg']}},item('copy'),item('undecided'),item('candidate','B'),item('complex','D')];
@@ -42,7 +112,7 @@ describe('independent multi-creator admission workspace',()=>{
   it('previews two creator scopes once without individual execute calls or automatically creating identities',async()=>{
     const {wrapper}=await render();expect(wrapper.get('[data-folder="未明确身份"] input[type=checkbox]').attributes('disabled')).toBeDefined();
     await wrapper.get('[data-folder="甲别名"] input[type=checkbox]').setValue(true);await wrapper.get('[data-folder="博主乙"] input[type=checkbox]').setValue(true);await flushPromises();
-    expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeDefined();await wrapper.get('.stage-actions input[type=checkbox]').setValue(true);await wrapper.get('[data-test=collection-preview]').trigger('click');await flushPromises();
+    expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeUndefined();expect(wrapper.find('.stage-actions input[type=checkbox]').exists()).toBe(false);await wrapper.get('[data-test=collection-preview]').trigger('click');await flushPromises();
     expect(api.previewAdmissionCollection).toHaveBeenCalledExactlyOnceWith([{creatorId:17,parent:'甲别名',directories:['第一套','第二套'],acceptExistingVersion:true},{creatorId:88,parent:'博主乙',directories:['第一套','第二套'],acceptExistingVersion:true}]);expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmission).not.toHaveBeenCalled();expect(wrapper.text()).toContain('预览草稿 · 未执行');
   });
   it('confirms all creators centrally, leaves candidates and complex boundaries deferred, and asks separately for ads',async()=>{
@@ -90,7 +160,7 @@ describe('independent multi-creator admission workspace',()=>{
   });
   it('does not silently omit a checked creator after every work directory is deselected',async()=>{
     const {wrapper}=await render();await wrapper.get('[data-folder="甲别名"] input[type=checkbox]').setValue(true);await wrapper.get('[data-folder="博主乙"] input[type=checkbox]').setValue(true);await flushPromises();
-    const folder=wrapper.get('[data-folder="博主乙"]');await folder.findAll('input[type=checkbox]')[1]!.setValue(false);await wrapper.get('.stage-actions input').setValue(true);
+    const folder=wrapper.get('[data-folder="博主乙"]');await folder.findAll('input[type=checkbox]')[1]!.setValue(false);
     expect(wrapper.text()).toContain('“博主乙”没有选择作品目录');expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeDefined();expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
   });
 });
