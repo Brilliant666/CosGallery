@@ -61,13 +61,20 @@ The confirmation page groups advertisement candidates by their complete basename
 showing the selected-directory count, file count and selected count. Select/clear a
 specific filename or all candidates across **all pages and groups**. Only directories
 chosen as new/existing/same-as are affected; skip/defer, identity, main-copy and source
-choices remain unchanged. TXT/URL files remain candidates, not blanket approvals.
+choices remain unchanged. Newly selecting a directory for admission preselects **all
+listed advertisement candidates**, including TXT/URL and recognized image ads. The
+user may clear individual paths, names or the whole selection. This is a web-form
+default, not a new filename rule or permission to remove files outside the saved
+candidate list. The exact list still requires final explicit confirmation.
+Switching among admission identity choices, refreshing, restoring saved draft
+choices or carrying unchanged choices into repreview preserves manual deselections,
+including an empty list. Existing confirmed plans and pending receipts are unchanged.
 
 The user has confirmed the ecytt02 advertisements `492.jpg` and `009-01.jpg` as global
 exact-filename rules. Any creator's new local admission can recognize these basenames
 (case-insensitive, including nested paths). No wildcard, similar number or other JPG
-is included. When selecting a directory for admission, these image ads are preselected;
-the user may deselect them. They remain explicitly listed in `approvedAds` and in the
+is included. These image ads use the same preselected, cancellable web default as the
+other listed candidates. They remain explicitly listed in `approvedAds` and in the
 last confirmation dialog. Image ads moved out do not become gallery media. The preview
 image count is the original inventory, not a promise that excluded ads remain indexed.
 

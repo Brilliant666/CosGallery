@@ -176,10 +176,27 @@ describe('independent multi-creator admission workspace',()=>{
     const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');
     expect(wrapper.find('[data-test=admission-accept-version]').exists()).toBe(false);expect(wrapper.text()).toContain('已入库的同一作品不重复获取');
     expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('new');expect(wrapper.get('[data-test=admission-item-a-candidate] select').element.value).toBe('defer');
-    await wrapper.get('[data-ad-filename="推广.txt"]').findAll('button')[0]!.trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');
+    expect(wrapper.get('[data-ad-filename="推广.txt"]').text()).toContain('2 个接纳目录 / 2 个文件 · 已选 2');await wrapper.get('[data-test=collection-confirm]').trigger('click');
     const dialog=wrapper.get('[role=dialog]');expect(dialog.text()).toContain('博主甲');expect(dialog.text()).toContain('博主乙');expect(dialog.text()).toContain('b-complex');await dialog.findAll('input')[0]!.setValue(true);expect(dialog.get('[data-test=collection-execute]').attributes('disabled')).toBeDefined();await dialog.findAll('input')[1]!.setValue(true);await dialog.get('[data-test=collection-execute]').trigger('click');await flushPromises();
-    expect(api.executeAdmissionCollection).toHaveBeenCalledTimes(1);const input=vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1];expect(input.batches.map(batch=>batch.batchId)).toEqual(['a','b']);expect(input.batches.map(batch=>batch.actions.map(action=>action.action))).toEqual([['new','defer'],['new','defer']]);expect(input.batches.every(batch=>batch.adsConfirmed===true)).toBe(true);expect(input.batches[1]!.actions[0]!.approvedAds).toEqual(['492.jpg','附件/推广.txt']);expect(api.executeAdmission).not.toHaveBeenCalled();
+    expect(api.executeAdmissionCollection).toHaveBeenCalledTimes(1);const input=vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1];expect(input.batches.map(batch=>batch.batchId)).toEqual(['a','b']);expect(input.batches.map(batch=>batch.actions.map(action=>action.action))).toEqual([['new','defer'],['new','defer']]);expect(input.batches.every(batch=>batch.adsConfirmed===true)).toBe(true);expect(input.batches[1]!.actions[0]!.approvedAds).toEqual(['附件/推广.txt','492.jpg']);expect(api.executeAdmission).not.toHaveBeenCalled();
     expect(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1].batches.every(batch=>batch.acceptExistingVersion===true)).toBe(true);
+  });
+  it('preserves cleared advertisement defaults across saved-status refresh, page return and unchanged repreview',async()=>{
+    vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>({...collection(),id,batches:[batch()]}));
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('first'),reviewFingerprint:'same-files'}],total:1,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one');
+    expect(wrapper.text()).toContain('已勾选 2 个具体文件');
+    await wrapper.get('[data-test=ads-clear-all]').trigger('click');
+    await button(wrapper,'读取已保存状态').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('已勾选 0 个具体文件');
+    wrapper.unmount();const returned=await render('?collection=collection-one');
+    expect(returned.wrapper.text()).toContain('已勾选 0 个具体文件');
+    vi.mocked(api.repreviewAdmissionCollection).mockResolvedValue({...collection(),id:'fresh'});
+    await returned.wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();
+    expect(returned.router.currentRoute.value.query.collection).toBe('fresh');
+    expect(returned.wrapper.get('[data-test=admission-item-first] select').element.value).toBe('new');
+    expect(returned.wrapper.text()).toContain('已勾选 0 个具体文件');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('limits same-work choices to the active creator and displays boundary notes instead of silently splitting',async()=>{
     const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('same-as');

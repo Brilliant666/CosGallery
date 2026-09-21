@@ -7,7 +7,7 @@ export const isAdmissionSelected = (action:AdmissionAction) => ['new','existing'
 export const mediaSize = (value:number) => value>=1024**3?`${(value/1024**3).toFixed(2)} GiB`:value>=1024**2?`${(value/1024**2).toFixed(2)} MiB`:`${value} B`;
 export function admissionAction(item:AdmissionItem,kind:AdmissionActionKind,previous?:AdmissionAction):AdmissionAction {
   return {key:item.key,action:kind,displayTitle:item.displayTitle,primary:false,acceptSourceIds:[],
-    approvedAds:['new','existing','same-as'].includes(kind)?previous&&isAdmissionSelected(previous)?[...(previous.approvedAds??[])]:item.ads.filter(ad=>ad.automatic).map(ad=>ad.relativePath):[]};
+    approvedAds:['new','existing','same-as'].includes(kind)?previous&&isAdmissionSelected(previous)?[...(previous.approvedAds??[])]:item.ads.map(ad=>ad.relativePath):[]};
 }
 export function validateAdmissionSelection(entries:AdmissionEntry[]):string {
   const primary=new Set<string>();

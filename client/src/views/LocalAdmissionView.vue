@@ -44,7 +44,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router';
 import AdmissionItemEditor from '../components/AdmissionItemEditor.vue';
 import AdmissionAcquisitionPolicy from '../components/AdmissionAcquisitionPolicy.vue';
 import AdmissionAdsPicker from '../components/AdmissionAdsPicker.vue';
-import { validateAdmissionSelection } from '../utils/admission-ui';
+import { admissionAction, validateAdmissionSelection } from '../utils/admission-ui';
 import * as api from '../api/local-admission';
 import { fetchSourceEvidence } from '../api/source-evidence';
 import type { SourceEvidenceObservation } from '../api/source-evidence';
@@ -75,8 +75,8 @@ const selectedCount = computed(() => items.value.filter(isSelected).length), ski
 const adsCount = computed(() => items.value.reduce((sum,item) => sum+(isSelected(item) ? actionFor(item).approvedAds?.length ?? 0 : 0),0));
 function initialAds(item: AdmissionItem): string[] {
   // Re-reading a draft, a historical suggestion or a retry never grants new approval.
-  // Apply the global defaults only to an explicit new admission selection; retain cancellations thereafter.
-  return isSelected(item) ? [...(actionFor(item).approvedAds ?? [])] : item.ads.filter(ad => ad.automatic).map(ad => ad.relativePath);
+  // Apply the shared web defaults only to a new admission selection; retain cancellations thereafter.
+  return admissionAction(item,'new',actionFor(item)).approvedAds ?? [];
 }
 const entries = computed(()=>items.value.map(item=>({item,action:actionFor(item)})));
 const selectionError = computed(()=>validateAdmissionSelection(entries.value));
