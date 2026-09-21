@@ -84,6 +84,18 @@ describe('independent multi-creator admission workspace',()=>{
     await returned.wrapper.get('[data-test=collection-confirm]').trigger('click');expect(returned.wrapper.get('[role=dialog]').text()).toContain('作品 #92');expect(returned.wrapper.get('[role=dialog]').text()).not.toContain('旧展示作品');
     await returned.wrapper.get('[role=dialog] input').setValue(true);await returned.wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();expect(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]).toEqual(original);
   });
+  it('also saves edits made while refresh status is in flight before loading the item pages',async()=>{
+    const {wrapper}=await render('?collection=collection-one');
+    let status!:(value:AdmissionCollection)=>void,items!:(value:Awaited<ReturnType<typeof api.fetchAdmissionItems>>)=>void;
+    vi.mocked(api.fetchAdmissionCollection).mockReturnValueOnce(new Promise(done=>status=done));
+    vi.mocked(api.fetchAdmissionItems).mockReturnValueOnce(new Promise(done=>items=done));
+    await button(wrapper,'刷新状态').trigger('click');
+    await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
+    status(collection());await flushPromises();wrapper.unmount();
+    const returned=await render('?collection=collection-one');expect(returned.wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
+    items({items:[],total:0,page:1,pageSize:100});await flushPromises();
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
   it('does not default-select suspicious A metadata or overwrite original pending actions',async()=>{
     const records=[{...item('boundary'),needsBoundaryReview:true},{...item('conflict'),conflicts:['目标存在']},{...item('suggested'),suggestedAction:{key:'suggested',action:'defer' as const,approvedAds:[],acceptSourceIds:[]}},item('safe')];
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:4,page:1,pageSize:100});
