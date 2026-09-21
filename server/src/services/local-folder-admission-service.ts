@@ -10,6 +10,7 @@ import { SourceEvidenceService } from './source-evidence-service.js';
 import { runAdmissionExclusive } from './local-admission-lock.js';
 import { extractWorkDisplayTitle } from '../utils/work-title.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
+import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 
 const leaf = z.string().min(1).refine(v => !/[\\/:\x00]/.test(v) && v!=='.' && v!=='..', 'A direct child directory name is required');
 const entrySchema = z.object({ relativePath:z.string().min(1), kind:z.enum(['directory','image','video','other']), size:z.number().int().nonnegative(), dev:z.string(), ino:z.string(), mtimeNs:z.string() }).strict();
@@ -93,7 +94,8 @@ export class LocalFolderAdmissionService {
         .map(r=>({...r,tasks:this.db.prepare('SELECT id,status,attempt_count FROM archive_catalog_download_tasks WHERE source_work_id=? ORDER BY id').all(r.sourceWorkId)}));
       const existingRelations=this.db.prepare(`SELECT l.id localWorkId,l.work_id workId,l.post_id postId,l.identity_policy identityPolicy,w.display_title canonicalTitle
         FROM archive_catalog_local_works l LEFT JOIN archive_catalog_works w ON w.id=l.work_id WHERE l.absolute_path=?`).all(targetPath);
-      items.push({key:randomUUID(),sourceRelativePath:name,targetPath,displayTitle,manifest,identity:{kind:'new'},reason:'',localOnly:false,acceptExistingVersion:input.acceptExistingVersion??false,excludeSourceIds:[],primary:false,approvedAds:[],
+      items.push({key:randomUUID(),sourceRelativePath:name,targetPath,displayTitle,manifest,identity:{kind:'new'},reason:'',localOnly:false,acceptExistingVersion:input.acceptExistingVersion??false,excludeSourceIds:[],primary:false,
+        approvedAds:manifest.filter(e=>e.kind==='image'&&isKnownAdvertisementImage(e.relativePath)).map(e=>e.relativePath),
         review:{candidates,existingRelations,conflicts:await exists(targetPath)?['target exists']:[],summary:{images:manifest.filter(x=>x.kind==='image').length,videos:manifest.filter(x=>x.kind==='video').length,other:manifest.filter(x=>x.kind==='other').length,bytes:manifest.reduce((n,x)=>n+x.size,0)}}});
     }
     return {version:1,planId:randomUUID(),confirmed:false,creatorId:input.creatorId,...(input.sourceEvidenceId!==undefined?{sourceEvidenceId:input.sourceEvidenceId}:{}),inputRoot:path.resolve(input.inputRoot),galleryRoot:path.resolve(this.galleryRoot),creatorDirectory,items};
@@ -124,8 +126,10 @@ export class LocalFolderAdmissionService {
       if(cmp(path.resolve(item.targetPath))!==cmp(expected))throw Error('Target must preserve original directory name');
       for(const ad of item.approvedAds){
         const entry=item.manifest.find(e=>e.relativePath===ad);
-        if(!entry||entry.kind!=='other'||!['.txt','.url'].includes(path.extname(ad).toLowerCase()))throw Error('Advertisement exclusion must be an explicit existing TXT/URL entry');
+        if(!entry||!isAdmissionAdvertisementCandidate(entry))throw Error('Advertisement exclusion must be an explicit existing TXT/URL or known advertisement image entry');
       }
+      if(new Set(item.approvedAds).size!==item.approvedAds.length)throw Error('Duplicate advertisement approval');
+      if(!item.manifest.some(e=>['image','video'].includes(e.kind)&&!item.approvedAds.includes(e.relativePath)))throw Error('No supported media remains after advertisement exclusion');
     }return plan;
   }
 
@@ -220,7 +224,7 @@ export class LocalFolderAdmissionService {
       if(observed.some(e=>e.relativePath===ad))throw Error('Attachment exists in both locations; review required');
       const stat=await fs.lstat(saved,{bigint:true});
       if(!stat.isFile()||stat.isSymbolicLink())throw Error('Saved attachment is not a regular file');
-      observed.push({relativePath:ad,kind:'other',size:Number(stat.size),dev:String(stat.dev),ino:String(stat.ino),mtimeNs:String(stat.mtimeNs)});
+      observed.push({relativePath:ad,kind:item.manifest.find(e=>e.relativePath===ad)!.kind,size:Number(stat.size),dev:String(stat.dev),ino:String(stat.ino),mtimeNs:String(stat.mtimeNs)});
     }
     const decisions=[...this.removals(plan,item),...additional];
     const retained=new Map(decisions.filter(r=>r.retainOriginal).map(r=>[r.entry.relativePath,r]));
@@ -234,7 +238,7 @@ export class LocalFolderAdmissionService {
     }
     for(let n=observed.length-1;n>=0;n--)if(observed[n].kind==='directory'&&generatedDirs.has(observed[n].relativePath))observed.splice(n,1);
     const removed=new Set(decisions.filter(r=>!r.retainOriginal).map(r=>r.entry.relativePath));
-    if(!item.manifest.some(e=>['image','video'].includes(e.kind)&&!removed.has(e.relativePath)&&!retained.has(e.relativePath)))throw Error('No supported media remains for display');
+    if(!item.manifest.some(e=>['image','video'].includes(e.kind)&&!item.approvedAds.includes(e.relativePath)&&!removed.has(e.relativePath)&&!retained.has(e.relativePath)))throw Error('No supported media remains for display');
     // A returned/replaced file is not ignored. Explicit removal describes absence only.
     if(observed.some(e=>removed.has(e.relativePath)))throw Error('Approved removed file is present again; review required');
     const sorted=(entries:Entry[])=>[...entries].sort((a,b)=>a.relativePath.localeCompare(b.relativePath,'en'));
@@ -347,7 +351,7 @@ export class LocalFolderAdmissionService {
           this.db.prepare("UPDATE archive_local_admission_items SET state='files_verified' WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='files_verified';
         }
         if(state.state==='files_verified'){
-          // Reversible exclusion, never deletion: retain only explicitly approved TXT/URL
+          // Reversible exclusion, never deletion: retain only explicitly approved candidates
           // outside the gallery, with the same plan and relative names for safe replay.
           for(const ad of item.approvedAds){
             const from=path.join(target,ad),to=this.attachmentPath(plan,item,ad);

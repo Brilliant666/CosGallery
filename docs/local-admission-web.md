@@ -19,7 +19,7 @@ This is local-server file handling, not browser media upload or a cloud sync ser
    Existing canonical titles remain. Same-title independent Works are supported.
    No general merging of two existing Works is offered.
 5. Confirm the source/destination scope and usable-version choice. Ads require an
-   **additional explicit confirmation of named TXT/URL files**; unchecked attachments
+   **additional explicit confirmation of the exact relative-file list**; unchecked attachments
    stay. Batch provenance alone never satisfies downloads. Exact version acceptance
    requires selecting the existing Work and specific sources, using original claim
    checks and the fulfillment service, without rewriting staged history.
@@ -35,6 +35,37 @@ be set by a manager. It must exist on the same volume and be independent from th
 gallery, archive inbox and processing root. Linked ancestors, junctions, traversal
 and arbitrary absolute directory selection are rejected server-side. There is no
 shell-command or arbitrary-file-management endpoint.
+
+### Batch advertisement selection
+
+The confirmation page groups advertisement candidates by their complete basename,
+showing the selected-directory count, file count and selected count. Select/clear a
+specific filename or all candidates across **all pages and groups**. Only directories
+chosen as new/existing/same-as are affected; skip/defer, identity, main-copy and source
+choices remain unchanged. TXT/URL files remain candidates, not blanket approvals.
+
+The user has confirmed the ecytt02 advertisements `492.jpg` and `009-01.jpg` as global
+exact-filename rules. Any creator's new local admission can recognize these basenames
+(case-insensitive, including nested paths). No wildcard, similar number or other JPG
+is included. When selecting a directory for admission, these image ads are preselected;
+the user may deselect them. They remain explicitly listed in `approvedAds` and in the
+last confirmation dialog. Image ads moved out do not become gallery media. The preview
+image count is the original inventory, not a promise that excluded ads remain indexed.
+
+An old **unsubmitted** draft can show these additional candidates from its saved
+manifest without another disk inventory or changing its plan. Existing confirmed
+payloads, past batches and outstanding retry receipts never gain new approvals.
+Choosing defaults is not execution; the recoverable move only happens on confirmed
+admission. No previously indexed gallery or old source copy is swept or rewritten.
+
+The same exact-name helper is used by new ordinary Stage3 staging. Advertisement
+files remain in its original processing content, outside `ready`, and follow the
+existing recoverable processing cleanup (or remain when cleanup is disabled).
+Existing ready content, immutable staging manifests and explicit review plans keep
+their recorded classification. A new optional `imageAdvertisementPolicy: 1` in the
+job summary fixes the rule for an in-progress new staging attempt, including copy
+fallback/replay; absent historical markers do not authorize retroactive cleanup.
+No schema migration or source/plugin rule is added for this filename policy.
 
 ## Review, persistence and failure behavior
 

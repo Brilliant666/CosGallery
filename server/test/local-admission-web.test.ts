@@ -176,6 +176,52 @@ describe.sequential('web directory admission delegates to original plans',()=>{
     expect(manager.connection.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(batch.id)).toEqual(payload);
     for(const item of batch.items)await expect(fs.stat(path.join(waiting,parent,item.sourceRelativePath))).resolves.toBeTruthy();
   });
+  it('adds exact global image ads to legacy drafts without rescanning or rewriting preview evidence',async()=>{
+    const name='NO.023 全局广告草稿',dir=await make(name);
+    for(const file of ['492.jpg','009-01.jpg','0492.jpg','492.jpeg'])await fs.copyFile(path.join(dir,'图片 1.jpg'),path.join(dir,file));
+    const batch=await service.preview({creatorId:creator,parent,directories:[name]});
+    expect(batch.items[0].ads.filter(a=>a.automatic).map(a=>a.relativePath).sort()).toEqual(['009-01.jpg','492.jpg']);
+    const db=manager.connection,row=db.prepare('SELECT summary_json,preview_json FROM local_admission_web_items WHERE batch_id=?').get(batch.id)!;
+    const legacy=JSON.parse(String(row.summary_json));delete legacy.advertisementRulesVersion;legacy.ads=legacy.ads.filter((a:{automatic?:boolean})=>!a.automatic);
+    db.prepare('UPDATE local_admission_web_items SET summary_json=? WHERE batch_id=?').run(JSON.stringify(legacy),batch.id);
+    const saved=db.prepare('SELECT * FROM local_admission_web_items WHERE batch_id=?').get(batch.id);
+    const reads=vi.spyOn(fs,'readdir');
+    try{expect(service.items(batch.id).items[0].ads.filter(a=>a.automatic).map(a=>a.relativePath).sort()).toEqual(['009-01.jpg','492.jpg']);expect(reads).not.toHaveBeenCalled();}finally{reads.mockRestore();}
+    expect(db.prepare('SELECT * FROM local_admission_web_items WHERE batch_id=?').get(batch.id)).toEqual(saved);
+    expect(db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)).toBeUndefined();
+    // Historical confirmed summaries/choices do not gain retroactive approvals.
+    db.prepare("UPDATE local_admission_web_batches SET state='completed',confirmed_json='{}' WHERE id=?").run(batch.id);
+    expect(service.items(batch.id).items[0].ads).toEqual(legacy.ads);
+  });
+  it('moves only the confirmed global JPG advertisements outside the gallery and safely replays exact evidence',async()=>{
+    const name='NO.024 图片广告执行',dir=await make(name);await fs.mkdir(path.join(dir,'nested'));
+    for(const file of ['492.jpg','009-01.jpg','nested/492.jpg','0492.jpg','492.jpeg'])await fs.copyFile(path.join(dir,'图片 1.jpg'),path.join(dir,file));
+    const batch=await service.preview({creatorId:creator,parent,directories:[name]});
+    const approvedAds=['492.jpg','nested/492.jpg','明确广告.txt'];
+    const input=request(batch,{adsConfirmed:true,actions:[{key:batch.items[0].key,action:'new',approvedAds}]});
+    await expect(service.execute(batch.id,{...input,adsConfirmed:undefined})).rejects.toThrow('单独确认');
+    await expect(service.execute(batch.id,{...input,actions:[{key:batch.items[0].key,action:'new',approvedAds:['图片 1.jpg']}]})).rejects.toThrow('具体候选');
+    await service.execute(batch.id,input);await service.waitForIdle();expect(service.get(batch.id).state).toBe('completed');
+    const item=service.items(batch.id).items[0],destination=path.join(gallery,parent,name);
+    for(const ad of approvedAds){await expect(fs.stat(path.join(destination,ad))).rejects.toThrow();await expect(fs.stat(path.join(waiting,parent,'.local-admission-attachments',batch.id,item.key,ad))).resolves.toBeTruthy();}
+    for(const file of ['图片 1.jpg','009-01.jpg','0492.jpg','492.jpeg','笔记.txt'])await expect(fs.stat(path.join(destination,file))).resolves.toBeTruthy();
+    const db=manager.connection,images=db.prepare('SELECT image_id FROM post_items WHERE post_id=? ORDER BY position').all(Number(item.postId));expect(images).toHaveLength(4);
+    const saved=db.prepare('SELECT payload_json FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)!;
+    const {LocalFolderAdmissionService}=await import('../src/services/local-folder-admission-service.js');
+    await new LocalFolderAdmissionService(db,gallery).apply(JSON.parse(String(saved.payload_json)));
+    expect(db.prepare('SELECT image_id FROM post_items WHERE post_id=? ORDER BY position').all(Number(item.postId))).toEqual(images);
+    const adPath=path.join(waiting,parent,'.local-admission-attachments',batch.id,item.key,'492.jpg');
+    await fs.appendFile(adPath,'changed');
+    await expect(new LocalFolderAdmissionService(db,gallery).apply(JSON.parse(String(saved.payload_json)))).rejects.toThrow('changed');
+  });
+  it('refuses to admit an advertisement-only directory before any move or immutable plan',async()=>{
+    const name='NO.025 仅广告',dir=path.join(waiting,parent,name);await fs.mkdir(dir);
+    await sharp({create:{width:12,height:18,channels:3,background:'#123456'}}).jpeg().toFile(path.join(dir,'492.jpg'));
+    const batch=await service.preview({creatorId:creator,parent,directories:[name]});
+    await expect(service.execute(batch.id,request(batch,{adsConfirmed:true,actions:[{key:batch.items[0].key,action:'new',approvedAds:['492.jpg']}]}))).rejects.toThrow('没有可展示媒体');
+    expect(service.get(batch.id).state).toBe('draft');expect(manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)).toBeUndefined();
+    await expect(fs.stat(dir)).resolves.toBeTruthy();
+  });
   it('viewer and unauthenticated requests cannot browse disk, inspect batches or submit operations',async()=>{
     const {authService}=await import('../src/services/auth-service.js');authService.setAdminPassword('synthetic-admin-pass');authService.setViewerAccess('password','synthetic-viewer-pass');
     const app=App(),login=await requestTestApp(app,'POST','/api/auth/login',{'x-foldergram-intent':'1'},{password:'synthetic-viewer-pass'});

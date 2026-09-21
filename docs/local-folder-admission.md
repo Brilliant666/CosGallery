@@ -82,11 +82,17 @@ set is valid only if that source actually has no tasks. Changes/active claims st
 acceptance without undoing successful file admission. Resume retries this checkpoint.
 
 `approvedAds:["relative/ad.url"]` is optional and accepts only listed TXT/URL files
-present in the confirmed manifest. These files are **moved, not deleted**, to
+or the user-confirmed global ecytt02 image-ad basenames `492.jpg` and `009-01.jpg`
+present in the confirmed manifest. New unconfirmed CLI previews prefill these two
+image-ad matches; the full plan still requires confirmation, and the list may be
+edited before confirming. Other images are not advertisement candidates. Existing
+confirmed plans are never supplemented on apply/resume. These files are **moved, not deleted**, to
 `inputRoot/.local-admission-attachments/planId/itemKey/relative/ad.url`.
 All other attachments and directory structure remain. URLs are never opened.
 The result reports exact retained attachment locations. No cleanup of real samples is
-performed by development/testing, nor is general advertisement detection introduced.
+performed by development/testing, nor is content-based/general advertisement detection introduced.
+At least one non-excluded supported media file must remain. Replay verifies the
+saved advertisement's original kind and exact metadata as well as retained media.
 
 ### Later decisions
 

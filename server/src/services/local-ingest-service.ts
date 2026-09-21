@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 
 import { readMovableImageMetadata } from '../utils/movable-image-metadata.js';
+import { isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { inspectReviewFiles, matchReviewInventory, normalizeReviewPath, parseReviewArchiveInventory } from './local-ingest-review-inventory.js';
 import { readReviewRecovery, reviewHash, reviewPlanHash, reviewPlanSchema, reviewRequestSchema, type LocalIngestReviewPlan, type LocalIngestReviewRequest } from './local-ingest-review-plan.js';
 import { runWithAdmissionBarrier } from './local-admission-lock.js';
@@ -2081,7 +2082,16 @@ export class LocalIngestService {
     const contentRoot = await discoverContentRoot(levelTwoRoot);
     await this.assertInside(levelTwoRoot, contentRoot, 'UNSAFE_ARCHIVE_PATH', 'Extracted content root', { allowRoot: true });
     const tree = await listTree(contentRoot);
-    const reviewed = readReviewRecovery(safeJsonParse(this.getJobRow(job.id).summary_json));
+    const validationCheckpoint = safeJsonParse(this.getJobRow(job.id).summary_json) ?? {};
+    const reviewed = readReviewRecovery(validationCheckpoint);
+    // A confirmed review or pre-policy ready directory keeps its original media
+    // contract. Persist the policy before staging so a copy-path interruption
+    // cannot reinterpret the advertisements left in level-2 as media on replay.
+    const imageAdvertisementPolicy = !reviewed && (validationCheckpoint.imageAdvertisementPolicy === 1
+      || !await pathExists(path.join(processingPath, 'ready')));
+    if (imageAdvertisementPolicy && validationCheckpoint.imageAdvertisementPolicy !== 1) {
+      this.updateJob(job.id, { summaryJson: JSON.stringify({ ...validationCheckpoint, imageAdvertisementPolicy: 1 }) });
+    }
     const retainedApprovals = new Map(reviewed?.plan.request.retainedFiles.map(file => [comparableRelativePath(file.relativePath), file.reason]) ?? []);
     const media: typeof tree = [];
     const ads: typeof tree = [];
@@ -2103,6 +2113,8 @@ export class LocalIngestService {
       const approval = retainedApprovals.get(comparableRelativePath(path.relative(levelTwoRoot, entry.absolutePath)));
       if (approval) {
         originals.push(entry);
+      } else if (imageAdvertisementPolicy && isKnownAdvertisementImage(entry.relativePath)) {
+        ads.push(entry);
       } else if (IMAGE_EXTENSIONS.has(extension)) {
         await validateImage(entry.absolutePath);
         imageCount += 1;
@@ -2209,9 +2221,11 @@ export class LocalIngestService {
       const { performance: _previousPerformance, ...manifestSummary } = summary as unknown as Record<string, unknown>;
       // Mixed unsupported originals use copy staging: keep their complete source
       // inventory until destination hashes are verified. Ordinary media still move.
+      const advertisementPaths = new Set(ads.map(entry => entry.relativePath));
       const manifest = originals.length || reviewed ? null : await createStagingMoveManifest(binding, contentRoot, tree.filter((entry) => !entry.directory).map((entry) => ({
         relativePath: entry.relativePath, size: entry.size,
-        kind: IMAGE_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'image' as const
+        kind: advertisementPaths.has(entry.relativePath) ? 'advertisement' as const
+          : IMAGE_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'image' as const
           : VIDEO_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'video' as const
             : ADVERTISEMENT_EXTENSIONS.has(path.extname(entry.relativePath).toLowerCase()) ? 'advertisement' as const : 'ignored' as const
       })), manifestSummary);

@@ -9,6 +9,7 @@ import { LocalFolderAdmissionService, admissionPlanSchema, type AdmissionPlan } 
 import { localIngestSettingsService } from './local-ingest-settings-service.js';
 import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/local-ingest-paths.js';
 import { LOCAL_ADMISSION_LOCK_KEY } from './local-admission-lock.js';
+import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 
 const ROOT_KEY = 'local-admission.waiting-root.v1';
 const reservedDirectory = (name:string) => /^\.local-(?:admission|review)-/i.test(name);
@@ -33,7 +34,12 @@ type Batch = {id:string;creator_id:number;input_root:string;source_evidence_id:n
 type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waitingRoot:string;workFacts:Record<string,string>;sourceFacts:Record<string,string>};
 type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTitle:string;group:'A'|'B'|'C'|'D';
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
-  ads:{relativePath:string;size:number}[];suggestedAction?:z.input<typeof actionSchema>};
+  ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>};
+const advertisementRulesVersion=1;
+function advertisementCandidates(manifest:PreviewItem['manifest']):Summary['ads'] {
+  return manifest.filter(isAdmissionAdvertisementCandidate).map(e=>({relativePath:e.relativePath,size:e.size,
+    ...(e.kind==='image'&&isKnownAdvertisementImage(e.relativePath)?{automatic:true}:{})}));
+}
 const now = () => new Date().toISOString();
 const hash = (value:unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const same = (a:string,b:string) => process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b);
@@ -147,7 +153,7 @@ export class LocalAdmissionWebService {
         const candidates=[...workIds].slice(0,50).flatMap(workId=>{const choice=this.workChoice(workId,scope.creatorId,version);return choice?[choice]:[];});
         const group:Summary['group']=item.review.existingRelations.length?'C':item.review.conflicts.length?'D':candidates.length===1?'B':candidates.length>1?'D':'A';
         items.push({preview:item,summary:{key:item.key,sourceRelativePath:name,targetPath:item.targetPath,displayTitle:item.displayTitle,group,
-          summary:item.review.summary,candidates,conflicts:item.review.conflicts,ads:item.manifest.filter(e=>e.kind==='other'&&/\.(txt|url)$/i.test(e.relativePath)).map(e=>({relativePath:e.relativePath,size:e.size}))}});
+          summary:item.review.summary,candidates,conflicts:item.review.conflicts,ads:advertisementCandidates(item.manifest),advertisementRulesVersion}});
       } catch(e) {items.push({preview:null,summary:{key:randomUUID(),sourceRelativePath:name,targetPath:'',displayTitle:name,group:'D',
         summary:{images:0,videos:0,other:0,bytes:0},candidates:[],conflicts:[message(e)],ads:[]}});}
     }
@@ -184,11 +190,16 @@ export class LocalAdmissionWebService {
     return {page,pageSize:30,total,items:this.db.prepare(`SELECT id FROM local_admission_web_batches ${where} ORDER BY created_at DESC,id DESC LIMIT 30 OFFSET ?`).all(...args,(page-1)*30).map(r=>this.get(String(r.id)))};}
   items(id:string,page=1,pageSize=24) {
     const batch=this.get(id);page=Math.max(1,page);pageSize=Math.min(100,Math.max(1,pageSize));
-    const rows=this.db.prepare(`SELECT x.item_key,x.summary_json,x.action,i.state,i.last_error,i.work_id,i.local_work_id,l.post_id
+    const rows=this.db.prepare(`SELECT x.item_key,x.summary_json,x.action,i.state,i.last_error,i.work_id,i.local_work_id,l.post_id,
+      CASE WHEN ?='draft' AND COALESCE(json_extract(x.summary_json,'$.advertisementRulesVersion'),0)<>? THEN x.preview_json ELSE NULL END legacy_preview_json
       FROM local_admission_web_items x LEFT JOIN archive_local_admission_items i ON i.plan_id=x.batch_id AND i.item_key=x.item_key
-      LEFT JOIN archive_catalog_local_works l ON l.id=i.local_work_id WHERE x.batch_id=? ORDER BY x.position LIMIT ? OFFSET ?`).all(id,pageSize,(page-1)*pageSize);
-    return {page,pageSize,total:batch.totals.total,items:rows.map(r=>({...JSON.parse(String(r.summary_json)) as Summary,
-      action:String(r.action),state:r.state??(batch.state==='draft'?'preview':r.action),lastError:r.last_error??null,workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null}))};
+      LEFT JOIN archive_catalog_local_works l ON l.id=i.local_work_id WHERE x.batch_id=? ORDER BY x.position LIMIT ? OFFSET ?`).all(batch.state,advertisementRulesVersion,id,pageSize,(page-1)*pageSize);
+    return {page,pageSize,total:batch.totals.total,items:rows.map(r=>{
+      const summary=JSON.parse(String(r.summary_json)) as Summary;
+      // Old unsubmitted drafts use their saved inventory; no disk reads or changes
+      // to the manifest, choices, confirmed payload or execution checkpoints.
+      if(r.legacy_preview_json){summary.ads=advertisementCandidates((JSON.parse(String(r.legacy_preview_json)) as PreviewItem).manifest);summary.advertisementRulesVersion=advertisementRulesVersion;}
+      return {...summary,action:String(r.action),state:r.state??(batch.state==='draft'?'preview':r.action),lastError:r.last_error??null,workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
   }
   async repreview(id:string,keys?:string[]) {
     const batch=this.row(id);if(['running','queued'].includes(this.effectiveState(batch)))throw new AdmissionWebError('执行中不能重新预览');
@@ -277,6 +288,9 @@ export class LocalAdmissionWebService {
         title=items.find(i=>i.key===action.sameAsKey)!.displayTitle;identity={kind:'same-as',itemKey:action.sameAsKey};
       }
       if(action.approvedAds.length&&!request.adsConfirmed)throw new AdmissionWebError('广告可恢复移出必须单独确认具体清单');
+      const allowedAds=new Set(advertisementCandidates(preview.manifest).map(e=>e.relativePath));
+      if(new Set(action.approvedAds).size!==action.approvedAds.length||action.approvedAds.some(ad=>!allowedAds.has(ad)))throw new AdmissionWebError('广告选择必须是本项预览中的具体候选文件');
+      if(!preview.manifest.some(e=>['image','video'].includes(e.kind)&&!action.approvedAds.includes(e.relativePath)))throw new AdmissionWebError('移出广告后没有可展示媒体，请暂缓此目录');
       const reason=`用户在网页确认页选择：${{new:'新独立作品',existing:'复用所选作品','same-as':'与本批所选目录同套',skip:'跳过',defer:'暂缓'}[action.action]}${action.reason?'；'+action.reason:''}`;
       const acceptVersions=action.acceptSourceIds.map(sourceWorkId=>{
         if(!request.acceptExistingVersion||identity.kind!=='existing'||!identity.workId)throw new AdmissionWebError('精确来源版本接受必须明确复用对应作品并接受本地版本');
@@ -304,7 +318,7 @@ export class LocalAdmissionWebService {
       for(const a of request.actions){
         const summary=JSON.parse(String(saved.find(s=>s.item_key===a.key)!.summary_json)) as Summary;
         const confirmed=items.find(i=>i.key===a.key);
-        if(confirmed)summary.displayTitle=confirmed.displayTitle;
+        if(confirmed){summary.displayTitle=confirmed.displayTitle;summary.ads=advertisementCandidates(confirmed.manifest);summary.advertisementRulesVersion=advertisementRulesVersion;}
         this.db.prepare('UPDATE local_admission_web_items SET action=?,summary_json=? WHERE batch_id=? AND item_key=?').run(a.action,JSON.stringify(summary),id,a.key);
       }
       this.db.prepare('INSERT INTO local_admission_web_requests VALUES(?,?,?,?,?)').run(request.requestKey,id,'execute',hash(request),now());

@@ -22,7 +22,7 @@ export interface AdmissionAction {
 export interface AdmissionItem {
   key: string; sourceRelativePath: string; targetPath: string; displayTitle: string; group: 'A' | 'B' | 'C' | 'D';
   summary: { images: number; videos: number; other: number; bytes: number }; candidates: AdmissionWork[];
-  conflicts: string[]; ads: Array<{ relativePath: string; size: number }>; state: string; lastError?: string | null;
+  conflicts: string[]; ads: Array<{ relativePath: string; size: number; automatic?: boolean }>; state: string; lastError?: string | null;
   workId?: number | null; localWorkId?: number | null; postId?: number | null;
   suggestedAction?: AdmissionAction;
 }

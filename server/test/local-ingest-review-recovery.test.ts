@@ -37,7 +37,7 @@ function seed(database: DatabaseSync, creatorName: string) {
     '2024-01-01T00:00:00Z','historical-worker',3)`).run(creatorName);
 }
 
-async function makeFixture(members: Record<string, Buffer>, options: { scanFailures?: number; historicalWebp?: boolean; normalIngest?: boolean; allowRecycle?: boolean } = {}) {
+async function makeFixture(members: Record<string, Buffer>, options: { scanFailures?: number; historicalWebp?: boolean; normalIngest?: boolean; allowRecycle?: boolean; recycleAfterIngest?: boolean; interruptCommit?: boolean } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'stage3-review-recovery-'));
   const libraryRoot = path.join(root, 'library'), inboxRoot = path.join(root, 'inbox'), processingRoot = path.join(root, 'processing');
   const creatorName = 'Review Creator';
@@ -51,7 +51,7 @@ async function makeFixture(members: Record<string, Buffer>, options: { scanFailu
   seed(database, creatorName);
   const settings = {
     get: () => ({ libraryRoot, inboxRoot, processingRoot, sevenZipPath: 'synthetic-7z', fileStableSeconds: 1,
-      recycleAfterIngest: false, maxExtractionDepth: 2 as const, allowlist: [creatorName], archivePasswordConfigured: true }),
+      recycleAfterIngest: options.recycleAfterIngest ?? false, maxExtractionDepth: 2 as const, allowlist: [creatorName], archivePasswordConfigured: true }),
     getArchivePassword: () => 'synthetic-password'
   } as unknown as LocalIngestSettingsService;
   const counts = { list: 0, test: 0, outer: 0, inner: 0, scan: 0, recycle: 0 };
@@ -165,9 +165,16 @@ async function makeFixture(members: Record<string, Buffer>, options: { scanFailu
       validation_status='failed',error_code='UNKNOWN_FILE_TYPE',error_detail='Historical WebP whitelist',summary_json=? WHERE id=?`)
       .run(processing, JSON.stringify({ ...current.summary, levelOneOutput: ['007.7zz'], innerOriginalName: '007.7zz', innerWorkingName: '007.7z' }), jobId);
   } else {
-    const failed = await service.runJob(jobId);
-    expect(failed.status, failed.errorDetail ?? '').toBe(options.normalIngest ? 'ingested' : 'awaiting_review');
-    if (!options.normalIngest) expect(failed.phase).toBe('validating');
+    const rename = fs.rename.bind(fs);
+    const interruption = options.interruptCommit ? vi.spyOn(fs, 'rename').mockImplementation(async (source, destination) => {
+      if (path.basename(String(source)) === 'ready') throw new Error('Synthetic commit interruption');
+      return rename(source, destination);
+    }) : null;
+    try {
+      const failed = await service.runJob(jobId);
+      expect(failed.status, failed.errorDetail ?? '').toBe(options.interruptCommit ? 'failed' : options.normalIngest ? 'ingested' : 'awaiting_review');
+      if (!options.normalIngest && !options.interruptCommit) expect(failed.phase).toBe('validating');
+    } finally { interruption?.mockRestore(); }
   }
   const request = (overrides: Partial<LocalIngestReviewRequest> = {}): LocalIngestReviewRequest => ({ jobId,
     removedFiles: [], retainedFiles: [], note: 'User approved only the exact synthetic recovery scope', ...overrides });
@@ -192,6 +199,72 @@ async function removableFixture(options: { scanFailures?: number } = {}) {
 }
 
 describe.sequential('explicit Stage3 review recovery', () => {
+  it('excludes exact known JPG ads before decoding and preserves them through ordinary cleanup', async () => {
+    const cover = await jpeg(), normalJpeg = await jpeg();
+    const members = { 'cover.jpg': cover, '492.jpeg': normalJpeg,
+      'nested/492.jpg': Buffer.from('known ad need not decode'), '009-01.JPG': Buffer.from('known ad need not decode either') };
+    const f = await makeFixture(members, { normalIngest: true, allowRecycle: true, recycleAfterIngest: true });
+    const job = f.service.getJob(f.jobId);
+    expect(job).toMatchObject({ status: 'ingested', cleanupStatus: 'recycled' });
+    expect(job.summary).toMatchObject({ imageAdvertisementPolicy: 1, imageCount: 2, totalMediaCount: 2,
+      totalBytes: cover.length + normalJpeg.length, advertisementFileCount: 2 });
+    expect(await fs.readdir(job.targetPath!)).toEqual(['492.jpeg', 'cover.jpg']);
+    expect(f.database.prepare('SELECT COUNT(*) AS n FROM images').get()).toEqual({ n: 2 });
+    const preserved = f.recycled.find(item => item.original === f.processing)!.preserved;
+    for (const name of ['nested/492.jpg', '009-01.JPG']) {
+      expect(await fs.readFile(path.join(preserved, 'level-2', name))).toEqual(members[name as keyof typeof members]);
+    }
+    const counts = { ...f.counts };
+    await f.restart().runJob(f.jobId);
+    expect(f.counts).toEqual(counts);
+  });
+
+  it('does not admit an archive whose only images are known advertisements', async () => {
+    const f = await makeFixture({ '492.jpg': Buffer.from('ad'), '009-01.jpg': Buffer.from('ad') });
+    expect(f.service.getJob(f.jobId)).toMatchObject({ status: 'awaiting_review', errorCode: 'NO_VALID_MEDIA' });
+    expect(f.counts).toMatchObject({ scan: 0, recycle: 0 });
+    expect(await fs.readFile(path.join(f.levelTwo, '492.jpg'), 'utf8')).toBe('ad');
+    expect(await fs.readdir(f.libraryRoot)).toEqual([]);
+  });
+
+  it('persists the new advertisement policy through copy-path ready replay without deleting originals', async () => {
+    const cover = await jpeg(), advertisement = Buffer.from('undecodable known ad'), original = Buffer.from('retained TIFF');
+    const f = await makeFixture({ 'cover.jpg': cover, '492.jpg': advertisement, 'original.tiff': original }, { interruptCommit: true });
+    expect(f.service.getJob(f.jobId).summary).toMatchObject({ imageAdvertisementPolicy: 1, imageCount: 1, advertisementFileCount: 1 });
+    await expect(fs.stat(path.join(f.processing, '.staging-move.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const job = await f.restart().runJob(f.jobId);
+    expect(job.status, job.errorDetail ?? '').toBe('ingested');
+    expect(job.summary).toMatchObject({ imageCount: 1, totalMediaCount: 1, totalBytes: cover.length, advertisementFileCount: 1 });
+    expect(await fs.readFile(path.join(f.levelTwo, '492.jpg'))).toEqual(advertisement);
+    expect(await fs.readFile(path.join(job.targetPath!, RETAINED_ORIGINALS_DIRECTORY, 'original.tiff'))).toEqual(original);
+    await expect(fs.stat(path.join(job.targetPath!, '492.jpg'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves pre-policy ready media and exact review plans instead of silently reclassifying their JPG files', async () => {
+    const members = { 'cover.jpg': await jpeg(), '492.jpg': await jpeg() };
+    const legacy = await makeFixture(members, { historicalWebp: true });
+    const ready = path.join(legacy.processing, 'ready');
+    await fs.mkdir(ready);
+    for (const [name, bytes] of Object.entries(members)) await fs.writeFile(path.join(ready, name), bytes);
+    legacy.database.exec("UPDATE local_ingest_jobs SET status='failed', error_code=NULL WHERE id=1");
+    const resumed = await legacy.restart().runJob(legacy.jobId);
+    expect(resumed.status, resumed.errorDetail ?? '').toBe('ingested');
+    expect(resumed.summary).toMatchObject({ imageCount: 2, advertisementFileCount: 0 });
+    expect(resumed.summary!.imageAdvertisementPolicy).toBeUndefined();
+    expect(await fs.readFile(path.join(resumed.targetPath!, '492.jpg'))).toEqual(members['492.jpg']);
+
+    const reviewed = await makeFixture({ ...members, 'broken.jpg': Buffer.alloc(0) });
+    await fs.rm(path.join(reviewed.levelTwo, 'broken.jpg'));
+    const plan = await reviewed.service.previewReview(reviewed.request({ removedFiles: [{ relativePath: 'broken.jpg', size: 0 }] }));
+    const immutable = JSON.stringify(plan);
+    const result = await reviewed.service.resumeReview(accepted(plan));
+    expect(result.status, result.errorDetail ?? '').toBe('ingested');
+    expect(result.summary).toMatchObject({ imageCount: 2, advertisementFileCount: 0 });
+    expect(await fs.readFile(path.join(result.targetPath!, '492.jpg'))).toEqual(members['492.jpg']);
+    expect(JSON.stringify(plan)).toBe(immutable);
+    expect(result.summary!.reviewRecovery).toMatchObject({ plan });
+  });
+
   it('previews without DB mutation and resumes exact removed-file approval on the original job', async () => {
     const f = await makeFixture({ 'cover.jpg': await jpeg(), 'broken.jpg': Buffer.alloc(0) });
     const before = f.row();

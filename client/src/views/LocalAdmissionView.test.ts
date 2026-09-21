@@ -11,7 +11,7 @@ const dir=(parent:string|null=null):AdmissionDirectories=>({root:'R:/等待区',
 const item=(key='first',group:AdmissionItem['group']='A'):AdmissionItem=>({key,sourceRelativePath:key==='first'?'001 中文 & 空格':key,targetPath:`R:/正式/测试博主/${key}`,displayTitle:key,group,summary:{images:12,videos:1,other:1,bytes:12345},candidates:[],conflicts:[],ads:[],state:'planned'});
 const batch=(state:AdmissionBatch['state']='draft'):AdmissionBatch=>({id:'batch-synthetic',planId:state==='draft'?null:'original-plan',creatorId:17,creatorName:'测试博主',state,createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z',inputRoot:'R:/等待区/别名目录',totals:{total:3,selected:0,completed:0,skipped:0,deferred:3}});
 const work:AdmissionWork={workId:91,title:'已有具体作品',catalogNo:23,images:24,videos:0,thumbnailUrl:null,primaryLocalWorkId:122,localState:'available',originalDirectories:['原始目录'],sources:[{sourceWorkId:71,title:'来源声明',sourceOrder:'030',mediaSummary:'23P',taskIds:[63]}]};
-const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(b=>b.text()===text)!;
+const button=(wrapper:Pick<ReturnType<typeof mount>,'findAll'>,text:string)=>wrapper.findAll('button').find(b=>b.text()===text)!;
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>resolve=done);return {promise,resolve};}
 async function render(query=''){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-admission/:creatorId',name:'local-admission',component:LocalAdmissionView},{path:'/archive-catalog',component:{template:'<p>库</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}}]});await router.push(`/local-admission/17${query}`);const wrapper=mount(LocalAdmissionView,{global:{plugins:[router]}});await flushPromises();return {wrapper,router};}
 describe('web local admission without CLI or raw identity inputs',()=>{
@@ -71,5 +71,99 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     expect(wrapper.get('[data-test=admission-item-existing]').text()).toContain('对应：已有具体作品');
     expect(wrapper.get('[data-test=admission-item-changed] select').element.value).toBe('defer');
     expect(api.executeAdmission).not.toHaveBeenCalled();expect(wrapper.find('[role=dialog]').exists()).toBe(false);
+  });
+  it('selects same-name advertisements across directory pages and filters without touching skipped or deferred items',async()=>{
+    const records=Array.from({length:23},(_,index)=>({...item(`set-${index}`),ads:[{relativePath:'附件/指定广告.txt',size:8},{relativePath:'链接.url',size:9}]}));
+    vi.mocked(api.fetchAdmissionItems).mockImplementation(async(_id,page=1)=>({items:records.slice((page-1)*20,page*20),total:23,page,pageSize:20}));
+    const {wrapper}=await render('?batch=batch-synthetic');
+    expect(api.fetchAdmissionItems).toHaveBeenCalledTimes(2);
+    await button(wrapper,'A 组全部选择新独立作品').trigger('click');
+    await wrapper.get('[data-test=admission-item-set-0] select').setValue('skip');
+    await wrapper.get('[data-test=admission-item-set-1] select').setValue('defer');
+    const group=wrapper.findAll('label').find(label=>label.text().startsWith('分组'))!.get('select');
+    await group.setValue('D');
+    expect(wrapper.find('.item-card').exists()).toBe(false);
+    const row=wrapper.get('[data-ad-filename="指定广告.txt"]');
+    expect(row.text()).toContain('21 个接纳目录 / 21 个文件 · 已选 0');
+    await button(row,'勾选同名候选').trigger('click');
+    expect(row.text()).toContain('已选 21');
+    expect(wrapper.get('[data-ad-filename="链接.url"]').text()).toContain('已选 0');
+    await group.setValue('all');await button(wrapper,'下一页目录').trigger('click');
+    expect(wrapper.get('[data-test=admission-item-set-22] details input').element).toMatchObject({checked:true});
+    await button(wrapper,'核对本批并确认执行').trigger('click');
+    const dialog=wrapper.get('[role=dialog]');await dialog.findAll('input')[0]!.setValue(true);await dialog.findAll('input')[1]!.setValue(true);
+    await dialog.get('[data-test=admission-execute]').trigger('click');await flushPromises();
+    const actions=vi.mocked(api.executeAdmission).mock.calls[0]![1].actions;
+    expect(actions[0]).toMatchObject({action:'skip',approvedAds:[]});expect(actions[1]).toMatchObject({action:'defer',approvedAds:[]});
+    expect(actions.slice(2).every(action=>JSON.stringify(action.approvedAds)===JSON.stringify(['附件/指定广告.txt']))).toBe(true);
+  });
+  it('selects and clears concrete candidate paths without changing identity, primary, source or version selections',async()=>{
+    const records=[{...item(),candidates:[work],ads:[{relativePath:'广告.txt',size:8},{relativePath:'内层/广告.txt',size:9}]},{...item('copy'),ads:[{relativePath:'链接.url',size:8}]},item('defer')];
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:3,page:1,pageSize:100});
+    const {wrapper}=await render('?batch=batch-synthetic');
+    await wrapper.get('[data-test=admission-item-first] select').setValue('existing');
+    await button(wrapper,`候选：${work.title} · 24 图 / 0 视频`).trigger('click');
+    await wrapper.get('[data-test=admission-item-first] input[type=checkbox]').setValue(true);
+    await wrapper.findAll('label.check').find(label=>label.text().startsWith('接受已有可用'))!.get('input').setValue(true);
+    await wrapper.get('[data-test=admission-item-first]').findAll('label.check').find(label=>label.text().includes('来源声明'))!.get('input').setValue(true);
+    await wrapper.get('[data-test=admission-item-copy] select').setValue('same-as');
+    await wrapper.get('[data-test=admission-item-copy]').findAll('select')[1]!.setValue('first');
+    await wrapper.get('[data-test=admission-item-copy] input:not([type=checkbox])').setValue('用户确认同套');
+    await wrapper.get('[data-test=ads-select-all]').trigger('click');
+    expect(wrapper.get('[data-ad-filename="广告.txt"]').text()).toContain('1 个接纳目录 / 2 个文件 · 已选 2');
+    await button(wrapper.get('[data-ad-filename="广告.txt"]'),'取消同名勾选').trigger('click');
+    expect(wrapper.get('[data-ad-filename="广告.txt"]').text()).toContain('已选 0');
+    expect(wrapper.get('[data-ad-filename="链接.url"]').text()).toContain('已选 1');
+    await wrapper.get('[data-test=ads-select-all]').trigger('click');
+    await wrapper.get('[data-test=ads-clear-all]').trigger('click');
+    expect(wrapper.text()).toContain('已勾选 0 个具体文件');
+    await button(wrapper,'核对本批并确认执行').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=admission-execute]').trigger('click');await flushPromises();
+    const payload=vi.mocked(api.executeAdmission).mock.calls[0]![1];
+    expect(payload.actions[0]).toMatchObject({action:'existing',workId:91,primary:true,acceptSourceIds:[71],approvedAds:[]});
+    expect(payload.actions[1]).toMatchObject({action:'same-as',sameAsKey:'first',reason:'用户确认同套',approvedAds:[]});
+    expect(payload.actions[2]).toMatchObject({action:'defer',approvedAds:[]});expect(payload.acceptExistingVersion).toBe(true);expect(payload.adsConfirmed).toBeUndefined();
+  });
+  it('applies global image advertisement defaults only when explicitly selecting admission and retains cancellations',async()=>{
+    const ads=[{relativePath:'广告.txt',size:8},{relativePath:'492.jpg',size:12,automatic:true},{relativePath:'内层/009-01.jpg',size:13,automatic:true}];
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item(),ads,candidates:[work]}, {...item('old'),ads,suggestedAction:{key:'old',action:'new',approvedAds:[]}}],total:2,page:1,pageSize:100});
+    const {wrapper}=await render('?batch=batch-synthetic');
+    expect(wrapper.get('[data-test=admission-item-old] details').findAll('input').every(input=>!(input.element as HTMLInputElement).checked)).toBe(true);
+    await wrapper.get('[data-test=admission-item-first] select').setValue('new');
+    let checks=wrapper.get('[data-test=admission-item-first] details').findAll('input');
+    expect(checks.map(input=>(input.element as HTMLInputElement).checked)).toEqual([false,true,true]);
+    await checks[1]!.setValue(false);
+    await wrapper.get('[data-test=admission-item-first] select').setValue('existing');
+    await button(wrapper,`候选：${work.title} · 24 图 / 0 视频`).trigger('click');
+    checks=wrapper.get('[data-test=admission-item-first] details').findAll('input');
+    expect(checks.map(input=>(input.element as HTMLInputElement).checked)).toEqual([false,false,true]);
+    await button(wrapper,'核对本批并确认执行').trigger('click');const dialog=wrapper.get('[role=dialog]');
+    expect(dialog.text()).toContain('广告可恢复移出：内层/009-01.jpg');expect(dialog.text()).not.toContain('广告可恢复移出：492.jpg');
+    await dialog.findAll('input')[0]!.setValue(true);expect(dialog.get('[data-test=admission-execute]').attributes('disabled')).toBeDefined();
+    await dialog.findAll('input')[1]!.setValue(true);await dialog.get('[data-test=admission-execute]').trigger('click');await flushPromises();
+    const payload=vi.mocked(api.executeAdmission).mock.calls[0]![1];expect(payload.actions[0]?.approvedAds).toEqual(['内层/009-01.jpg']);expect(payload.actions[1]?.approvedAds).toEqual([]);
+  });
+  it('locks bulk advertisements while the original execution receipt is unresolved and does not add new image defaults',async()=>{
+    const original={requestKey:'unchanged-request',confirmed:true as const,acceptExistingVersion:false,actions:[{key:'first',action:'new' as const,approvedAds:[]}]};
+    localStorage.setItem('cosgallery:admission:pending:batch-synthetic',JSON.stringify(original));
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item(),ads:[{relativePath:'492.jpg',size:8,automatic:true}]}],total:1,page:1,pageSize:100});
+    const {wrapper}=await render('?batch=batch-synthetic');
+    expect(wrapper.get('[aria-label="本批附件集中选择"] fieldset').attributes('disabled')).toBeDefined();
+    await wrapper.get('[data-test=ads-select-all]').trigger('click');
+    expect(wrapper.text()).toContain('已勾选 0 个具体文件');expect(localStorage.getItem('cosgallery:admission:pending:batch-synthetic')).toBe(JSON.stringify(original));
+    await button(wrapper,'查看并重试原提交').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=admission-execute]').trigger('click');await flushPromises();
+    expect(vi.mocked(api.executeAdmission).mock.calls[0]![1]).toEqual(original);
+  });
+  it('waits for the complete saved item list before enabling admission or batch advertisement choices',async()=>{
+    const delayed=deferred<Awaited<ReturnType<typeof api.fetchAdmissionItems>>>();
+    vi.mocked(api.fetchAdmissionItems).mockReturnValue(delayed.promise);
+    const {wrapper}=await render('?batch=batch-synthetic');
+    expect(wrapper.text()).toContain('正在读取预览摘要');
+    expect(button(wrapper,'A 组全部选择新独立作品').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[aria-label="本批附件集中选择"] fieldset').attributes('disabled')).toBeDefined();
+    await wrapper.get('[data-test=ads-select-all]').trigger('click');expect(api.executeAdmission).not.toHaveBeenCalled();
+    delayed.resolve({items:[{...item(),ads:[{relativePath:'广告.txt',size:8}]}],total:1,page:1,pageSize:100});await flushPromises();
+    expect(wrapper.get('[aria-label="本批附件集中选择"] fieldset').attributes('disabled')).toBeUndefined();
+    await button(wrapper,'A 组全部选择新独立作品').trigger('click');
+    expect(wrapper.get('[data-ad-filename="广告.txt"]').text()).toContain('已选 0');
   });
 });

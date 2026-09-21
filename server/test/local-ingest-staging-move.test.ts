@@ -11,14 +11,14 @@ import {
 
 const roots: string[] = [];
 
-async function fixture() {
+async function fixture(firstName = 'first.jpg', firstKind: 'image' | 'advertisement' = 'image') {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foldergram-move-'));
   roots.push(root);
   const processingPath = path.join(root, 'job');
   const levelTwoRoot = path.join(processingPath, 'level-2');
   const contentRoot = path.join(levelTwoRoot, 'wrapper');
   await fs.mkdir(contentRoot, { recursive: true });
-  await fs.writeFile(path.join(contentRoot, 'first.jpg'), 'first image');
+  await fs.writeFile(path.join(contentRoot, firstName), 'first image');
   await fs.writeFile(path.join(contentRoot, 'second.jpg'), 'second image');
   await fs.writeFile(path.join(contentRoot, 'ad.txt'), 'ad');
   const binding: StagingMoveBinding = {
@@ -26,14 +26,16 @@ async function fixture() {
     targetPath: path.join(root, 'gallery-target'), processingPath, levelTwoRoot
   };
   const files = [
-    { relativePath: 'first.jpg', kind: 'image' as const, size: 11 },
+    { relativePath: firstName, kind: firstKind, size: 11 },
     { relativePath: 'second.jpg', kind: 'image' as const, size: 12 },
     { relativePath: 'ad.txt', kind: 'advertisement' as const, size: 2 }
   ];
   const summary = {
     sourceWorkId: 8, archiveDownloadTaskId: 9, sourceArchiveSha256: binding.sourceArchiveSha256,
     plannedTargetPath: binding.targetPath, readyPath: path.join(processingPath, 'ready'),
-    imageCount: 2, videoCount: 0, totalMediaCount: 2, totalBytes: 23, warnings: ['keep original validation']
+    imageCount: firstKind === 'image' ? 2 : 1, videoCount: 0,
+    totalMediaCount: firstKind === 'image' ? 2 : 1, totalBytes: firstKind === 'image' ? 23 : 12,
+    warnings: ['keep original validation']
   };
   const manifest = await createStagingMoveManifest(binding, contentRoot, files, summary);
   expect(manifest).not.toBeNull();
@@ -46,6 +48,29 @@ afterEach(async () => {
 });
 
 describe.sequential('Local ingest durable staging moves', () => {
+  it.each(['492.jpg', '009-01.JPG'])('keeps exact known image advertisement %s recoverable outside staged media', async name => {
+    const f = await fixture(name, 'advertisement');
+    await finishStagingMove(f.binding, f.manifest);
+    expect(await fs.readFile(path.join(f.contentRoot, name), 'utf8')).toBe('first image');
+    expect(await fs.readdir(path.join(f.binding.processingPath, 'ready'))).toEqual(['second.jpg']);
+    const recovered = (await readStagingMoveManifest(f.binding))!;
+    expect(recovered.summary).toEqual(f.summary);
+    await finishStagingMove(f.binding, recovered);
+    expect(await fs.readFile(path.join(f.contentRoot, name), 'utf8')).toBe('first image');
+  });
+
+  it('does not permit arbitrary JPG advertisements or reinterpret historical image classifications', async () => {
+    await expect(fixture('normal.jpg', 'advertisement')).rejects.toMatchObject({ code: 'STAGING_MOVE_REVIEW_REQUIRED' });
+    const f = await fixture('492.jpg');
+    const original = JSON.stringify(f.manifest);
+    await finishStagingMove(f.binding, f.manifest);
+    const recovered = (await readStagingMoveManifest(f.binding))!;
+    expect(JSON.stringify(recovered)).toBe(original);
+    expect(recovered.summary).toMatchObject({ imageCount: 2, totalBytes: 23 });
+    expect(await fs.readFile(path.join(f.binding.processingPath, 'ready', '492.jpg'), 'utf8')).toBe('first image');
+    await finishStagingMove(f.binding, recovered);
+  });
+
   it('moves without copying bytes, preserving identity and leaving advertisements behind', async () => {
     const f = await fixture();
     const copy = vi.spyOn(fs, 'copyFile');
