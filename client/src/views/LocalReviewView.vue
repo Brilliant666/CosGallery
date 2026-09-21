@@ -70,8 +70,8 @@ async function execute(){
     savePending(null);showConfirm.value=false;await refresh();
   }catch(cause){
     if(current!==generation||disposed)return;
-    error.value=cause instanceof Error?cause.message:'处理回执未确认';
-    if(cause instanceof RequestError&&[400,403,404,409,422].includes(cause.status))savePending(null);
+    error.value=cause instanceof RequestError&&cause.status===413?'本项确认内容超过上限，服务端未接受。请暂缓此项并核对文件范围；不会自动拆分或执行。':cause instanceof Error?cause.message:'处理回执未确认';
+    if(cause instanceof RequestError&&[400,403,404,409,413,422].includes(cause.status))savePending(null);
   }finally{if(current===generation&&!disposed)busy.value=false;}
 }
 async function retry(){
@@ -80,7 +80,7 @@ async function retry(){
     await api.retryLocalReview(id,requestKey('retry'));try{localStorage.removeItem(retryKey);}catch{/* Acknowledged operation is durable on the server. */}
     if(current!==generation||disposed)return;showRetry.value=false;failures=0;await refresh();
   }catch(cause){
-    if(cause instanceof RequestError&&[400,403,404,409,422].includes(cause.status)){try{localStorage.removeItem(retryKey);}catch{/* Definitive rejection is not a pending receipt. */}}
+    if(cause instanceof RequestError&&[400,403,404,409,413,422].includes(cause.status)){try{localStorage.removeItem(retryKey);}catch{/* Definitive rejection is not a pending receipt. */}}
     if(current===generation&&!disposed)error.value=cause instanceof Error?cause.message:'原操作重试失败';
   }finally{if(current===generation&&!disposed)busy.value=false;}
 }

@@ -82,7 +82,7 @@ const selectionError = computed(()=>validateAdmissionSelection(entries.value));
 const storageKey = (id: string) => `cosgallery:admission:pending:${id}`;
 function rememberPending(value: AdmissionExecuteInput | null) { pending.value=value; if(!batch.value) return; try { if(value) localStorage.setItem(storageKey(batch.value.id),JSON.stringify(value)); else localStorage.removeItem(storageKey(batch.value.id)); } catch { notice.value='浏览器不能保存重试凭据，请保留本页直到确认服务端已接收；服务端批次和检查点仍会持久保留。'; } }
 function restorePending() { pending.value=null; if(!batch.value) return; try { const raw=localStorage.getItem(storageKey(batch.value.id)); if(!raw) return; const parsed: unknown=JSON.parse(raw); if(!parsed||typeof parsed!=='object'||!('requestKey' in parsed)||typeof parsed.requestKey!=='string'||!('confirmed' in parsed)||parsed.confirmed!==true||!('actions' in parsed)||!Array.isArray(parsed.actions)||!('acceptExistingVersion' in parsed)||typeof parsed.acceptExistingVersion!=='boolean') return; const safeActions: AdmissionAction[]=[]; for(const value of parsed.actions) { if(!value||typeof value!=='object'||typeof value.key!=='string'||!['new','existing','same-as','skip','defer'].includes(value.action)) return; safeActions.push(value as AdmissionAction); } pending.value={requestKey:parsed.requestKey,confirmed:true,actions:safeActions,acceptExistingVersion:parsed.acceptExistingVersion,...('adsConfirmed' in parsed&&parsed.adsConfirmed===true?{adsConfirmed:true}:{})}; acceptExistingVersion.value=pending.value.acceptExistingVersion; for(const action of safeActions) actions[action.key]=action; } catch { /* A malformed local retry copy cannot authorize execution. */ } }
-function confirmNewGroup() { if(draftLocked.value)return; for(const item of items.value.filter(item=>item.group==='A'&&!item.conflicts.length&&!item.structureWarnings?.length)) actions[item.key]={key:item.key,action:'new',displayTitle:item.displayTitle,approvedAds:initialAds(item),acceptSourceIds:[],reason:'用户在确认页选择新独立作品'}; adsChecked.value=false; }
+function confirmNewGroup() { if(draftLocked.value)return; for(const item of items.value.filter(item=>item.group==='A'&&!item.conflicts.length&&!item.structureWarnings?.length&&actions[item.key]?.action==='defer')) actions[item.key]={key:item.key,action:'new',displayTitle:item.displayTitle,approvedAds:initialAds(item),acceptSourceIds:[],reason:'用户在确认页选择新独立作品'}; adsChecked.value=false; }
 function stopPoll() { if(timer)clearTimeout(timer); timer=undefined; }
 function schedulePoll() { stopPoll(); if(!active.value||disposed||pollFailures.value>=3)return; timer=setTimeout(()=>void refreshBatch(true),2500); }
 async function loadItems(id: string, current = generation) {
@@ -139,8 +139,8 @@ async function execute() {
     batch.value=result;rememberPending(null);showConfirmation.value=false;await loadItems(id);schedulePoll();await loadRecent();
   }catch(cause){
     if(disposed||token!==mutationToken)return;
-    error.value=cause instanceof Error?cause.message:'执行回执未确认';
-    if(cause instanceof RequestError&&[400,403,404,409,422].includes(cause.status))rememberPending(null);
+    error.value=cause instanceof RequestError&&cause.status===413?'本批确认内容超过上限，请分小批；服务端未接受本次执行。':cause instanceof Error?cause.message:'执行回执未确认';
+    if(cause instanceof RequestError&&[400,403,404,409,413,422].includes(cause.status))rememberPending(null);
   }finally{if(!disposed&&token===mutationToken)busy.value=false;}
 }
 async function resume() {
@@ -153,7 +153,7 @@ async function resume() {
     if(disposed||token!==mutationToken)return;
     batch.value=result;showResume.value=false;pollFailures.value=0;schedulePoll();
   }catch(cause){
-    if(cause instanceof RequestError&&[400,403,404,409,422].includes(cause.status)){try{localStorage.removeItem(key);}catch{/* No business write was accepted. */}}
+    if(cause instanceof RequestError&&[400,403,404,409,413,422].includes(cause.status)){try{localStorage.removeItem(key);}catch{/* No business write was accepted. */}}
     if(!disposed&&token===mutationToken)error.value=cause instanceof Error?cause.message:'继续失败';
   }finally{if(!disposed&&token===mutationToken)busy.value=false;}
 }

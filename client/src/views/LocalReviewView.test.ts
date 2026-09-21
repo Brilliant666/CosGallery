@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import LocalReviewView from './LocalReviewView.vue';
 import * as api from '../api/local-review';
+import { RequestError } from '../api/http';
 import type { LocalReviewFile, LocalReviewSession } from '../api/local-review';
 vi.mock('../api/local-review');
 const files:LocalReviewFile[]=[
@@ -19,6 +20,9 @@ describe('scoped review UI invokes original task instead of asking for JSON',()=
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchLocalReviewTarget).mockResolvedValue({target:{kind:'stage3',jobId:9},creatorId:17,title:'本项中文作品',eligible:true,reason:'媒体审核暂停',sessionId:null});vi.mocked(api.createLocalReviewSession).mockResolvedValue({sessionId:'review-synthetic',status:'preparing'});vi.mocked(api.fetchLocalReviewSession).mockResolvedValue(session());vi.mocked(api.fetchLocalReviewFiles).mockResolvedValue({items:files,total:104,page:1,limit:50});vi.mocked(api.executeLocalReview).mockResolvedValue(session('submitted'));});
   afterEach(()=>vi.useRealTimers());
+  it('does not retain a review execution lock after an explicit HTTP 413 rejection',async()=>{
+    vi.mocked(api.executeLocalReview).mockRejectedValueOnce(new RequestError('body too large',413));const {wrapper}=await render();await wrapper.findAll('tbody tr')[0]!.get('select').setValue('retain_original');await wrapper.get('[data-test=review-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=review-execute]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('本项确认内容超过上限，服务端未接受');expect(wrapper.text()).not.toContain('提交回执未确认');expect([...Array(localStorage.length)].map((_,index)=>localStorage.key(index)).some(key=>key?.endsWith(':pending'))).toBe(false);expect(wrapper.findAll('tbody tr')[0]!.get('select').attributes('disabled')).toBeUndefined();expect(api.executeLocalReview).toHaveBeenCalledTimes(1);
+  });
   it('returns an admission review to its exact saved batch so a collection child resolves back to the collection',async()=>{
     const target={kind:'admission' as const,planId:'saved plan',itemKey:'item-one'};
     vi.mocked(api.fetchLocalReviewTarget).mockResolvedValue({target,creatorId:17,title:'原目录',eligible:true,reason:null,sessionId:null});

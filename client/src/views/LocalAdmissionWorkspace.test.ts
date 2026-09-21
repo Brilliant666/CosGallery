@@ -3,6 +3,7 @@ import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { createMemoryHistory,createRouter } from 'vue-router';
 import LocalAdmissionWorkspace from './LocalAdmissionWorkspace.vue';
 import * as api from '../api/local-admission';
+import { RequestError } from '../api/http';
 import type { AdmissionBatch,AdmissionCollection,AdmissionItem,AdmissionWorkspace } from '../types/local-admission';
 vi.mock('../api/local-admission');
 vi.mock('../api/source-evidence',()=>({fetchSourceEvidence:vi.fn()}));
@@ -20,6 +21,24 @@ describe('independent multi-creator admission workspace',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
   afterEach(()=>vi.useRealTimers());
+  it('fills only undecided safe A items without overwriting manual identities, skips, titles, primary choices or ads',async()=>{
+    const work={workId:91,title:'已选作品',catalogNo:1,images:2,videos:0,thumbnailUrl:null,primaryLocalWorkId:19,localState:'available',originalDirectories:['原目录'],sources:[]};
+    const records=[{...item('existing'),candidates:[work]},item('skip'),{...item('edited'),suggestedAction:{key:'edited',action:'new' as const,displayTitle:'上次名称',primary:true,approvedAds:['492.jpg']}},item('copy'),item('undecided'),item('candidate','B'),item('complex','D')];
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:records.length,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-existing] select').setValue('existing');await button(wrapper,'候选：已选作品 · 2 图 / 0 视频').trigger('click');await wrapper.get('[data-test=admission-item-skip] select').setValue('skip');
+    const edited=wrapper.get('[data-test=admission-item-edited]');await edited.get('input:not([type=checkbox])').setValue('用户修改的标题');await edited.get('.item-ads input[value="492.jpg"]').setValue(false);await edited.get('.item-ads input[value="附件/推广.txt"]').setValue(true);
+    await wrapper.get('[data-test=admission-item-copy] select').setValue('same-as');await wrapper.get('[data-test=admission-item-copy]').findAll('select')[1]!.setValue('edited');
+    await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=collection-select-safe]').trigger('click');
+    expect(wrapper.get('[data-test=admission-item-candidate] select').element.value).toBe('defer');expect(wrapper.get('[data-test=admission-item-complex] select').element.value).toBe('defer');
+    await wrapper.get('[data-test=collection-confirm]').trigger('click');for(const input of wrapper.get('[role=dialog]').findAll('input'))await input.setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    const actions=vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1].batches[0]!.actions;
+    expect(actions[0]).toMatchObject({action:'existing',workId:91});expect(actions[1]).toMatchObject({action:'skip',approvedAds:[]});expect(actions[2]).toMatchObject({action:'new',displayTitle:'用户修改的标题',primary:true,approvedAds:['附件/推广.txt']});expect(actions[3]).toMatchObject({action:'same-as',sameAsKey:'edited'});expect(actions[4]).toMatchObject({action:'new'});expect(actions.slice(5).map(action=>action.action)).toEqual(['defer','defer']);
+  });
+  it('releases a conclusively rejected oversized collection payload instead of locking it as an uncertain receipt',async()=>{
+    vi.mocked(api.executeAdmissionCollection).mockRejectedValueOnce(new RequestError('Request failed with status 413',413));
+    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=ads-clear-all]').trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('本批确认内容超过上限，请分小批');expect(wrapper.text()).not.toContain('执行回执尚未确认');expect(localStorage.getItem('cosgallery:admission:collection:collection-one')).toBeNull();expect(wrapper.get('[data-test=collection-select-safe]').attributes('disabled')).toBeUndefined();expect(api.executeAdmissionCollection).toHaveBeenCalledTimes(1);
+  });
   it('previews two creator scopes once without individual execute calls or automatically creating identities',async()=>{
     const {wrapper}=await render();expect(wrapper.get('[data-folder="未明确身份"] input[type=checkbox]').attributes('disabled')).toBeDefined();
     await wrapper.get('[data-folder="甲别名"] input[type=checkbox]').setValue(true);await wrapper.get('[data-folder="博主乙"] input[type=checkbox]').setValue(true);await flushPromises();

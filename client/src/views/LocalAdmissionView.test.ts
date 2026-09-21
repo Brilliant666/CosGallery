@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRouter, createMemoryHistory } from 'vue-router';
 import LocalAdmissionView from './LocalAdmissionView.vue';
 import * as api from '../api/local-admission';
+import { RequestError } from '../api/http';
 import * as evidence from '../api/source-evidence';
 import type { AdmissionBatch, AdmissionDirectories, AdmissionItem, AdmissionWork } from '../types/local-admission';
 vi.mock('../api/local-admission');
@@ -18,6 +19,20 @@ describe('web local admission without CLI or raw identity inputs',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchAdmissionSettings).mockResolvedValue({waitingRoot:'R:/等待区',galleryRoot:'R:/正式',archiveInboxRoot:'R:/压缩包'});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(_id,parent)=>dir(parent??null));vi.mocked(api.fetchAdmissionBatches).mockResolvedValue({items:[],total:0,page:1,pageSize:20});vi.mocked(api.fetchAdmissionBatch).mockResolvedValue(batch());vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[item(),item('skip'),item('defer')],total:3,page:1,pageSize:100});vi.mocked(api.createAdmissionPreview).mockResolvedValue(batch());vi.mocked(api.executeAdmission).mockResolvedValue(batch('queued'));vi.mocked(api.fetchAdmissionWorks).mockResolvedValue({items:[work],total:1,page:1,pageSize:20});vi.mocked(evidence.fetchSourceEvidence).mockResolvedValue({items:[],total:0,page:1,limit:20});});
   afterEach(()=>{vi.useRealTimers();});
+  it('bulk-selects only undecided A items and preserves manual choices and edited new-work fields',async()=>{
+    const records=[{...item('existing'),candidates:[work]},item('skip'),{...item('edited'),ads:[{relativePath:'492.jpg',size:12,automatic:true},{relativePath:'指定广告.txt',size:8}],suggestedAction:{key:'edited',action:'new' as const,displayTitle:'上次名称',primary:true,approvedAds:['492.jpg']}},item('copy'),item('undecided'),item('candidate','B'),item('complex','D')];
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:records.length,page:1,pageSize:100});const {wrapper}=await render('?batch=batch-synthetic');
+    await wrapper.get('[data-test=admission-item-existing] select').setValue('existing');await button(wrapper,`候选：${work.title} · 24 图 / 0 视频`).trigger('click');await wrapper.get('[data-test=admission-item-skip] select').setValue('skip');
+    const edited=wrapper.get('[data-test=admission-item-edited]');await edited.get('input:not([type=checkbox])').setValue('用户修改的标题');await edited.get('.item-ads input[value="492.jpg"]').setValue(false);await edited.get('.item-ads input[value="指定广告.txt"]').setValue(true);
+    await wrapper.get('[data-test=admission-item-copy] select').setValue('same-as');await wrapper.get('[data-test=admission-item-copy]').findAll('select')[1]!.setValue('edited');
+    await button(wrapper,'A 组全部选择新独立作品').trigger('click');await button(wrapper,'A 组全部选择新独立作品').trigger('click');
+    expect(wrapper.get('[data-test=admission-item-candidate] select').element.value).toBe('defer');expect(wrapper.get('[data-test=admission-item-complex] select').element.value).toBe('defer');
+    await button(wrapper,'核对本批并确认执行').trigger('click');for(const input of wrapper.get('[role=dialog]').findAll('input'))await input.setValue(true);await wrapper.get('[data-test=admission-execute]').trigger('click');await flushPromises();
+    const actions=vi.mocked(api.executeAdmission).mock.calls[0]![1].actions;expect(actions[0]).toMatchObject({action:'existing',workId:91});expect(actions[1]).toMatchObject({action:'skip',approvedAds:[]});expect(actions[2]).toMatchObject({action:'new',displayTitle:'用户修改的标题',primary:true,approvedAds:['指定广告.txt']});expect(actions[3]).toMatchObject({action:'same-as',sameAsKey:'edited'});expect(actions[4]).toMatchObject({action:'new'});expect(actions.slice(5).map(action=>action.action)).toEqual(['defer','defer']);
+  });
+  it('clears an oversized single-creator request after HTTP 413 so a smaller scope can be prepared',async()=>{
+    vi.mocked(api.executeAdmission).mockRejectedValueOnce(new RequestError('body too large',413));const {wrapper}=await render('?batch=batch-synthetic');await wrapper.get('[data-test=admission-item-first] select').setValue('new');await button(wrapper,'核对本批并确认执行').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=admission-execute]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('本批确认内容超过上限，请分小批');expect(wrapper.text()).not.toContain('上次执行回执尚未确认');expect(localStorage.getItem('cosgallery:admission:pending:batch-synthetic')).toBeNull();expect(wrapper.get('[data-test=admission-item-first] fieldset').attributes('disabled')).toBeUndefined();
+  });
   it('redirects a collection child deep link to the central collection without allowing a separate execution',async()=>{
     vi.mocked(api.fetchAdmissionBatch).mockResolvedValue({...batch(),collectionId:'collection-one'});const {router}=await render('?batch=batch-synthetic');expect(router.currentRoute.value.name).toBe('local-admission-workspace');expect(router.currentRoute.value.query.collection).toBe('collection-one');expect(api.executeAdmission).not.toHaveBeenCalled();expect(api.fetchAdmissionItems).not.toHaveBeenCalled();
   });
