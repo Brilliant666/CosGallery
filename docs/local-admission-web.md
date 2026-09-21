@@ -19,7 +19,13 @@ This is local-server file handling, not browser media upload or a cloud sync ser
 4. Choose new / existing / same-as-this-batch, main or secondary copy, skip or defer.
    Existing canonical titles remain. Same-title independent Works are supported.
    No general merging of two existing Works is offered.
-5. Confirm the source/destination scope and usable-version choice. Ads require an
+5. Confirm the source/destination scope. Admission intent is not a declaration that
+   this copy is complete or sufficient for acquisition. The separate, collapsed
+   **来源补缺策略（可选）** defaults off: admission still works, and later source
+   association remains allowed. Enabling it explicitly authorizes qualifying local
+   fulfillment; existing sources still require individual selection. Future source
+   imports may reuse the saved policy only through the existing reliable matching
+   and local-validity checks. No older decision is rewritten. Ads require an
    **additional explicit confirmation of the exact relative-file list**; unchecked attachments
    stay. Batch provenance alone never satisfies downloads. Exact version acceptance
    requires selecting the existing Work and specific sources, using original claim
