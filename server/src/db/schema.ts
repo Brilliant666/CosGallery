@@ -1,6 +1,8 @@
 import { resourceCatalogSchemaSql } from './resource-catalog-schema.js';
 import { workSortSchemaSql } from './work-sort-schema.js';
 import { sourceEvidenceSchemaSql } from './source-evidence-schema.js';
+import { localAdmissionWebSchemaSql } from './local-admission-web-schema.js';
+import { localReviewWebSchemaSql } from './local-review-web-schema.js';
 
 export const schemaSql = `
 PRAGMA foreign_keys = ON;
@@ -608,4 +610,6 @@ CREATE INDEX IF NOT EXISTS idx_local_ingest_file_observations_creator
 ${resourceCatalogSchemaSql}
 ${workSortSchemaSql}
 ${sourceEvidenceSchemaSql}
+${localAdmissionWebSchemaSql}
+${localReviewWebSchemaSql}
 `;

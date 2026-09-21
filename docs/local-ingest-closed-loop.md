@@ -146,9 +146,9 @@ pnpm --dir server exec tsx src/scripts/local-ingest.ts jobs
 可保留类型限于逐文件明确批准的：
 
 - `pixel_limit`：仅 JPEG，默认 Sharp 必须实际报告像素限制。正常 JPEG 或其他解码损坏不能借此绕过；不关闭或提高像素安全上限。
-- `attachment`：仅 PDF，作为附件完整保留，不转换成图片、不算广告。
+- `attachment`：精确指定的 PDF、TXT、URL，作为附件完整保留，不转换成图片、不打开 URL、不算广告。网页审核中，未被明确批准移出的 TXT/URL 默认按此方式保留；这不改变普通 Stage3 的原有流程，也不放行未知文件类型。
 
-以上沿用 `_未支持格式原件` 和现有索引排除机制，不另建原件库。图片原件计入 `retainedOriginalCount`；PDF 单列 `retainedAttachmentCount`，不计入可展示图片/视频、媒体字节或未支持图片数量。原有 HEIC/HEIF/TIFF 自动保留和旧手工保留记录兼容，不重新解释旧决定。
+以上沿用 `_未支持格式原件` 和现有索引排除机制，不另建原件库。图片原件计入 `retainedOriginalCount`；附件单列 `retainedAttachmentCount`，不计入可展示图片/视频、媒体字节或未支持图片数量。原有 HEIC/HEIF/TIFF 自动保留和旧手工保留记录兼容，不重新解释旧决定。
 
 人工核对预览后只把该完整计划的 `confirmed` 改为 `true` 再提交。服务重新核对源包、身份映射、路径、解压标记和文件清单；首次接受后把版本 1 的不可变 payload、hash、原失败及确认时间写入原 job 的 `summary_json.reviewRecovery`，无需新增迁移。重试必须使用同一 payload，不允许补写新例外覆盖原确认。
 

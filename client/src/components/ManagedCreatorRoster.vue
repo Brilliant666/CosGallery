@@ -26,7 +26,7 @@
         <div class="card-metric"><small>本地作品</small><strong>{{ creator.localWorks }}</strong></div>
         <div class="card-metric"><small>已关联</small><strong>{{ creator.matchedWorks }}</strong></div>
         <div class="card-metric" :class="{missing:creator.missingWorks > 0}"><small>待收录</small><strong>{{ creator.missingWorks }}</strong></div>
-        <div class="card-actions"><button type="button" @click="openCreator(creator.id, 'ledger')">查看账本</button><button type="button" @click="emit('resource-catalog', creator.id)">资源目录</button><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理资料</button></div>
+        <div class="card-actions"><button type="button" @click="openCreator(creator.id, 'ledger')">查看账本</button><button type="button" @click="emit('resource-catalog', creator.id)">资源目录</button><a :href="`/local-admission/${creator.id}`" :aria-label="`本地导入 ${creator.name}`">本地导入</a><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理资料</button></div>
       </article>
     </div>
     <p v-if="payload && !payload.items.length">没有符合条件的博主。</p>
@@ -329,4 +329,7 @@ label{display:grid;gap:.3rem;font-size:.8rem}input,select,button{font:inherit}in
 @media(max-width:640px){.roster{padding:.8rem}.roster-edit{grid-template-columns:1fr}.roster-heading{align-items:start}.roster-dialog{padding:1rem}.roster-filters label{flex:1 1 8rem}.roster-filters .search{flex-basis:100%}}
 .creator-cards{display:grid;gap:1rem;margin-top:1.2rem}.creator-card{display:grid;grid-template-columns:minmax(15rem,2.5fr) repeat(4,minmax(4rem,.65fr)) auto;align-items:center;gap:1rem;padding:1.3rem;border:1px solid var(--border);border-radius:1rem;background:var(--surface);box-shadow:0 2px 3px #00000012}.card-name{display:flex;align-items:center;flex-wrap:wrap;gap:.5rem}.card-identity p{margin:.5rem 0 0;color:var(--muted);font-size:.8rem}.badge{border-radius:1rem;background:var(--bg);padding:.2rem .5rem;font-size:.7rem;font-weight:700}.badge.liked{background:#fee2e2;color:#dc2626}.badge.kept{background:#fef3c7;color:#92400e}.badge.rating{background:#6b7280;color:white}.badge.R15{background:#55718f}.badge.R18{background:#b72d45}.card-metric small{display:block;color:var(--muted);font-size:.75rem}.card-metric strong{display:block;margin-top:.3rem;font-size:1.15rem}.card-metric.missing strong{color:#d97706}.card-actions{display:flex;flex-wrap:wrap;gap:.5rem}.card-identity{min-width:0;overflow-wrap:anywhere}
 @media(max-width:1100px){.creator-card{grid-template-columns:repeat(4,minmax(0,1fr))}.card-identity{grid-column:1/-1}.card-actions{grid-column:1/-1;justify-content:flex-end}}
+</style>
+<style scoped>
+.card-actions a{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:.5rem;background:var(--surface);color:var(--accent);padding:.55rem .85rem;text-decoration:none;white-space:nowrap}.card-actions a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>

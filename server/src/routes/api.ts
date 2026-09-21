@@ -16,6 +16,8 @@ import { ArchiveMetadataTaskService } from '../services/archive-metadata-task-se
 import { createCreatorSyncReadRouter } from './creator-sync-read-routes.js';
 import { createResourceCatalogRouter } from './resource-catalog-routes.js';
 import { createSourceEvidenceRouter } from './source-evidence-routes.js';
+import { createLocalAdmissionWebRouter } from './local-admission-web-routes.js';
+import { createLocalReviewRouter } from './local-review-routes.js';
 import {
   localIngestService,
   type LocalIngestJob,
@@ -62,6 +64,8 @@ function managedResponse(response: express.Response, action: () => unknown, stat
 }
 
 const managedAccess = requireCapability('canManageLibrary', 'Admin access is required.');
+router.use('/admin/local-admission', managedAccess, createLocalAdmissionWebRouter());
+router.use('/admin/local-review', managedAccess, createLocalReviewRouter());
 router.use('/admin/archive-catalog/source-evidence', managedAccess, createSourceEvidenceRouter());
 router.use('/admin/archive-catalog/resource-catalog', requireCapability('canAccessSettings', 'Admin access is required.'), createResourceCatalogRouter());
 router.use('/admin/archive-catalog', requireCapability('canAccessSettings', 'Admin access is required.'), createCreatorSyncReadRouter());

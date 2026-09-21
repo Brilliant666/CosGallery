@@ -1,5 +1,8 @@
 # Local folder admission and explicit mapping (V1)
 
+The web continuation is documented in [Local admission and review in the web UI](local-admission-web.md).
+It delegates to the same immutable plans and checkpoints; the CLI below remains supported.
+
 This is an application CLI, not the research prototype. It accepts already-extracted,
 explicitly selected work directories. No queues, downloads, archive jobs or source
 collection are created by admission. Production execution is a separate authorization.

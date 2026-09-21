@@ -22,6 +22,8 @@ import { useAuthStore } from '../stores/auth';
 import { pinia } from '../stores/pinia';
 import SettingsView from '../views/SettingsView.vue';
 import ArchiveCatalogView from '../views/ArchiveCatalogView.vue';
+import LocalAdmissionView from '../views/LocalAdmissionView.vue';
+import LocalReviewView from '../views/LocalReviewView.vue';
 import type { AuthCapabilities } from '../types/api';
 
 type RouteCapability = keyof AuthCapabilities;
@@ -125,6 +127,18 @@ export const router = createRouter({
       meta: {
         requiredCapability: 'canAccessSettings'
       }
+    },
+    {
+      path: '/local-admission/:creatorId',
+      name: 'local-admission',
+      component: LocalAdmissionView,
+      meta: { requiredCapability: 'canAccessSettings' }
+    },
+    {
+      path: '/local-review',
+      name: 'local-review',
+      component: LocalReviewView,
+      meta: { requiredCapability: 'canAccessSettings' }
     },
     {
       path: '/moments/:id',

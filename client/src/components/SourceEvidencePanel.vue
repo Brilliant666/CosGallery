@@ -53,8 +53,10 @@
         </form>
         <p v-else-if="selected.identityState === 'conflict'" class="error">身份冲突：保留资料，不允许在这里强制改绑或据此接纳。需先核对相冲突的具体页面身份。</p>
         <template v-if="selected.identityState === 'confirmed' && selected.creatorId === creator.id">
-          <details class="admission-handoff"><summary>准备本地接纳预览</summary>
-            <ol><li>将手工获取的文件解压、分套；在下方填入已准备的范围。</li><li>下载 scope，交给 Codex 或原 CLI 的 preview；核对已有 Work 候选、原目录、目标与版本差异。</li><li>另行集中确认实际计划后，才执行原 apply / resume。此处不会移动文件或满足任务。</li></ol>
+          <div class="actions"><a :href="`/local-admission/${creator.id}?sourceEvidenceId=${selected.id}`">准备本地接纳</a></div>
+          <p class="hint">进入本地导入页面选择已解压目录、查看预览并集中确认。博主及本份资料自动带入；批次来源不自动满足下载需求。</p>
+          <details class="admission-handoff"><summary>高级维护：下载 CLI 预览 scope</summary>
+            <p class="hint">正常入库使用上方网页入口；以下保留为已有 CLI 的高级范围导出。</p>
             <form class="evidence-form" aria-label="准备本地接纳预览" @submit.prevent="downloadScope">
               <label>已解压作品所在父目录<input v-model="scopeRoot" required placeholder="本机绝对路径" /></label>
               <label>本批一级作品目录（一行一个原名）<textarea v-model="scopeDirectories" required rows="4" placeholder="保留目录原名，不要填写子路径" /></label>
@@ -317,4 +319,7 @@ onBeforeUnmount(() => { generation++; });
 <style scoped>
 .evidence-form select{width:100%;min-width:0;box-sizing:border-box;padding:.5rem;border:1px solid var(--border);border-radius:.4rem;background:var(--surface);color:var(--text);font:inherit}
 .source-evidence{margin-top:1rem;padding:.8rem;border:1px solid var(--border);border-radius:.6rem;overflow-wrap:anywhere}.source-evidence summary{cursor:pointer;font-weight:600}.panel-body{display:grid;gap:.8rem;margin-top:.8rem}.hint{font-size:.88rem;color:var(--muted)}.error{color:var(--danger,#c44)}.actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}button{padding:.45rem .7rem;border:1px solid var(--border);border-radius:.5rem;background:var(--surface);color:var(--text);cursor:pointer}button:disabled{opacity:.5;cursor:default}.evidence-list,.entry-list,.raw-list{margin:0;padding:0;list-style:none}.evidence-list li+li{margin-top:.45rem}.evidence-list button{display:grid;gap:.2rem;text-align:left;width:100%;overflow-wrap:anywhere}.evidence-list button[aria-pressed=true]{border-color:var(--accent,#847)}.evidence-list span{font-size:.8rem}.evidence-form,.evidence-form fieldset{display:grid;gap:.65rem}.evidence-form fieldset{border:0;padding:0;min-width:0}.evidence-form label{display:grid;gap:.25rem}.evidence-form input,.evidence-form textarea{width:100%;min-width:0;box-sizing:border-box;padding:.5rem;border:1px solid var(--border);border-radius:.4rem;background:var(--surface);color:var(--text);font:inherit}.evidence-form .check{display:flex;align-items:flex-start;gap:.5rem}.check input{width:auto;margin-top:.25rem}.evidence-detail{display:grid;gap:.8rem;min-width:0;padding-top:.8rem;border-top:1px solid var(--border)}.evidence-detail h4,.evidence-detail p{margin:0}.evidence-detail dd{margin:0 0 .5rem}.evidence-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:18rem;overflow:auto;font:inherit;padding:.5rem;background:var(--surface-alt,var(--surface))}.entry-list{max-height:24rem;overflow:auto}.entry-list li{padding:.6rem 0;border-bottom:1px solid var(--border)}.admission-handoff ol{padding-left:1.3rem}details details{padding:.6rem;border:1px solid var(--border);border-radius:.4rem}details details>summary{margin-bottom:.6rem}@media(max-width:640px){.source-evidence{padding:.55rem}.actions button{flex:1 1 9rem}.evidence-form button{width:100%}}
+</style>
+<style scoped>
+.actions a{display:inline-flex;align-items:center;padding:.5rem .8rem;border:1px solid var(--accent);border-radius:.5rem;color:var(--accent);text-decoration:none}.actions a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>

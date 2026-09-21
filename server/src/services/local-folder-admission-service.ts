@@ -27,9 +27,9 @@ export const admissionPlanSchema=z.object({ version:z.literal(1),planId:z.string
 export type AdmissionPlan=z.infer<typeof admissionPlanSchema>;
 type Entry=z.infer<typeof entrySchema>;
 const recoverySchema=z.object({confirmed:z.literal(true),planId:z.string().min(1),key:z.string().min(1).max(100),reason:z.string().trim().min(1),evidence:z.string().trim().min(1),
-  removals:z.array(z.object({itemKey:z.string().min(1),entry:entrySchema,retainOriginal:z.literal(true).optional()}).strict()).min(1).max(2000)}).strict();
+  removals:z.array(z.object({itemKey:z.string().min(1),entry:entrySchema,retainOriginal:z.literal(true).optional(),approvedAdvertisement:z.literal(true).optional()}).strict()).min(1).max(2000)}).strict();
 const removalKind='admission_file_removal';
-type Removal={planId:string;itemKey:string;contentHash:string;entry:Entry;reason:string;evidence:string;retainOriginal?:true};
+type Removal={planId:string;itemKey:string;contentHash:string;entry:Entry;reason:string;evidence:string;retainOriginal?:true;approvedAdvertisement?:true};
 
 function cmp(v:string){return process.platform==='win32'?v.toLowerCase():v;}
 function json(v:unknown){return JSON.stringify(v);}
@@ -151,7 +151,7 @@ export class LocalFolderAdmissionService {
   }
 
   /** Record explicit, already-performed removals. Never deletes files or rewrites a plan. */
-  async recover(raw:unknown){
+  async recover(raw:unknown,beforeVerify?:()=>Promise<void>){
     return runAdmissionExclusive(this.db,async()=>{
       this.idle();const request=recoverySchema.parse(raw);
       const saved=this.db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(request.planId) as {payload_json:string;content_hash:string}|undefined;
@@ -165,7 +165,8 @@ export class LocalFolderAdmissionService {
         const state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key) as ItemState|undefined;
         if(!state?.work_id||!state.local_work_id||!['files_verified','indexed','completed'].includes(state.state))throw Error('Removal requires an already verified move');
         if(removal.retainOriginal&&(!['image','video'].includes(removal.entry.kind)||item.manifest.some(e=>e.relativePath.split('/')[0]===RETAINED_ORIGINALS_DIRECTORY)))throw Error('Retention requires explicit media and an unused reserved originals directory');
-        const payload:Removal={planId:plan.planId,itemKey:item.key,contentHash:saved.content_hash,entry:removal.entry,reason:request.reason,evidence:request.evidence,...(removal.retainOriginal?{retainOriginal:true as const}:{})};
+        if(removal.approvedAdvertisement&&(removal.retainOriginal||removal.entry.kind!=='other'||!['.txt','.url'].includes(path.extname(removal.entry.relativePath).toLowerCase())||state.state!=='files_verified'))throw Error('New advertisement approval is limited to exact TXT/URL entries in unfinished indexing');
+        const payload:Removal={planId:plan.planId,itemKey:item.key,contentHash:saved.content_hash,entry:removal.entry,reason:request.reason,evidence:request.evidence,...(removal.retainOriginal?{retainOriginal:true as const}:{}),...(removal.approvedAdvertisement?{approvedAdvertisement:true as const}:{})};
         const key=`admission-removal:${request.key}:${index}`;
         const old=this.db.prepare('SELECT kind,payload_json,state FROM archive_catalog_work_decisions WHERE decision_key=?').get(key) as {kind:string;payload_json:string;state:string}|undefined;
         if(old&&(old.kind!==removalKind||old.payload_json!==json(payload)||old.state!=='active'))throw Error('Recovery key differs or was revoked; explicit new decision required');
@@ -174,12 +175,15 @@ export class LocalFolderAdmissionService {
           WHERE s.work_id=? AND t.status IN ('claimed','downloading') LIMIT 1`).get(state.work_id))throw Error('Related acquisition is active');
         const ad=item.approvedAds.includes(removal.entry.relativePath);
         if(!ad&&!old){
-          if(!['image','video'].includes(removal.entry.kind))throw Error('Only original approved advertisements or explicitly failed media may be removed');
+          if(!['image','video'].includes(removal.entry.kind)&&!removal.approvedAdvertisement)throw Error('Only original approved advertisements, explicitly reviewed TXT/URL advertisements or explicitly failed media may be removed');
           const local=this.db.prepare('SELECT post_id FROM archive_catalog_local_works WHERE id=?').get(state.local_work_id) as {post_id:number|null};
           if(state.state!=='files_verified'||local.post_id!==null||this.db.prepare("SELECT id FROM archive_catalog_local_fulfillments WHERE local_work_id=? AND state='active'").get(state.local_work_id))throw Error('Media recovery is limited to unfinished, unfulfilled indexing');
         }
         pending.push({key,payload,workId:state.work_id,localId:state.local_work_id});
       }
+      // Web callers may perform exact journaled moves only after all plan/claim guards.
+      // The callback is internal code, never request-provided; original CLI behavior is unchanged.
+      await beforeVerify?.();
       // Validate ALL affected items before writing any decision. No broad ignore flag.
       for(const key of new Set(pending.map(r=>r.payload.itemKey))){
         const item=plan.items.find(i=>i.key===key)!;
@@ -303,8 +307,8 @@ export class LocalFolderAdmissionService {
       const expected=(await assertPathInsideLocalIngestRoot(plan.galleryRoot,destination.creatorDirectory,{directChild:true})).relative;
       if(cmp(expected)!==cmp(plan.creatorDirectory))throw Error('Destination is no longer the selected legal creator directory');
       // Validate every untouched source/target before the first move.
-      for(const item of plan.items){if(await exists(item.targetPath))throw Error('Target exists; never overwrite');
-        if(hash(await inventoryAdmissionDirectory(path.join(plan.inputRoot,item.sourceRelativePath)))!==hash(item.manifest))throw Error('Source changed since preview');}
+      for(const item of plan.items){if(await exists(item.targetPath))throw Error(`${item.sourceRelativePath}: Target exists; never overwrite`);
+        if(hash(await inventoryAdmissionDirectory(path.join(plan.inputRoot,item.sourceRelativePath)))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);}
       this.db.exec('SAVEPOINT admission_plan');
       try {
         this.db.prepare('INSERT INTO archive_local_admission_plans(plan_id,payload_json,content_hash) VALUES(?,?,?)').run(plan.planId,payload,hash(plan));
