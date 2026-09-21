@@ -3,6 +3,7 @@ import { workSortSchemaSql } from './work-sort-schema.js';
 import { sourceEvidenceSchemaSql } from './source-evidence-schema.js';
 import { localAdmissionWebSchemaSql } from './local-admission-web-schema.js';
 import { localReviewWebSchemaSql } from './local-review-web-schema.js';
+import { localAdmissionCollectionSchemaSql } from './local-admission-collection-schema.js';
 
 export const schemaSql = `
 PRAGMA foreign_keys = ON;
@@ -612,4 +613,5 @@ ${workSortSchemaSql}
 ${sourceEvidenceSchemaSql}
 ${localAdmissionWebSchemaSql}
 ${localReviewWebSchemaSql}
+${localAdmissionCollectionSchemaSql}
 `;

@@ -1,0 +1,10 @@
+<template><details @toggle="toggle"><summary>来源资料（可选）</summary><p>只记本批出处，不等于作品映射或来源已满足。</p><label>当前博主的已确认资料<select v-model="model"><option :value="null">无来源资料，本地先接纳</option><option v-for="source in sources" :key="source.id" :value="source.id">{{ source.pageTitle||source.platform }}</option></select></label><button v-if="more" :disabled="loading" @click="load(page+1)">更多资料</button><p v-if="error">{{ error }}；可继续本地先接纳。</p></details></template>
+<script setup lang="ts">
+import { ref,watch,onBeforeUnmount } from 'vue';
+import { fetchSourceEvidence,type SourceEvidenceObservation } from '../api/source-evidence';
+const props=defineProps<{creatorId:number}>(),model=defineModel<number|null>({default:null}),sources=ref<SourceEvidenceObservation[]>([]),page=ref(0),more=ref(false),loading=ref(false),error=ref('');let generation=0;
+async function load(next:number){const current=generation;loading.value=true;error.value='';try{const data=await fetchSourceEvidence(props.creatorId,next);if(current!==generation)return;const accepted=data.items.filter(item=>item.creatorId===props.creatorId&&item.identityState==='confirmed');sources.value=next===1?accepted:[...sources.value,...accepted];page.value=next;more.value=next*data.limit<data.total;}catch(cause){if(current===generation)error.value=cause instanceof Error?cause.message:'资料读取失败';}finally{if(current===generation)loading.value=false;}}
+function toggle(event:Event){if((event.target as HTMLDetailsElement).open&&!page.value&&!loading.value)void load(1);}
+watch(()=>props.creatorId,()=>{generation++;sources.value=[];page.value=0;more.value=false;loading.value=false;model.value=null;});onBeforeUnmount(()=>generation++);
+</script>
+<style scoped>details{margin:.8rem 0;font-size:.82rem}summary{cursor:pointer}label{display:grid;gap:.4rem}select,button{font:inherit;padding:.55rem .7rem;border:1px solid #8884;border-radius:.5rem;background:var(--bg,#fafafa);color:inherit;max-width:100%}p{opacity:.75}</style>

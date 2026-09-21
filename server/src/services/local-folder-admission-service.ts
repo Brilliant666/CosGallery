@@ -291,6 +291,19 @@ export class LocalFolderAdmissionService {
     postRepository.setPostItems(post.id,kept.map((m,n)=>({imageId:m.image_id,position:n+1})));
   }
 
+  /** Read-only preparation for an all-child confirmation; apply repeats these guards under its execution lock. */
+  async verifyUnstarted(raw:unknown):Promise<void> {
+    const plan=this.validate(raw);this.idle();
+    await regularDirectory(plan.inputRoot);await regularDirectory(plan.galleryRoot);
+    for(const item of plan.items){
+      const source=path.join(plan.inputRoot,item.sourceRelativePath);
+      await assertPathInsideLocalIngestRoot(plan.inputRoot,source,{directChild:true});
+      await assertPathInsideLocalIngestRoot(plan.galleryRoot,item.targetPath);
+      if(await exists(item.targetPath))throw Error(`${item.sourceRelativePath}: Target exists; never overwrite`);
+      if(hash(await inventoryAdmissionDirectory(source))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);
+    }
+  }
+
   /** Each DB checkpoint commits before/after a filesystem step, never pretending rename is part of SQLite. */
   async apply(raw:unknown,options:{stopAfterMove?:boolean}={}) {
     return runAdmissionExclusive(this.db,()=>this.applyConfirmed(raw,options));

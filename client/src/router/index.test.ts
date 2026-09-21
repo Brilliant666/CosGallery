@@ -370,6 +370,8 @@ describe('router', () => {
     });
 
     expect(canAccessRoute(router.resolve('/archive-catalog'))).toBe(false);
+    expect(canAccessRoute(router.resolve('/local-admission'))).toBe(false);
+    expect(canAccessRoute(router.resolve('/local-admission/17'))).toBe(false);
 
     authStore.$patch({
       capabilities: {
@@ -378,6 +380,8 @@ describe('router', () => {
       }
     });
     expect(canAccessRoute(router.resolve('/archive-catalog'))).toBe(true);
+    expect(canAccessRoute(router.resolve('/local-admission'))).toBe(true);
+    expect(canAccessRoute(router.resolve('/local-admission/17'))).toBe(true);
   });
 
   it('keeps shared folder routes outside normal app capability checks', () => {

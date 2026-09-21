@@ -23,6 +23,7 @@ import { pinia } from '../stores/pinia';
 import SettingsView from '../views/SettingsView.vue';
 import ArchiveCatalogView from '../views/ArchiveCatalogView.vue';
 import LocalAdmissionView from '../views/LocalAdmissionView.vue';
+import LocalAdmissionWorkspace from '../views/LocalAdmissionWorkspace.vue';
 import LocalReviewView from '../views/LocalReviewView.vue';
 import type { AuthCapabilities } from '../types/api';
 
@@ -127,6 +128,12 @@ export const router = createRouter({
       meta: {
         requiredCapability: 'canAccessSettings'
       }
+    },
+    {
+      path: '/local-admission',
+      name: 'local-admission-workspace',
+      component: LocalAdmissionWorkspace,
+      meta: { requiredCapability: 'canAccessSettings' }
     },
     {
       path: '/local-admission/:creatorId',

@@ -8,7 +8,7 @@ import { databaseManager } from '../db/database.js';
 import { LocalFolderAdmissionService, admissionPlanSchema, type AdmissionPlan } from './local-folder-admission-service.js';
 import { localIngestSettingsService } from './local-ingest-settings-service.js';
 import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/local-ingest-paths.js';
-import { LOCAL_ADMISSION_LOCK_KEY } from './local-admission-lock.js';
+import { LOCAL_ADMISSION_LOCK_KEY, runAdmissionCollectionExclusive } from './local-admission-lock.js';
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 
 const ROOT_KEY = 'local-admission.waiting-root.v1';
@@ -24,6 +24,9 @@ const actionSchema = z.object({ key:z.string().min(1), action:z.enum(['new','exi
 export const webExecuteSchema = z.object({ requestKey:z.string().min(1).max(150), confirmed:z.literal(true), acceptExistingVersion:z.boolean(),
   adsConfirmed:z.literal(true).optional(), actions:z.array(actionSchema).min(1).max(500) }).strict();
 export const webResumeSchema = z.object({requestKey:z.string().min(1).max(150),confirmed:z.literal(true)}).strict();
+export const collectionPreviewSchema=z.object({scopes:z.array(webPreviewSchema).min(1).max(100)}).strict();
+export const collectionExecuteSchema=z.object({requestKey:z.string().min(1).max(150),confirmed:z.literal(true),
+  batches:z.array(webExecuteSchema.omit({requestKey:true,confirmed:true}).extend({batchId:z.string().uuid()})).min(1).max(100)}).strict();
 type Preview = Awaited<ReturnType<LocalFolderAdmissionService['preview']>>;
 type PreviewItem = Preview['items'][number];
 type Source = {sourceWorkId:number;title:string;sourceOrder:number|null;mediaSummary:string|null;taskIds:number[]};
@@ -34,11 +37,25 @@ type Batch = {id:string;creator_id:number;input_root:string;source_evidence_id:n
 type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waitingRoot:string;workFacts:Record<string,string>;sourceFacts:Record<string,string>};
 type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTitle:string;group:'A'|'B'|'C'|'D';
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
-  ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>};
+  ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>;
+  structureWarnings?:string[];needsBoundaryReview?:boolean};
+type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[]};
+type PreparedExecution={batch:Batch;request:z.infer<typeof webExecuteSchema>;plan:AdmissionPlan|null;saved:Record<string,unknown>[]};
+type Collection={id:string;state:string;created_at:string;updated_at:string;confirmed_json:string|null;error:string|null;owner_pid:number|null;owner_token:string|null};
 const advertisementRulesVersion=1;
 function advertisementCandidates(manifest:PreviewItem['manifest']):Summary['ads'] {
   return manifest.filter(isAdmissionAdvertisementCandidate).map(e=>({relativePath:e.relativePath,size:e.size,
     ...(e.kind==='image'&&isKnownAdvertisementImage(e.relativePath)?{automatic:true}:{})}));
+}
+function structureWarnings(manifest:PreviewItem['manifest']):string[] {
+  const media=manifest.filter(e=>['image','video'].includes(e.kind)&&!isKnownAdvertisementImage(e.relativePath));
+  const branches=new Set(media.filter(e=>e.relativePath.includes('/')).map(e=>e.relativePath.split('/')[0]));
+  const warnings:string[]=[];
+  if(branches.size>1)warnings.push(`包含 ${branches.size} 个有媒体的一级分支，可能是多套合集；请确认作品边界后再选择整套接纳。`);
+  if(media.some(e=>e.relativePath.split('/').length>2))warnings.push('存在多层媒体子目录；这里只保留结构，不会自动按子目录拆分作品。');
+  const rootKinds=new Set(media.filter(e=>!e.relativePath.includes('/')).map(e=>e.kind));
+  if(media.some(e=>e.relativePath.includes('/')&&rootKinds.size>0&&!rootKinds.has(e.kind)))warnings.push('图片和视频分布在不同层级，请确认是否属于同一套。');
+  return warnings;
 }
 const now = () => new Date().toISOString();
 const hash = (value:unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -95,6 +112,36 @@ export class LocalAdmissionWebService {
     }
     return {root,parent:parent??null,creator,items};
   }
+  async workspace() {
+    const root=await this.validateRoot();
+    const names=this.db.prepare(`SELECT id creatorId,canonical_name creatorName,canonical_name matchedName,'canonical' matchKind
+      FROM archive_catalog_creators WHERE is_active=1 UNION ALL SELECT c.id,c.canonical_name,a.alias,'alias'
+      FROM archive_catalog_creator_aliases a JOIN archive_catalog_creators c ON c.id=a.creator_id WHERE c.is_active=1`).all();
+    const normalize=(name:string)=>name.normalize('NFKC').replace(/\s+/g,'').toLocaleLowerCase();
+    const items=[];
+    for(const entry of (await fs.readdir(root,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans-CN'))){
+      if((!entry.isDirectory()&&!entry.isSymbolicLink())||reservedDirectory(entry.name))continue;
+      let reason:string|undefined;
+      try{await strictDirectory(path.join(root,entry.name));await assertPathInsideLocalIngestRoot(root,path.join(root,entry.name),{directChild:true});}catch(e){reason=message(e);}
+      const matchesByCreator=new Map<number,{creatorId:number;creatorName:string;matchedName:string;matchKind:'canonical'|'alias'}>();
+      for(const row of names.filter(row=>normalize(String(row.matchedName))===normalize(entry.name))) {
+        const creatorId=Number(row.creatorId),matchKind=String(row.matchKind) as 'canonical'|'alias';
+        if(!matchesByCreator.has(creatorId)||matchKind==='canonical')matchesByCreator.set(creatorId,{
+          creatorId,creatorName:String(row.creatorName),matchedName:String(row.matchedName),matchKind});
+      }
+      const matches=[...matchesByCreator.values()];
+      items.push({name:entry.name,selectable:!reason,reason,matches});
+    }
+    return {...this.settings(),items};
+  }
+  creators(q='',page=1,pageSize=20) {
+    page=Math.max(1,page);pageSize=Math.max(1,Math.min(50,pageSize));const query=q.trim().toLocaleLowerCase();
+    const where=`c.is_active=1 AND (?='' OR instr(lower(c.canonical_name),?)>0 OR EXISTS
+      (SELECT 1 FROM archive_catalog_creator_aliases a WHERE a.creator_id=c.id AND instr(lower(a.alias),?)>0))`;
+    const args=[query,query,query],total=Number(this.db.prepare(`SELECT COUNT(*) n FROM archive_catalog_creators c WHERE ${where}`).get(...args)!.n);
+    const rows=this.db.prepare(`SELECT c.id,c.canonical_name name FROM archive_catalog_creators c WHERE ${where} ORDER BY c.canonical_name,c.id LIMIT ? OFFSET ?`).all(...args,pageSize,(page-1)*pageSize);
+    return {page,pageSize,total,items:rows.map(row=>({id:Number(row.id),name:String(row.name),aliases:this.db.prepare('SELECT alias FROM archive_catalog_creator_aliases WHERE creator_id=? ORDER BY alias').all(row.id).map(a=>String(a.alias))}))};
+  }
   private workFact(id:number) { return hash({work:this.db.prepare('SELECT id,creator_id,display_title,primary_local_work_id,title_policy FROM archive_catalog_works WHERE id=?').get(id),
     copies:this.db.prepare(`SELECT l.id,l.work_id,l.post_id,l.is_active,l.identity_policy,l.absolute_path,p.is_deleted,p.is_trashed
       FROM archive_catalog_local_works l LEFT JOIN posts p ON p.id=l.post_id WHERE l.work_id=? ORDER BY l.id`).all(id)}); }
@@ -138,7 +185,7 @@ export class LocalAdmissionWebService {
       WHERE w.id=? AND w.creator_id=? AND (p.id IS NULL OR (p.is_deleted=0 AND p.is_trashed=0))`).get(workId,creatorId);
     return row?this.choice(row,version):null;
   }
-  async preview(raw:unknown) {
+  private async preparePreview(raw:unknown):Promise<PreparedPreview> {
     const scope=webPreviewSchema.parse(raw);this.creator(scope.creatorId);const root=await this.validateRoot();
     const inputRoot=path.join(root,scope.parent);await strictDirectory(inputRoot);await assertPathInsideLocalIngestRoot(root,inputRoot,{directChild:true});
     if(new Set(scope.directories.map(d=>process.platform==='win32'?d.toLowerCase():d)).size!==scope.directories.length)throw new AdmissionWebError('选择了重复目录',400);
@@ -151,27 +198,35 @@ export class LocalAdmissionWebService {
         // Include source-free same-title Works as suggestions too; never implicitly merge.
         for(const w of this.db.prepare('SELECT id FROM archive_catalog_works WHERE creator_id=? AND display_title=?').all(scope.creatorId,item.displayTitle))workIds.add(Number(w.id));
         const candidates=[...workIds].slice(0,50).flatMap(workId=>{const choice=this.workChoice(workId,scope.creatorId,version);return choice?[choice]:[];});
-        const group:Summary['group']=item.review.existingRelations.length?'C':item.review.conflicts.length?'D':candidates.length===1?'B':candidates.length>1?'D':'A';
+        const warnings=structureWarnings(item.manifest);
+        const group:Summary['group']=warnings.length?'D':item.review.existingRelations.length?'C':item.review.conflicts.length?'D':candidates.length===1?'B':candidates.length>1?'D':'A';
         items.push({preview:item,summary:{key:item.key,sourceRelativePath:name,targetPath:item.targetPath,displayTitle:item.displayTitle,group,
-          summary:item.review.summary,candidates,conflicts:item.review.conflicts,ads:advertisementCandidates(item.manifest),advertisementRulesVersion}});
+          summary:item.review.summary,candidates,conflicts:item.review.conflicts,ads:advertisementCandidates(item.manifest),advertisementRulesVersion,
+          ...(warnings.length?{structureWarnings:warnings,needsBoundaryReview:true}:{})}});
       } catch(e) {items.push({preview:null,summary:{key:randomUUID(),sourceRelativePath:name,targetPath:'',displayTitle:name,group:'D',
         summary:{images:0,videos:0,other:0,bytes:0},candidates:[],conflicts:[message(e)],ads:[]}});}
     }
     const context:Context={galleryRoot:this.galleryRoot,creatorDirectory,parent:scope.parent,waitingRoot:root,workFacts:{},sourceFacts:{}};
     for(const w of this.db.prepare('SELECT id FROM archive_catalog_works WHERE creator_id=?').all(scope.creatorId))context.workFacts[String(w.id)]=this.workFact(Number(w.id));
     for(const s of this.db.prepare('SELECT s.id FROM archive_catalog_source_works s JOIN archive_catalog_works w ON w.id=s.work_id WHERE w.creator_id=?').all(scope.creatorId))context.sourceFacts[String(s.id)]=this.sourceFact(Number(s.id));
-    this.db.exec('SAVEPOINT admission_web_preview');
-    try {
+    return {id,scope,inputRoot,context,items};
+  }
+  private savePreview({id,scope,inputRoot,context,items}:PreparedPreview) {
       this.db.prepare(`INSERT INTO local_admission_web_batches(id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,context_json)
         VALUES(?,?,?,?,'draft',?,?,?)`).run(id,scope.creatorId,inputRoot,scope.sourceEvidenceId??null,now(),now(),JSON.stringify(context));
       for(const [position,item] of items.entries())this.db.prepare('INSERT INTO local_admission_web_items(batch_id,item_key,position,summary_json,preview_json) VALUES(?,?,?,?,?)')
         .run(id,item.summary.key,position,JSON.stringify(item.summary),item.preview?JSON.stringify(item.preview):null);
-      this.db.exec('RELEASE admission_web_preview');
-    }catch(e){this.db.exec('ROLLBACK TO admission_web_preview; RELEASE admission_web_preview');throw e;}
+  }
+  async preview(raw:unknown) {
+    const prepared=await this.preparePreview(raw),id=prepared.id;
+    this.db.exec('BEGIN IMMEDIATE');
+    try{this.savePreview(prepared);this.db.exec('COMMIT');}catch(e){this.db.exec('ROLLBACK');throw e;}
     return {...this.get(id),items:this.items(id).items};
   }
   private row(id:string) {const row=this.db.prepare('SELECT * FROM local_admission_web_batches WHERE id=?').get(id) as Batch|undefined;
     if(!row)throw new AdmissionWebError('导入批次不存在',404);return row;}
+  private collectionId(batchId:string):string|null {return this.db.prepare('SELECT collection_id FROM local_admission_web_collection_batches WHERE batch_id=?').get(batchId)?.collection_id as string|undefined??null;}
+  private assertStandalone(batchId:string) {if(this.collectionId(batchId))throw new AdmissionWebError('此批次属于集中导入，请从集中导入页面确认或继续整个集合');}
   private effectiveState(row:Pick<Batch,'state'|'owner_pid'>){return ['queued','running'].includes(row.state)&&!alive(row.owner_pid)?'interrupted':row.state;}
   get(id:string) {
     // No manifest/content reads, hashing or directory traversal on progress polling.
@@ -181,7 +236,7 @@ export class LocalAdmissionWebService {
       FROM local_admission_web_items WHERE batch_id=?`).get(id)!;
     const completed=Number(this.db.prepare("SELECT COUNT(*) n FROM archive_local_admission_items WHERE plan_id=? AND state='completed'").get(id)!.n);
     const reconciled=Number(counts.selected)>0&&completed===Number(counts.selected);
-    return {id,planId:id,creatorId:row.creator_id,creatorName:String(this.db.prepare('SELECT canonical_name FROM archive_catalog_creators WHERE id=?').get(row.creator_id)?.canonical_name??''),
+    return {id,planId:id,collectionId:this.collectionId(id),creatorId:row.creator_id,creatorName:String(this.db.prepare('SELECT canonical_name FROM archive_catalog_creators WHERE id=?').get(row.creator_id)?.canonical_name??''),
       inputRoot:row.input_root,sourceEvidenceId:row.source_evidence_id,state:reconciled?'completed':this.effectiveState(row),createdAt:row.created_at,updatedAt:row.updated_at,error:reconciled?null:row.error,
       totals:{total:Number(counts.total),selected:Number(counts.selected??0),completed,skipped:Number(counts.skipped??0),deferred:Number(counts.deferred??0)}};
   }
@@ -202,6 +257,7 @@ export class LocalAdmissionWebService {
       return {...summary,action:String(r.action),state:r.state??(batch.state==='draft'?'preview':r.action),lastError:r.last_error??null,workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
   }
   async repreview(id:string,keys?:string[]) {
+    this.assertStandalone(id);
     const batch=this.row(id);if(['running','queued'].includes(this.effectiveState(batch)))throw new AdmissionWebError('执行中不能重新预览');
     const context=JSON.parse(batch.context_json) as Context;
     const items=this.db.prepare(`SELECT x.item_key,x.summary_json,x.action,i.state FROM local_admission_web_items x LEFT JOIN archive_local_admission_items i
@@ -241,7 +297,141 @@ export class LocalAdmissionWebService {
     }
     return {...this.get(next.id),items:this.items(next.id).items};
   }
-  private assertIdle(exceptId?:string) {
+  private collectionRow(id:string) {
+    const row=this.db.prepare(`SELECT id,state,created_at,updated_at,error,owner_pid,owner_token,confirmed_json IS NOT NULL has_confirmation
+      FROM local_admission_web_collections WHERE id=?`).get(id) as (Omit<Collection,'confirmed_json'>&{has_confirmation:number})|undefined;
+    if(!row)throw new AdmissionWebError('集中导入不存在',404);return row;
+  }
+  collection(id:string) {
+    const row=this.collectionRow(id);
+    const children=this.db.prepare(`SELECT b.id,json_extract(b.context_json,'$.parent') parent FROM local_admission_web_collection_batches c
+      JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=? ORDER BY c.position`).all(id);
+    const batches=children.map(child=>({...this.get(String(child.id)),parent:String(child.parent)}));
+    const totals={creators:batches.length,total:0,selected:0,completed:0,skipped:0,deferred:0,failedCreators:0};
+    for(const child of batches){for(const key of ['total','selected','completed','skipped','deferred'] as const)totals[key]+=child.totals[key];
+      if(['needs_review','failed','interrupted'].includes(child.state))totals.failedCreators++;}
+    const state=row.has_confirmation&&batches.length&&batches.every(b=>b.state==='completed')?'completed':this.effectiveState(row);
+    return {id,state,createdAt:row.created_at,updatedAt:row.updated_at,error:state==='completed'?null:row.error,totals,batches};
+  }
+  collections(page=1) {
+    page=Math.max(1,page);const pageSize=20,total=Number(this.db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n);
+    return {page,pageSize,total,items:this.db.prepare('SELECT id FROM local_admission_web_collections ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?')
+      .all(pageSize,(page-1)*pageSize).map(row=>this.collection(String(row.id)))};
+  }
+  async previewCollection(raw:unknown) {
+    const {scopes}=collectionPreviewSchema.parse(raw);
+    if(new Set(scopes.map(s=>s.creatorId)).size!==scopes.length)throw new AdmissionWebError('同一规范博主本次只能选择一个父目录；多个别名目录请分别预览，不能静默合并或漏项',400);
+    if(new Set(scopes.map(s=>process.platform==='win32'?s.parent.toLowerCase():s.parent)).size!==scopes.length)throw new AdmissionWebError('同一父目录不能重复分配给多位博主',400);
+    const prepared:PreparedPreview[]=[];
+    for(const scope of scopes)prepared.push(await this.preparePreview(scope));
+    const id=randomUUID(),stamp=now();this.db.exec('BEGIN IMMEDIATE');
+    try{
+      this.db.prepare("INSERT INTO local_admission_web_collections(id,state,created_at,updated_at) VALUES(?,'draft',?,?)").run(id,stamp,stamp);
+      for(const [position,child] of prepared.entries()){this.savePreview(child);this.db.prepare('INSERT INTO local_admission_web_collection_batches VALUES(?,?,?)').run(id,child.id,position);}
+      this.db.exec('COMMIT');
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+    return this.collection(id);
+  }
+  private collectionRequest(key:string,id:string,kind:string,payload:unknown) {
+    const row=this.db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE request_key=?').get(key);
+    if(!row)return false;
+    if(row.collection_id!==id||row.kind!==kind||row.payload_hash!==hash(payload))throw new AdmissionWebError('集中请求键已用于另一份确认，请重试原请求');
+    return true;
+  }
+  async executeCollection(id:string,raw:unknown) {
+    const request=collectionExecuteSchema.parse(raw);if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);
+    const record=this.collectionRow(id);if(record.state!=='draft'||record.has_confirmation)throw new AdmissionWebError('集中确认已保存，请继续原集合');
+    this.assertIdle();
+    const children=this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=? ORDER BY position').all(id);
+    const requested=new Map(request.batches.map(child=>[child.batchId,child]));
+    if(requested.size!==request.batches.length||requested.size!==children.length||children.some(row=>!requested.has(String(row.batch_id))))throw new AdmissionWebError('集中确认必须覆盖本集合所有博主批次',400);
+    const prepared:PreparedExecution[]=[],targets=new Set<string>();
+    try{for(const row of children){
+      const child=requested.get(String(row.batch_id))!,{batchId,...options}=child;
+      const input=webExecuteSchema.parse({...options,requestKey:`collection:${id}:execute:${batchId}`,confirmed:true});
+      const next=await this.prepareExecution(batchId,input);
+      if(next.plan){
+        for(const item of next.plan.items){const target=process.platform==='win32'?path.resolve(item.targetPath).toLowerCase():path.resolve(item.targetPath);
+          if(targets.has(target))throw new AdmissionWebError('不同博主批次指向同一目标目录，请重新核对');targets.add(target);}
+        await this.admission.verifyUnstarted(next.plan);
+      }
+      prepared.push(next);
+    }}catch(e){if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);throw e;}
+    // Filesystem reads above do not hold a SQLite read snapshot. Commit all children
+    // under one fresh write transaction; no child can run before the last validates.
+    if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);
+    const token=randomUUID();this.db.exec('BEGIN IMMEDIATE');
+    try{
+      this.assertIdle();for(const child of prepared)this.assertPreparedCurrent(child);
+      const changed=this.db.prepare("UPDATE local_admission_web_collections SET state='queued',confirmed_json=?,owner_pid=?,owner_token=?,updated_at=?,error=NULL WHERE id=? AND state='draft' AND confirmed_json IS NULL")
+        .run(JSON.stringify(request),process.pid,token,now(),id);
+      if(changed.changes!==1)throw new AdmissionWebError('集中批次已被另一请求确认');
+      for(const child of prepared)this.saveExecution(child,token);
+      this.db.prepare('INSERT INTO local_admission_web_collection_requests VALUES(?,?,?,?,?)').run(request.requestKey,id,'execute',hash(request),now());
+      this.db.exec('COMMIT');
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+    this.scheduleCollection(id,token);return this.collection(id);
+  }
+  resumeCollection(id:string,raw:unknown) {
+    const request=webResumeSchema.parse(raw);if(this.collectionRequest(request.requestKey,id,'resume',request))return this.collection(id);
+    const row=this.collectionRow(id);if(!row.has_confirmation)throw new AdmissionWebError('请先集中确认');
+    if(this.collection(id).state==='completed')return this.collection(id);
+    if(['queued','running'].includes(this.effectiveState(row)))throw new AdmissionWebError('集中队列仍在执行');
+    this.assertIdle(undefined,id);const token=randomUUID();
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const current=this.collectionRow(id);if(['queued','running'].includes(this.effectiveState(current)))throw new AdmissionWebError('集中队列已被另一请求继续');
+      this.assertIdle(undefined,id);
+      this.db.prepare("UPDATE local_admission_web_collections SET state='queued',owner_pid=?,owner_token=?,updated_at=?,error=NULL WHERE id=?").run(process.pid,token,now(),id);
+      for(const row of this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=? ORDER BY position').all(id)){
+        const batchId=String(row.batch_id);if(this.get(batchId).state==='completed')continue;
+        const child=this.row(batchId);if(!child.confirmed_json)throw new AdmissionWebError('子批确认记录缺失，不能推断执行');
+        admissionPlanSchema.parse(JSON.parse(child.confirmed_json));
+        this.db.prepare("UPDATE local_admission_web_batches SET state='queued',owner_pid=?,owner_token=?,updated_at=?,error=NULL WHERE id=?").run(process.pid,token,now(),batchId);
+      }
+      this.db.prepare('INSERT INTO local_admission_web_collection_requests VALUES(?,?,?,?,?)').run(request.requestKey,id,'resume',hash(request),now());
+      this.db.exec('COMMIT');
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+    this.scheduleCollection(id,token);return this.collection(id);
+  }
+  private scheduleCollection(id:string,token:string) {
+    const key=`collection:${id}`;
+    const task=new Promise<void>(resolve=>setImmediate(resolve)).then(async()=>{
+      try{
+        await runAdmissionCollectionExclusive(this.db,async()=>{
+          const changed=this.db.prepare("UPDATE local_admission_web_collections SET state='running',updated_at=? WHERE id=? AND owner_token=?").run(now(),id,token);
+          if(changed.changes!==1)throw new AdmissionWebError('集中执行所有者已改变');
+          const children=this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=? ORDER BY position').all(id);
+          for(const row of children){
+            const childId=String(row.batch_id);if(this.get(childId).state==='completed')continue;
+            const child=this.row(childId);if(child.owner_token!==token)throw new AdmissionWebError('子批执行所有者已改变');
+            this.db.prepare("UPDATE local_admission_web_batches SET state='running',updated_at=? WHERE id=? AND owner_token=?").run(now(),childId,token);
+            try{
+              const plan=admissionPlanSchema.parse(JSON.parse(child.confirmed_json!));
+              await strictDirectory(plan.inputRoot);await strictDirectory(plan.galleryRoot);this.creator(plan.creatorId);this.assertCreatorIdle(plan.creatorId);
+              await this.admission.apply(plan);
+              this.db.prepare("UPDATE local_admission_web_batches SET state='completed',error=NULL,updated_at=? WHERE id=? AND owner_token=?").run(now(),childId,token);
+            }catch(e){
+              const checkpoint=this.db.prepare('SELECT state FROM archive_local_admission_items WHERE plan_id=? AND last_error IS NOT NULL ORDER BY rowid LIMIT 1').get(childId);
+              this.db.prepare('UPDATE local_admission_web_batches SET state=?,error=?,updated_at=? WHERE id=? AND owner_token=?')
+                .run(checkpoint?.state==='indexed'?'failed':'needs_review',message(e),now(),childId,token);
+            }finally{this.db.prepare('UPDATE local_admission_web_batches SET owner_pid=NULL,owner_token=NULL WHERE id=? AND owner_token=?').run(childId,token);}
+          }
+          const complete=this.collection(id).batches.every(child=>child.state==='completed');
+          this.db.prepare('UPDATE local_admission_web_collections SET state=?,error=?,updated_at=? WHERE id=? AND owner_token=?')
+            .run(complete?'completed':'partial',complete?null:'部分博主未完成；检查原批次后可继续，其余已完成项不会重做',now(),id,token);
+        });
+      }catch(e){this.db.prepare("UPDATE local_admission_web_collections SET state='partial',error=?,updated_at=? WHERE id=? AND owner_token=?").run(message(e),now(),id,token);}
+      finally{
+        this.db.prepare('UPDATE local_admission_web_batches SET owner_pid=NULL,owner_token=NULL WHERE owner_token=? AND id IN (SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=?)').run(token,id);
+        this.db.prepare('UPDATE local_admission_web_collections SET owner_pid=NULL,owner_token=NULL WHERE id=? AND owner_token=?').run(id,token);this.tasks.delete(key);
+      }
+    });
+    this.tasks.set(key,task);void task.catch(error=>console.error('[local-admission-web] collection dispatch record failed:',message(error)));
+  }
+  private assertIdle(exceptId?:string,exceptCollection?:string) {
+    for(const row of this.db.prepare("SELECT id,owner_pid FROM local_admission_web_collections WHERE state IN ('queued','running')").all()){
+      if(row.id!==exceptCollection&&alive(Number(row.owner_pid)))throw new AdmissionWebError('已有集中导入正在执行，请等待完成');}
     const operation=this.db.prepare('SELECT value FROM app_settings WHERE key=?').get(LOCAL_ADMISSION_LOCK_KEY);
     if(operation){
       let owner:{pid:number;token:string;kind:string};
@@ -250,7 +440,7 @@ export class LocalAdmissionWebService {
       if(alive(owner.pid))throw new AdmissionWebError('接纳、扫描或 Stage3 正在执行，请等待完成');
     }
     for(const row of this.db.prepare("SELECT id,state,owner_pid FROM local_admission_web_batches WHERE state IN ('queued','running')").all()){
-      if(row.id!==exceptId&&alive(Number(row.owner_pid)))throw new AdmissionWebError('已有导入批次正在执行');}
+      if(row.id!==exceptId&&this.collectionId(String(row.id))!==exceptCollection&&alive(Number(row.owner_pid)))throw new AdmissionWebError('已有导入批次正在执行');}
     if(this.db.prepare("SELECT id FROM scan_runs WHERE status='running' LIMIT 1").get()||this.db.prepare("SELECT id FROM local_ingest_jobs WHERE status IN ('running','reconciling') AND claim_token IS NOT NULL LIMIT 1").get())throw new AdmissionWebError('扫描或 Stage3 正在执行');
   }
   private request(key:string,id:string,kind:string,payload:unknown) {
@@ -259,10 +449,9 @@ export class LocalAdmissionWebService {
     if(row.batch_id!==id||row.kind!==kind||row.payload_hash!==hash(payload))throw new AdmissionWebError('请求键已经用于另一份确认，请保留原请求或重新确认');
     return true;
   }
-  async execute(id:string,raw:unknown) {
-    const request=webExecuteSchema.parse(raw);if(this.request(request.requestKey,id,'execute',request))return this.get(id);
+  private async prepareExecution(id:string,request:z.infer<typeof webExecuteSchema>):Promise<PreparedExecution> {
     const batch=this.row(id);if(batch.confirmed_json||batch.state!=='draft')throw new AdmissionWebError('本批次已有不可变确认计划，请继续原计划');
-    this.assertIdle();const context=JSON.parse(batch.context_json) as Context;
+    const context=JSON.parse(batch.context_json) as Context;
     if(!same(context.waitingRoot,this.settings().waitingRoot)||!same(context.galleryRoot,this.galleryRoot))throw new AdmissionWebError('配置已改变，请重新预览');
     await this.validateRoot();await strictDirectory(batch.input_root);this.creator(batch.creator_id);
     const saved=this.db.prepare('SELECT item_key,preview_json,summary_json FROM local_admission_web_items WHERE batch_id=? ORDER BY position').all(id);
@@ -309,9 +498,20 @@ export class LocalAdmissionWebService {
     const primaries=new Set<string>();for(const item of items)if(item.primary){const g=group(item);if(primaries.has(g))throw new AdmissionWebError('同一作品只能选择一份主副本');primaries.add(g);}
     const plan=items.length?admissionPlanSchema.parse({version:1,planId:id,confirmed:true,creatorId:batch.creator_id,inputRoot:batch.input_root,galleryRoot:this.galleryRoot,creatorDirectory:context.creatorDirectory,
       ...(batch.source_evidence_id?{sourceEvidenceId:batch.source_evidence_id}:{}),items}):null;
-    if(this.request(request.requestKey,id,'execute',request))return this.get(id);
-    this.assertCreatorIdle(batch.creator_id);this.assertIdle();const token=randomUUID();this.db.exec('SAVEPOINT web_submit');
-    try{
+    return {batch,request,plan,saved};
+  }
+  private assertPreparedCurrent(prepared:PreparedExecution) {
+    const {batch,plan}=prepared,current=this.row(batch.id),context=JSON.parse(batch.context_json) as Context;
+    if(current.confirmed_json||current.state!=='draft')throw new AdmissionWebError('该批次已被另一请求确认');
+    if(!same(context.waitingRoot,this.settings().waitingRoot)||!same(context.galleryRoot,this.galleryRoot))throw new AdmissionWebError('配置已改变，请重新预览');
+    this.creator(batch.creator_id);this.assertCreatorIdle(batch.creator_id);
+    for(const item of plan?.items??[]) {
+      if(item.identity.kind==='existing'&&context.workFacts[String(item.identity.workId)]!==this.workFact(item.identity.workId!))throw new AdmissionWebError('准备期间作品身份已变化，请重新预览');
+      if(item.acceptVersions.some(a=>context.sourceFacts[String(a.sourceWorkId)]!==this.sourceFact(a.sourceWorkId)))throw new AdmissionWebError('准备期间来源或任务已变化，请重新预览');
+    }
+  }
+  private saveExecution({batch,request,plan,saved}:PreparedExecution,token:string) {
+      const id=batch.id,items=plan?.items??[];
       const changed=this.db.prepare("UPDATE local_admission_web_batches SET confirmed_json=?,state=?,owner_pid=?,owner_token=?,updated_at=?,error=NULL WHERE id=? AND state='draft' AND confirmed_json IS NULL")
         .run(JSON.stringify(plan??{skippedAll:true}),plan?'queued':'completed',plan?process.pid:null,plan?token:null,now(),id);
       if(changed.changes!==1)throw new AdmissionWebError('该批次已被另一请求确认');
@@ -322,22 +522,31 @@ export class LocalAdmissionWebService {
         this.db.prepare('UPDATE local_admission_web_items SET action=?,summary_json=? WHERE batch_id=? AND item_key=?').run(a.action,JSON.stringify(summary),id,a.key);
       }
       this.db.prepare('INSERT INTO local_admission_web_requests VALUES(?,?,?,?,?)').run(request.requestKey,id,'execute',hash(request),now());
-      this.db.exec('RELEASE web_submit');
-    }catch(e){this.db.exec('ROLLBACK TO web_submit; RELEASE web_submit');throw e;}
+  }
+  async execute(id:string,raw:unknown) {
+    this.assertStandalone(id);
+    const request=webExecuteSchema.parse(raw);if(this.request(request.requestKey,id,'execute',request))return this.get(id);
+    this.assertIdle();const prepared=await this.prepareExecution(id,request);
+    if(this.request(request.requestKey,id,'execute',request))return this.get(id);
+    const token=randomUUID(),plan=prepared.plan;this.db.exec('BEGIN IMMEDIATE');
+    try{this.assertIdle();this.assertPreparedCurrent(prepared);this.saveExecution(prepared,token);this.db.exec('COMMIT');}
+    catch(e){this.db.exec('ROLLBACK');throw e;}
     if(plan)this.schedule(id,token,plan);
     return this.get(id);
   }
   resume(id:string,raw:unknown) {
+    this.assertStandalone(id);
     const request=webResumeSchema.parse(raw);if(this.request(request.requestKey,id,'resume',request))return this.get(id);
     const row=this.row(id);if(!row.confirmed_json)throw new AdmissionWebError('尚未确认，请先预览并确认');
     if(row.state==='completed')return this.get(id);
     if(['running','queued'].includes(this.effectiveState(row)))throw new AdmissionWebError('原任务仍在执行，不重复提交');
     this.assertIdle(id);const plan=admissionPlanSchema.parse(JSON.parse(row.confirmed_json));const token=randomUUID();
-    this.db.exec('SAVEPOINT web_resume');try{
+    this.db.exec('BEGIN IMMEDIATE');try{
+      this.assertIdle(id);
       this.db.prepare("UPDATE local_admission_web_batches SET state='queued',owner_pid=?,owner_token=?,updated_at=?,error=NULL WHERE id=?").run(process.pid,token,now(),id);
       this.db.prepare('INSERT INTO local_admission_web_requests VALUES(?,?,?,?,?)').run(request.requestKey,id,'resume',hash(request),now());
-      this.db.exec('RELEASE web_resume');
-    }catch(e){this.db.exec('ROLLBACK TO web_resume; RELEASE web_resume');throw e;}
+      this.db.exec('COMMIT');
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
     this.schedule(id,token,plan);return this.get(id);
   }
   private schedule(id:string,token:string,plan:AdmissionPlan) {

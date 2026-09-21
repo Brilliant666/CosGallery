@@ -6,8 +6,9 @@ This is local-server file handling, not browser media upload or a cloud sync ser
 
 ## User flow
 
-1. Open a managed creator and choose **本地导入**. A confirmed source observation
-   may open the same page with its context; a source is not required.
+1. Open **本地入库** from the main navigation for one or several creators. Existing
+   creator-specific **本地导入** and confirmed source observation links remain valid;
+   a source is not required.
 2. Finish manual copying/extraction first. Browse the configured extracted waiting
    root, choose the creator parent, then select its direct work directories.
    Browsing lists one layer only. Preview inventories just the selected scope.
@@ -69,6 +70,65 @@ No schema migration or source/plugin rule is added for this filename policy.
 
 ## Review, persistence and failure behavior
 
+### Independent multi-creator workspace
+
+The local-admission workspace is a library-level entry, not a requirement to open
+each creator's management page. Existing creator-specific and source-evidence links
+remain valid. The normal path is three stages: choose creator directories and work
+scope, review one combined confirmation, then read durable background results.
+
+The root browser only enumerates the configured waiting directory's immediate
+children. Canonical names and registered aliases suggest existing active creator
+identities; an ambiguous/unmatched directory needs an explicit selection. No creator
+is automatically created or reactivated. Detailed inventory is limited to the work
+directories selected for preview, not the whole waiting area or gallery.
+
+A multi-creator collection coordinates the existing per-creator admission plans.
+It is not a new Work database or fabricated archive-ingest history. The server saves
+the exact confirmed scope before dispatch and executes creator plans serially under
+the existing admission barrier. Closing the browser does not discard the collection.
+An interrupted collection retains child checkpoints and requires an explicit resume;
+opening the workspace does not automatically replay old queues. A failed child is
+reported independently of other completed/remaining confirmed children.
+If an unstarted source changes after confirmation, continuing the old payload does
+not approve that change. Prepare a new preview for those still-unmoved directories;
+keep the old failed collection as history. Moved items use their original checkpoint
+and exact recovery workflow, not a new plan that pretends they were never moved.
+
+One collection accepts at most 100 creators, each with one selected parent directory.
+Multiple alias folders for the same creator must be reviewed in separate scopes;
+they are never silently combined or omitted. The submit check validates all selected
+manifests and targets before atomically saving every child confirmation. The existing
+engine validates again when each child actually starts. A collection child cannot be
+submitted or resumed independently through an old single-creator URL.
+
+Only clear new-work candidates can be selected together. Existing Work reuse,
+same-work copies, source acceptance and exceptions remain explicit, creator-scoped
+choices. Cross-creator Work reuse and same-as references are not supported. Optional
+sources/settings and technical identifiers are secondary details rather than steps
+every user must repeat. Exact advertisement choices and recoverable handling remain
+visible in the final confirmation, including selections spanning creators/pages.
+
+### Irregular extracted collections are not automatically reorganized
+
+One selected direct child directory still represents one proposed Work, with its
+internal structure preserved. Recursive inventory counts files; it does not prove
+that a wrapper containing several shoots is a single album. Structural hints are
+review prompts, not a semantic classification of photography or duplicate content.
+
+For example, a creator wrapper might contain `working/Pic/albums`, another copy of
+`albums`, and separate year/month image/video trees. Selecting those wrapper folders
+would propose large combined Works. Establish the intended album boundaries first:
+which branch is authoritative, which same-named directories are duplicates or distinct
+shoots, and which loose videos belong to which album. Similar names/counts/sizes alone
+do not authorize merging, skipping or deletion.
+
+This workspace does not silently flatten, split, rename or merge those collections.
+Keep uncertain scopes deferred while other creators proceed. Existing exact review
+handles supported failed admission/Stage3 checkpoints and file exceptions; it is not
+a general arbitrary-folder restructuring tool. Preparing a regular waiting layout
+remains a separate scoped operation when genuinely needed.
+
 - Review files are paginated. Status reads saved summaries, not disk media, full
   manifest hashes or decoder results. Polling is confined to the open active page
   and stops on completion, repeated network failure or leaving the page.
@@ -121,6 +181,23 @@ preserves receipts; reopening preserves sessions. Automatic destructive down is
 refused because it would erase operation receipts. Do not restore an old full backup
 over later trial data.
 
+Migration **000026_local_admission_collections.sql** adds the multi-creator envelope,
+without rewriting 000025 or any existing confirmed plan:
+
+| Table | Purpose |
+| --- | --- |
+| `local_admission_web_collections` | Combined confirmation, serial dispatch owner and overall outcome |
+| `local_admission_web_collection_batches` | Ordered links to original per-creator batches |
+| `local_admission_web_collection_requests` | Idempotent combined submit/continue receipts |
+
+The collection endpoints live under `/api/admin/local-admission/collections`;
+`workspace` reads configured top-level directories and `creators` searches active
+canonical identities and registered aliases. These have the same manager access and
+write-intent checks as single-creator admission. All-deferred creators remain explicit
+outcomes, not silently dropped work. Read-only polling uses durable summaries only.
+The existing 1 MiB HTTP body limit remains; very large explicit file selections may
+need separate collections rather than an unlimited request size.
+
 ## Verification and trial boundary
 
 Focused tests cover original-engine execution, immutable replay, identity/main-copy
@@ -139,6 +216,15 @@ call remain unchanged. This adds a full file read and temporary input-buffer mem
 on Windows at the existing bounded/sequential validation point, not another hash or
 decode pass. A separate Node process test retains default caching and exercises actual
 Chinese-path JPEG/WebP link/unlink plus the unchanged pixel-limit rejection.
+
+A separate two-connection regression test reproduces SQLite's deferred read-to-write
+upgrade conflict during `ManagedCreatorService.linkFolder` while a real catalog
+publication holds the writer. Top-level folder linking now reserves the writer with
+`BEGIN IMMEDIATE` before reading ownership. Caller-owned transactions retain their
+SAVEPOINT/rollback contract. This does not change journal mode, global timeouts or
+the catalog worker, and is not a blanket promise that every SQLite contention is
+resolved. Historical failures without a statement-level trace are not retrospectively
+claimed to have this sole cause.
 
 Previously completed real jobs must not be replayed. Preview data is never copied to
 production. A 4141 candidate update requires paired client/server/CLI artifacts, a

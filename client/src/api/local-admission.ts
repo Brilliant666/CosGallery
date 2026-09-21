@@ -1,5 +1,6 @@
 import { requestJson } from './http';
 import type { AdmissionBatch, AdmissionDirectories, AdmissionExecuteInput, AdmissionItem, AdmissionPage, AdmissionPreviewInput, AdmissionResumeInput, AdmissionSettings, AdmissionWork } from '../types/local-admission';
+import type { AdmissionWorkspace, AdmissionCreator, AdmissionCollection, AdmissionCollectionExecuteInput } from '../types/local-admission';
 
 const root = '/api/admin/local-admission';
 const id = (value: string) => encodeURIComponent(value);
@@ -15,3 +16,10 @@ export const executeAdmission = (batchId: string, input: AdmissionExecuteInput) 
 export const resumeAdmission = (batchId: string, input: AdmissionResumeInput) => send<AdmissionBatch>(`/batches/${id(batchId)}/resume`, input);
 export const repreviewAdmission = (batchId: string, keys?: string[]) => send<AdmissionBatch>(`/batches/${id(batchId)}/repreview`, keys ? { keys } : {});
 export const fetchAdmissionWorks = (creatorId: number, q: string, page = 1) => requestJson<AdmissionPage<AdmissionWork>>(`${root}/works?${new URLSearchParams({ creatorId: String(creatorId), q, page: String(page), pageSize: '20' })}`);
+export const fetchAdmissionWorkspace = () => requestJson<AdmissionWorkspace>(`${root}/workspace`);
+export const searchAdmissionCreators = (q:string,page=1) => requestJson<AdmissionPage<AdmissionCreator>>(`${root}/creators?${new URLSearchParams({q,page:String(page),pageSize:'20'})}`);
+export const previewAdmissionCollection = (scopes:AdmissionPreviewInput[]) => send<AdmissionCollection>('/collections/previews',{scopes});
+export const fetchAdmissionCollections = (page=1) => requestJson<AdmissionPage<AdmissionCollection>>(`${root}/collections?page=${page}`);
+export const fetchAdmissionCollection = (collectionId:string) => requestJson<AdmissionCollection>(`${root}/collections/${id(collectionId)}`);
+export const executeAdmissionCollection = (collectionId:string,input:AdmissionCollectionExecuteInput) => send<AdmissionCollection>(`/collections/${id(collectionId)}/execute`,input);
+export const resumeAdmissionCollection = (collectionId:string,input:AdmissionResumeInput) => send<AdmissionCollection>(`/collections/${id(collectionId)}/resume`,input);

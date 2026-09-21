@@ -1,8 +1,9 @@
 <template>
   <section class="admission-page">
-    <header><div><p class="eyebrow">LOCAL ADMISSION</p><h1>{{ creatorName || '本地目录' }} · 本地导入</h1><p>选择已分套的本机目录，集中确认后后台执行。无需上传媒体，也无需先登记来源。</p></div><RouterLink to="/archive-catalog">返回博主库</RouterLink></header>
+    <header><div><p class="eyebrow">LOCAL ADMISSION</p><h1>{{ creatorName || '本地目录' }} · 本地导入</h1><p>选择已分套的本机目录，集中确认后后台执行。无需上传媒体，也无需先登记来源。</p></div><RouterLink to="/local-admission">全部博主入库</RouterLink></header>
+    <ol class="steps" aria-label="入库步骤"><li :class="{current:!batch}">1 选择博主与目录</li><li :class="{current:batch?.state==='draft'}">2 集中核对</li><li :class="{current:batch&&batch.state!=='draft'}">3 后台结果</li></ol>
     <p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
-    <section class="panel recent"><div class="section-heading"><h2>当前 / 最近导入批次</h2><button :disabled="busy" @click="loadRecent">刷新批次</button><button :disabled="busy || active" @click="startNew">选择新一批目录</button></div><p v-if="!recent.length">还没有导入批次。</p><ul><li v-for="record in recent" :key="record.id"><button @click="openBatch(record.id)" :disabled="busy" :aria-pressed="batch?.id === record.id">{{ time(record.createdAt) }} · {{ record.totals.total }} 目录 · {{ stateLabel(record.state) }}</button></li></ul></section>
+    <details class="panel recent"><summary>最近批次与历史记录</summary><div class="section-heading"><h2>当前 / 最近导入批次</h2><button :disabled="busy" @click="loadRecent">刷新批次</button><button :disabled="busy || active" @click="startNew">选择新一批目录</button></div><p v-if="!recent.length">还没有导入批次。</p><ul><li v-for="record in recent" :key="record.id"><button @click="openBatch(record.id)" :disabled="busy" :aria-pressed="batch?.id === record.id">{{ time(record.createdAt) }} · {{ record.totals.total }} 目录 · {{ stateLabel(record.state) }}</button></li></ul></details>
     <section v-if="!batch" class="panel" aria-label="选择本地目录">
       <h2>1. 选择目录</h2><p class="hint">请先完成手工复制 / 解压。执行期间不要修改同批文件；服务端会在确认及执行时再次核对。</p>
       <dl v-if="settings"><dt>已解压等待区</dt><dd>{{ settings.waitingRoot || '尚未配置' }}</dd><dt>正式图库</dt><dd>{{ settings.galleryRoot }}</dd></dl>
@@ -12,45 +13,23 @@
       <template v-if="directories && !parent"><div class="directory-list"><button v-for="dir in directories.items" :key="dir.name" :disabled="busy || !dir.selectable" @click="browse(dir.name)"><strong>{{ dir.name }}</strong><small>{{ dir.matchesSelectedCreator ? '名称 / 已登记别名匹配当前博主' : dir.matchedCreatorIds.length ? '匹配其他规范身份，请核对；不会新建博主' : '名称未自动对应；将以本页规范博主预览' }}</small><small v-if="dir.reason">{{ dir.reason }}</small></button></div></template>
       <template v-else-if="directories"><div class="actions"><button :disabled="busy" @click="selectAll">全选当前可接纳目录</button><button :disabled="busy" @click="selectedNames = []">取消选择</button><span>已选 {{ selectedNames.length }} / {{ directories.items.length }} 个目录</span></div><div class="directory-list"><label v-for="dir in directories.items" :key="dir.name" class="directory-row"><input v-model="selectedNames" type="checkbox" :value="dir.name" :disabled="busy || !dir.selectable" /><span>{{ dir.name }}<small v-if="dir.reason">{{ dir.reason }}</small></span></label></div></template>
       <p v-if="directories && !directories.items.length">当前层级没有目录。只读取这一层，不递归扫描旧图库。</p>
-      <label>本批来源资料（可选）<select v-model="sourceEvidenceId" :disabled="busy"><option :value="null">无来源资料，本地先接纳</option><option v-for="source in sources" :key="source.id" :value="source.id">{{ source.pageTitle || source.platform }} · {{ time(source.observedAt) }}</option></select></label><div v-if="sourceHasMore" class="actions"><button :disabled="busy" @click="loadSources(sourcePage + 1)">更多本博主资料</button></div><p class="hint">批次来源只说明文件出处，不代表精确作品对应或下载需求已满足。</p>
+      <details><summary>来源资料（可选）</summary><label>本批来源资料（可选）<select v-model="sourceEvidenceId" :disabled="busy"><option :value="null">无来源资料，本地先接纳</option><option v-for="source in sources" :key="source.id" :value="source.id">{{ source.pageTitle || source.platform }} · {{ time(source.observedAt) }}</option></select></label><div v-if="sourceHasMore" class="actions"><button :disabled="busy" @click="loadSources(sourcePage + 1)">更多本博主资料</button></div><p class="hint">批次来源只说明文件出处，不代表精确作品对应或下载需求已满足。</p></details>
       <label class="check"><input v-model="filesReady" type="checkbox" :disabled="busy" />手工复制 / 解压已结束，本批目录目前不再写入</label>
-      <button class="primary" data-test="admission-preview" :disabled="busy || !filesReady || !parent || !selectedNames.length" @click="preview">{{ busy ? '正在生成预览…' : `生成 ${selectedNames.length} 个目录的实际预览` }}</button>
+      <div class="stage-actions"><span>{{ selectedNames.length }} 个目录</span><button class="primary" data-test="admission-preview" :disabled="busy || !filesReady || !parent || !selectedNames.length" @click="preview">{{ busy ? '正在生成预览…' : `生成 ${selectedNames.length} 个目录的实际预览` }}</button></div>
     </section>
     <template v-if="batch">
       <section class="panel" aria-label="批次状态"><div class="section-heading"><h2>{{ stateLabel(batch.state) }}</h2><button :disabled="busy" @click="refreshBatch()">读取最新状态</button></div><p>{{ batch.totals.completed }} 已完成 · {{ batch.totals.selected }} 确认接纳 · {{ batch.totals.skipped }} 跳过 · {{ batch.totals.deferred }} 暂缓</p><p v-if="active" role="status">服务端正在执行。关闭页面不会取消；稍后通过“最近导入批次”继续查看。{{ pollFailures ? '暂时无法刷新，可手动读取最新状态。' : '' }}</p><p v-if="batch.error" class="error">{{ batch.error }}</p><details><summary>技术详情</summary><dl><dt>批次</dt><dd>{{ batch.id }}</dd><dt>原计划</dt><dd>{{ batch.planId || '尚未确认' }}</dd><dt>更新时间</dt><dd>{{ batch.updatedAt }}</dd><dt>输入根目录</dt><dd>{{ batch.inputRoot }}</dd></dl></details></section>
       <section v-if="batch.state === 'draft'" class="panel" aria-label="预览与确认">
-        <h2>2. 预览与集中确认</h2><p>候选不是已批准关系。默认暂缓；可集中选择明确的新作品，其他项分别复用已有作品、确认同套、跳过或暂缓。</p>
+        <h2>2. 预览与集中确认</h2><p>候选不是已批准关系。默认暂缓；可集中选择无冲突的新作品。复杂目录先核对边界：只按选中目录作为一套，不自动拆合。</p>
         <p v-if="items.some(item => item.suggestedAction)" class="hint">已保留未变化项目的上次选择，仍需本次确认。发生变化或无法复用的项目暂缓，不会自动执行。</p>
         <div class="actions"><button :disabled="draftLocked" @click="confirmNewGroup">A 组全部选择新独立作品</button><label>分组<select v-model="group"><option value="all">全部目录</option><option v-for="(label, key) in groups" :key="key" :value="key">{{ key }} · {{ label }}</option></select></label></div>
-        <section class="batch-ads" aria-label="本批附件集中选择">
-          <h3>本批附件集中选择</h3>
-          <p class="hint">仅作用于已选择接纳的 {{ selectedCount }} 个目录，跨全部分页和分组；不改变作品身份，跳过 / 暂缓目录不处理。TXT / URL 只是候选，不默认当作广告。</p>
-          <p class="hint">全局已确认图片广告：492.jpg、009-01.jpg（ecytt02）。新选择接纳时默认勾选，可逐项取消；确认后可恢复移出，不清理已入库历史文件。</p>
-          <fieldset :disabled="draftLocked">
-            <div class="actions"><button data-test="ads-select-all" :disabled="!adSummary.length" @click="selectAds(true)">勾选全部候选</button><button data-test="ads-clear-all" :disabled="!adsCount" @click="selectAds(false)">清空本批勾选</button><span>已勾选 {{ adsCount }} 个具体文件，执行前仍需另行确认</span></div>
-            <div v-for="ad in adSummary" :key="ad.filename" class="ad-summary-row" :data-ad-filename="ad.filename">
-              <span><strong>{{ ad.filename }}</strong><small>{{ ad.type }} · {{ ad.directories }} 个接纳目录 / {{ ad.files }} 个文件 · 已选 {{ ad.selected }}<template v-if="ad.automatic"> · 全局已确认广告</template></small></span>
-              <div class="actions"><button :disabled="ad.selected === ad.files" @click="selectAds(true, ad.filename)">勾选同名候选</button><button :disabled="!ad.selected" @click="selectAds(false, ad.filename)">取消同名勾选</button></div>
-            </div>
-          </fieldset>
-          <p v-if="!adSummary.length" class="hint">请先选择接纳的目录；没有匹配附件时无需处理。预览和勾选不会移动文件。</p>
-        </section>
+        <AdmissionAdsPicker :entries="entries" :locked="draftLocked" @change="adsChecked=false" />
         <p v-if="itemsLoading">正在读取预览摘要…</p>
-        <article v-for="item in visibleItems" :key="item.key" class="item-card" :data-test="'admission-item-'+item.key">
-          <div class="section-heading"><div><span class="badge">{{ item.group }} · {{ groups[item.group] }}</span><h3>{{ item.displayTitle }}</h3><p class="path">{{ item.sourceRelativePath }}</p></div><span>{{ item.summary.images }} 图 · {{ item.summary.videos }} 视频<br /><small>{{ size(item.summary.bytes) }} · {{ item.summary.other }} 附件 / 其他</small></span></div>
-          <p v-for="conflict in item.conflicts" :key="conflict" class="warning">{{ conflict }}</p>
-          <fieldset :disabled="draftLocked"><label>本次处理<select :value="actionFor(item).action" @change="changeAction(item, $event)"><option value="defer">暂缓，保留等待区文件</option><option value="new">接纳为新独立作品</option><option value="existing">对应已有作品</option><option value="same-as">与本批另一目录同套</option><option value="skip">跳过本次导入，保留等待区文件</option></select></label>
-            <template v-if="actionFor(item).action === 'new'"><label>展示名称<input v-model="actions[item.key].displayTitle" maxlength="500" /></label><p class="hint">原目录名与内部结构不变；允许以后可靠来源关联，不自动建立来源对应。</p></template>
-            <template v-if="actionFor(item).action === 'existing'"><div class="actions"><button type="button" @click="pickerKey = pickerKey === item.key ? null : item.key">{{ selectedWorks[item.key] ? '改选已有作品' : '查找已有作品' }}</button><button v-for="candidate in item.candidates" :key="candidate.workId" @click="selectWork(item, candidate)">候选：{{ candidate.title }} · {{ candidate.images }} 图 / {{ candidate.videos }} 视频</button></div><AdmissionWorkPicker v-if="pickerKey === item.key" :creator-id="creatorId" @select="selectWork(item, $event)" @close="pickerKey = null" /><div v-if="selectedWorks[item.key]" class="work-selection"><img v-if="selectedWorks[item.key].thumbnailUrl" :src="selectedWorks[item.key].thumbnailUrl!" alt="所选作品封面" loading="lazy" /><div><strong>对应：{{ selectedWorks[item.key].title }}</strong><p>{{ selectedWorks[item.key].images }} 图 · {{ selectedWorks[item.key].videos }} 视频 · {{ selectedWorks[item.key].originalDirectories.join(' / ') }}</p></div></div><label class="check"><input v-model="actions[item.key].primary" type="checkbox" />本目录作为主副本（不选则保留已有主副本）</label><div v-if="acceptExistingVersion && selectedWorks[item.key]?.sources.length"><p>明确接受以下已关联来源的现有本地版本（仅限勾选项）：</p><label v-for="source in selectedWorks[item.key].sources" :key="source.sourceWorkId" class="check"><input v-model="actions[item.key].acceptSourceIds" type="checkbox" :value="source.sourceWorkId" />{{ source.sourceOrder }} {{ source.title }} · {{ source.mediaSummary || '来源数量未声明' }}</label></div></template>
-            <template v-if="actionFor(item).action === 'same-as'"><label>同套的本批目录<select v-model="actions[item.key].sameAsKey"><option :value="undefined">选择目录，不以同名自动确认</option><option v-for="other in items.filter(other => other.key !== item.key && ['new','existing'].includes(actionFor(other).action))" :key="other.key" :value="other.key">{{ other.sourceRelativePath }}</option></select></label><label class="check"><input v-model="actions[item.key].primary" type="checkbox" />使用本目录作为这一套的主副本，另一份保留</label></template>
-            <label v-if="!['new','defer'].includes(actionFor(item).action)">选择依据 / 备注<input v-model="actions[item.key].reason" maxlength="2000" placeholder="按本次确认选择记录，不默认声称逐字节相同" /></label>
-            <details v-if="item.ads.length && isSelected(item)"><summary>附件候选 · {{ item.ads.length }} 项（已选 {{ actionFor(item).approvedAds?.length || 0 }} 项）</summary><p class="hint">仅勾选确认为广告的具体文件；移入可恢复附件区，不永久删除，不打开链接。其他文件保持。</p><label v-for="ad in item.ads" :key="ad.relativePath" class="check"><input v-model="actions[item.key].approvedAds" type="checkbox" :value="ad.relativePath" />{{ ad.relativePath }} · {{ size(ad.size) }}<small v-if="ad.automatic">全局已确认广告（可取消）</small></label></details>
-          </fieldset><p v-if="isSelected(item)" class="path">实际目标：{{ item.targetPath }}</p>
-        </article>
+        <AdmissionItemEditor v-for="item in visibleItems" :key="item.key" v-model="actions[item.key]" :item="item" :creator-id="creatorId" :peers="entries" :locked="draftLocked" :accept-existing-version="acceptExistingVersion" :selected-work="selectedWorks[item.key]" @select-work="selectedWorks[item.key]=$event" @change="adsChecked=false" />
         <div class="actions"><button :disabled="page <= 1" @click="page--">上一页目录</button><span>共 {{ filteredItems.length }} 目录 · 第 {{ page }} / {{ Math.max(1, Math.ceil(filteredItems.length / pageSize)) }} 页</span><button :disabled="page * pageSize >= filteredItems.length" @click="page++">下一页目录</button></div>
         <label class="check"><input v-model="acceptExistingVersion" type="checkbox" :disabled="draftLocked" />接受已有可用本地版本，并允许以后可靠来源关联。具体来源满足仅按明确映射及所选来源处理，不伪造下载历史。</label>
         <p v-if="pending" class="warning">上次执行回执尚未确认。原请求与选择已保留，请重试原请求；不会创建另一套计划。</p>
-        <button class="primary" :disabled="busy || itemsLoading || !items.length" @click="showConfirmation = true">{{ pending ? '查看并重试原提交' : '核对本批并确认执行' }}</button>
+        <div class="stage-actions"><span>{{ selectedCount }} 接纳 · {{ skippedCount }} 跳过 · {{ deferredCount }} 暂缓</span><button class="primary" :disabled="busy || itemsLoading || !items.length" @click="showConfirmation = true">{{ pending ? '查看并重试原提交' : '核对本批并确认执行' }}</button></div>
       </section>
       <section v-else class="panel" aria-label="执行结果"><h2>3. 执行进度与结果</h2><table><thead><tr><th>目录</th><th>实际阶段</th><th>结果 / 后续</th></tr></thead><tbody><tr v-for="item in items" :key="item.key"><td><label v-if="isUnstarted(item)" class="check"><input v-model="repreviewKeys" type="checkbox" :value="item.key" />{{ item.sourceRelativePath }}</label><span v-else>{{ item.sourceRelativePath }}</span></td><td>{{ phaseLabel(item.state) }}</td><td><p v-if="item.lastError" class="error">{{ item.lastError }}</p><RouterLink v-if="batch.planId && item.lastError && !['completed','skipped','deferred','skip','defer'].includes(item.state)" :to="{name:'local-review',query:{kind:'admission',planId:batch.planId,itemKey:item.key,creatorId}}">查看并处理</RouterLink><RouterLink v-if="item.postId" :to="{name:'canonical-work-gallery',params:{creatorId,postId:item.postId}}">查看已入库图集</RouterLink><span v-if="['skipped','deferred','skip','defer'].includes(item.state)">等待区文件保留</span></td></tr></tbody></table><div class="actions"><button v-if="['interrupted','failed','needs_review'].includes(batch.state)" :disabled="busy" @click="showResume = true">核对后继续原计划</button><button v-if="!active" :disabled="busy || !repreviewKeys.length" @click="repreview">对选中的 {{ repreviewKeys.length }} 个未开始目录重新预览</button></div><p class="hint">可勾选未开始的具体目录单独重新预览，其他项保留。已有移动 / 索引检查点的目录只能继续原计划；不能忽略文件差异。需要文件处置时先进入“查看并处理”。</p></section>
     </template>
@@ -62,7 +41,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
-import AdmissionWorkPicker from '../components/AdmissionWorkPicker.vue';
+import AdmissionItemEditor from '../components/AdmissionItemEditor.vue';
+import AdmissionAdsPicker from '../components/AdmissionAdsPicker.vue';
+import { validateAdmissionSelection } from '../utils/admission-ui';
 import * as api from '../api/local-admission';
 import { fetchSourceEvidence } from '../api/source-evidence';
 import type { SourceEvidenceObservation } from '../api/source-evidence';
@@ -91,59 +72,17 @@ function actionFor(item: AdmissionItem): AdmissionAction { return actions[item.k
 const isSelected = (item: AdmissionItem) => ['new','existing','same-as'].includes(actionFor(item).action);
 const selectedCount = computed(() => items.value.filter(isSelected).length), skippedCount = computed(() => items.value.filter(item => actionFor(item).action==='skip').length), deferredCount = computed(() => items.value.filter(item => actionFor(item).action==='defer').length);
 const adsCount = computed(() => items.value.reduce((sum,item) => sum+(isSelected(item) ? actionFor(item).approvedAds?.length ?? 0 : 0),0));
-const adFilename = (relativePath: string) => relativePath.split(/[\\/]/).at(-1) ?? relativePath;
-const adSummary = computed(() => {
-  const rows = new Map<string, { filename: string; type: string; directories: number; files: number; selected: number; automatic: boolean }>();
-  for (const item of items.value.filter(isSelected)) {
-    const approved = new Set(actionFor(item).approvedAds ?? []), names = new Set<string>();
-    for (const ad of item.ads) {
-      const filename = adFilename(ad.relativePath);
-      const row = rows.get(filename) ?? { filename, type: filename.split('.').at(-1)?.toUpperCase() ?? '附件', directories: 0, files: 0, selected: 0, automatic: false };
-      row.files++; if (!names.has(filename)) row.directories++;
-      row.selected += Number(approved.has(ad.relativePath)); row.automatic ||= ad.automatic === true;
-      names.add(filename); rows.set(filename, row);
-    }
-  }
-  return [...rows.values()].sort((left, right) => left.filename.localeCompare(right.filename, 'zh-CN'));
-});
-function selectAds(selected: boolean, filename?: string) {
-  if (draftLocked.value) return;
-  for (const item of items.value.filter(isSelected)) {
-    const action = actionFor(item), approved = new Set(action.approvedAds ?? []);
-    for (const ad of item.ads) if (filename === undefined || adFilename(ad.relativePath) === filename) {
-      if (selected) approved.add(ad.relativePath); else approved.delete(ad.relativePath);
-    }
-    action.approvedAds = [...approved];
-  }
-  adsChecked.value = false;
-}
 function initialAds(item: AdmissionItem): string[] {
   // Re-reading a draft, a historical suggestion or a retry never grants new approval.
   // Apply the global defaults only to an explicit new admission selection; retain cancellations thereafter.
   return isSelected(item) ? [...(actionFor(item).approvedAds ?? [])] : item.ads.filter(ad => ad.automatic).map(ad => ad.relativePath);
 }
-const selectionError = computed(() => {
-  const primaryGroups=new Set<string>();
-  for(const item of items.value) {
-    const action=actionFor(item);
-    if(action.action==='existing'&&!action.workId)return `请为“${item.displayTitle}”选择已有作品，或改为暂缓。`;
-    const peer=action.action==='same-as'?items.value.find(other=>other.key===action.sameAsKey):null;
-    if(action.action==='same-as'&&(!peer||!['new','existing'].includes(actionFor(peer).action)))return `请为“${item.displayTitle}”选择本批明确接纳的同套目录，或改为暂缓。`;
-    if(action.primary&&isSelected(item)){
-      const root=peer?actionFor(peer):action;
-      const groupKey=root.action==='existing'?`work:${root.workId}`:root.key;
-      if(primaryGroups.has(groupKey))return '同一套作品只能明确选择一个主副本，请取消重复的主副本选择。';
-      primaryGroups.add(groupKey);
-    }
-  }
-  return '';
-});
+const entries = computed(()=>items.value.map(item=>({item,action:actionFor(item)})));
+const selectionError = computed(()=>validateAdmissionSelection(entries.value));
 const storageKey = (id: string) => `cosgallery:admission:pending:${id}`;
 function rememberPending(value: AdmissionExecuteInput | null) { pending.value=value; if(!batch.value) return; try { if(value) localStorage.setItem(storageKey(batch.value.id),JSON.stringify(value)); else localStorage.removeItem(storageKey(batch.value.id)); } catch { notice.value='浏览器不能保存重试凭据，请保留本页直到确认服务端已接收；服务端批次和检查点仍会持久保留。'; } }
 function restorePending() { pending.value=null; if(!batch.value) return; try { const raw=localStorage.getItem(storageKey(batch.value.id)); if(!raw) return; const parsed: unknown=JSON.parse(raw); if(!parsed||typeof parsed!=='object'||!('requestKey' in parsed)||typeof parsed.requestKey!=='string'||!('confirmed' in parsed)||parsed.confirmed!==true||!('actions' in parsed)||!Array.isArray(parsed.actions)||!('acceptExistingVersion' in parsed)||typeof parsed.acceptExistingVersion!=='boolean') return; const safeActions: AdmissionAction[]=[]; for(const value of parsed.actions) { if(!value||typeof value!=='object'||typeof value.key!=='string'||!['new','existing','same-as','skip','defer'].includes(value.action)) return; safeActions.push(value as AdmissionAction); } pending.value={requestKey:parsed.requestKey,confirmed:true,actions:safeActions,acceptExistingVersion:parsed.acceptExistingVersion,...('adsConfirmed' in parsed&&parsed.adsConfirmed===true?{adsConfirmed:true}:{})}; acceptExistingVersion.value=pending.value.acceptExistingVersion; for(const action of safeActions) actions[action.key]=action; } catch { /* A malformed local retry copy cannot authorize execution. */ } }
-function changeAction(item: AdmissionItem,event: Event) { if(draftLocked.value)return; const value=(event.target as HTMLSelectElement).value; if(!['new','existing','same-as','skip','defer'].includes(value))return; const approvedAds=['new','existing','same-as'].includes(value)?initialAds(item):[]; actions[item.key]={key:item.key,action:value as AdmissionActionKind,displayTitle:item.displayTitle,approvedAds,acceptSourceIds:[],primary:false}; adsChecked.value=false; }
-function selectWork(item: AdmissionItem,work: AdmissionWork) { if(draftLocked.value)return; actions[item.key]={...actionFor(item),approvedAds:initialAds(item),action:'existing',workId:work.workId,primary:false,acceptSourceIds:[],reason:'用户在确认页选择对应已有作品'}; selectedWorks[item.key]=work; pickerKey.value=null; }
-function confirmNewGroup() { if(draftLocked.value)return; for(const item of items.value.filter(item=>item.group==='A')) actions[item.key]={key:item.key,action:'new',displayTitle:item.displayTitle,approvedAds:initialAds(item),acceptSourceIds:[],reason:'用户在确认页选择新独立作品'}; adsChecked.value=false; }
+function confirmNewGroup() { if(draftLocked.value)return; for(const item of items.value.filter(item=>item.group==='A'&&!item.conflicts.length&&!item.structureWarnings?.length)) actions[item.key]={key:item.key,action:'new',displayTitle:item.displayTitle,approvedAds:initialAds(item),acceptSourceIds:[],reason:'用户在确认页选择新独立作品'}; adsChecked.value=false; }
 function stopPoll() { if(timer)clearTimeout(timer); timer=undefined; }
 function schedulePoll() { stopPoll(); if(!active.value||disposed||pollFailures.value>=3)return; timer=setTimeout(()=>void refreshBatch(true),2500); }
 async function loadItems(id: string, current = generation) {
@@ -180,7 +119,7 @@ async function browse(next?: string) { if(busy.value)return; directoryLoading.va
 function selectAll() { selectedNames.value=directories.value?.items.filter(dir=>dir.selectable).map(dir=>dir.name)??[]; }
 async function saveRoot() { busy.value=true; error.value=''; try { settings.value=await api.saveAdmissionSettings(waitingRoot.value); } catch(cause) { error.value=cause instanceof Error?cause.message:'等待区设置失败'; } finally { busy.value=false; } if(!error.value)await browse(); }
 async function loadSources(next=1) { const current=generation,id=creatorId.value;try { const result=await fetchSourceEvidence(id,next);if(current!==generation||disposed)return; const confirmed=result.items.filter(source=>source.identityState==='confirmed'&&source.creatorId===creatorId.value); sources.value=next===1?confirmed:[...sources.value,...confirmed]; sourcePage.value=next; sourceHasMore.value=next*result.limit<result.total; } catch(cause) { if(current!==generation||disposed)return;notice.value=`可选来源资料暂时无法读取，可先本地接纳：${cause instanceof Error?cause.message:'网络错误'}`; } }
-async function openBatch(id: string) { error.value=''; stopPoll(); const current=++generation;batch.value=null;items.value=[];directories.value=null;filesReady.value=false;pending.value=null;page.value=1;group.value='all';confirmChecked.value=false;adsChecked.value=false; try { const result=await api.fetchAdmissionBatch(id); if(current!==generation||disposed)return; if(result.creatorId!==creatorId.value)throw new Error('批次不属于当前博主'); batch.value=result;repreviewKeys.value=[]; creatorName.value=result.creatorName; for(const key of Object.keys(actions))delete actions[key]; for(const key of Object.keys(selectedWorks))delete selectedWorks[key]; await loadItems(id,current); if(current!==generation||disposed)return;restorePending(); if(result.state!=='draft')rememberPending(null); await router.replace({query:{...route.query,batch:id}}); pollFailures.value=0;schedulePoll(); } catch(cause) { if(current===generation)error.value=cause instanceof Error?cause.message:'批次读取失败'; } }
+async function openBatch(id: string) { error.value=''; stopPoll(); const current=++generation;batch.value=null;items.value=[];directories.value=null;filesReady.value=false;pending.value=null;page.value=1;group.value='all';confirmChecked.value=false;adsChecked.value=false; try { const result=await api.fetchAdmissionBatch(id); if(current!==generation||disposed)return; if(result.creatorId!==creatorId.value)throw new Error('批次不属于当前博主'); if(result.collectionId){await router.replace({name:'local-admission-workspace',query:{collection:result.collectionId}});return;}batch.value=result;repreviewKeys.value=[]; creatorName.value=result.creatorName; for(const key of Object.keys(actions))delete actions[key]; for(const key of Object.keys(selectedWorks))delete selectedWorks[key]; await loadItems(id,current); if(current!==generation||disposed)return;restorePending(); if(result.state!=='draft')rememberPending(null); await router.replace({query:{...route.query,batch:id}}); pollFailures.value=0;schedulePoll(); } catch(cause) { if(current===generation)error.value=cause instanceof Error?cause.message:'批次读取失败'; } }
 async function refreshBatch(poll=false) { if(!batch.value)return; const id=batch.value.id,current=generation; try { const result=await api.fetchAdmissionBatch(id); if(current!==generation||disposed)return; const changed=batch.value.updatedAt!==result.updatedAt||batch.value.state!==result.state||batch.value.totals.completed!==result.totals.completed;batch.value=result; pollFailures.value=0; if(result.state!=='draft')rememberPending(null); if(result.state!=='draft'&&(!poll||changed))await loadItems(id,current); schedulePoll(); } catch(cause) { if(current!==generation)return; pollFailures.value++; if(!poll||pollFailures.value>=3)error.value=cause instanceof Error?cause.message:'状态读取失败'; schedulePoll(); } }
 async function preview() {
   if(busy.value)return; const token=++mutationToken; busy.value=true;error.value='';
@@ -258,4 +197,7 @@ onBeforeUnmount(()=>{disposed=true;mutationToken++;generation++;stopPoll();});
 </style>
 <style scoped>
 .admission-page,.panel,.item-card,fieldset,.directory-list{min-width:0}.directory-row span,td{overflow-wrap:anywhere}table{table-layout:fixed}.work-selection div{min-width:0}.actions label{min-width:0;max-width:100%}input,select,textarea{max-width:100%}header a{white-space:nowrap}
+</style>
+<style scoped>
+.steps{display:flex;list-style:none;padding:0;gap:1rem;flex-wrap:wrap;margin:1.4rem 0}.steps li{padding:.55rem .8rem;border-radius:.5rem;font-size:.86rem;opacity:.55}.steps .current{background:var(--accent,#7764b0);color:white;opacity:1}.stage-actions{position:sticky;bottom:.6rem;z-index:5;display:flex;justify-content:space-between;align-items:center;gap:.7rem;background:var(--surface,#fff);border:1px solid #8883;box-shadow:0 .3rem 1.5rem #0001;padding:.8rem 1rem;border-radius:.8rem;margin-top:1.2rem}.stage-actions span{font-size:.8rem}.recent>summary{font-weight:600}.recent:not([open]){padding:1rem 1.35rem}.recent ul{max-height:12rem;overflow:auto}
 </style>

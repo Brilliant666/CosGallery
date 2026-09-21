@@ -8,6 +8,13 @@ export function createLocalAdmissionWebRouter(service?:LocalAdmissionWebService)
   const current=()=>{if(service)return service;const db=databaseManager.connection;if(db!==connection){connection=db;instance=new LocalAdmissionWebService(db);}return instance!;};
   const id=z.string().uuid(),number=z.coerce.number().int().positive();
   router.get('/settings',(_req,res)=>res.json(current().settings()));
+  router.get('/workspace',async(_req,res)=>res.json(await current().workspace()));
+  router.get('/creators',(req,res)=>res.json(current().creators(z.string().max(500).default('').parse(req.query.q),number.default(1).parse(req.query.page),number.max(50).default(20).parse(req.query.pageSize))));
+  router.post('/collections/previews',async(req,res)=>res.status(201).json(await current().previewCollection(req.body)));
+  router.get('/collections',(req,res)=>res.json(current().collections(number.default(1).parse(req.query.page))));
+  router.get('/collections/:id',(req,res)=>res.json(current().collection(id.parse(req.params.id))));
+  router.post('/collections/:id/execute',async(req,res)=>res.status(202).json(await current().executeCollection(id.parse(req.params.id),req.body)));
+  router.post('/collections/:id/resume',(req,res)=>res.status(202).json(current().resumeCollection(id.parse(req.params.id),req.body)));
   router.put('/settings',async(req,res)=>res.json(await current().saveSettings(z.object({waitingRoot:z.string().min(1).max(4000)}).strict().parse(req.body).waitingRoot)));
   router.get('/directories',async(req,res)=>res.json(await current().directories(number.parse(req.query.creatorId),z.string().optional().parse(req.query.parent))));
   router.get('/works',(req,res)=>res.json(current().works(number.parse(req.query.creatorId),z.string().max(500).default('').parse(req.query.q),number.default(1).parse(req.query.page),number.max(50).default(24).parse(req.query.pageSize))));

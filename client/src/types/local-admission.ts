@@ -25,6 +25,8 @@ export interface AdmissionItem {
   conflicts: string[]; ads: Array<{ relativePath: string; size: number; automatic?: boolean }>; state: string; lastError?: string | null;
   workId?: number | null; localWorkId?: number | null; postId?: number | null;
   suggestedAction?: AdmissionAction;
+  structureWarnings?: string[];
+  needsBoundaryReview?: boolean;
 }
 export type AdmissionState = 'draft' | 'queued' | 'running' | 'completed' | 'needs_review' | 'interrupted' | 'failed';
 export interface AdmissionBatch {
@@ -32,6 +34,7 @@ export interface AdmissionBatch {
   createdAt: string; updatedAt: string; error?: string | null; inputRoot: string; sourceEvidenceId?: number | null;
   totals: { total: number; selected: number; completed: number; skipped: number; deferred: number };
   items?: AdmissionItem[];
+  collectionId?: string | null;
 }
 export interface AdmissionPreviewInput {
   creatorId: number; parent: string; directories: string[]; sourceEvidenceId?: number; acceptExistingVersion: boolean;
@@ -40,3 +43,16 @@ export interface AdmissionExecuteInput {
   requestKey: string; confirmed: true; acceptExistingVersion: boolean; actions: AdmissionAction[]; adsConfirmed?: true;
 }
 export interface AdmissionResumeInput { requestKey: string; confirmed: true }
+export interface AdmissionCreator { id: number; name: string; aliases: string[] }
+export interface AdmissionWorkspace extends AdmissionSettings {
+  items: Array<{name: string; selectable: boolean; reason?: string; matches: Array<{creatorId:number;creatorName:string;matchedName:string;matchKind:'canonical'|'alias'}>}>;
+}
+export interface AdmissionCollection {
+  id:string; state:'draft'|'queued'|'running'|'completed'|'partial'|'interrupted'; createdAt:string;updatedAt:string;error:string|null;
+  totals:{creators:number;total:number;selected:number;completed:number;skipped:number;deferred:number;failedCreators:number};
+  batches:Array<AdmissionBatch & {parent:string}>;
+}
+export interface AdmissionCollectionExecuteInput {
+  requestKey:string;confirmed:true;
+  batches:Array<{batchId:string;acceptExistingVersion:boolean;adsConfirmed?:true;actions:AdmissionAction[]}>;
+}
