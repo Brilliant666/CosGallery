@@ -22,9 +22,10 @@ const actionSchema = z.object({ key:z.string().min(1), action:z.enum(['new','exi
   workId:positive.optional(), sameAsKey:z.string().optional(), primary:z.boolean().default(false), displayTitle:z.string().trim().min(1).max(1000).optional(),
   approvedAds:z.array(z.string().min(1)).max(2000).default([]), acceptSourceIds:z.array(positive).max(500).default([]), reason:z.string().trim().max(2000).optional() }).strict();
 export const webExecuteSchema = z.object({ requestKey:z.string().min(1).max(150), confirmed:z.literal(true), acceptExistingVersion:z.boolean(),
-  adsConfirmed:z.literal(true).optional(), actions:z.array(actionSchema).min(1).max(500) }).strict();
+  adsConfirmed:z.literal(true).optional(), advertisementDisposition:z.literal('recycle_bin').optional(), actions:z.array(actionSchema).min(1).max(500) }).strict();
 export const webResumeSchema = z.object({requestKey:z.string().min(1).max(150),confirmed:z.literal(true)}).strict();
 export const collectionPreviewSchema=z.object({scopes:z.array(webPreviewSchema).min(1).max(100)}).strict();
+export const collectionRepreviewSchema=collectionPreviewSchema.partial();
 export const collectionExecuteSchema=z.object({requestKey:z.string().min(1).max(150),confirmed:z.literal(true),
   batches:z.array(webExecuteSchema.omit({requestKey:true,confirmed:true}).extend({batchId:z.string().uuid()})).min(1).max(100)}).strict();
 type Preview = Awaited<ReturnType<LocalFolderAdmissionService['preview']>>;
@@ -38,7 +39,7 @@ type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waiting
 type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTitle:string;group:'A'|'B'|'C'|'D';
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
   ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>;
-  structureWarnings?:string[];needsBoundaryReview?:boolean};
+  structureWarnings?:string[];needsBoundaryReview?:boolean;reviewFingerprint?:string};
 type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[]};
 type PreparedExecution={batch:Batch;request:z.infer<typeof webExecuteSchema>;plan:AdmissionPlan|null;saved:Record<string,unknown>[]};
 type Collection={id:string;state:string;created_at:string;updated_at:string;confirmed_json:string|null;error:string|null;owner_pid:number|null;owner_token:string|null};
@@ -209,6 +210,15 @@ export class LocalAdmissionWebService {
     const context:Context={galleryRoot:this.galleryRoot,creatorDirectory,parent:scope.parent,waitingRoot:root,workFacts:{},sourceFacts:{}};
     for(const w of this.db.prepare('SELECT id FROM archive_catalog_works WHERE creator_id=?').all(scope.creatorId))context.workFacts[String(w.id)]=this.workFact(Number(w.id));
     for(const s of this.db.prepare('SELECT s.id FROM archive_catalog_source_works s JOIN archive_catalog_works w ON w.id=s.work_id WHERE w.creator_id=?').all(scope.creatorId))context.sourceFacts[String(s.id)]=this.sourceFact(Number(s.id));
+    // Keys are fresh on every draft. The review facts, including Works selected
+    // through search rather than suggestions, decide whether an unsent choice
+    // can safely carry forward. Invalid inventories never inherit a choice.
+    for(const item of items)if(item.preview)item.summary.reviewFingerprint=hash({
+      creatorId:scope.creatorId,parent:scope.parent,sourceEvidenceId:scope.sourceEvidenceId??null,inputRoot,context,
+      manifest:item.preview.manifest,sourceRelativePath:item.summary.sourceRelativePath,targetPath:item.summary.targetPath,
+      displayTitle:item.summary.displayTitle,group:item.summary.group,conflicts:item.summary.conflicts,
+      ads:item.summary.ads,advertisementRulesVersion,structureWarnings:item.summary.structureWarnings??[]
+    });
     return {id,scope,inputRoot,context,items};
   }
   private savePreview({id,scope,inputRoot,context,items}:PreparedPreview) {
@@ -318,19 +328,53 @@ export class LocalAdmissionWebService {
     return {page,pageSize,total,items:this.db.prepare('SELECT id FROM local_admission_web_collections ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?')
       .all(pageSize,(page-1)*pageSize).map(row=>this.collection(String(row.id)))};
   }
-  async previewCollection(raw:unknown) {
+  collectionScope(id:string) {
+    this.collectionRow(id);
+    // Saved scope only: reopening the range picker never inventories the disk
+    // and does not silently include newly added or renamed directories.
+    const children=this.db.prepare(`SELECT b.id,b.creator_id,b.source_evidence_id,json_extract(b.context_json,'$.parent') parent
+      FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id
+      WHERE c.collection_id=? ORDER BY c.position`).all(id);
+    return {scopes:children.map(child=>({creatorId:Number(child.creator_id),parent:String(child.parent),
+      directories:this.db.prepare('SELECT summary_json FROM local_admission_web_items WHERE batch_id=? ORDER BY position').all(child.id)
+        .map(item=>(JSON.parse(String(item.summary_json)) as Summary).sourceRelativePath),
+      acceptExistingVersion:true,...(child.source_evidence_id==null?{}:{sourceEvidenceId:Number(child.source_evidence_id)})}))};
+  }
+  private assertDraftCollection(id:string) {
+    const record=this.collectionRow(id);
+    if(record.state!=='draft'||record.has_confirmation||record.owner_pid!==null||record.owner_token!==null)
+      throw new AdmissionWebError('集中导入已有确认或正在执行，不能重新预览；请继续原集合');
+    const changed=this.db.prepare(`SELECT b.id FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id
+      WHERE c.collection_id=? AND (b.state<>'draft' OR b.confirmed_json IS NOT NULL OR b.owner_pid IS NOT NULL OR b.owner_token IS NOT NULL) LIMIT 1`).get(id);
+    if(changed)throw new AdmissionWebError('集中导入子批次已有确认或正在执行，不能重新预览；请继续原集合');
+  }
+  private async prepareCollectionPreview(raw:unknown) {
     const {scopes}=collectionPreviewSchema.parse(raw);
     if(new Set(scopes.map(s=>s.creatorId)).size!==scopes.length)throw new AdmissionWebError('同一规范博主本次只能选择一个父目录；多个别名目录请分别预览，不能静默合并或漏项',400);
     if(new Set(scopes.map(s=>process.platform==='win32'?s.parent.toLowerCase():s.parent)).size!==scopes.length)throw new AdmissionWebError('同一父目录不能重复分配给多位博主',400);
     const prepared:PreparedPreview[]=[];
     for(const scope of scopes)prepared.push(await this.preparePreview(scope));
+    return prepared;
+  }
+  private publishCollectionPreview(prepared:PreparedPreview[],previousId?:string) {
     const id=randomUUID(),stamp=now();this.db.exec('BEGIN IMMEDIATE');
     try{
+      // Another request may confirm while the selected manifests are read.
+      // Recheck under the same transaction that publishes the new draft.
+      if(previousId)this.assertDraftCollection(previousId);
       this.db.prepare("INSERT INTO local_admission_web_collections(id,state,created_at,updated_at) VALUES(?,'draft',?,?)").run(id,stamp,stamp);
       for(const [position,child] of prepared.entries()){this.savePreview(child);this.db.prepare('INSERT INTO local_admission_web_collection_batches VALUES(?,?,?)').run(id,child.id,position);}
       this.db.exec('COMMIT');
     }catch(e){this.db.exec('ROLLBACK');throw e;}
     return this.collection(id);
+  }
+  async previewCollection(raw:unknown) {
+    return this.publishCollectionPreview(await this.prepareCollectionPreview(raw));
+  }
+  async repreviewCollection(id:string,raw:unknown={}) {
+    const request=collectionRepreviewSchema.parse(raw);this.assertDraftCollection(id);
+    const prepared=await this.prepareCollectionPreview(request.scopes?{scopes:request.scopes}:this.collectionScope(id));
+    return this.publishCollectionPreview(prepared,id);
   }
   private collectionRequest(key:string,id:string,kind:string,payload:unknown) {
     const row=this.db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE request_key=?').get(key);
@@ -476,7 +520,7 @@ export class LocalAdmissionWebService {
         if(!action.sameAsKey||!actions.has(action.sameAsKey))throw new AdmissionWebError('请选择本批具体同套作品');add(action.sameAsKey);
         title=items.find(i=>i.key===action.sameAsKey)!.displayTitle;identity={kind:'same-as',itemKey:action.sameAsKey};
       }
-      if(action.approvedAds.length&&!request.adsConfirmed)throw new AdmissionWebError('广告可恢复移出必须单独确认具体清单');
+      if(action.approvedAds.length&&!request.adsConfirmed)throw new AdmissionWebError('广告处置必须单独确认具体清单');
       const allowedAds=new Set(advertisementCandidates(preview.manifest).map(e=>e.relativePath));
       if(new Set(action.approvedAds).size!==action.approvedAds.length||action.approvedAds.some(ad=>!allowedAds.has(ad)))throw new AdmissionWebError('广告选择必须是本项预览中的具体候选文件');
       if(!preview.manifest.some(e=>['image','video'].includes(e.kind)&&!action.approvedAds.includes(e.relativePath)))throw new AdmissionWebError('移出广告后没有可展示媒体，请暂缓此目录');
@@ -497,7 +541,7 @@ export class LocalAdmissionWebService {
     const group=(item:AdmissionPlan['items'][number]):string=>{const identity=item.identity;return identity.kind==='existing'?`work:${identity.workId}`:identity.kind==='same-as'?group(items.find(i=>i.key===identity.itemKey)!):item.key;};
     const primaries=new Set<string>();for(const item of items)if(item.primary){const g=group(item);if(primaries.has(g))throw new AdmissionWebError('同一作品只能选择一份主副本');primaries.add(g);}
     const plan=items.length?admissionPlanSchema.parse({version:1,planId:id,confirmed:true,creatorId:batch.creator_id,inputRoot:batch.input_root,galleryRoot:this.galleryRoot,creatorDirectory:context.creatorDirectory,
-      ...(batch.source_evidence_id?{sourceEvidenceId:batch.source_evidence_id}:{}),items}):null;
+      ...(batch.source_evidence_id?{sourceEvidenceId:batch.source_evidence_id}:{}),...(request.advertisementDisposition?{advertisementDisposition:request.advertisementDisposition}:{}),items}):null;
     return {batch,request,plan,saved};
   }
   private assertPreparedCurrent(prepared:PreparedExecution) {

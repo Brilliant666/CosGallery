@@ -41,7 +41,7 @@ This is local-server file handling, not browser media upload or a cloud sync ser
    refresh/new tabs. A lost response is retried with the same receipt. Closing the
    page does not cancel a submitted operation. In the same browser tab, the general
    local-admission entry restores the last opened collection after visiting an album;
-   **选择新批次** explicitly starts a fresh scope. The remembered ID never starts or
+   **新建批次** explicitly starts a fresh scope. The remembered ID never starts or
    resumes work: status is fetched with normal authorization. Unavailable batches
    report an error rather than displaying cached success. New tabs can use the exact
    collection URL or recent history; no cross-browser navigation promise is made.
@@ -74,8 +74,20 @@ image count is the original inventory, not a promise that excluded ads remain in
 An old **unsubmitted** draft can show these additional candidates from its saved
 manifest without another disk inventory or changing its plan. Existing confirmed
 payloads, past batches and outstanding retry receipts never gain new approvals.
-Choosing defaults is not execution; the recoverable move only happens on confirmed
-admission. No previously indexed gallery or old source copy is swept or rewritten.
+Choosing defaults is not execution. New web confirmations explicitly include
+`advertisementDisposition:'recycle_bin'`: after indexing, the approved files go to
+the Windows Recycle Bin and only their known empty staging directories are removed.
+The temporary attachment area is not a permanent ad archive. A native recycle failure
+keeps the item at its indexed checkpoint and reports partial completion; resume uses
+the same plan and exact durable file intents. This is recoverable recycling, not
+permanent deletion. Files not explicitly approved remain untouched.
+
+Old confirmed plans and pending receipts without this optional field retain their
+original attachment handling. They are not silently upgraded by a new UI. Historical
+attachments need the separate exact `preview-recycle-advertisements` /
+`recycle-advertisements` request described in the CLI document. A failed historical
+cleanup retries that original cleanup request, not ordinary admission resume. No
+previously indexed gallery or old source copy is swept or rewritten.
 
 The same exact-name helper is used by new ordinary Stage3 staging. Advertisement
 files remain in its original processing content, outside `ready`, and follow the
@@ -128,10 +140,25 @@ recent unsent draft choices may be restored after fetching the same authorized s
 changed summary evidence is deferred for review. Original pending execution receipts
 always take precedence, including their historical acquisition policy.
 
-Status refresh reads the saved batch, not newly edited filesystem content. After
-rearranging, renaming or changing directories, use **选择新批次** to obtain a fresh
-preview; the supplement button cannot make old conflicts disappear. Polling never
-creates previews or rewrites confirmed plans.
+The controls distinguish three operations:
+
+- **上一步：调整导入范围** reopens the unsubmitted draft's selected creators and
+  directories. Renamed/new directories are not automatically selected. Cancel returns
+  to the same review; submitting the edited scope creates a new unconfirmed preview.
+- **重新检查文件** inventories only the saved selected scope and creates a new draft.
+  It is for filesystem changes within those directories, not progress polling. A
+  rename or changed album boundary needs an explicit scope adjustment first.
+- **更新进度** (results), or **读取已保存状态** (review technical details), reads saved
+  server state only. Neither scans files, reapplies default selections nor resumes work.
+
+Repreview never edits the original plan or carries its execution receipt. Unsent
+choices carry only when the saved manifest, target, boundary, advertisement and
+creator-scoped identity/source facts still match; changed evidence is deferred for
+review. New independent directories receive the normal initial suggestion once.
+**补选可直接入库的作品** is an explicit subsequent selection, not execution. The API
+rechecks draft/confirmation/owner state under its publication transaction, so a
+concurrent confirmation prevents publishing a replacement draft. Confirmed or moved
+items stay with their original checkpoint/recovery workflow.
 
 Only clear new-work candidates can be selected together. Existing Work reuse,
 same-work copies, source acceptance and exceptions remain explicit, creator-scoped
@@ -170,7 +197,8 @@ remains a separate scoped operation when genuinely needed.
   In the Stage3 review path, named TXT/URL files not approved for removal are also
   retained explicitly as attachments, rather than inherited blanket ad cleanup.
 - Explicitly selected ads or damaged files move on the same volume into recoverable
-  quarantine, never permanent deletion. Durable intent with exact evidence precedes
+  quarantine in the existing precise-review workflow, never permanent deletion. This
+  is distinct from new-admission advertisement recycling above. Durable intent with exact evidence precedes
   the move; destination verification precedes success. Retry reconciles both paths.
 - Handling files and registering results are separate steps. Folder review uses
   original `recover` with an internal preparation callback under the admission lock,
@@ -222,6 +250,9 @@ without rewriting 000025 or any existing confirmed plan:
 | `local_admission_web_collection_requests` | Idempotent combined submit/continue receipts |
 
 The collection endpoints live under `/api/admin/local-admission/collections`;
+`GET /:id/scope` returns the saved scope without filesystem inventory, and
+`POST /:id/repreview` prepares a new unconfirmed draft from that scope or an explicitly
+edited replacement. The original collection remains unchanged. These add no migration.
 `workspace` reads configured top-level directories and `creators` searches active
 canonical identities and registered aliases. These have the same manager access and
 write-intent checks as single-creator admission. All-deferred creators remain explicit
@@ -256,6 +287,15 @@ SAVEPOINT/rollback contract. This does not change journal mode, global timeouts 
 the catalog worker, and is not a blanket promise that every SQLite contention is
 resolved. Historical failures without a statement-level trace are not retrospectively
 claimed to have this sole cause.
+
+`WorkIdentityService.registerLocal` now follows the same top-level writer reservation
+rule before its first identity/idempotency read. A separate real catalog-publisher
+connection regression reproduces the old conflict despite `busy_timeout`, then checks
+successful waiting, stable identities and rollback. Nested caller transactions retain
+their original semantics; they are not silently replaced or automatically retried.
+Advertisement-result transactions also reserve the top-level writer before reading.
+No filesystem operation is wrapped in a blanket SQLite retry. The historical paused
+batch's error is retained; its exact former lock-owning connection was not observed.
 
 Previously completed real jobs must not be replayed. Preview data is never copied to
 production. A 4141 candidate update requires paired client/server/CLI artifacts, a

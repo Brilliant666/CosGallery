@@ -16,7 +16,7 @@
       </template>
       <template v-if="model.action==='same-as'"><label>同套的本博主目录<select v-model="model.sameAsKey"><option :value="undefined">选择目录，不以同名自动确认</option><option v-for="peer in peers.filter(peer=>peer.item.key!==item.key&&['new','existing'].includes(peer.action.action))" :key="peer.item.key" :value="peer.item.key">{{ peer.item.sourceRelativePath }}</option></select></label><label class="check"><input v-model="model.primary" type="checkbox" />使用本目录作为这一套的主副本，另一份保留</label></template>
       <details v-if="!['new','defer'].includes(model.action)"><summary>选择依据 / 备注</summary><label>备注<input v-model="model.reason" maxlength="2000" placeholder="记录本次依据，不默认声称逐字节相同" /></label></details>
-      <details class="item-ads" v-if="item.ads.length&&isAdmissionSelected(model)"><summary>附件候选 · {{ item.ads.length }} 项（已选 {{ model.approvedAds?.length||0 }} 项）</summary><p class="hint">仅勾选确认为广告的具体文件，可恢复移出，不永久删除，不打开链接。</p><label v-for="ad in item.ads" :key="ad.relativePath" class="check"><input v-model="model.approvedAds" type="checkbox" :value="ad.relativePath" />{{ ad.relativePath }} · {{ mediaSize(ad.size) }}<small v-if="ad.automatic">全局已确认广告（可取消）</small></label></details>
+      <details class="item-ads" v-if="item.ads.length&&isAdmissionSelected(model)"><summary>附件候选 · {{ item.ads.length }} 项（已选 {{ model.approvedAds?.length||0 }} 项）</summary><p class="hint">仅勾选确认为广告的具体文件，{{ recycleAds?'完成索引后送入Windows回收站':'按原确认方式移至可恢复附件区' }}，不永久删除，不打开链接。</p><label v-for="ad in item.ads" :key="ad.relativePath" class="check"><input v-model="model.approvedAds" type="checkbox" :value="ad.relativePath" />{{ ad.relativePath }} · {{ mediaSize(ad.size) }}<small v-if="ad.automatic">全局已确认广告（可取消）</small></label></details>
     </fieldset><p v-if="isAdmissionSelected(model)" class="path">实际目标：{{ item.targetPath }}</p>
   </article>
 </template>
@@ -25,7 +25,7 @@ import { ref } from 'vue';
 import AdmissionWorkPicker from './AdmissionWorkPicker.vue';
 import { admissionAction,admissionGroups,isAdmissionSelected,mediaSize,type AdmissionEntry } from '../utils/admission-ui';
 import type { AdmissionAction,AdmissionActionKind,AdmissionItem,AdmissionWork } from '../types/local-admission';
-const props=defineProps<{item:AdmissionItem;creatorId:number;peers:AdmissionEntry[];locked:boolean;acceptExistingVersion:boolean;selectedWork?:AdmissionWork}>();
+const props=defineProps<{item:AdmissionItem;creatorId:number;peers:AdmissionEntry[];locked:boolean;acceptExistingVersion:boolean;selectedWork?:AdmissionWork;recycleAds?:boolean}>();
 const model=defineModel<AdmissionAction>({required:true}),emit=defineEmits<{'select-work':[work:AdmissionWork];change:[]}>(),showPicker=ref(false);
 function changeKind(event:Event){if(props.locked)return;const value=(event.target as HTMLSelectElement).value;if(!['new','existing','same-as','skip','defer'].includes(value))return;model.value=admissionAction(props.item,value as AdmissionActionKind,model.value);emit('change');}
 function selectWork(work:AdmissionWork){if(props.locked)return;model.value={...admissionAction(props.item,'existing',model.value),workId:work.workId,reason:'用户在确认页选择对应已有作品'};showPicker.value=false;emit('select-work',work);emit('change');}

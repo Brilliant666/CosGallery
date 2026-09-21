@@ -11,6 +11,7 @@ import { runAdmissionExclusive } from './local-admission-lock.js';
 import { extractWorkDisplayTitle } from '../utils/work-title.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
+import { recycleBinAdapter, type RecycleBinAdapter } from './recycle-bin-adapter.js';
 
 const leaf = z.string().min(1).refine(v => !/[\\/:\x00]/.test(v) && v!=='.' && v!=='..', 'A direct child directory name is required');
 const entrySchema = z.object({ relativePath:z.string().min(1), kind:z.enum(['directory','image','video','other']), size:z.number().int().nonnegative(), dev:z.string(), ino:z.string(), mtimeNs:z.string() }).strict();
@@ -24,6 +25,7 @@ const itemSchema = z.object({ key:z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), so
 });
 export const admissionPlanSchema=z.object({ version:z.literal(1),planId:z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),confirmed:z.literal(true),creatorId:z.number().int().positive(),
   sourceEvidenceId:z.number().int().positive().optional(),
+  advertisementDisposition:z.literal('recycle_bin').optional(),
   inputRoot:z.string().min(1),galleryRoot:z.string().min(1),creatorDirectory:leaf,items:z.array(itemSchema).min(1).max(500) }).strict();
 export type AdmissionPlan=z.infer<typeof admissionPlanSchema>;
 type Entry=z.infer<typeof entrySchema>;
@@ -31,6 +33,11 @@ const recoverySchema=z.object({confirmed:z.literal(true),planId:z.string().min(1
   removals:z.array(z.object({itemKey:z.string().min(1),entry:entrySchema,retainOriginal:z.literal(true).optional(),approvedAdvertisement:z.literal(true).optional()}).strict()).min(1).max(2000)}).strict();
 const removalKind='admission_file_removal';
 type Removal={planId:string;itemKey:string;contentHash:string;entry:Entry;reason:string;evidence:string;retainOriginal?:true;approvedAdvertisement?:true};
+const advertisementRecycleKind='admission_advertisement_recycle';
+const advertisementRecycleSchema=z.object({confirmed:z.literal(true),planId:z.string().min(1),key:z.string().trim().min(1).max(100),reason:z.string().trim().min(1).max(2000),
+  files:z.array(z.object({itemKey:z.string().min(1),entry:entrySchema}).strict()).min(1).max(2000)}).strict();
+type AdvertisementRecycle={removal:Removal;sourcePath:string;requestKey:string;phase:'intent'|'recycled'};
+type AdvertisementRecycleRow={decision_key:string;payload_json:string;state:string};
 
 function cmp(v:string){return process.platform==='win32'?v.toLowerCase():v;}
 function json(v:unknown){return JSON.stringify(v);}
@@ -62,7 +69,10 @@ export async function inventoryAdmissionDirectory(root:string):Promise<Entry[]> 
 
 type ItemState={state:string;local_work_id:number|null;work_id:number|null;manifest_json:string};
 export class LocalFolderAdmissionService {
-  constructor(private readonly db:DatabaseSync,private readonly galleryRoot:string){}
+  private readonly recycler:Pick<RecycleBinAdapter,'recycle'>;
+  constructor(private readonly db:DatabaseSync,private readonly galleryRoot:string,options:{recycler?:Pick<RecycleBinAdapter,'recycle'>}={}){
+    this.recycler=options.recycler??recycleBinAdapter;
+  }
 
   async preview(input:{creatorId:number;inputRoot:string;directories:string[];sourceEvidenceId?:number;acceptExistingVersion?:boolean}) {
     if(!Number.isSafeInteger(input.creatorId)||input.creatorId<=0||!Array.isArray(input.directories)||!input.directories.length)throw Error('Explicit creator and non-empty directory scope required');
@@ -142,6 +152,202 @@ export class LocalFolderAdmissionService {
     return path.join(plan.inputRoot,'.local-admission-attachments',plan.planId,item.key,relative);
   }
 
+  private async assertAdvertisementPath(plan:AdmissionPlan,candidate:string){
+    await assertPathInsideLocalIngestRoot(plan.inputRoot,candidate);
+    const root=path.resolve(plan.inputRoot),relative=path.relative(root,path.resolve(candidate));
+    if(!relative||relative.startsWith('..')||path.isAbsolute(relative))throw Error('Advertisement path is outside its exact input root');
+    const components=[root,...relative.split(path.sep)];let current='';
+    for(const [index,component] of components.entries()){
+      current=index===0?component:path.join(current,component);
+      try{
+        const stat=await fs.lstat(current);
+        if(stat.isSymbolicLink()||index<components.length-1&&!stat.isDirectory())throw Error('Linked advertisement path is not supported');
+      }catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')break;throw error;}
+    }
+  }
+
+  private advertisementRecycleKey(plan:AdmissionPlan,item:AdmissionPlan['items'][number],entry:Entry){
+    return `admission-ad-recycle:${plan.planId}:${hash([item.key,entry.relativePath])}`;
+  }
+
+  private assertAdvertisementRecycleIdle(itemState:ItemState){
+    this.idle();
+    if(!itemState?.work_id||!itemState.local_work_id||!['indexed','completed'].includes(itemState.state))throw Error('Advertisement recycling requires indexed or completed admission');
+    if(this.db.prepare(`SELECT t.id FROM archive_catalog_download_tasks t JOIN archive_catalog_source_works s ON s.id=t.source_work_id
+      WHERE s.work_id=? AND t.status IN ('claimed','downloading') LIMIT 1`).get(itemState.work_id))throw Error('Related acquisition is active');
+  }
+
+  private advertisementRecycleJournal(plan:AdmissionPlan,item:AdmissionPlan['items'][number]){
+    const state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key) as ItemState;
+    if(!state?.local_work_id)return [];
+    const contentHash=String(this.db.prepare('SELECT content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(plan.planId)!.content_hash);
+    return (this.db.prepare('SELECT decision_key,payload_json,state FROM archive_catalog_work_decisions WHERE kind=? AND local_work_id=?').all(advertisementRecycleKind,state.local_work_id) as AdvertisementRecycleRow[]).map(row=>{
+      const journal=JSON.parse(row.payload_json) as AdvertisementRecycle,removal=journal.removal;
+      if(!removal||removal.planId!==plan.planId||removal.itemKey!==item.key||removal.contentHash!==contentHash||!removal.reason||!removal.evidence||
+        removal.retainOriginal||removal.approvedAdvertisement||!item.approvedAds.includes(removal.entry.relativePath)||!item.manifest.some(e=>json(e)===json(removal.entry))||
+        row.decision_key!==this.advertisementRecycleKey(plan,item,removal.entry)||journal.sourcePath!==this.attachmentPath(plan,item,removal.entry.relativePath)||
+        !journal.requestKey||!['intent','recycled'].includes(journal.phase)||row.state!=='active')throw Error('Advertisement recycle journal changed or was revoked; review required');
+      if(journal.requestKey===`plan:${plan.planId}`){
+        if(plan.advertisementDisposition!=='recycle_bin')throw Error('Saved plan did not authorize advertisement recycling');
+      }else{
+        const receipt=this.db.prepare('SELECT kind,payload_json,state FROM archive_catalog_work_decisions WHERE decision_key=?').get(`admission-ad-recycle-request:${journal.requestKey}`);
+        if(!receipt||receipt.kind!=='admission_advertisement_recycle_request'||receipt.state!=='active')throw Error('Advertisement recycling request changed or was revoked');
+        const request=advertisementRecycleSchema.parse(JSON.parse(String(receipt.payload_json)));
+        if(request.planId!==plan.planId||request.key!==journal.requestKey||request.reason!==removal.reason||!request.files.some(file=>file.itemKey===item.key&&json(file.entry)===json(removal.entry)))throw Error('Advertisement recycle intent differs from its explicit request');
+      }
+      return {row,journal};
+    });
+  }
+
+  /** Filesystem success and its result may be separated by a process/SQLite failure. */
+  private finishAdvertisementRecycle(row:AdvertisementRecycleRow,journal:AdvertisementRecycle){
+    const key=`${row.decision_key}:removal`,payload=json(journal.removal);
+    // Reserve the writer before SELECT so a catalog publisher cannot force a
+    // deferred read-to-write upgrade to fail immediately despite busy_timeout.
+    const ownWriteTransaction=!this.db.isTransaction;
+    this.db.exec(ownWriteTransaction?'BEGIN IMMEDIATE':'SAVEPOINT admission_ad_recycle');
+    try{
+      const prior=this.db.prepare('SELECT kind,payload_json,state FROM archive_catalog_work_decisions WHERE decision_key=?').get(key) as {kind:string;payload_json:string;state:string}|undefined;
+      if(prior&&(prior.kind!==removalKind||prior.payload_json!==payload||prior.state!=='active'))throw Error('Advertisement removal decision changed or was revoked; review required');
+      const owner=this.db.prepare('SELECT work_id,local_work_id FROM archive_catalog_work_decisions WHERE decision_key=? AND state=\'active\'').get(row.decision_key);
+      if(!owner)throw Error('Advertisement recycle intent is not active');
+      this.db.prepare(`INSERT INTO archive_catalog_work_decisions(decision_key,kind,work_id,local_work_id,reason,payload_json)
+        VALUES(?,?,?,?,?,?) ON CONFLICT(decision_key) DO NOTHING`).run(key,removalKind,owner.work_id,owner.local_work_id,journal.removal.reason,payload);
+      this.db.prepare('UPDATE archive_catalog_work_decisions SET payload_json=? WHERE decision_key=?').run(json({...journal,phase:'recycled'}),row.decision_key);
+      this.db.exec(ownWriteTransaction?'COMMIT':'RELEASE admission_ad_recycle');
+    }catch(error){this.db.exec(ownWriteTransaction?'ROLLBACK':'ROLLBACK TO admission_ad_recycle; RELEASE admission_ad_recycle');throw error;}
+  }
+
+  /** A missing file is accepted only with a previously persisted exact recycle intent. */
+  private async reconcileAdvertisementRecycling(plan:AdmissionPlan,item:AdmissionPlan['items'][number]){
+    const missing=[];
+    for(const {row,journal} of this.advertisementRecycleJournal(plan,item)){
+      await this.assertAdvertisementPath(plan,journal.sourcePath);
+      const present=await exists(journal.sourcePath);
+      if(journal.phase==='recycled'&&present)throw Error('Recycled advertisement is present again; review required');
+      if(journal.phase==='intent'&&!present)missing.push({row,journal});
+    }
+    if(!missing.length)return;
+    await this.verifyTarget(plan,item,missing.map(value=>value.journal.removal));
+    const state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key) as ItemState;
+    this.assertAdvertisementRecycleIdle(state);
+    for(const {row,journal} of missing)this.finishAdvertisementRecycle(row,journal);
+  }
+
+  private async verifyAdvertisementFile(plan:AdmissionPlan,item:AdmissionPlan['items'][number],entry:Entry){
+    const saved=this.attachmentPath(plan,item,entry.relativePath);
+    await this.assertAdvertisementPath(plan,saved);
+    const stat=await fs.lstat(saved,{bigint:true});
+    if(!stat.isFile()||stat.isSymbolicLink()||json({...entry,size:Number(stat.size),dev:String(stat.dev),ino:String(stat.ino),mtimeNs:String(stat.mtimeNs)})!==json(entry))throw Error('Advertisement changed since confirmation; review required');
+    return saved;
+  }
+
+  /** Only known empty attachment ancestors are removed; foreign files are never traversed. */
+  private async pruneAdvertisementContainers(plan:AdmissionPlan,item:AdmissionPlan['items'][number],entries:Entry[]){
+    const root=path.join(plan.inputRoot,'.local-admission-attachments'),directories=new Set<string>();
+    for(const entry of entries){
+      for(let dir=path.dirname(this.attachmentPath(plan,item,entry.relativePath));isSameOrNestedPath(root,dir);dir=path.dirname(dir)){
+        directories.add(dir);if(dir===root)break;
+      }
+    }
+    for(const dir of [...directories].sort((a,b)=>b.length-a.length)){
+      await this.assertAdvertisementPath(plan,dir);
+      try{await regularDirectory(dir);await fs.rmdir(dir);}catch(error){if(!['ENOENT','ENOTEMPTY','EEXIST'].includes((error as NodeJS.ErrnoException).code??''))throw error;}
+    }
+  }
+
+  private async recycleItemAdvertisements(plan:AdmissionPlan,item:AdmissionPlan['items'][number],entries:Entry[],requestKey:string,reason:string){
+    await this.reconcileAdvertisementRecycling(plan,item);
+    await this.verifyTarget(plan,item);
+    if(this.db.isTransaction)throw Error('Advertisement recycling requires committed intent outside a caller transaction');
+    const state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key) as ItemState;
+    this.assertAdvertisementRecycleIdle(state);
+    const removed=new Set(this.removals(plan,item).map(value=>value.entry.relativePath));
+    // Preflight the complete exact selection before creating any new intent or recycling.
+    for(const entry of entries)if(!removed.has(entry.relativePath))await this.verifyAdvertisementFile(plan,item,entry);
+    for(const entry of entries){
+      const key=this.advertisementRecycleKey(plan,item,entry);
+      let recorded=this.advertisementRecycleJournal(plan,item).find(value=>value.row.decision_key===key);
+      if(recorded&&recorded.journal.requestKey!==requestKey)throw Error('Reuse the original advertisement recycling request');
+      if(removed.has(entry.relativePath))continue;
+      const saved=await this.verifyAdvertisementFile(plan,item,entry);
+      this.assertAdvertisementRecycleIdle(state);
+      if(!recorded){
+        const contentHash=String(this.db.prepare('SELECT content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(plan.planId)!.content_hash);
+        const journal:AdvertisementRecycle={requestKey,sourcePath:saved,phase:'intent',removal:{planId:plan.planId,itemKey:item.key,contentHash,entry,reason,
+          evidence:'Explicit Windows Recycle Bin request; absence is recorded only after durable exact-file recycle intent.'}};
+        this.db.prepare('INSERT INTO archive_catalog_work_decisions(decision_key,kind,work_id,local_work_id,reason,payload_json) VALUES(?,?,?,?,?,?)')
+          .run(key,advertisementRecycleKind,state.work_id,state.local_work_id,reason,json(journal));
+        recorded={row:{decision_key:key,payload_json:json(journal),state:'active'},journal};
+      }
+      await this.verifyAdvertisementFile(plan,item,entry);this.assertAdvertisementRecycleIdle(state);
+      const result=await this.recycler.recycle(saved);
+      if(!result.recycled||await exists(saved))throw Error('Advertisement recycling did not remove the original path; retry the saved request');
+      this.finishAdvertisementRecycle(recorded.row,recorded.journal);
+    }
+    await this.verifyTarget(plan,item);
+    await this.pruneAdvertisementContainers(plan,item,entries);
+  }
+
+  async previewAdvertisementRecycling(raw:unknown){
+    const request=z.object({planId:z.string().min(1),itemKeys:z.array(z.string().min(1)).min(1).max(500)}).strict().parse(raw);
+    this.idle();
+    const saved=this.db.prepare('SELECT payload_json FROM archive_local_admission_plans WHERE plan_id=?').get(request.planId);
+    if(!saved)throw Error('Existing admission plan required');
+    const plan=this.validate(JSON.parse(String(saved.payload_json))),files:Array<{itemKey:string;entry:Entry}>=[];
+    if(new Set(request.itemKeys).size!==request.itemKeys.length)throw Error('Duplicate advertisement item scope');
+    for(const itemKey of request.itemKeys){
+      const item=plan.items.find(value=>value.key===itemKey);
+      if(!item)throw Error('Item is not in the saved admission plan');
+      const state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,itemKey) as ItemState;
+      this.assertAdvertisementRecycleIdle(state);await this.verifyTarget(plan,item);
+      if(this.advertisementRecycleJournal(plan,item).some(value=>value.journal.phase==='intent'))throw Error('Pending advertisement recycle intent exists; reuse the original request or admission resume');
+      const removed=new Set(this.removals(plan,item).map(value=>value.entry.relativePath));
+      for(const relative of item.approvedAds)if(!removed.has(relative)){const entry=item.manifest.find(value=>value.relativePath===relative)!;await this.verifyAdvertisementFile(plan,item,entry);files.push({itemKey,entry});}
+    }
+    return {confirmed:false,planId:plan.planId,key:randomUUID(),reason:'',files};
+  }
+
+  /** Explicit historical cleanup never edits or silently upgrades the immutable plan. */
+  async recycleAdvertisements(raw:unknown){
+    if(this.db.isTransaction)throw Error('Advertisement recycling requires committed intent outside a caller transaction');
+    return runAdmissionExclusive(this.db,async()=>{
+      const request=advertisementRecycleSchema.parse(raw);this.idle();
+      const saved=this.db.prepare('SELECT payload_json FROM archive_local_admission_plans WHERE plan_id=?').get(request.planId);
+      if(!saved)throw Error('Existing admission plan required');
+      const plan=this.validate(JSON.parse(String(saved.payload_json))),selected=new Map<string,Entry[]>(),seen=new Set<string>();
+      const requestDecisionKey=`admission-ad-recycle-request:${request.key}`;
+      const oldRequest=this.db.prepare('SELECT kind,payload_json,state FROM archive_catalog_work_decisions WHERE decision_key=?').get(requestDecisionKey);
+      if(oldRequest&&(oldRequest.kind!=='admission_advertisement_recycle_request'||oldRequest.payload_json!==json(request)||oldRequest.state!=='active'))throw Error('Advertisement recycling request changed or was revoked');
+      for(const file of request.files){
+        const item=plan.items.find(value=>value.key===file.itemKey),identifier=json([file.itemKey,file.entry.relativePath]);
+        if(!item||!item.approvedAds.includes(file.entry.relativePath)||!item.manifest.some(entry=>json(entry)===json(file.entry)))throw Error('Recycling requires an exact original approved advertisement');
+        if(seen.has(identifier))throw Error('Duplicate advertisement recycling selection');seen.add(identifier);
+        selected.set(item.key,[...(selected.get(item.key)??[]),file.entry]);
+      }
+      // Verify every selected item before any new destructive file operation.
+      for(const itemKey of selected.keys()){
+        const item=plan.items.find(value=>value.key===itemKey)!;
+        const state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,itemKey) as ItemState;
+        const source=path.join(plan.inputRoot,item.sourceRelativePath);await assertPathInsideLocalIngestRoot(plan.inputRoot,source,{directChild:true});
+        if(await exists(source))throw Error('Source still exists; advertisement recycling requires a completed move');
+        this.assertAdvertisementRecycleIdle(state);
+        const removed=new Set(this.removals(plan,item).map(value=>value.entry.relativePath));
+        for(const entry of selected.get(itemKey)!){
+          const recorded=this.advertisementRecycleJournal(plan,item).find(value=>value.row.decision_key===this.advertisementRecycleKey(plan,item,entry));
+          if(recorded&&recorded.journal.requestKey!==request.key)throw Error('Reuse the original advertisement recycling request');
+          if(!recorded&&removed.has(entry.relativePath))throw Error('Advertisement was already removed by a separate explicit decision; exclude it from this recycling request');
+        }
+        await this.reconcileAdvertisementRecycling(plan,item);await this.verifyTarget(plan,item);
+      }
+      this.idle();
+      if(!oldRequest)this.db.prepare('INSERT INTO archive_catalog_work_decisions(decision_key,kind,reason,payload_json) VALUES(?,?,?,?)')
+        .run(requestDecisionKey,'admission_advertisement_recycle_request',request.reason,json(request));
+      for(const [itemKey,entries] of selected)await this.recycleItemAdvertisements(plan,plan.items.find(value=>value.key===itemKey)!,entries,request.key,request.reason);
+      return {planId:plan.planId,recycledFiles:request.files,resumed:false};
+    });
+  }
+
   private removals(plan:AdmissionPlan,item:AdmissionPlan['items'][number]):Removal[]{
     const rows=this.db.prepare(`SELECT payload_json FROM archive_catalog_work_decisions WHERE kind=? AND state='active'
       AND local_work_id=(SELECT local_work_id FROM archive_local_admission_items WHERE plan_id=? AND item_key=?)`).all(removalKind,plan.planId,item.key) as {payload_json:string}[];
@@ -219,7 +425,7 @@ export class LocalFolderAdmissionService {
     await assertPathInsideLocalIngestRoot(plan.galleryRoot,item.targetPath);
     const observed=await inventoryAdmissionDirectory(item.targetPath);
     for(const ad of item.approvedAds){
-      const saved=this.attachmentPath(plan,item,ad);await assertPathInsideLocalIngestRoot(plan.inputRoot,saved);
+      const saved=this.attachmentPath(plan,item,ad);await this.assertAdvertisementPath(plan,saved);
       if(!await exists(saved))continue;
       if(observed.some(e=>e.relativePath===ad))throw Error('Attachment exists in both locations; review required');
       const stat=await fs.lstat(saved,{bigint:true});
@@ -344,7 +550,7 @@ export class LocalFolderAdmissionService {
         const sourceExists=await exists(source),targetExists=await exists(target);
         if(sourceExists===targetExists)throw Error('Both source and target exist or both are absent; review required');
         if(sourceExists){if(hash(await inventoryAdmissionDirectory(source))!==hash(item.manifest))throw Error('Directory changed since confirmation; review required');}
-        else {await this.retainRecoveredOriginals(plan,item);await this.verifyTarget(plan,item);}
+        else {await this.reconcileAdvertisementRecycling(plan,item);await this.retainRecoveredOriginals(plan,item);await this.verifyTarget(plan,item);}
         if(state.state==='planned'){
           if(!sourceExists)throw Error('No recorded move intent; cannot adopt target');
           await fs.mkdir(path.dirname(target),{recursive:true});await regularDirectory(path.dirname(target));
@@ -368,10 +574,11 @@ export class LocalFolderAdmissionService {
           // outside the gallery, with the same plan and relative names for safe replay.
           for(const ad of item.approvedAds){
             const from=path.join(target,ad),to=this.attachmentPath(plan,item,ad);
-            await assertPathInsideLocalIngestRoot(target,from);await assertPathInsideLocalIngestRoot(plan.inputRoot,to);
+            await assertPathInsideLocalIngestRoot(target,from);await this.assertAdvertisementPath(plan,to);
             if(await exists(from)){
               if(await exists(to))throw Error('Attachment target occupied');
               await fs.mkdir(path.dirname(to),{recursive:true});
+              await this.assertAdvertisementPath(plan,to);
               if((await fs.stat(from,{bigint:true})).dev!==(await fs.stat(path.dirname(to),{bigint:true})).dev)throw Error('Cross-volume attachment exclusion unsupported');
               await fs.rename(from,to);
             }
@@ -399,6 +606,8 @@ export class LocalFolderAdmissionService {
             observationId:plan.sourceEvidenceId,creatorId:plan.creatorId,workId:state.work_id!,localWorkId:state.local_work_id!,
             planId:plan.planId,itemKey:item.key,reason:item.reason,key:`admission-evidence:${plan.planId}:${item.key}`
           });
+          if(plan.advertisementDisposition==='recycle_bin'&&item.approvedAds.length)await this.recycleItemAdvertisements(plan,item,
+            item.approvedAds.map(ad=>item.manifest.find(entry=>entry.relativePath===ad)!),`plan:${plan.planId}`,item.reason);
           this.db.prepare("UPDATE archive_local_admission_items SET state='completed',last_error=NULL WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='completed';
         }
         const approvedRemovals=this.removals(plan,item);

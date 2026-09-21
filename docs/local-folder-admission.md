@@ -86,13 +86,63 @@ or the user-confirmed global ecytt02 image-ad basenames `492.jpg` and `009-01.jp
 present in the confirmed manifest. New unconfirmed CLI previews prefill these two
 image-ad matches; the full plan still requires confirmation, and the list may be
 edited before confirming. Other images are not advertisement candidates. Existing
-confirmed plans are never supplemented on apply/resume. These files are **moved, not deleted**, to
+confirmed plans are never supplemented on apply/resume. Without an explicit
+`advertisementDisposition`, these files are **moved, not deleted**, to
 `inputRoot/.local-admission-attachments/planId/itemKey/relative/ad.url`.
 All other attachments and directory structure remain. URLs are never opened.
 The result reports exact retained attachment locations. No cleanup of real samples is
 performed by development/testing, nor is content-based/general advertisement detection introduced.
 At least one non-excluded supported media file must remain. Replay verifies the
 saved advertisement's original kind and exact metadata as well as retained media.
+
+New confirmed plans can explicitly set top-level
+`"advertisementDisposition":"recycle_bin"`. The Web confirmation passes this mode
+only with its exact advertisement selection and separate advertisement consent.
+Admission first moves the selected advertisements to the location above so failed
+indexing remains recoverable. After indexing and identity/evidence updates succeed,
+it sends those exact advertisement files to the Windows Recycle Bin, records their
+absence, then marks the item completed. A recycle failure leaves `indexed` and the
+error for retry; a successful file is not recycled twice. There is no permanent-delete
+fallback. Non-Windows hosts report that the Windows Recycle Bin is unavailable.
+
+The recycle journal uses `archive_catalog_work_decisions`: an exact-file
+`admission_advertisement_recycle` intent is committed before the OS operation and an
+`admission_file_removal` decision is committed with its result. If the OS operation
+finishes but its response or database write is lost, resume first checks the saved
+intent, original immutable manifest and remaining files, then completes the result.
+Absence without that prior intent remains an error; an intent plus absence is not a
+claim that the service inspected the contents of the Windows Recycle Bin. Completed
+items still verify their retained media and accepted advertisement removals on replay.
+Only empty known ancestors under `.local-admission-attachments` are pruned using
+nonrecursive `rmdir`; other files and unrelated plan directories are preserved.
+
+### Explicit recycling for advertisements retained by older plans
+
+An old immutable plan keeps its original behavior and payload. Adding
+`advertisementDisposition` to that saved plan is rejected. Its preserved advertisements
+can instead be handled by a separate explicit request; deployment does not perform
+that cleanup automatically.
+
+1. Prepare a scope file with the original `planId` and exact `itemKeys` to inspect.
+   Run `local-folder-admission preview-recycle-advertisements <absolute-scope.json>`.
+   This command opens the existing database read-only and returns `confirmed:false`,
+   a request `key`, an empty `reason`, and the exact original manifest entries in `files`.
+2. Review that returned list, fill in `reason`, and set `confirmed:true` in a separate
+   confirmation file. Run
+   `local-folder-admission recycle-advertisements <absolute-confirmed-advertisements.json>`.
+   The shape is `{confirmed:true,planId,key,reason,files:[{itemKey,entry}]}`; copy `entry`
+   exactly from the preview. Only advertisements already approved by the immutable
+   plan are accepted, and only indexed/completed items are eligible.
+3. Retry the same confirmation file if interrupted. Its exact request is durably
+   recorded as `admission_advertisement_recycle_request`; changing its key, reason or
+   file list is not a retry. The command does not resume admission, change acquisition
+   state, rewrite the plan or reset completed checkpoints. Afterwards, the original
+   plan can still be resumed normally.
+
+Do not manually delete the preserved advertisement files: their absence would fail
+the original batch's replay checks until an exact authorized removal is recorded.
+No historical or production advertisements are recycled by development or tests;
+tests inject a synthetic recycler operating only on temporary fixtures.
 
 ### Later decisions
 

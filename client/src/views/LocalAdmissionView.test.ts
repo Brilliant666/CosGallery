@@ -163,7 +163,7 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     checks=wrapper.get('[data-test=admission-item-first] .item-ads').findAll('input');
     expect(checks.map(input=>(input.element as HTMLInputElement).checked)).toEqual([false,false,true]);
     await button(wrapper,'核对本批并确认执行').trigger('click');const dialog=wrapper.get('[role=dialog]');
-    expect(dialog.text()).toContain('广告可恢复移出：内层/009-01.jpg');expect(dialog.text()).not.toContain('广告可恢复移出：492.jpg');
+    expect(dialog.text()).toContain('广告送入Windows回收站：内层/009-01.jpg');expect(dialog.text()).not.toContain('广告可恢复移出：492.jpg');
     await dialog.findAll('input')[0]!.setValue(true);expect(dialog.get('[data-test=admission-execute]').attributes('disabled')).toBeDefined();
     await dialog.findAll('input')[1]!.setValue(true);await dialog.get('[data-test=admission-execute]').trigger('click');await flushPromises();
     const payload=vi.mocked(api.executeAdmission).mock.calls[0]![1];expect(payload.actions[0]?.approvedAds).toEqual(['内层/009-01.jpg']);expect(payload.actions[1]?.approvedAds).toEqual([]);

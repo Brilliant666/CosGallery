@@ -27,6 +27,7 @@ export interface AdmissionItem {
   suggestedAction?: AdmissionAction;
   structureWarnings?: string[];
   needsBoundaryReview?: boolean;
+  reviewFingerprint?: string;
 }
 export type AdmissionState = 'draft' | 'queued' | 'running' | 'completed' | 'needs_review' | 'interrupted' | 'failed';
 export interface AdmissionBatch {
@@ -41,6 +42,7 @@ export interface AdmissionPreviewInput {
 }
 export interface AdmissionExecuteInput {
   requestKey: string; confirmed: true; acceptExistingVersion: boolean; actions: AdmissionAction[]; adsConfirmed?: true;
+  advertisementDisposition?: 'recycle_bin';
 }
 export interface AdmissionResumeInput { requestKey: string; confirmed: true }
 export interface AdmissionCreator { id: number; name: string; aliases: string[] }
@@ -54,5 +56,5 @@ export interface AdmissionCollection {
 }
 export interface AdmissionCollectionExecuteInput {
   requestKey:string;confirmed:true;
-  batches:Array<{batchId:string;acceptExistingVersion:boolean;adsConfirmed?:true;actions:AdmissionAction[]}>;
+  batches:Array<{batchId:string;acceptExistingVersion:boolean;adsConfirmed?:true;advertisementDisposition?:'recycle_bin';actions:AdmissionAction[]}>;
 }

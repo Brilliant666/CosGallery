@@ -21,13 +21,58 @@ describe('independent multi-creator admission workspace',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();sessionStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
   afterEach(()=>vi.useRealTimers());
+  it('returns to scope editing with original selections and only includes explicitly selected new directories',async()=>{
+    vi.mocked(api.fetchAdmissionCollectionScope).mockResolvedValue({scopes:[{creatorId:17,parent:'甲别名',directories:['第一套'],acceptExistingVersion:true}]});
+    const {wrapper}=await render('?collection=collection-one');
+    await wrapper.get('[data-test=collection-edit-scope]').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('调整本批导入范围');
+    const directories=wrapper.findAll('[data-folder="甲别名"] .directory-grid input');
+    expect(directories.map(input=>(input.element as HTMLInputElement).checked)).toEqual([true,false]);
+    expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
+    await directories[1].setValue(true);
+    vi.mocked(api.repreviewAdmissionCollection).mockResolvedValue({...collection(),id:'replacement'});
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),id:'replacement'});
+    await wrapper.get('[data-test=collection-preview]').trigger('click');await flushPromises();
+    expect(api.repreviewAdmissionCollection).toHaveBeenCalledWith('collection-one',[{creatorId:17,parent:'甲别名',directories:['第一套','第二套'],acceptExistingVersion:true}]);
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('lets users deselect a renamed/missing directory instead of silently dropping or selecting replacements',async()=>{
+    vi.mocked(api.fetchAdmissionCollectionScope).mockResolvedValue({scopes:[{creatorId:17,parent:'甲别名',directories:['原目录'],acceptExistingVersion:true}]});
+    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-edit-scope]').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('原目录已不存在');expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeDefined();
+    const directories=wrapper.findAll('[data-folder="甲别名"] .directory-grid input');
+    expect(directories.map(input=>(input.element as HTMLInputElement).checked)).toEqual([false,false,true]);
+    expect(directories[2].attributes('disabled')).toBeUndefined();await directories[2].setValue(false);await directories[0].setValue(true);
+    expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeUndefined();
+    await button(wrapper,'取消调整，返回核对').trigger('click');expect(wrapper.text()).toContain('核对作品身份与文件范围');expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('rechecks files into a new draft, retaining unchanged choices and deferring changed evidence until explicit selection',async()=>{
+    let fresh=false;
+    vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>({...collection(),id,batches:[{...batch(fresh?'a2':'a'),totals:{total:2,selected:0,completed:0,skipped:0,deferred:2}}]}));
+    vi.mocked(api.fetchAdmissionItems).mockImplementation(async()=>({items:['one','two'].map(name=>({...item(fresh?`new-${name}`:name),sourceRelativePath:name,reviewFingerprint:fresh&&name==='two'?'changed':'same'})),total:2,page:1,pageSize:100}));
+    vi.mocked(api.repreviewAdmissionCollection).mockImplementation(async()=>{fresh=true;return {...collection(),id:'fresh'};});
+    const {wrapper,router}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-one] select').setValue('skip');
+    await wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query.collection).toBe('fresh');expect(api.repreviewAdmissionCollection).toHaveBeenCalledWith('collection-one');
+    expect(wrapper.get('[data-test=admission-item-new-one] select').element.value).toBe('skip');
+    expect(wrapper.get('[data-test=admission-item-new-two] select').element.value).toBe('defer');
+    await button(wrapper,'补选可直接入库的作品').trigger('click');expect(wrapper.get('[data-test=admission-item-new-two] select').element.value).toBe('new');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('keeps the original draft and choices when a concurrent confirmation rejects repreview',async()=>{
+    vi.mocked(api.repreviewAdmissionCollection).mockRejectedValue(new RequestError('原批已确认',409));
+    const {wrapper,router}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-a-first] select').setValue('skip');
+    await wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query.collection).toBe('collection-one');expect(wrapper.text()).toContain('原批已确认');expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('skip');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
   it('preselects safe items once, preserves manual defer on refresh/return, and only reselects on explicit request',async()=>{
     const {wrapper}=await render('?collection=collection-one');
     expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('new');
     expect(wrapper.get('[data-test=admission-item-a-candidate] select').element.value).toBe('defer');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
     await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
-    await button(wrapper,'刷新状态').trigger('click');await flushPromises();
+    await button(wrapper,'读取已保存状态').trigger('click');await flushPromises();
     expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
     expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
     wrapper.unmount();const returned=await render();
@@ -46,7 +91,7 @@ describe('independent multi-creator admission workspace',()=>{
     const returned=await render();expect(returned.router.currentRoute.value.query.collection).toBe('collection-one');
     expect(returned.wrapper.text()).toContain('本批处理完成');expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
     const reads=vi.mocked(api.fetchAdmissionWorkspace).mock.calls.length;
-    await button(returned.wrapper,'选择新批次').trigger('click');await flushPromises();
+    await button(returned.wrapper,'新建批次').trigger('click');await flushPromises();
     expect(api.fetchAdmissionWorkspace).toHaveBeenCalledTimes(reads+1);
     expect(returned.router.currentRoute.value.query.collection).toBeUndefined();expect(returned.wrapper.text()).toContain('选择这次要收录的范围');
     returned.wrapper.unmount();const fresh=await render();expect(fresh.router.currentRoute.value.query.collection).toBeUndefined();
@@ -68,7 +113,7 @@ describe('independent multi-creator admission workspace',()=>{
     await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
     let release!:(value:Awaited<ReturnType<typeof api.fetchAdmissionItems>>)=>void;
     vi.mocked(api.fetchAdmissionItems).mockReturnValueOnce(new Promise(done=>release=done));
-    await button(wrapper,'刷新状态').trigger('click');await flushPromises();wrapper.unmount();
+    await button(wrapper,'读取已保存状态').trigger('click');await flushPromises();wrapper.unmount();
     const returned=await render('?collection=first');expect(returned.wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
     release({items:[item('late')],total:1,page:1,pageSize:100});await flushPromises();
     expect(returned.wrapper.find('[data-test=admission-item-late]').exists()).toBe(false);
@@ -89,7 +134,7 @@ describe('independent multi-creator admission workspace',()=>{
     let status!:(value:AdmissionCollection)=>void,items!:(value:Awaited<ReturnType<typeof api.fetchAdmissionItems>>)=>void;
     vi.mocked(api.fetchAdmissionCollection).mockReturnValueOnce(new Promise(done=>status=done));
     vi.mocked(api.fetchAdmissionItems).mockReturnValueOnce(new Promise(done=>items=done));
-    await button(wrapper,'刷新状态').trigger('click');
+    await button(wrapper,'读取已保存状态').trigger('click');
     await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
     status(collection());await flushPromises();wrapper.unmount();
     const returned=await render('?collection=collection-one');expect(returned.wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
@@ -167,7 +212,7 @@ describe('independent multi-creator admission workspace',()=>{
   });
   it('explains changed unstarted files versus moved checkpoints without replaying or modifying the confirmed plan',async()=>{
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),error:'源文件已变化'});const {wrapper}=await render('?collection=collection-one');
-    expect(wrapper.text()).toContain('尚未移动但源文件已变化的目录');expect(wrapper.text()).toContain('选择新批次');expect(wrapper.text()).toContain('不能修改或重放原确认计划');expect(wrapper.text()).toContain('已经移动的项目按原检查点处理');
+    expect(wrapper.text()).toContain('尚未移动但源文件已变化的目录');expect(wrapper.text()).toContain('新建批次');expect(wrapper.text()).toContain('不能修改或重放原确认计划');expect(wrapper.text()).toContain('已经移动的项目按原检查点处理');
     expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();expect(api.previewAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('does not silently omit a checked creator after every work directory is deselected',async()=>{
