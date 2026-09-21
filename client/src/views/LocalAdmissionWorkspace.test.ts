@@ -43,16 +43,16 @@ describe('independent multi-creator admission workspace',()=>{
     const {wrapper}=await render();expect(wrapper.get('[data-folder="未明确身份"] input[type=checkbox]').attributes('disabled')).toBeDefined();
     await wrapper.get('[data-folder="甲别名"] input[type=checkbox]').setValue(true);await wrapper.get('[data-folder="博主乙"] input[type=checkbox]').setValue(true);await flushPromises();
     expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeDefined();await wrapper.get('.stage-actions input[type=checkbox]').setValue(true);await wrapper.get('[data-test=collection-preview]').trigger('click');await flushPromises();
-    expect(api.previewAdmissionCollection).toHaveBeenCalledExactlyOnceWith([{creatorId:17,parent:'甲别名',directories:['第一套','第二套'],acceptExistingVersion:false},{creatorId:88,parent:'博主乙',directories:['第一套','第二套'],acceptExistingVersion:false}]);expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmission).not.toHaveBeenCalled();expect(wrapper.text()).toContain('预览草稿 · 未执行');
+    expect(api.previewAdmissionCollection).toHaveBeenCalledExactlyOnceWith([{creatorId:17,parent:'甲别名',directories:['第一套','第二套'],acceptExistingVersion:true},{creatorId:88,parent:'博主乙',directories:['第一套','第二套'],acceptExistingVersion:true}]);expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmission).not.toHaveBeenCalled();expect(wrapper.text()).toContain('预览草稿 · 未执行');
   });
   it('confirms all creators centrally, leaves candidates and complex boundaries deferred, and asks separately for ads',async()=>{
     const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');
-    expect(wrapper.get('[data-test=admission-accept-version]').element).toMatchObject({checked:false});
+    expect(wrapper.find('[data-test=admission-accept-version]').exists()).toBe(false);expect(wrapper.text()).toContain('已入库的同一作品不重复获取');
     expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('new');expect(wrapper.get('[data-test=admission-item-a-candidate] select').element.value).toBe('defer');
     await wrapper.get('[data-ad-filename="推广.txt"]').findAll('button')[0]!.trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');
     const dialog=wrapper.get('[role=dialog]');expect(dialog.text()).toContain('博主甲');expect(dialog.text()).toContain('博主乙');expect(dialog.text()).toContain('b-complex');await dialog.findAll('input')[0]!.setValue(true);expect(dialog.get('[data-test=collection-execute]').attributes('disabled')).toBeDefined();await dialog.findAll('input')[1]!.setValue(true);await dialog.get('[data-test=collection-execute]').trigger('click');await flushPromises();
     expect(api.executeAdmissionCollection).toHaveBeenCalledTimes(1);const input=vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1];expect(input.batches.map(batch=>batch.batchId)).toEqual(['a','b']);expect(input.batches.map(batch=>batch.actions.map(action=>action.action))).toEqual([['new','defer'],['new','defer']]);expect(input.batches.every(batch=>batch.adsConfirmed===true)).toBe(true);expect(input.batches[1]!.actions[0]!.approvedAds).toEqual(['492.jpg','附件/推广.txt']);expect(api.executeAdmission).not.toHaveBeenCalled();
-    expect(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1].batches.every(batch=>batch.acceptExistingVersion===false)).toBe(true);
+    expect(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1].batches.every(batch=>batch.acceptExistingVersion===true)).toBe(true);
   });
   it('limits same-work choices to the active creator and displays boundary notes instead of silently splitting',async()=>{
     const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('same-as');
@@ -69,6 +69,16 @@ describe('independent multi-creator admission workspace',()=>{
   });
   it('polls only lightweight collection state, stops after completion, and never automatically resumes',async()=>{
     vi.useFakeTimers();vi.mocked(api.fetchAdmissionCollection).mockResolvedValueOnce(collection('running')).mockResolvedValue(collection('completed'));const {wrapper}=await render('?collection=collection-one');await vi.advanceTimersByTimeAsync(2500);await flushPromises();expect(wrapper.text()).toContain('本批处理完成');const calls=vi.mocked(api.fetchAdmissionCollection).mock.calls.length;await vi.advanceTimersByTimeAsync(15000);expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(calls);expect(api.executeAdmission).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('retries mixed historical creator policies unchanged, then uses the default only for a new confirmation',async()=>{
+    const original={requestKey:'mixed-original',confirmed:true,batches:[{batchId:'a',acceptExistingVersion:false,actions:[{key:'a-first',action:'new',approvedAds:[]},{key:'a-candidate',action:'defer'}]},{batchId:'b',acceptExistingVersion:true,actions:[{key:'b-first',action:'new',approvedAds:[]},{key:'b-complex',action:'defer'}]}]};
+    localStorage.setItem('cosgallery:admission:collection:collection-one',JSON.stringify(original));
+    const {wrapper,router}=await render('?collection=collection-one');expect(wrapper.text()).toContain('本次重试保留原请求的策略和选择');expect(wrapper.find('[data-test=admission-accept-version]').exists()).toBe(false);
+    await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    expect(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]).toEqual(original);
+    await router.push('/local-admission?collection=new-draft');await flushPromises();
+    await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=ads-clear-all]').trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');expect(wrapper.get('[role=dialog]').text()).toContain('已入库的同一作品不重复获取');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    expect(vi.mocked(api.executeAdmissionCollection).mock.calls[1]![1].batches.every(entry=>entry.acceptExistingVersion)).toBe(true);
   });
   it('requires explicit canonical selection when the waiting-directory name is unresolved',async()=>{
     const {wrapper}=await render();const folder=wrapper.get('[data-folder="未明确身份"]');await folder.get('input[aria-label="搜索规范博主"]').setValue('未明确');await folder.get('form').trigger('submit');await flushPromises();await folder.get('.creator-picker .choices button').trigger('click');expect(folder.text()).toContain('博主丙');await folder.get('input[type=checkbox]').setValue(true);await flushPromises();expect(api.fetchAdmissionDirectories).toHaveBeenLastCalledWith(92,'未明确身份');expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
