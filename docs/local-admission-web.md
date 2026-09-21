@@ -139,33 +139,57 @@ manifests and targets before atomically saving every child confirmation. The exi
 engine validates again when each child actually starts. A collection child cannot be
 submitted or resumed independently through an old single-creator URL.
 
-On the first multi-creator review, clear new-work candidates are preselected once,
-but never submitted. **补选可直接入库的作品** explicitly fills remaining deferred,
-conflict-free new-work choices. Existing/same-work/title/primary/skip choices are not
-overwritten. Status refresh does not repeat the initial selection. One tab's ten most
-recent unsent draft choices may be restored after fetching the same authorized server draft;
-changed summary evidence is deferred for review. Original pending execution receipts
-always take precedence, including their historical acquisition policy.
+On first review, clear new-work candidates are preselected, never submitted. Review
+starts with pending items across all selected creators; selected works have collapsed
+cards, with creator/group/status filters and title/directory search. Scope selection
+can select currently filtered, uniquely resolved creators together without replacing
+manual directory choices or combining two parent directories for the same creator.
+
+Unsent choices record UI-only automatic/manual provenance. Manual defer/skip/title,
+identity and primary choices are not reinterpreted as defaults. One tab's ten recent
+unsent drafts can be restored after fetching authorized server state; this is not a
+cross-browser saved draft guarantee. Original pending execution receipts always take
+precedence, including their historical acquisition policy. UI-only provenance and
+advertisement cancellation history never enter the execution payload.
 
 The controls distinguish three operations:
 
 - **上一步：调整导入范围** reopens the unsubmitted draft's selected creators and
   directories. Renamed/new directories are not automatically selected. Cancel returns
   to the same review; submitting the edited scope creates a new unconfirmed preview.
-- **重新检查文件** inventories only the saved selected scope and creates a new draft.
-  It is for filesystem changes within those directories, not progress polling. A
-  rename or changed album boundary needs an explicit scope adjustment first.
+- **重新检查并更新选择** inventories the selected scope and creates a new draft.
+  Automatically deferred or selected new works are reconsidered against fresh facts;
+  now-safe new works are selected in the same operation. Manual defer/skip remain,
+  and changed manual identity decisions require review. A rename or changed album
+  boundary needs an explicit scope adjustment first. There is no separate supplement button.
 - **更新进度** (results), or **读取已保存状态** (review technical details), reads saved
-  server state only. Neither scans files, reapplies default selections nor resumes work.
+  server state only. Neither inventories disk nor resumes work. Refresh reconciles
+  any changed saved summary with current choices, without overwriting manual decisions.
 
 Repreview never edits the original plan or carries its execution receipt. Unsent
-choices carry only when the saved manifest, target, boundary, advertisement and
-creator-scoped identity/source facts still match; changed evidence is deferred for
-review. New independent directories receive the normal initial suggestion once.
-**补选可直接入库的作品** is an explicit subsequent selection, not execution. The API
+confirmed identity choices carry only when the saved manifest, target, boundary,
+advertisement and creator-scoped identity/source facts still match. Changed existing
+Work/same-as decisions become manual defer; one peer's changed evidence also invalidates
+its dependent same-as choice. Legacy choices without provenance are conservative manual
+choices. Surviving advertisement cancellations persist even across an unsafe intermediate
+preview. Automatic safe-new selection is not an execution authorization. The API
 rechecks draft/confirmation/owner state under its publication transaction, so a
 concurrent confirmation prevents publishing a replacement draft. Confirmed or moved
 items stay with their original checkpoint/recovery workflow.
+
+History names the creators and links previous/subsequent previews. Lineage is optional
+metadata published atomically in new children's existing context JSON; old drafts lack
+it and remain readable. No schema migration or original confirmed-payload change.
+Result items expose DB-only next-action hints from actual execution checkpoints, saved
+plan membership, LocalWork/Post links and active owners. File-review links appear only
+for eligible files-verified projects and disappear while a batch is active. Hints are
+not authority: execution/review routes still validate their original guards.
+
+Each grouped advertisement filename has one tri-state checkbox (all/partial/none).
+Batch select/clear remains available, and affects only selected admission directories.
+Final confirmation shows creator-level counts first; expandable exact directory, Work,
+target and advertisement lists remain available. Separate execution/advertisement
+confirmation is still required. No list/filter/checkbox action moves or recycles files.
 
 Only clear new-work candidates can be selected together. Existing Work reuse,
 same-work copies, source acceptance and exceptions remain explicit, creator-scoped

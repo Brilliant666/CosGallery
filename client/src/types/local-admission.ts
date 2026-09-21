@@ -18,6 +18,9 @@ export type AdmissionActionKind = 'new' | 'existing' | 'same-as' | 'skip' | 'def
 export interface AdmissionAction {
   key: string; action: AdmissionActionKind; workId?: number; sameAsKey?: string; primary?: boolean;
   displayTitle?: string; approvedAds?: string[]; acceptSourceIds?: number[]; reason?: string;
+  /** Unsubmitted UI choice provenance; not part of the execution payload. */
+  selectionOrigin?: 'automatic' | 'manual';
+  cancelledAds?: string[];
 }
 export interface AdmissionItem {
   key: string; sourceRelativePath: string; targetPath: string; displayTitle: string; group: 'A' | 'B' | 'C' | 'D';
@@ -28,6 +31,9 @@ export interface AdmissionItem {
   structureWarnings?: string[];
   needsBoundaryReview?: boolean;
   reviewFingerprint?: string;
+  nextAction?: 'review_files' | 'resume_plan' | 'prepare_preview' | 'none';
+  nextActionReason?: string;
+  executionState?: string | null;
 }
 export type AdmissionState = 'draft' | 'queued' | 'running' | 'completed' | 'needs_review' | 'interrupted' | 'failed';
 export interface AdmissionBatch {
@@ -53,6 +59,8 @@ export interface AdmissionCollection {
   id:string; state:'draft'|'queued'|'running'|'completed'|'partial'|'interrupted'; createdAt:string;updatedAt:string;error:string|null;
   totals:{creators:number;total:number;selected:number;completed:number;skipped:number;deferred:number;failedCreators:number};
   batches:Array<AdmissionBatch & {parent:string}>;
+  previousCollectionId?:string|null;
+  nextCollectionIds?:string[];
 }
 export interface AdmissionCollectionExecuteInput {
   requestKey:string;confirmed:true;

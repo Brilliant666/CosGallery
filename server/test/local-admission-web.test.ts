@@ -58,6 +58,7 @@ describe.sequential('web directory admission delegates to original plans',()=>{
     const [first,retry]=await Promise.all([service.execute(batch.id,input),service.execute(batch.id,input)]);expect(first.id).toBe(retry.id);expect(['queued','running']).toContain(first.state);
     await service.waitForIdle();expect(service.get(batch.id).state).toBe('completed');
     const item=service.items(batch.id).items[0];expect(item.state).toBe('completed');expect(item.workId).toBeTruthy();expect(item.postId).toBeTruthy();
+    expect(item).toMatchObject({executionState:'completed',nextAction:'none'});
     await expect(fs.stat(path.join(gallery,parent,'NO.002 中文 空格 & 标题','图片 1.jpg'))).resolves.toBeTruthy();
     expect(await fs.readFile(path.join(gallery,parent,'NO.002 中文 空格 & 标题','笔记.txt'),'utf8')).toBe('keep attachment');
     expect(await fs.readFile(path.join(waiting,parent,'.local-admission-attachments',batch.id,item.key,'明确广告.txt'),'utf8')).toBe('synthetic ad');
@@ -74,6 +75,8 @@ describe.sequential('web directory admission delegates to original plans',()=>{
   it('skipped/deferred source folders remain, deferred work can get a new preview without replaying completed items',async()=>{
     const batch=await preview(['NO.007 明确','NO.008 跳过','NO.009 暂缓']);const actions=batch.items.map((i,n)=>({key:i.key,action:['new','skip','defer'][n]}));
     await service.execute(batch.id,request(batch,{actions}));await service.waitForIdle();expect(service.get(batch.id).totals).toEqual({total:3,selected:1,completed:1,skipped:1,deferred:1});
+    expect(service.items(batch.id).items.slice(1)).toMatchObject([
+      {state:'skip',executionState:null,nextAction:'none'}, {state:'defer',executionState:null,nextAction:'prepare_preview'}]);
     for(const name of ['NO.008 跳过','NO.009 暂缓'])await expect(fs.stat(path.join(waiting,parent,name))).resolves.toBeTruthy();
     const renewed=await service.repreview(batch.id);expect(renewed.id).not.toBe(batch.id);expect(renewed.items[0].sourceRelativePath).toBe('NO.009 暂缓');
     await expect(service.repreview(batch.id,[batch.items[0].key])).rejects.toThrow('原计划');
@@ -87,6 +90,7 @@ describe.sequential('web directory admission delegates to original plans',()=>{
   it('pre-confirmation source changes and occupied targets fail without file moves',async()=>{
     const batch=await preview(['NO.011 变化']);await fs.writeFile(path.join(waiting,parent,'NO.011 变化','图片 1.jpg'),'changed');
     await service.execute(batch.id,request(batch));await service.waitForIdle();expect(service.get(batch.id).state).toBe('needs_review');expect(service.get(batch.id).error).toContain('Source changed');
+    expect(service.items(batch.id).items[0]).toMatchObject({state:'not_started',executionState:null,nextAction:'prepare_preview'});
     await expect(fs.stat(path.join(waiting,parent,'NO.011 变化'))).resolves.toBeTruthy();
     const next=await preview(['NO.012 占用']);await fs.mkdir(next.items[0].targetPath);
     await service.execute(next.id,request(next));await service.waitForIdle();expect(service.get(next.id).error).toContain('Target exists');
@@ -221,6 +225,57 @@ describe.sequential('web directory admission delegates to original plans',()=>{
     await expect(service.execute(batch.id,request(batch,{adsConfirmed:true,actions:[{key:batch.items[0].key,action:'new',approvedAds:['492.jpg']}]}))).rejects.toThrow('没有可展示媒体');
     expect(service.get(batch.id).state).toBe('draft');expect(manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)).toBeUndefined();
     await expect(fs.stat(dir)).resolves.toBeTruthy();
+  });
+  it('derives recovery actions from immutable checkpoints and suppresses them while an owner is active',async()=>{
+    const batch=await preview(['NO.026 恢复动作']),db=manager.connection;
+    const {scannerService}=await import('../src/services/scanner-service.js');
+    const scan=vi.spyOn(scannerService,'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic media issue'));
+    await service.execute(batch.id,request(batch));await service.waitForIdle();scan.mockRestore();
+    const get=()=>service.items(batch.id).items[0];
+    expect(get()).toMatchObject({state:'files_verified',executionState:'files_verified',nextAction:'review_files',postId:null});
+    const saved=db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id);
+    const reads=[vi.spyOn(fs,'readdir'),vi.spyOn(fs,'lstat'),vi.spyOn(fs,'readFile')];
+    try{
+      // Identical error text must not turn a move intent or indexed item into media review.
+      for(const state of ['planned','move_intent','indexed']){
+        db.prepare('UPDATE archive_local_admission_items SET state=? WHERE plan_id=?').run(state,batch.id);
+        expect(get()).toMatchObject({state,executionState:state,nextAction:'resume_plan',lastError:'Synthetic media issue'});
+      }
+      db.prepare("UPDATE archive_local_admission_items SET state='files_verified' WHERE plan_id=?").run(batch.id);
+      const localId=Number(get().localWorkId),postId=Number(db.prepare('SELECT id FROM posts LIMIT 1').get()!.id);
+      db.exec('SAVEPOINT review_attached_post');
+      try{
+        db.prepare('UPDATE archive_catalog_local_works SET post_id=NULL WHERE post_id=?').run(postId);
+        db.prepare('UPDATE archive_catalog_local_works SET post_id=? WHERE id=?').run(postId,localId);
+        expect(get().nextAction).toBe('resume_plan');
+      }finally{db.exec('ROLLBACK TO review_attached_post; RELEASE review_attached_post');}
+      db.exec('SAVEPOINT review_fulfillment');
+      try{
+        db.prepare("UPDATE archive_catalog_local_fulfillments SET local_work_id=? WHERE id=(SELECT id FROM archive_catalog_local_fulfillments WHERE state='active' LIMIT 1)").run(localId);
+        expect(get().nextAction).toBe('resume_plan');
+      }finally{db.exec('ROLLBACK TO review_fulfillment; RELEASE review_fulfillment');}
+      db.exec('SAVEPOINT review_acquisition');
+      try{
+        db.prepare("UPDATE archive_catalog_download_tasks SET status='claimed' WHERE id=(SELECT id FROM archive_catalog_download_tasks LIMIT 1)").run();
+        expect(get().nextAction).toBe('none');
+      }finally{db.exec('ROLLBACK TO review_acquisition; RELEASE review_acquisition');}
+      db.prepare("UPDATE local_admission_web_batches SET state='running',owner_pid=?,owner_token='test-owner' WHERE id=?").run(process.pid,batch.id);
+      expect(get().nextAction).toBe('none');
+      db.prepare("UPDATE local_admission_web_batches SET state='needs_review',owner_pid=NULL,owner_token=NULL WHERE id=?").run(batch.id);
+      const reviewId=randomUUID();
+      db.prepare(`INSERT INTO local_review_web_sessions(id,creator_id,target_key,target_json,request_key,status,owner_pid,created_at,updated_at)
+        VALUES(?,?,?,?,?,'preparing',?,'now','now')`).run(reviewId,creator,`admission:${batch.id}:${batch.items[0].key}`,'{}',randomUUID(),process.pid);
+      expect(get().nextAction).toBe('none');
+      db.prepare("UPDATE local_review_web_sessions SET status='failed',owner_pid=NULL WHERE id=?").run(reviewId);
+      expect(get().nextAction).toBe('review_files');
+      db.exec('SAVEPOINT review_missing_confirmation');
+      try{
+        db.prepare('UPDATE local_admission_web_batches SET confirmed_json=NULL WHERE id=?').run(batch.id);
+        expect(get().nextAction).toBe('none');
+      }finally{db.exec('ROLLBACK TO review_missing_confirmation; RELEASE review_missing_confirmation');}
+      for(const read of reads)expect(read).not.toHaveBeenCalled();
+      expect(db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)).toEqual(saved);
+    }finally{for(const read of reads)read.mockRestore();}
   });
   it('viewer and unauthenticated requests cannot browse disk, inspect batches or submit operations',async()=>{
     const {authService}=await import('../src/services/auth-service.js');authService.setAdminPassword('synthetic-admin-pass');authService.setViewerAccess('password','synthetic-viewer-pass');

@@ -4,10 +4,29 @@ export interface AdmissionEntry { item:AdmissionItem; action:AdmissionAction }
 export const admissionGroups = {A:'无冲突的新作品',B:'已有作品候选，待本次确认',C:'同名 / 副本需确认',D:'冲突 / 需整理'};
 export const admissionActionLabels = {new:'新独立作品',existing:'对应已有作品','same-as':'与本批目录同套',skip:'跳过',defer:'暂缓'};
 export const isAdmissionSelected = (action:AdmissionAction) => ['new','existing','same-as'].includes(action.action);
+export const isAdmissionSafeCandidate = (item:AdmissionItem) => item.group==='A'&&!item.candidates.length&&!item.conflicts.length&&!item.structureWarnings?.length&&!item.needsBoundaryReview;
 export const mediaSize = (value:number) => value>=1024**3?`${(value/1024**3).toFixed(2)} GiB`:value>=1024**2?`${(value/1024**2).toFixed(2)} MiB`:`${value} B`;
+function cancelledAdmissionAds(action:AdmissionAction,ads:AdmissionItem['ads']):string[]{
+  return [...new Set([...(action.cancelledAds??[]),...(isAdmissionSelected(action)?ads.filter(ad=>!action.approvedAds?.includes(ad.relativePath)).map(ad=>ad.relativePath):[])])];
+}
+export function rememberAdmissionAdCancellations(item:AdmissionItem,action:AdmissionAction){
+  action.cancelledAds=item.ads.filter(ad=>!action.approvedAds?.includes(ad.relativePath)).map(ad=>ad.relativePath);
+}
 export function admissionAction(item:AdmissionItem,kind:AdmissionActionKind,previous?:AdmissionAction):AdmissionAction {
-  return {key:item.key,action:kind,displayTitle:item.displayTitle,primary:false,acceptSourceIds:[],
-    approvedAds:['new','existing','same-as'].includes(kind)?previous&&isAdmissionSelected(previous)?[...(previous.approvedAds??[])]:item.ads.map(ad=>ad.relativePath):[]};
+  const cancelledAds=previous?cancelledAdmissionAds(previous,item.ads):[];
+  return {key:item.key,action:kind,selectionOrigin:'manual',cancelledAds,displayTitle:item.displayTitle,primary:false,acceptSourceIds:[],
+    approvedAds:['new','existing','same-as'].includes(kind)?previous&&isAdmissionSelected(previous)?[...(previous.approvedAds??[])]:item.ads.map(ad=>ad.relativePath).filter(path=>!cancelledAds.includes(path)):[]};
+}
+/** Reconsider changed evidence without interpreting an old user choice as an automatic default. */
+export function changedAdmissionAction(item:AdmissionItem,previous:AdmissionAction,previousAds:AdmissionItem['ads']=[]):AdmissionAction {
+  const cancelledAds=cancelledAdmissionAds(previous,previousAds).filter(path=>item.ads.some(ad=>ad.relativePath===path));
+  if(previous.action==='skip'||previous.action==='defer'&&previous.selectionOrigin!=='automatic')return {...previous,key:item.key,selectionOrigin:'manual',cancelledAds,approvedAds:[],acceptSourceIds:[]};
+  if(previous.selectionOrigin==='automatic'&&['defer','new'].includes(previous.action)){
+    const action={...admissionAction(item,isAdmissionSafeCandidate(item)?'new':'defer'),selectionOrigin:'automatic' as const,cancelledAds};
+    action.approvedAds=action.approvedAds?.filter(path=>!cancelledAds.includes(path));
+    return action;
+  }
+  return {...admissionAction(item,'defer'),cancelledAds,reason:'文件或身份依据有变化，或旧预览缺少比对依据，请重新核对后选择'};
 }
 export function validateAdmissionSelection(entries:AdmissionEntry[]):string {
   const primary=new Set<string>();
@@ -23,7 +42,7 @@ export function validateAdmissionSelection(entries:AdmissionEntry[]):string {
   return '';
 }
 export function admissionPayload(entries:AdmissionEntry[],accept:boolean):AdmissionAction[]{
-  return entries.map(({action})=>({...action,approvedAds:isAdmissionSelected(action)?[...(action.approvedAds??[])]:[],acceptSourceIds:accept&&action.action==='existing'?[...(action.acceptSourceIds??[])]:[],reason:action.reason||`用户在网页确认页选择：${admissionActionLabels[action.action]}`}));
+  return entries.map(({action})=>{const {selectionOrigin:_origin,cancelledAds:_cancelledAds,...payload}=action;return {...payload,approvedAds:isAdmissionSelected(action)?[...(action.approvedAds??[])]:[],acceptSourceIds:accept&&action.action==='existing'?[...(action.acceptSourceIds??[])]:[],reason:action.reason||`用户在网页确认页选择：${admissionActionLabels[action.action]}`};});
 }
 export function admissionAdSummary(entries:AdmissionEntry[]){
   const rows=new Map<string,{filename:string;type:string;directories:number;files:number;selected:number;automatic:boolean}>();
@@ -34,5 +53,5 @@ export function admissionAdSummary(entries:AdmissionEntry[]){
   return [...rows.values()].sort((a,b)=>a.filename.localeCompare(b.filename,'zh-CN'));
 }
 export function selectAdmissionAds(entries:AdmissionEntry[],selected:boolean,filename?:string){
-  for(const {item,action} of entries.filter(entry=>isAdmissionSelected(entry.action))){const approved=new Set(action.approvedAds??[]);for(const ad of item.ads)if(!filename||(ad.relativePath.split(/[\\/]/).at(-1)??ad.relativePath)===filename){if(selected)approved.add(ad.relativePath);else approved.delete(ad.relativePath);}action.approvedAds=[...approved];}
+  for(const {item,action} of entries.filter(entry=>isAdmissionSelected(entry.action))){const approved=new Set(action.approvedAds??[]);for(const ad of item.ads)if(!filename||(ad.relativePath.split(/[\\/]/).at(-1)??ad.relativePath)===filename){if(selected)approved.add(ad.relativePath);else approved.delete(ad.relativePath);}action.approvedAds=[...approved];rememberAdmissionAdCancellations(item,action);}
 }

@@ -35,7 +35,8 @@ export type AdmissionWorkChoice = {workId:number;title:string;catalogNo:string|n
   thumbnailUrl:string|null;primaryLocalWorkId:number|null;localState:string;originalDirectories:string[];sources:Source[]};
 type Batch = {id:string;creator_id:number;input_root:string;source_evidence_id:number|null;state:string;created_at:string;updated_at:string;
   error:string|null;context_json:string;confirmed_json:string|null;owner_pid:number|null;owner_token:string|null};
-type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waitingRoot:string;workFacts:Record<string,string>;sourceFacts:Record<string,string>};
+type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waitingRoot:string;workFacts:Record<string,string>;sourceFacts:Record<string,string>;previousCollectionId?:string};
+type NextAction = {nextAction:'review_files'|'resume_plan'|'prepare_preview'|'none';nextActionReason:string};
 type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTitle:string;group:'A'|'B'|'C'|'D';
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
   ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>;
@@ -255,16 +256,46 @@ export class LocalAdmissionWebService {
     return {page,pageSize:30,total,items:this.db.prepare(`SELECT id FROM local_admission_web_batches ${where} ORDER BY created_at DESC,id DESC LIMIT 30 OFFSET ?`).all(...args,(page-1)*30).map(r=>this.get(String(r.id)))};}
   items(id:string,page=1,pageSize=24) {
     const batch=this.get(id);page=Math.max(1,page);pageSize=Math.min(100,Math.max(1,pageSize));
-    const rows=this.db.prepare(`SELECT x.item_key,x.summary_json,x.action,i.state,i.last_error,i.work_id,i.local_work_id,l.post_id,
+    let blocked:string|null=null;
+    try{this.assertIdle();this.creator(batch.creatorId);this.assertCreatorIdle(batch.creatorId);}catch(error){blocked=message(error);}
+    const rows=this.db.prepare(`SELECT x.item_key,x.summary_json,x.action,i.state,i.last_error,i.work_id,i.local_work_id,l.id existing_local_id,l.post_id,
+      EXISTS(SELECT 1 FROM archive_catalog_local_fulfillments f WHERE f.local_work_id=l.id AND f.state='active') fulfilled,
+      EXISTS(SELECT 1 FROM archive_local_admission_plans p,json_each(p.payload_json,'$.items') item
+        WHERE p.plan_id=x.batch_id AND json_extract(p.payload_json,'$.creatorId')=? AND json_extract(item.value,'$.key')=x.item_key) saved_plan_item,
+      EXISTS(SELECT 1 FROM local_admission_web_batches b,json_each(b.confirmed_json,'$.items') item
+        WHERE b.id=x.batch_id AND json_extract(b.confirmed_json,'$.creatorId')=? AND json_extract(item.value,'$.key')=x.item_key) confirmed_plan_item,
       CASE WHEN ?='draft' AND COALESCE(json_extract(x.summary_json,'$.advertisementRulesVersion'),0)<>? THEN x.preview_json ELSE NULL END legacy_preview_json
       FROM local_admission_web_items x LEFT JOIN archive_local_admission_items i ON i.plan_id=x.batch_id AND i.item_key=x.item_key
-      LEFT JOIN archive_catalog_local_works l ON l.id=i.local_work_id WHERE x.batch_id=? ORDER BY x.position LIMIT ? OFFSET ?`).all(batch.state,advertisementRulesVersion,id,pageSize,(page-1)*pageSize);
+      LEFT JOIN archive_catalog_local_works l ON l.id=i.local_work_id AND l.work_id=i.work_id WHERE x.batch_id=? ORDER BY x.position LIMIT ? OFFSET ?`).all(batch.creatorId,batch.creatorId,batch.state,advertisementRulesVersion,id,pageSize,(page-1)*pageSize);
     return {page,pageSize,total:batch.totals.total,items:rows.map(r=>{
       const summary=JSON.parse(String(r.summary_json)) as Summary;
       // Old unsubmitted drafts use their saved inventory; no disk reads or changes
       // to the manifest, choices, confirmed payload or execution checkpoints.
       if(r.legacy_preview_json){summary.ads=advertisementCandidates((JSON.parse(String(r.legacy_preview_json)) as PreviewItem).manifest);summary.advertisementRulesVersion=advertisementRulesVersion;}
-      return {...summary,action:String(r.action),state:r.state??(batch.state==='draft'?'preview':r.action),lastError:r.last_error??null,workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
+      const state=r.state??(batch.state==='draft'?'preview':['skip','defer'].includes(String(r.action))?r.action:'not_started');
+      return {...summary,action:String(r.action),state,executionState:r.state??null,...this.itemNextAction(batch,r,blocked),
+        lastError:r.last_error??null,workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
+  }
+  private itemNextAction(batch:ReturnType<LocalAdmissionWebService['get']>,item:Record<string,unknown>,blocked:string|null):NextAction {
+    const none=(nextActionReason:string):NextAction=>({nextAction:'none',nextActionReason});
+    if(item.state==='completed')return none('此项目已完成，无需重复处理。');
+    if(blocked)return none(blocked);
+    if(batch.state==='draft')return none('尚未确认，请在预览中核对选择。');
+    if(item.action==='skip')return none('此项目已明确跳过。');
+    const activeReview=this.db.prepare(`SELECT owner_pid FROM local_review_web_sessions
+      WHERE target_key=? AND status IN ('preparing','submitted','running')`).all(`admission:${batch.id}:${String(item.item_key)}`);
+    if(activeReview.some(row=>alive(Number(row.owner_pid))))return none('原项目的文件审核仍在执行，请等待完成。');
+    if(item.state==null){
+      if(!batch.collectionId)return {nextAction:'prepare_preview',nextActionReason:'此项目没有执行记录，可为尚未执行的目录准备新预览。'};
+      return none(item.action==='defer'?'此项目已暂缓，原集中确认未包含执行计划。':'尚未建立执行记录；请核对集中导入的原范围与失败原因。');
+    }
+    if(!item.saved_plan_item||!item.confirmed_plan_item)return none('原计划或项目记录不完整，不能推断恢复方式。');
+    if(item.state!=='planned'&&(!item.existing_local_id||!item.work_id))return none('原项目的本地作品关联不完整，不能推断恢复方式。');
+    if(item.state==='files_verified'&&item.existing_local_id&&item.work_id&&item.post_id==null&&!item.fulfilled)
+      return {nextAction:'review_files',nextActionReason:'文件移动已核验且尚未关联图集，可进入原项目的文件审核。'};
+    if(['planned','move_intent','files_verified','indexed'].includes(String(item.state))&&batch.state!=='completed')
+      return {nextAction:'resume_plan',nextActionReason:batch.collectionId?'可继续原集中确认计划，已完成项目会沿用原执行记录。':'可从现有执行记录继续原确认计划。'};
+    return none('当前记录不支持网页文件审核或自动推断下一步。');
   }
   async repreview(id:string,keys?:string[]) {
     this.assertStandalone(id);
@@ -321,7 +352,13 @@ export class LocalAdmissionWebService {
     for(const child of batches){for(const key of ['total','selected','completed','skipped','deferred'] as const)totals[key]+=child.totals[key];
       if(['needs_review','failed','interrupted'].includes(child.state))totals.failedCreators++;}
     const state=row.has_confirmation&&batches.length&&batches.every(b=>b.state==='completed')?'completed':this.effectiveState(row);
-    return {id,state,createdAt:row.created_at,updatedAt:row.updated_at,error:state==='completed'?null:row.error,totals,batches};
+    const previous=this.db.prepare(`SELECT json_extract(b.context_json,'$.previousCollectionId') previous_id
+      FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id
+      WHERE c.collection_id=? AND json_extract(b.context_json,'$.previousCollectionId') IS NOT NULL LIMIT 1`).get(id);
+    const next=this.db.prepare(`SELECT DISTINCT c.collection_id FROM local_admission_web_collection_batches c
+      JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE json_extract(b.context_json,'$.previousCollectionId')=? ORDER BY c.collection_id`).all(id);
+    return {id,state,createdAt:row.created_at,updatedAt:row.updated_at,error:state==='completed'?null:row.error,totals,batches,
+      previousCollectionId:previous?String(previous.previous_id):null,nextCollectionIds:next.map(child=>String(child.collection_id))};
   }
   collections(page=1) {
     page=Math.max(1,page);const pageSize=20,total=Number(this.db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n);
@@ -363,7 +400,11 @@ export class LocalAdmissionWebService {
       // Recheck under the same transaction that publishes the new draft.
       if(previousId)this.assertDraftCollection(previousId);
       this.db.prepare("INSERT INTO local_admission_web_collections(id,state,created_at,updated_at) VALUES(?,'draft',?,?)").run(id,stamp,stamp);
-      for(const [position,child] of prepared.entries()){this.savePreview(child);this.db.prepare('INSERT INTO local_admission_web_collection_batches VALUES(?,?,?)').run(id,child.id,position);}
+      for(const [position,child] of prepared.entries()){
+        // Draft lineage is published with its children; original confirmations stay immutable.
+        this.savePreview(previousId?{...child,context:{...child.context,previousCollectionId:previousId}}:child);
+        this.db.prepare('INSERT INTO local_admission_web_collection_batches VALUES(?,?,?)').run(id,child.id,position);
+      }
       this.db.exec('COMMIT');
     }catch(e){this.db.exec('ROLLBACK');throw e;}
     return this.collection(id);

@@ -1,5 +1,5 @@
 import type { DraftEntry } from './admission-navigation';
-import { admissionAction } from './admission-ui';
+import { changedAdmissionAction, isAdmissionSafeCandidate } from './admission-ui';
 
 export interface RepreviewEntry extends DraftEntry { parent:string }
 
@@ -22,8 +22,9 @@ export function carryRepreviewChoices(previous:RepreviewEntry[],next:RepreviewEn
     return true;
   };
   return [...matching].map(([entry,old])=>{
-    if(!valid(entry))return {...entry,key:entry.item.key,work:undefined,action:{...admissionAction(entry.item,'defer'),approvedAds:[],reason:'文件或身份依据有变化，或旧预览缺少比对依据，请重新核对后选择'}};
+    if(!valid(entry)||old.action.action==='defer'&&old.action.selectionOrigin==='automatic'&&isAdmissionSafeCandidate(entry.item))return {...entry,key:entry.item.key,work:undefined,action:changedAdmissionAction(entry.item,old.action,old.item.ads)};
     const action={...old.action,key:entry.item.key,approvedAds:[...(old.action.approvedAds??[])],acceptSourceIds:[...(old.action.acceptSourceIds??[])]};
+    if(old.action.cancelledAds)action.cancelledAds=[...old.action.cancelledAds];
     if(action.action==='same-as')action.sameAsKey=next.find(row=>row.batchId===entry.batchId&&matching.get(row)?.item.key===old.action.sameAsKey)!.item.key;
     return {...entry,key:entry.item.key,action,work:old.work};
   });

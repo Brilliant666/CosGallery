@@ -114,7 +114,7 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     expect(wrapper.get('[data-ad-filename="链接.url"]').text()).toContain('已选 21');
     await wrapper.get('[data-test=ads-clear-all]').trigger('click');
     expect(row.text()).toContain('已选 0');
-    await button(row,'勾选同名候选').trigger('click');
+    await row.get('input[type=checkbox]').setValue(true);
     expect(row.text()).toContain('已选 21');
     expect(wrapper.get('[data-ad-filename="链接.url"]').text()).toContain('已选 0');
     await group.setValue('all');await button(wrapper,'下一页目录').trigger('click');
@@ -140,7 +140,7 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     await wrapper.get('[data-test=admission-item-copy] input:not([type=checkbox])').setValue('用户确认同套');
     await wrapper.get('[data-test=ads-select-all]').trigger('click');
     expect(wrapper.get('[data-ad-filename="广告.txt"]').text()).toContain('1 个接纳目录 / 2 个文件 · 已选 2');
-    await button(wrapper.get('[data-ad-filename="广告.txt"]'),'取消同名勾选').trigger('click');
+    await wrapper.get('[data-ad-filename="广告.txt"] input[type=checkbox]').setValue(false);
     expect(wrapper.get('[data-ad-filename="广告.txt"]').text()).toContain('已选 0');
     expect(wrapper.get('[data-ad-filename="链接.url"]').text()).toContain('已选 1');
     await wrapper.get('[data-test=ads-select-all]').trigger('click');

@@ -138,6 +138,8 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     const before=manager.connection.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(collection.batches[0].id);
     expect(before).toEqual({confirmed_json:'{"skippedAll":true}'});expect(service.collection(collection.id)).toMatchObject({state:'partial',totals:{selected:1,skipped:1,deferred:1}});
     expect(service.collection(collection.id).batches[0].state).toBe('completed');
+    expect(service.items(collection.batches[0].id).items).toMatchObject([
+      {state:'skip',executionState:null,nextAction:'none'}, {state:'defer',executionState:null,nextAction:'none'}]);
     const apply=vi.spyOn(Admission.prototype,'apply');service.resumeCollection(collection.id,{requestKey:randomUUID(),confirmed:true});await service.waitForIdle();
     expect(apply).toHaveBeenCalledTimes(1);expect(service.collection(collection.id).state).toBe('completed');
     expect(manager.connection.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(collection.batches[0].id)).toEqual(before);
@@ -200,6 +202,9 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     for(const read of reads){expect(read).not.toHaveBeenCalled();read.mockRestore();}
     const unchanged=await service.repreviewCollection(original.id,{});
     expect(unchanged.id).not.toBe(original.id);expect(unchanged.state).toBe('draft');
+    expect(original).toMatchObject({previousCollectionId:null,nextCollectionIds:[]});
+    expect(unchanged).toMatchObject({previousCollectionId:original.id,nextCollectionIds:[]});
+    expect(service.collection(original.id).nextCollectionIds).toEqual([unchanged.id]);
     expect(service.items(unchanged.batches[0].id).items.map(item=>item.reviewFingerprint)).toEqual(oldItems.map(item=>item.reviewFingerprint));
     await fs.appendFile(path.join(waiting,names[0],selected[1],'photo.jpg'),'new metadata');
     await fs.rename(path.join(waiting,names[0],selected[2]),path.join(waiting,names[0],'016 明确新名'));
@@ -219,6 +224,8 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     expect(freshItems.every(item=>item.action==='defer')).toBe(true);
     const replacement={...scope.scopes[0],directories:[selected[0],'016 明确新名','017 未选择的新增目录']};
     const adjusted=await service.repreviewCollection(original.id,{scopes:[replacement]});
+    expect(service.collection(original.id).nextCollectionIds.sort()).toEqual([unchanged.id,fresh.id,adjusted.id].sort());
+    expect(service.collections().items.find(item=>item.id===adjusted.id)?.previousCollectionId).toBe(original.id);
     expect(service.collectionScope(adjusted.id)).toEqual({scopes:[replacement]});
     expect(service.items(adjusted.batches[0].id).items.every(item=>!item.conflicts.length)).toBe(true);
     expect(snapshot()).toEqual(saved);expect(counts()).toEqual(beforeCounts);expect(execute).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
@@ -279,6 +286,7 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     const move=vi.spyOn(fs,'rename'),apply=vi.spyOn(Admission.prototype,'apply');
     await expect(service.repreviewCollection(original.id,{})).rejects.toThrow('不能重新预览');
     await service.waitForIdle();
+    expect(service.collection(original.id).nextCollectionIds).toEqual([]);
     expect(service.collection(original.id).state).toBe('completed');
     expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(before);
     expect(JSON.parse(String(db.prepare('SELECT confirmed_json FROM local_admission_web_collections WHERE id=?').get(original.id)!.confirmed_json))).toMatchObject(requestBody);
@@ -323,7 +331,7 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     const input={requestKey:randomUUID(),confirmed:true as const,batches:[{batchId:child.id,acceptExistingVersion:true,advertisementDisposition:'recycle_bin' as const,adsConfirmed:true as const,actions:[{key:item.key,action:'new' as const,approvedAds:['图集网站永久发布页.txt']}]}]};
     await service.executeCollection(next.id,input);await service.waitForIdle();
     expect(service.collection(next.id)).toMatchObject({state:'partial',totals:{completed:0,selected:1}});
-    expect(service.items(child.id).items[0]).toMatchObject({state:'indexed',lastError:'Synthetic recycle temporarily unavailable'});
+    expect(service.items(child.id).items[0]).toMatchObject({state:'indexed',executionState:'indexed',nextAction:'resume_plan',lastError:'Synthetic recycle temporarily unavailable'});
     const saved=String(manager.connection.prepare('SELECT payload_json FROM archive_local_admission_plans WHERE plan_id=?').get(child.id)!.payload_json);
     expect(JSON.parse(saved).advertisementDisposition).toBe('recycle_bin');
     const trash=path.join(root,'synthetic-recycle-bin');await fs.mkdir(trash,{recursive:true});

@@ -16,11 +16,95 @@ const batch=(id='a',creatorId=17):AdmissionBatch&{parent:string}=>({id,planId:id
 const collection=(state:AdmissionCollection['state']='draft'):AdmissionCollection=>({id:'collection-one',state,createdAt:'2026-09-21T01:00:00Z',updatedAt:'2026-09-21T01:00:00Z',error:null,totals:{creators:2,total:4,selected:0,completed:0,skipped:0,deferred:4,failedCreators:0},batches:[batch(),batch('b',88)]});
 const item=(key:string,group:AdmissionItem['group']='A'):AdmissionItem=>({key,displayTitle:key,sourceRelativePath:key,targetPath:`R:/图库/${key}`,group,state:'planned',summary:{images:2,videos:0,other:1,bytes:3000},candidates:[],conflicts:[],ads:[{relativePath:'附件/推广.txt',size:20},{relativePath:'492.jpg',size:20,automatic:true}]});
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(button=>button.text()===text)!;
-async function render(query=''){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-admission',name:'local-admission-workspace',component:LocalAdmissionWorkspace},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}}]});await router.push(`/local-admission${query}`);const wrapper=mount(LocalAdmissionWorkspace,{global:{plugins:[router]}});await flushPromises();return {wrapper,router};}
+async function render(query='',showAll=true){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-admission',name:'local-admission-workspace',component:LocalAdmissionWorkspace},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}}]});await router.push(`/local-admission${query}`);const wrapper=mount(LocalAdmissionWorkspace,{global:{plugins:[router]}});await flushPromises();if(showAll)await showAllReview(wrapper);return {wrapper,router};}
+async function showAllReview(wrapper:ReturnType<typeof mount>){if(wrapper.find('[data-test=review-filter]').exists()){await wrapper.get('[data-test=review-filter]').setValue('all');await wrapper.findAll('[role=tab]')[1]?.trigger('click');}}
 describe('independent multi-creator admission workspace',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();sessionStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
   afterEach(()=>vi.useRealTimers());
+  it('reconciles changed saved ad evidence on status refresh while keeping cancellation and request authority',async()=>{
+    const original={...item('a-first'),reviewFingerprint:'same-manifest'};
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[original],total:1,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=ads-clear-all]').trigger('click');
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...original,ads:[...original.ads,{relativePath:'新增广告.url',size:20}]}],total:1,page:1,pageSize:100});
+    await button(wrapper,'读取已保存状态').trigger('click');await flushPromises();
+    expect(wrapper.get('[data-ad-filename="492.jpg"] input').element.checked).toBe(false);
+    expect(wrapper.get('[data-ad-filename="新增广告.url"] input').element.checked).toBe(true);
+    expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('starts with pending items across creators, supports search and keeps selected cards collapsed',async()=>{
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.findAll('.item-card').map(card=>card.attributes('data-test'))).toEqual(['admission-item-a-candidate','admission-item-b-complex']);
+    expect(wrapper.find('[data-test=collection-select-safe]').exists()).toBe(false);
+    expect(wrapper.get('[data-test=collection-repreview]').text()).toBe('重新检查并更新选择');
+    await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('博主乙');
+    expect(wrapper.findAll('.item-card')).toHaveLength(1);
+    await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('');
+    await wrapper.get('[data-test=review-filter]').setValue('selected');
+    expect(wrapper.findAll('.review-row')).toHaveLength(2);
+    expect(wrapper.findAll('.review-row').every(row=>!row.element.hasAttribute('open'))).toBe(true);
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('bulk-selects filtered known identities without replacing manual directory choices or unknown identities',async()=>{
+    const {wrapper}=await render();
+    await wrapper.get('[data-folder="甲别名"] input[type=checkbox]').setValue(true);await flushPromises();
+    await wrapper.get('[data-folder="甲别名"] .directory-grid input').setValue(false);
+    await wrapper.get('input[aria-label="筛选等待区博主"]').setValue('博主乙');
+    await wrapper.get('[data-test=select-matched-creators]').trigger('click');await flushPromises();
+    await wrapper.get('input[aria-label="筛选等待区博主"]').setValue('');
+    expect(wrapper.get('[data-folder="未明确身份"] input[type=checkbox]').element.checked).toBe(false);
+    expect(wrapper.get('[data-folder="甲别名"] .directory-grid input').element.checked).toBe(false);
+    expect(wrapper.get('[data-folder="博主乙"] input[type=checkbox]').element.checked).toBe(true);
+    expect(api.fetchAdmissionDirectories).toHaveBeenCalledTimes(2);
+    expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('does not bulk-select two parent directories matching the same canonical creator',async()=>{
+    vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue({...workspace,items:[...workspace.items,{...workspace.items[0]!,name:'另一个甲目录'}]});
+    const {wrapper}=await render();await wrapper.get('[data-test=select-matched-creators]').trigger('click');await flushPromises();
+    expect(api.fetchAdmissionDirectories).toHaveBeenCalledExactlyOnceWith(88,'博主乙');
+    expect(wrapper.get('[data-folder="甲别名"] input[type=checkbox]').element.checked).toBe(false);
+  });
+  it('shows creator names and links between previews without automatically executing either version',async()=>{
+    const current={...collection(),previousCollectionId:'previous',nextCollectionIds:['newer']};
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(current);
+    vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[current],page:1,pageSize:20,total:1});
+    const {wrapper,router}=await render('?collection=collection-one',false);
+    expect(wrapper.get('.history').text()).toContain('博主甲、博主乙');
+    expect(wrapper.get('.history').text()).toContain('已有 1 份后续预览');
+    await button(wrapper,'查看后续预览 · newer').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query.collection).toBe('newer');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('keeps exact confirmation scope collapsed under per-creator summaries and omits UI provenance from execution',async()=>{
+    const {wrapper}=await render('?collection=collection-one',false);
+    await wrapper.get('[data-test=collection-confirm]').trigger('click');
+    const dialog=wrapper.get('[role=dialog]');
+    expect(dialog.findAll('.confirmation-list>details').every(row=>!row.element.hasAttribute('open'))).toBe(true);
+    expect(dialog.text()).toContain('1 接纳 · 0 跳过 · 1 暂缓');
+    expect(dialog.text()).toContain('R:/图库/a-first');expect(dialog.text()).toContain('附件/推广.txt');
+    for(const check of dialog.findAll('input'))await check.setValue(true);
+    await dialog.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    const payload=JSON.stringify(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]);
+    expect(payload).not.toContain('selectionOrigin');expect(payload).not.toContain('cancelledAds');
+  });
+  it('offers only checkpoint-supported recovery links even when every item contains an error',async()=>{
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),batches:[{...batch(),state:'needs_review'}]});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[
+      {...item('unstarted'),state:'not_started',lastError:'failed',nextAction:'none',nextActionReason:'尚未建立执行记录'},
+      {...item('moved'),state:'files_verified',lastError:'failed',nextAction:'review_files'},
+      {...item('indexed'),state:'indexed',lastError:'failed',nextAction:'resume_plan'}
+    ],total:3,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one',false);
+    const links=wrapper.findAll('a').filter(link=>link.text()==='核对文件处置');
+    expect(links).toHaveLength(1);expect(links[0]!.attributes('href')).toContain('itemKey=moved');
+    expect(wrapper.text()).toContain('尚未开始');expect(wrapper.text()).toContain('尚未建立执行记录');
+    expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+    await button(wrapper,'核对后继续原批次').trigger('click');
+    await button(wrapper,'确认继续原批次').trigger('click');await flushPromises();
+    expect(api.resumeAdmissionCollection).toHaveBeenCalledTimes(1);
+    expect(wrapper.findAll('a').some(link=>link.text()==='核对文件处置')).toBe(false);
+  });
   it('returns to scope editing with original selections and only includes explicitly selected new directories',async()=>{
     vi.mocked(api.fetchAdmissionCollectionScope).mockResolvedValue({scopes:[{creatorId:17,parent:'甲别名',directories:['第一套'],acceptExistingVersion:true}]});
     const {wrapper}=await render('?collection=collection-one');
@@ -46,17 +130,16 @@ describe('independent multi-creator admission workspace',()=>{
     expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeUndefined();
     await button(wrapper,'取消调整，返回核对').trigger('click');expect(wrapper.text()).toContain('核对作品身份与文件范围');expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();
   });
-  it('rechecks files into a new draft, retaining unchanged choices and deferring changed evidence until explicit selection',async()=>{
+  it('rechecks and updates automatic safe choices while retaining an explicit skip',async()=>{
     let fresh=false;
     vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>({...collection(),id,batches:[{...batch(fresh?'a2':'a'),totals:{total:2,selected:0,completed:0,skipped:0,deferred:2}}]}));
     vi.mocked(api.fetchAdmissionItems).mockImplementation(async()=>({items:['one','two'].map(name=>({...item(fresh?`new-${name}`:name),sourceRelativePath:name,reviewFingerprint:fresh&&name==='two'?'changed':'same'})),total:2,page:1,pageSize:100}));
     vi.mocked(api.repreviewAdmissionCollection).mockImplementation(async()=>{fresh=true;return {...collection(),id:'fresh'};});
     const {wrapper,router}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-one] select').setValue('skip');
-    await wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();
+    await wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();await showAllReview(wrapper);
     expect(router.currentRoute.value.query.collection).toBe('fresh');expect(api.repreviewAdmissionCollection).toHaveBeenCalledWith('collection-one');
     expect(wrapper.get('[data-test=admission-item-new-one] select').element.value).toBe('skip');
-    expect(wrapper.get('[data-test=admission-item-new-two] select').element.value).toBe('defer');
-    await button(wrapper,'补选可直接入库的作品').trigger('click');expect(wrapper.get('[data-test=admission-item-new-two] select').element.value).toBe('new');
+    expect(wrapper.get('[data-test=admission-item-new-two] select').element.value).toBe('new');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('keeps the original draft and choices when a concurrent confirmation rejects repreview',async()=>{
@@ -78,7 +161,7 @@ describe('independent multi-creator admission workspace',()=>{
     wrapper.unmount();const returned=await render();
     expect(returned.router.currentRoute.value.query.collection).toBe('collection-one');
     expect(returned.wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
-    await button(returned.wrapper,'补选可直接入库的作品').trigger('click');
+    await returned.wrapper.get('[data-test=admission-item-a-first] select').setValue('new');
     expect(returned.wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('new');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
@@ -108,7 +191,7 @@ describe('independent multi-creator admission workspace',()=>{
     const {wrapper,router}=await render('?collection=first');
     await wrapper.get('[data-test=admission-item-a-first] select').setValue('skip');
     await router.push('/local-admission?collection=second');await flushPromises();
-    await router.push('/local-admission?collection=first');await flushPromises();
+    await router.push('/local-admission?collection=first');await flushPromises();await showAllReview(wrapper);
     expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('skip');
     await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
     let release!:(value:Awaited<ReturnType<typeof api.fetchAdmissionItems>>)=>void;
@@ -155,7 +238,7 @@ describe('independent multi-creator admission workspace',()=>{
     const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-existing] select').setValue('existing');await button(wrapper,'候选：已选作品 · 2 图 / 0 视频').trigger('click');await wrapper.get('[data-test=admission-item-skip] select').setValue('skip');
     const edited=wrapper.get('[data-test=admission-item-edited]');await edited.get('input:not([type=checkbox])').setValue('用户修改的标题');await edited.get('.item-ads input[value="492.jpg"]').setValue(false);await edited.get('.item-ads input[value="附件/推广.txt"]').setValue(true);
     await wrapper.get('[data-test=admission-item-copy] select').setValue('same-as');await wrapper.get('[data-test=admission-item-copy]').findAll('select')[1]!.setValue('edited');
-    await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=collection-select-safe]').trigger('click');
+
     expect(wrapper.get('[data-test=admission-item-candidate] select').element.value).toBe('defer');expect(wrapper.get('[data-test=admission-item-complex] select').element.value).toBe('defer');
     await wrapper.get('[data-test=collection-confirm]').trigger('click');for(const input of wrapper.get('[role=dialog]').findAll('input'))await input.setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
     const actions=vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1].batches[0]!.actions;
@@ -163,8 +246,8 @@ describe('independent multi-creator admission workspace',()=>{
   });
   it('releases a conclusively rejected oversized collection payload instead of locking it as an uncertain receipt',async()=>{
     vi.mocked(api.executeAdmissionCollection).mockRejectedValueOnce(new RequestError('Request failed with status 413',413));
-    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=ads-clear-all]').trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
-    expect(wrapper.text()).toContain('本批确认内容超过上限，请分小批');expect(wrapper.text()).not.toContain('执行回执尚未确认');expect(localStorage.getItem('cosgallery:admission:collection:collection-one')).toBeNull();expect(wrapper.get('[data-test=collection-select-safe]').attributes('disabled')).toBeUndefined();expect(api.executeAdmissionCollection).toHaveBeenCalledTimes(1);
+    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=ads-clear-all]').trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('本批确认内容超过上限，请分小批');expect(wrapper.text()).not.toContain('执行回执尚未确认');expect(localStorage.getItem('cosgallery:admission:collection:collection-one')).toBeNull();expect(wrapper.get('[data-test=collection-repreview]').attributes('disabled')).toBeUndefined();expect(api.executeAdmissionCollection).toHaveBeenCalledTimes(1);
   });
   it('previews two creator scopes once without individual execute calls or automatically creating identities',async()=>{
     const {wrapper}=await render();expect(wrapper.get('[data-folder="未明确身份"] input[type=checkbox]').attributes('disabled')).toBeDefined();
@@ -173,7 +256,7 @@ describe('independent multi-creator admission workspace',()=>{
     expect(api.previewAdmissionCollection).toHaveBeenCalledExactlyOnceWith([{creatorId:17,parent:'甲别名',directories:['第一套','第二套'],acceptExistingVersion:true},{creatorId:88,parent:'博主乙',directories:['第一套','第二套'],acceptExistingVersion:true}]);expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmission).not.toHaveBeenCalled();expect(wrapper.text()).toContain('预览草稿 · 未执行');
   });
   it('confirms all creators centrally, leaves candidates and complex boundaries deferred, and asks separately for ads',async()=>{
-    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');
+    const {wrapper}=await render('?collection=collection-one');
     expect(wrapper.find('[data-test=admission-accept-version]').exists()).toBe(false);expect(wrapper.text()).toContain('已入库的同一作品不重复获取');
     expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('new');expect(wrapper.get('[data-test=admission-item-a-candidate] select').element.value).toBe('defer');
     expect(wrapper.get('[data-ad-filename="推广.txt"]').text()).toContain('2 个接纳目录 / 2 个文件 · 已选 2');await wrapper.get('[data-test=collection-confirm]').trigger('click');
@@ -194,22 +277,22 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.repreviewAdmissionCollection).mockResolvedValue({...collection(),id:'fresh'});
     await returned.wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();
     expect(returned.router.currentRoute.value.query.collection).toBe('fresh');
-    expect(returned.wrapper.get('[data-test=admission-item-first] select').element.value).toBe('new');
+    await showAllReview(returned.wrapper);expect(returned.wrapper.get('[data-test=admission-item-first] select').element.value).toBe('new');
     expect(returned.wrapper.text()).toContain('已勾选 0 个具体文件');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('limits same-work choices to the active creator and displays boundary notes instead of silently splitting',async()=>{
-    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('same-as');
-    const peerSelect=wrapper.get('[data-test=admission-item-a-candidate]').findAll('select')[1]!;expect(peerSelect.text()).toContain('a-first');expect(peerSelect.text()).not.toContain('b-first');await wrapper.findAll('[role=tab]')[1]!.trigger('click');expect(wrapper.text()).toContain('目录边界提示');expect(wrapper.text()).toContain('多个含媒体子目录');expect(wrapper.get('[data-test=admission-item-b-complex] select').element.value).toBe('defer');expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('same-as');
+    const peerSelect=wrapper.get('[data-test=admission-item-a-candidate]').findAll('select')[1]!;expect(peerSelect.text()).toContain('a-first');expect(peerSelect.text()).not.toContain('b-first');await wrapper.findAll('[role=tab]')[2]!.trigger('click');expect(wrapper.text()).toContain('目录边界提示');expect(wrapper.text()).toContain('多个含媒体子目录');expect(wrapper.get('[data-test=admission-item-b-complex] select').element.value).toBe('defer');expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('keeps cross-page advertisement choices scoped to all selected creators, preserving skipped and deferred files',async()=>{
     vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?Array.from({length:21},(_,index)=>item(`a-${index}`)):[item('b-first'),item('b-skip')],total:id==='a'?21:2,page:1,pageSize:100}));
-    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.findAll('[role=tab]')[1]!.trigger('click');await wrapper.get('[data-test=admission-item-b-skip] select').setValue('skip');await wrapper.get('[data-ad-filename="推广.txt"]').findAll('button')[0]!.trigger('click');
-    expect(wrapper.get('[data-ad-filename="推广.txt"]').text()).toContain('22 个接纳目录 / 22 个文件 · 已选 22');await wrapper.findAll('[role=tab]')[0]!.trigger('click');expect(wrapper.findAll('.item-card')).toHaveLength(20);await button(wrapper,'下一页目录').trigger('click');expect(wrapper.get('[data-test=admission-item-a-20] .item-ads').findAll('input').map(input=>(input.element as HTMLInputElement).checked)).toEqual([true,true]);
+    const {wrapper}=await render('?collection=collection-one');await wrapper.findAll('[role=tab]')[2]!.trigger('click');await wrapper.get('[data-test=admission-item-b-skip] select').setValue('skip');await wrapper.get('[data-ad-filename="推广.txt"] input').setValue(true);
+    expect(wrapper.get('[data-ad-filename="推广.txt"]').text()).toContain('22 个接纳目录 / 22 个文件 · 已选 22');await wrapper.findAll('[role=tab]')[1]!.trigger('click');expect(wrapper.findAll('.item-card')).toHaveLength(20);await button(wrapper,'下一页目录').trigger('click');expect(wrapper.get('[data-test=admission-item-a-20] .item-ads').findAll('input').map(input=>(input.element as HTMLInputElement).checked)).toEqual([true,true]);
   });
   it('restores the exact whole-collection receipt after lost response and a fresh page without replaying child batches',async()=>{
-    vi.mocked(api.executeAdmissionCollection).mockRejectedValueOnce(new Error('receipt lost'));const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=ads-clear-all]').trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
-    const original=JSON.parse(JSON.stringify(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]));wrapper.unmount();const returned=await render('?collection=collection-one');expect(returned.wrapper.text()).toContain('回执尚未确认');expect(returned.wrapper.get('[data-test=collection-select-safe]').attributes('disabled')).toBeDefined();await returned.wrapper.get('[data-test=collection-confirm]').trigger('click');await returned.wrapper.get('[role=dialog] input').setValue(true);await returned.wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();expect(vi.mocked(api.executeAdmissionCollection).mock.calls[1]![1]).toEqual(original);expect(api.executeAdmission).not.toHaveBeenCalled();
+    vi.mocked(api.executeAdmissionCollection).mockRejectedValueOnce(new Error('receipt lost'));const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=ads-clear-all]').trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    const original=JSON.parse(JSON.stringify(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]));wrapper.unmount();const returned=await render('?collection=collection-one');expect(returned.wrapper.text()).toContain('回执尚未确认');expect(returned.wrapper.get('[data-test=collection-repreview]').attributes('disabled')).toBeDefined();await returned.wrapper.get('[data-test=collection-confirm]').trigger('click');await returned.wrapper.get('[role=dialog] input').setValue(true);await returned.wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();expect(vi.mocked(api.executeAdmissionCollection).mock.calls[1]![1]).toEqual(original);expect(api.executeAdmission).not.toHaveBeenCalled();
   });
   it('polls only lightweight collection state, stops after completion, and never automatically resumes',async()=>{
     vi.useFakeTimers();vi.mocked(api.fetchAdmissionCollection).mockResolvedValueOnce(collection('running')).mockResolvedValue(collection('completed'));const {wrapper}=await render('?collection=collection-one');await vi.advanceTimersByTimeAsync(2500);await flushPromises();expect(wrapper.text()).toContain('本批处理完成');const calls=vi.mocked(api.fetchAdmissionCollection).mock.calls.length;await vi.advanceTimersByTimeAsync(15000);expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(calls);expect(api.executeAdmission).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
@@ -221,7 +304,7 @@ describe('independent multi-creator admission workspace',()=>{
     await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
     expect(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]).toEqual(original);
     await router.push('/local-admission?collection=new-draft');await flushPromises();
-    await wrapper.get('[data-test=collection-select-safe]').trigger('click');await wrapper.get('[data-test=ads-clear-all]').trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');expect(wrapper.get('[role=dialog]').text()).toContain('已入库的同一作品不重复获取');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    await wrapper.get('[data-test=ads-clear-all]').trigger('click');await wrapper.get('[data-test=collection-confirm]').trigger('click');expect(wrapper.get('[role=dialog]').text()).toContain('已入库的同一作品不重复获取');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
     expect(vi.mocked(api.executeAdmissionCollection).mock.calls[1]![1].batches.every(entry=>entry.acceptExistingVersion)).toBe(true);
   });
   it('requires explicit canonical selection when the waiting-directory name is unresolved',async()=>{
