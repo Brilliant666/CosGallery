@@ -5,6 +5,7 @@
     <div v-if="item.structureWarnings?.length" class="warning"><strong>目录边界提示</strong><p v-for="warning in item.structureWarnings" :key="warning">{{ warning }}</p><small>先核对是否属于一套；若确认保留整组，可明确选择新独立作品。本页不自动拆合。</small></div>
     <fieldset :disabled="locked">
       <label>本次处理<select :value="model.action" @change="changeKind"><option value="defer">暂缓，保留等待区文件</option><option value="new">接纳为新独立作品</option><option value="existing">对应已有作品</option><option value="same-as">与本批另一目录同套</option><option value="skip">跳过本次导入，保留等待区文件</option></select></label>
+      <button v-if="model.selectionOrigin==='scope-review'&&model.action==='defer'" type="button" data-test="scope-review-keep-deferred" @click="keepDeferred">本项保留暂缓</button>
       <template v-if="model.action==='new'"><label>展示名称<input v-model="model.displayTitle" maxlength="500" @input="markManual" /></label><p class="hint">保留原目录名与内部结构；允许以后可靠来源关联，不自动建立来源对应。</p></template>
       <template v-if="model.action==='existing'">
         <div class="actions"><button type="button" @click="showPicker=!showPicker">{{ selectedWork?'改选已有作品':'查找已有作品' }}</button><button v-for="candidate in item.candidates" :key="candidate.workId" @click="selectWork(candidate)">候选：{{ candidate.title }} · {{ candidate.images }} 图 / {{ candidate.videos }} 视频</button></div>
@@ -23,12 +24,13 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import AdmissionWorkPicker from './AdmissionWorkPicker.vue';
-import { admissionAction,admissionGroups,isAdmissionSelected,mediaSize,rememberAdmissionAdCancellations,type AdmissionEntry } from '../utils/admission-ui';
+import { admissionAction,admissionGroups,admissionScopeReviewReason,isAdmissionSelected,mediaSize,rememberAdmissionAdCancellations,type AdmissionEntry } from '../utils/admission-ui';
 import type { AdmissionAction,AdmissionActionKind,AdmissionItem,AdmissionWork } from '../types/local-admission';
 const props=defineProps<{item:AdmissionItem;creatorId:number;peers:AdmissionEntry[];locked:boolean;acceptExistingVersion:boolean;selectedWork?:AdmissionWork;recycleAds?:boolean}>();
 const model=defineModel<AdmissionAction>({required:true}),emit=defineEmits<{'select-work':[work:AdmissionWork];change:[]}>(),showPicker=ref(false);
-function markManual(){if(props.locked)return;model.value.selectionOrigin='manual';emit('change');}
+function markManual(){if(props.locked)return;if(model.value.selectionOrigin==='scope-review'&&model.value.reason===admissionScopeReviewReason)delete model.value.reason;model.value.selectionOrigin='manual';emit('change');}
 function changeAds(){if(props.locked)return;rememberAdmissionAdCancellations(props.item,model.value);emit('change');}
+function keepDeferred(){if(props.locked)return;model.value={...admissionAction(props.item,'defer',model.value),reason:'用户明确保留本项暂缓，不随范围确认预选'};emit('change');}
 function changeKind(event:Event){if(props.locked)return;const value=(event.target as HTMLSelectElement).value;if(!['new','existing','same-as','skip','defer'].includes(value))return;model.value=admissionAction(props.item,value as AdmissionActionKind,model.value);emit('change');}
 function selectWork(work:AdmissionWork){if(props.locked)return;model.value={...admissionAction(props.item,'existing',model.value),workId:work.workId,reason:'用户在确认页选择对应已有作品'};showPicker.value=false;emit('select-work',work);emit('change');}
 </script>

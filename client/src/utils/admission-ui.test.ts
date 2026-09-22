@@ -1,10 +1,32 @@
 import {describe,expect,it} from 'vitest';
 import {mount} from '@vue/test-utils';
 import AdmissionItemEditor from '../components/AdmissionItemEditor.vue';
-import {admissionAction,admissionPayload,isAdmissionSafeCandidate,selectAdmissionAds} from './admission-ui';
+import {admissionAction,admissionPayload,admissionScopeReviewReason,changedAdmissionAction,confirmAdmissionScope,isAdmissionSafeCandidate,normalizeAdmissionScopeAction,selectAdmissionAds} from './admission-ui';
 import type {AdmissionItem} from '../types/local-admission';
 const item:AdmissionItem={key:'a',sourceRelativePath:'a',targetPath:'gallery/a',displayTitle:'a',group:'A',state:'preview',summary:{images:1,videos:0,other:0,bytes:1},candidates:[],conflicts:[],ads:[{relativePath:'ad.txt',size:1}]};
 describe('admission action provenance and safe candidates',()=>{
+  it('recognizes only a server-marked exact historical system defer as scope review',()=>{
+    const marked={...item,scopeReviewRequired:true as const};
+    const old={key:item.key,action:'defer' as const,selectionOrigin:'manual' as const,reason:admissionScopeReviewReason,approvedAds:[],acceptSourceIds:[]};
+    expect(normalizeAdmissionScopeAction(marked,old).selectionOrigin).toBe('scope-review');
+    expect(normalizeAdmissionScopeAction(item,old).selectionOrigin).toBe('manual');
+    for(const edit of [{reason:'用户决定暂缓'},{reason:undefined},{action:'skip' as const},{primary:true},{displayTitle:'手工标题'},{workId:9},{sameAsKey:'other'},{approvedAds:['ad.txt']},{acceptSourceIds:[9]},{scopeConfirmed:true}])
+      expect(normalizeAdmissionScopeAction(marked,{...old,...edit}).selectionOrigin).toBe('manual');
+    expect(normalizeAdmissionScopeAction(marked,admissionAction(marked,'defer',old)).selectionOrigin).toBe('manual');
+  });
+  it('confirms scope without confirming identities, retains cancellations, and strips all UI-only metadata',()=>{
+    const marked={...item,scopeReviewRequired:true as const};
+    const held={key:item.key,action:'defer' as const,selectionOrigin:'scope-review' as const,reason:admissionScopeReviewReason,cancelledAds:['ad.txt'],approvedAds:[],acceptSourceIds:[]};
+    expect(changedAdmissionAction(marked,held).selectionOrigin).toBe('scope-review');
+    const chosen=confirmAdmissionScope(marked,held);
+    expect(chosen).toMatchObject({action:'new',selectionOrigin:'automatic',scopeConfirmed:true,approvedAds:[],cancelledAds:['ad.txt']});
+    for(const group of ['B','C','D'] as const)expect(confirmAdmissionScope({...marked,group},held)).toMatchObject({action:'defer',selectionOrigin:'automatic',scopeConfirmed:true});
+    const changed=changedAdmissionAction({...marked,summary:{...marked.summary,bytes:2}},chosen,marked.ads);
+    expect(changed).toMatchObject({action:'new',scopeConfirmed:true,approvedAds:[],cancelledAds:['ad.txt']});
+    const payload=admissionPayload([{item:marked,action:chosen}],true)[0]!;
+    expect(payload).not.toHaveProperty('scopeConfirmed');expect(payload).not.toHaveProperty('selectionOrigin');expect(payload).not.toHaveProperty('cancelledAds');
+    const manual={...held,selectionOrigin:'manual' as const};expect(confirmAdmissionScope(marked,manual)).toBe(manual);
+  });
   it('makes explicit helper choices manual and removes UI provenance from execution actions',()=>{
     const action=admissionAction(item,'new');expect(action.selectionOrigin).toBe('manual');
     expect(admissionPayload([{item,action}],false)[0]).not.toHaveProperty('selectionOrigin');

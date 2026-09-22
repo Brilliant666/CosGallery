@@ -1,7 +1,17 @@
 import {describe,it,expect} from 'vitest';
 import {carryRepreviewChoices,type RepreviewEntry} from './admission-repreview';
+import {admissionScopeReviewReason,confirmAdmissionScope} from './admission-ui';
 const row=(key:string,fingerprint='one',batchId='old'):RepreviewEntry=>({batchId,creatorId:1,parent:'same',item:{key,sourceRelativePath:key.replace(/new-/g,''),displayTitle:key,targetPath:'/target',group:'A',state:'preview',summary:{images:1,videos:0,other:0,bytes:1},candidates:[],conflicts:[],ads:[],reviewFingerprint:fingerprint},action:{key,action:'defer',approvedAds:[],acceptSourceIds:[]}});
 describe('new preview choices are evidence bound',()=>{
+  it('does not auto-confirm legacy scope during a fresh read and carries explicit acknowledgement across changed evidence',()=>{
+    const old=row('a');old.item.scopeReviewRequired=true;old.action={...old.action,selectionOrigin:'manual',reason:admissionScopeReviewReason};
+    const next=row('new-a','changed','fresh');
+    const held=carryRepreviewChoices([old],[next])[0]!;
+    expect(held.action).toMatchObject({action:'defer',selectionOrigin:'scope-review'});
+    const acknowledged={...held,action:confirmAdmissionScope(held.item,held.action)};
+    const later=row('new-a','changed-again','later');later.item.scopeReviewRequired=true;
+    expect(carryRepreviewChoices([acknowledged],[later])[0]?.action).toMatchObject({action:'new',selectionOrigin:'automatic',scopeConfirmed:true});
+  });
   it('retains a manual defer/skip, not key-bound auto defaults',()=>{
     const a=row('a'),b=row('b');b.action.action='skip';
     const result=carryRepreviewChoices([a,b],[row('new-a','one','new'),row('new-b','one','new')]);

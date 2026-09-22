@@ -19,7 +19,9 @@ export interface AdmissionAction {
   key: string; action: AdmissionActionKind; workId?: number; sameAsKey?: string; primary?: boolean;
   displayTitle?: string; approvedAds?: string[]; acceptSourceIds?: number[]; reason?: string;
   /** Unsubmitted UI choice provenance; not part of the execution payload. */
-  selectionOrigin?: 'automatic' | 'manual';
+  selectionOrigin?: 'automatic' | 'manual' | 'scope-review';
+  /** Tab-local acknowledgement of discovered directories, not execution authority. */
+  scopeConfirmed?: boolean;
   cancelledAds?: string[];
 }
 export interface AdmissionItem {
@@ -28,6 +30,7 @@ export interface AdmissionItem {
   conflicts: string[]; ads: Array<{ relativePath: string; size: number; automatic?: boolean }>; state: string; lastError?: string | null;
   workId?: number | null; localWorkId?: number | null; postId?: number | null;
   suggestedAction?: AdmissionAction;
+  scopeReviewRequired?: true;
   structureWarnings?: string[];
   needsBoundaryReview?: boolean;
   reviewFingerprint?: string;

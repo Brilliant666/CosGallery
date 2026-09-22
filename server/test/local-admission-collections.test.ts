@@ -331,6 +331,77 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     expect(items.every(item=>item.action==='defer')).toBe(true);expect(execute).not.toHaveBeenCalled();
     expect(db.prepare('SELECT * FROM local_admission_web_batches WHERE id=?').get(batchId)).toEqual(originalState);
   });
+  it('projects historical scope-review markers by exact persisted creator, parent and name without filesystem access or database writes',async()=>{
+    const db=manager.connection,parents=['范围标记甲','范围标记乙'];
+    const exactReason='旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品';
+    const firstNames=['同名作品','人工暂缓作品','无报告的作品','错误父目录作品','错误名称作品'];
+    const secondNames=['同名作品',...Array.from({length:24},(_,index)=>`普通范围${String(index+1).padStart(2,'0')}`),'分页后的范围作品'];
+    for(const name of firstNames)await makeWithin(parents[0],name);for(const name of secondNames)await makeWithin(parents[1],name);
+    const collection=await service.previewCollection({scopes:[{creatorId:creators[0],parent:parents[0],directories:firstNames},{creatorId:creators[1],parent:parents[1],directories:secondNames}]});
+    for(const batch of collection.batches)for(const row of db.prepare('SELECT item_key,summary_json FROM local_admission_web_items WHERE batch_id=?').all(batch.id)){
+      const summary=JSON.parse(String(row.summary_json));delete summary.scopeReviewRequired;
+      summary.suggestedAction={key:String(row.item_key),action:'defer',reason:summary.sourceRelativePath==='人工暂缓作品'?'用户明确暂缓，先处理另一套':exactReason};
+      db.prepare('UPDATE local_admission_web_items SET summary_json=? WHERE batch_id=? AND item_key=?').run(JSON.stringify(summary),batch.id,row.item_key);
+    }
+    const context=JSON.parse(String(db.prepare('SELECT context_json FROM local_admission_web_batches WHERE id=?').get(collection.batches[0].id)!.context_json));
+    context.directoryRefresh={added:[
+      {creatorId:creators[1],parent:parents[1],name:'同名作品'},
+      {creatorId:creators[1],parent:parents[1],name:'分页后的范围作品'},
+      {creatorId:creators[0],parent:parents[0],name:'人工暂缓作品'},
+      {creatorId:creators[0],parent:'不是当前父目录',name:'错误父目录作品'},
+      {creatorId:creators[0],parent:parents[0],name:'不是当前作品名'}],removed:[],warnings:['历史保存的范围待确认']};
+    db.prepare('UPDATE local_admission_web_batches SET context_json=? WHERE id=?').run(JSON.stringify(context),collection.batches[0].id);
+    expect(JSON.parse(String(db.prepare('SELECT context_json FROM local_admission_web_batches WHERE id=?').get(collection.batches[1].id)!.context_json)).directoryRefresh).toBeUndefined();
+    const snapshot=()=>collection.batches.map(batch=>({context:db.prepare('SELECT context_json FROM local_admission_web_batches WHERE id=?').get(batch.id),items:db.prepare('SELECT * FROM local_admission_web_items WHERE batch_id=? ORDER BY position').all(batch.id)}));
+    const before=snapshot(),changes=db.prepare('SELECT total_changes() count').get()!.count;
+    const fsReads=[vi.spyOn(fs,'readdir'),vi.spyOn(fs,'readFile'),vi.spyOn(fs,'stat'),vi.spyOn(fs,'lstat')];
+    expect(service.items(collection.batches[0].id,1,100).items.every(item=>item.scopeReviewRequired===undefined)).toBe(true);
+    const page1=service.items(collection.batches[1].id,1,24),page2=service.items(collection.batches[1].id,2,24),all=service.items(collection.batches[1].id,1,100);
+    expect([...page1.items,...page2.items]).toEqual(all.items);
+    expect(all.items.filter(item=>item.scopeReviewRequired).map(item=>item.sourceRelativePath)).toEqual(['同名作品','分页后的范围作品']);
+    for(const batch of collection.batches){const persisted=before.find(item=>item.items[0]?.batch_id===batch.id)!.items;
+      expect(service.items(batch.id,1,100).items.map(item=>item.reviewFingerprint)).toEqual(persisted.map(item=>JSON.parse(String(item.summary_json)).reviewFingerprint));}
+    expect(snapshot()).toEqual(before);expect(db.prepare('SELECT total_changes() count').get()!.count).toBe(changes);
+    for(const read of fsReads){expect(read).not.toHaveBeenCalled();read.mockRestore();}
+    delete context.directoryRefresh;db.prepare('UPDATE local_admission_web_batches SET context_json=? WHERE id=?').run(JSON.stringify(context),collection.batches[0].id);
+    expect(service.items(collection.batches[1].id,1,100).items.every(item=>item.scopeReviewRequired===undefined)).toBe(true);
+  });
+  it('preserves unresolved scope markers across rereading without including the marker in media review fingerprints',async()=>{
+    const db=manager.connection,parent='范围标记重复刷新',originalName='最初选择',newName='无基线的新作品';await makeWithin(parent,originalName);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[originalName]}]}),originalBatch=original.batches[0].id;
+    const context=JSON.parse(String(db.prepare('SELECT context_json FROM local_admission_web_batches WHERE id=?').get(originalBatch)!.context_json));delete context.knownSiblingDirectories;
+    db.prepare('UPDATE local_admission_web_batches SET context_json=? WHERE id=?').run(JSON.stringify(context),originalBatch);await makeWithin(parent,newName);
+    const apply=vi.spyOn(Admission.prototype,'apply'),first=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    const firstItem=service.items(first.batches[0].id).items.find(item=>item.sourceRelativePath===newName)!;
+    expect(firstItem).toMatchObject({scopeReviewRequired:true,suggestedAction:{action:'defer'}});
+    expect(JSON.parse(String(db.prepare('SELECT summary_json FROM local_admission_web_items WHERE batch_id=? AND item_key=?').get(first.batches[0].id,firstItem.key)!.summary_json)).scopeReviewRequired).toBe(true);
+    const plain=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[originalName,newName]}]}),plainItem=service.items(plain.batches[0].id).items.find(item=>item.sourceRelativePath===newName)!;
+    expect(plainItem.scopeReviewRequired).toBeUndefined();expect(plainItem.reviewFingerprint).toBe(firstItem.reviewFingerprint);
+    const again=await service.repreviewCollection(first.id,{refreshDirectories:true}),againItem=service.items(again.batches[0].id).items.find(item=>item.sourceRelativePath===newName)!;
+    expect(again.directoryRefresh.added).toEqual([]);expect(againItem.scopeReviewRequired).toBe(true);expect(againItem.reviewFingerprint).toBe(firstItem.reviewFingerprint);
+    expect(service.items(again.batches[0].id).items.find(item=>item.sourceRelativePath===originalName)?.scopeReviewRequired).toBeUndefined();expect(apply).not.toHaveBeenCalled();
+  });
+  it('does not reclassify confirmed manual deferrals or their remaining draft as unresolved automatic scope choices',async()=>{
+    const db=manager.connection,parent='人工确认后范围标记',base='原目录',discovered=['人工说明的暂缓','沿用旧说明的暂缓'];await makeWithin(parent,base);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[base]}]});
+    const context=JSON.parse(String(db.prepare('SELECT context_json FROM local_admission_web_batches WHERE id=?').get(original.batches[0].id)!.context_json));delete context.knownSiblingDirectories;
+    db.prepare('UPDATE local_admission_web_batches SET context_json=? WHERE id=?').run(JSON.stringify(context),original.batches[0].id);
+    for(const name of discovered)await makeWithin(parent,name);
+    const draft=await service.repreviewCollection(original.id,{refreshDirectories:true}),batch=draft.batches[0],draftItems=service.items(batch.id).items;
+    expect(draftItems.filter(item=>item.scopeReviewRequired).map(item=>item.sourceRelativePath).sort()).toEqual(discovered.slice().sort());
+    const exactReason='旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品',apply=vi.spyOn(Admission.prototype,'apply');
+    await service.executeCollection(draft.id,{requestKey:randomUUID(),confirmed:true,batches:[{batchId:batch.id,acceptExistingVersion:true,actions:draftItems.map(item=>({key:item.key,action:'defer',reason:item.sourceRelativePath===discovered[0]?'用户已看过，稍后再处理':exactReason}))}]});await service.waitForIdle();
+    const saved=db.prepare('SELECT summary_json FROM local_admission_web_items WHERE batch_id=? ORDER BY position').all(batch.id);
+    expect(saved.some(row=>JSON.parse(String(row.summary_json)).scopeReviewRequired===true)).toBe(true);
+    expect(service.items(batch.id).items.every(item=>item.scopeReviewRequired===undefined)).toBe(true);
+    expect(db.prepare('SELECT summary_json FROM local_admission_web_items WHERE batch_id=? ORDER BY position').all(batch.id)).toEqual(saved);
+    const remaining=await service.remainingCollection(draft.id),remainingItems=service.items(remaining.batches[0].id).items;
+    expect(remainingItems.every(item=>item.scopeReviewRequired===undefined)).toBe(true);
+    expect(remainingItems.find(item=>item.sourceRelativePath===discovered[0])?.suggestedAction).toMatchObject({action:'defer',reason:'用户已看过，稍后再处理'});
+    expect(remainingItems.find(item=>item.sourceRelativePath===discovered[1])?.suggestedAction).toMatchObject({action:'defer',reason:exactReason});
+    const reread=await service.repreviewCollection(remaining.id,{refreshDirectories:true});
+    expect(service.items(reread.batches[0].id).items.every(item=>item.scopeReviewRequired===undefined)).toBe(true);expect(apply).not.toHaveBeenCalled();
+  });
   it('does not replace the original draft when rereading leaves no eligible selected directories',async()=>{
     const db=manager.connection,parent='刷新后无可选目录',title='已移出作品';await makeWithin(parent,title);
     const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]});

@@ -1,5 +1,5 @@
 import type { AdmissionAction, AdmissionItem, AdmissionWork } from '../types/local-admission';
-import { admissionAction, changedAdmissionAction, isAdmissionSafeCandidate } from './admission-ui';
+import { admissionAction, changedAdmissionAction, isAdmissionSafeCandidate, normalizeAdmissionScopeAction } from './admission-ui';
 
 const lastKey = 'cosgallery:admission:last-collection';
 const draftKey = 'cosgallery:admission:tab-drafts';
@@ -41,7 +41,8 @@ export function carryRefreshedChoices(previous:DraftEntry[],next:DraftEntry[]):S
 }
 function carrySavedChoices(saved:SavedEntry[],entries:DraftEntry[],validateStored:boolean):SavedEntry[]{
     const restored:SavedEntry[]=entries.flatMap(entry=>{
-      const value=saved.find(row=>row?.batchId===entry.batchId&&row.creatorId===entry.creatorId&&row.key===entry.item.key);
+      const stored=saved.find(row=>row?.batchId===entry.batchId&&row.creatorId===entry.creatorId&&row.key===entry.item.key);
+      const value=stored?.action?{...stored,action:normalizeAdmissionScopeAction(entry.item,stored.action)}:stored;
       if(!value||!value.action||value.action.key!==entry.item.key||!['new','existing','same-as','skip','defer'].includes(value.action.action))return [];
       if(value.evidence!==evidence(entry.item)){
         let previousEvidence:unknown;try{previousEvidence=JSON.parse(value.evidence);}catch{previousEvidence=undefined;}

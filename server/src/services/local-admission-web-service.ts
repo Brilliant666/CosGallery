@@ -44,11 +44,13 @@ type NextAction = {nextAction:'review_files'|'resume_plan'|'prepare_preview'|'no
 type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTitle:string;group:'A'|'B'|'C'|'D';
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
   ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>;
+  scopeReviewRequired?:boolean;
   structureWarnings?:string[];needsBoundaryReview?:boolean;reviewFingerprint?:string};
 type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[]};
 type PreparedExecution={batch:Batch;request:z.infer<typeof webExecuteSchema>;plan:AdmissionPlan|null;saved:Record<string,unknown>[]};
 type Collection={id:string;state:string;created_at:string;updated_at:string;confirmed_json:string|null;error:string|null;owner_pid:number|null;owner_token:string|null};
 const advertisementRulesVersion=1;
+const legacyScopeReviewReason='旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品';
 function advertisementCandidates(manifest:PreviewItem['manifest']):Summary['ads'] {
   return manifest.filter(isAdmissionAdvertisementCandidate).map(e=>({relativePath:e.relativePath,size:e.size,
     ...(e.kind==='image'&&isKnownAdvertisementImage(e.relativePath)?{automatic:true}:{})}));
@@ -279,8 +281,26 @@ export class LocalAdmissionWebService {
   list(creatorId?:number,page=1) {const where=creatorId?'WHERE creator_id=?':'';const args=creatorId?[creatorId]:[];
     const total=Number(this.db.prepare(`SELECT COUNT(*) n FROM local_admission_web_batches ${where}`).get(...args)!.n);
     return {page,pageSize:30,total,items:this.db.prepare(`SELECT id FROM local_admission_web_batches ${where} ORDER BY created_at DESC,id DESC LIMIT 30 OFFSET ?`).all(...args,(page-1)*30).map(r=>this.get(String(r.id)))};}
+  private scopeReviewPaths(batchId:string):Set<string> {
+    const batch=this.db.prepare(`SELECT creator_id,json_extract(context_json,'$.parent') parent FROM local_admission_web_batches WHERE id=?`).get(batchId)!;
+    // Historical system defaults were stored as ordinary suggested deferrals. Only
+    // the exact server-generated reason AND the persisted discovery report identify
+    // those entries; a user's reason or an unrelated deferred work is not enough.
+    const report=this.db.prepare(`SELECT json_extract(b.context_json,'$.directoryRefresh') report
+      FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id
+      WHERE c.collection_id=(SELECT collection_id FROM local_admission_web_collection_batches WHERE batch_id=?)
+        AND json_extract(b.context_json,'$.directoryRefresh') IS NOT NULL LIMIT 1`).get(batchId);
+    const discoveries=report?(JSON.parse(String(report.report)) as DirectoryRefresh).added:[];
+    const legacyPaths=new Set(discoveries.filter(entry=>entry.creatorId===batch.creator_id&&entry.parent===batch.parent).map(entry=>entry.name));
+    return new Set(this.db.prepare(`SELECT json_extract(summary_json,'$.sourceRelativePath') relative,
+      json_extract(summary_json,'$.scopeReviewRequired') required,json_extract(summary_json,'$.suggestedAction.action') action,
+      json_extract(summary_json,'$.suggestedAction.reason') reason FROM local_admission_web_items WHERE batch_id=?`).all(batchId)
+      .filter(row=>row.required===1||(row.action==='defer'&&row.reason===legacyScopeReviewReason&&legacyPaths.has(String(row.relative))))
+      .map(row=>String(row.relative)));
+  }
   items(id:string,page=1,pageSize=24) {
     const batch=this.get(id);page=Math.max(1,page);pageSize=Math.min(100,Math.max(1,pageSize));
+    const scopeReview=batch.state==='draft'?this.scopeReviewPaths(id):new Set<string>();
     let blocked:string|null=null;
     try{this.assertIdle();this.creator(batch.creatorId);this.assertCreatorIdle(batch.creatorId);}catch(error){blocked=message(error);}
     const rows=this.db.prepare(`SELECT x.item_key,x.summary_json,x.action,i.state,i.last_error,i.work_id,i.local_work_id,l.id existing_local_id,l.post_id,
@@ -294,6 +314,7 @@ export class LocalAdmissionWebService {
       LEFT JOIN archive_catalog_local_works l ON l.id=i.local_work_id AND l.work_id=i.work_id WHERE x.batch_id=? ORDER BY x.position LIMIT ? OFFSET ?`).all(batch.creatorId,batch.creatorId,batch.state,advertisementRulesVersion,id,pageSize,(page-1)*pageSize);
     return {page,pageSize,total:batch.totals.total,items:rows.map(r=>{
       const summary=JSON.parse(String(r.summary_json)) as Summary;
+      if(scopeReview.has(summary.sourceRelativePath))summary.scopeReviewRequired=true;else delete summary.scopeReviewRequired;
       // Old unsubmitted drafts use their saved inventory; no disk reads or changes
       // to the manifest, choices, confirmed payload or execution checkpoints.
       if(r.legacy_preview_json){summary.ads=advertisementCandidates((JSON.parse(String(r.legacy_preview_json)) as PreviewItem).manifest);summary.advertisementRulesVersion=advertisementRulesVersion;}
@@ -465,9 +486,10 @@ export class LocalAdmissionWebService {
     const normalize=(name:string)=>process.platform==='win32'?name.toLowerCase():name;
     for(const scope of this.collectionScope(id).scopes){
       this.assertCreatorIdle(scope.creatorId);
-      const old=this.db.prepare(`SELECT b.input_root,b.context_json FROM local_admission_web_collection_batches c
+      const old=this.db.prepare(`SELECT b.id,b.input_root,b.context_json FROM local_admission_web_collection_batches c
         JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=? AND b.creator_id=?`).get(id,scope.creatorId)!;
       const context=JSON.parse(String(old.context_json)) as Context;
+      const unresolvedScope=this.scopeReviewPaths(String(old.id));
       const inputRoot=path.join(this.settings().waitingRoot,scope.parent);
       if(!same(inputRoot,String(old.input_root))||!same(this.settings().waitingRoot,context.waitingRoot))
         throw new AdmissionWebError('等待区设置已改变，请从选择范围核对原目录，不能自动改用新位置');
@@ -493,8 +515,10 @@ export class LocalAdmissionWebService {
       if(!retained.length&&!added.length)continue;
       const child=await this.preparePreview({...scope,directories:[...retained,...added.map(entry=>entry.name)]});
       if(hash(entries)!==hash(await this.siblingEntries(inputRoot)))throw new AdmissionWebError('重新读取期间目录范围发生变化，请待整理结束后重试；原草稿保持');
-      if(!context.knownSiblingDirectories)for(const item of child.items)if(added.some(entry=>entry.name===item.summary.sourceRelativePath))
-        item.summary.suggestedAction={key:item.summary.key,action:'defer',reason:'旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品'};
+      for(const item of child.items)if(unresolvedScope.has(item.summary.sourceRelativePath)||!context.knownSiblingDirectories&&added.some(entry=>entry.name===item.summary.sourceRelativePath)){
+        item.summary.scopeReviewRequired=true;
+        item.summary.suggestedAction={key:item.summary.key,action:'defer',reason:legacyScopeReviewReason};
+      }
       prepared.push(child);
     }
     if(!prepared.length)throw new AdmissionWebError('本批博主下没有可核对的作品目录，原草稿保留；请先完成目录整理或调整导入范围');

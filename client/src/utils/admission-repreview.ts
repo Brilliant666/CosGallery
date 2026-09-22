@@ -1,10 +1,11 @@
 import type { DraftEntry } from './admission-navigation';
-import { changedAdmissionAction, isAdmissionSafeCandidate } from './admission-ui';
+import { changedAdmissionAction, isAdmissionSafeCandidate, normalizeAdmissionScopeAction } from './admission-ui';
 
 export interface RepreviewEntry extends DraftEntry { parent:string }
 
 /** Unsent review choices only. A new preview never reuses an execution receipt. */
 export function carryRepreviewChoices(previous:RepreviewEntry[],next:RepreviewEntry[]):Array<RepreviewEntry&{key:string}> {
+  previous=previous.map(entry=>({...entry,action:normalizeAdmissionScopeAction(entry.item,entry.action)}));
   const matching=new Map<RepreviewEntry,RepreviewEntry>();
   for(const entry of next){
     const old=previous.find(row=>row.creatorId===entry.creatorId&&row.parent===entry.parent&&row.item.sourceRelativePath===entry.item.sourceRelativePath);

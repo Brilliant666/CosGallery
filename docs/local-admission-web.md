@@ -295,7 +295,18 @@ linked new paths and paths reserved by other confirmed plans are not added. Exis
 selected paths that become invalid remain visible as conflicts. Scope metadata is
 excluded from work review fingerprints. It adds no migration or execution authority.
 Legacy contexts have no such inventory: newly discovered paths are shown with an
-explicit range warning and suggested manual deferral, not automatically selected.
+explicit **range confirmation** requirement, not automatically selected and not
+misrepresented as a user's manual deferral or a file conflict. One batch-level
+confirmation lists the affected creator/directory scope and preselects only safe
+new works. Identity/boundary conflicts still require review; manual skip/defer and
+advertisement cancellations remain. This changes only unsubmitted browser choices,
+not the execution ledger, and never submits admission by itself.
+`scopeReviewRequired` marks these system-generated suggestions. Existing saved
+drafts are recognized read-only only when the exact historical system reason and
+the discovery report agree on creator, parent and directory. No rescan or migration
+is needed to expose the confirmation in an already-saved draft. Pending range
+requirements survive further repreview. Confirmed plans and deliberately deferred
+items carried from executed batches remain their original decisions.
 Optional `directoryRefresh` metadata preserves the added/removed report after reload.
 If no reviewable directories remain, the operation reports this and keeps the old
 draft rather than publishing an empty collection. Concurrent changes during reading

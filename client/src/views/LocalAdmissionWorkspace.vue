@@ -50,6 +50,14 @@
         <p class="hint">整理文件，或在本批已选博主父目录内新增、改名、拆分作品目录后，点击“重新读取并核对”即可重读并显示目录变化，无需返回第1步。更换博主或父目录时再用“上一步：调整导入范围”。新目录不继承旧合集身份或广告批准；旧草稿未记录的范围需核对，确认后才执行。</p>
         <p class="hint">未提交选择仅保存在当前浏览器标签页，刷新或同页返回可恢复；换浏览器或关闭标签页后不保证保留。后台确认与执行记录由服务端保存。</p>
         <details class="boundary-help"><summary>冲突 / 需整理的目录怎么处理？</summary><p>边界提示不代表文件损坏。确认整组属于一套，可逐项选择整套接纳并保留内部结构；确为多套时，先在尚未执行的等待区按一套一个目录整理，再点击“重新读取并核对”。更换博主或父目录才需调整导入范围。已有作品或目标冲突须判断身份，不覆盖或用改名掩盖冲突。</p></details>
+        <section v-if="scopeReviewRows.length&&!pending" class="scope-review warning" aria-label="确认本批目录范围" data-test="scope-review">
+          <h3>有 {{ scopeReviewRows.length }} 个目录需要确认属于本批</h3>
+          <p>这是范围待确认，不代表文件冲突。旧预览没有记录完整父目录范围，请集中确认以下新发现目录是否属于本次入库。</p>
+          <p>{{ scopeReviewSafeCount }} 个无冲突候选可预选 · {{ scopeReviewRows.length-scopeReviewSafeCount }} 个仍需判断作品身份或目录边界。</p>
+          <details v-for="entry in scopeReviewGroups" :key="entry.id"><summary>{{ entry.creatorName }} · {{ entry.rows.length }} 个候选目录</summary><ul><li v-for="row in entry.rows" :key="row.item.key">{{ entry.parent }} / {{ row.item.sourceRelativePath }}</li></ul></details>
+          <p>不属于本批的目录请先逐项改为跳过；暂不决定的项目可点“本项保留暂缓”。下方按钮只确认仍待核对的范围并更新未提交选择，不执行入库；已作出的人工决定保持。</p>
+          <button data-test="scope-review-confirm" :disabled="locked" @click="confirmScopeReview">确认这些目录属于本批，并预选无冲突作品</button>
+        </section>
         <AdmissionAcquisitionPolicy :retry="!!pending" />
         <AdmissionAdsPicker :entries="allEntries" :locked="locked" :recycle-ads="!pending" @change="invalidateConfirmation" />
         <div class="creator-tabs" role="tablist" aria-label="按博主核对"><button role="tab" :aria-selected="activeBatchId==='all'" @click="activeBatchId='all';page=1">全部博主</button><button v-for="entry in collection.batches" :key="entry.id" role="tab" :aria-selected="activeBatchId===entry.id" @click="activeBatchId=entry.id;page=1">{{ entry.creatorName }} <small>{{ contexts[entry.id]?.items.length??entry.totals.total }} 目录 · {{ pendingFor(entry.id) }} 待处理</small></button></div>
@@ -86,7 +94,7 @@ import * as api from '../api/local-admission';
 import { RequestError } from '../api/http';
 import { carryRefreshedChoices,clearAdmissionDraft,lastAdmissionCollection,rememberAdmissionCollection,restoreAdmissionDraft,saveAdmissionDraft } from '../utils/admission-navigation';
 import { carryRepreviewChoices,type RepreviewEntry } from '../utils/admission-repreview';
-import { admissionAction,admissionActionLabels,admissionGroups,admissionPayload,isAdmissionSelected,isAdmissionSafeCandidate,validateAdmissionSelection,type AdmissionEntry } from '../utils/admission-ui';
+import { admissionAction,admissionActionLabels,admissionGroups,admissionPayload,confirmAdmissionScope,isAdmissionSelected,isAdmissionSafeCandidate,normalizeAdmissionScopeAction,validateAdmissionSelection,type AdmissionEntry } from '../utils/admission-ui';
 import type { AdmissionAction,AdmissionBatch,AdmissionCollection,AdmissionCollectionExecuteInput,AdmissionCreator,AdmissionDirectory,AdmissionItem,AdmissionPage,AdmissionPreviewInput,AdmissionWork,AdmissionWorkspace } from '../types/local-admission';
 
 interface FolderChoice {selected:boolean;creator:AdmissionCreator|null;available:AdmissionDirectory[];directories:string[];sourceEvidenceId:number|null;loading:boolean;error:string;request:number}
@@ -115,6 +123,15 @@ function needsAttention(row:ReviewRow){const action=row.context.actions[row.item
 function batchSummary(id:string){const entries=contexts[id]?entriesFor(contexts[id]):[];return `${entries.filter(entry=>isAdmissionSelected(entry.action)).length} 接纳 · ${entries.filter(entry=>entry.action.action==='skip').length} 跳过 · ${entries.filter(entry=>entry.action.action==='defer').length} 暂缓`;}
 function itemPhase(item:AdmissionItem){return ({completed:'完成',skip:'跳过，等待区保留',defer:'暂缓，等待区保留',skipped:'跳过，等待区保留',deferred:'暂缓，等待区保留',not_started:'尚未开始',planned:'已建立计划，尚未移动',move_intent:'移动检查点',files_verified:'文件已核验',indexed:'已索引'} as Record<string,string>)[item.state]??item.state;}
 const reviewEntries=computed<ReviewRow[]>(()=>Object.values(contexts).flatMap(context=>context.items.map(item=>({context,item}))));
+const scopeReviewRows=computed(()=>reviewEntries.value.filter(row=>row.context.actions[row.item.key].selectionOrigin==='scope-review'&&row.context.actions[row.item.key].action==='defer'));
+const scopeReviewSafeCount=computed(()=>scopeReviewRows.value.filter(row=>isAdmissionSafeCandidate(row.item)).length);
+const scopeReviewGroups=computed(()=>Object.values(contexts).map(context=>({...context.batch,rows:scopeReviewRows.value.filter(row=>row.context.batch.id===context.batch.id)})).filter(entry=>entry.rows.length));
+function confirmScopeReview(){
+  if(locked.value)return;
+  const count=scopeReviewRows.value.length,safe=scopeReviewSafeCount.value;
+  for(const row of scopeReviewRows.value)row.context.actions[row.item.key]=confirmAdmissionScope(row.item,row.context.actions[row.item.key]);
+  invalidateConfirmation();notice.value=`已确认 ${count} 个目录属于本批，预选 ${safe} 个无冲突作品；其余仍需判断。尚未执行入库。`;
+}
 function pendingFor(id:string){return reviewEntries.value.filter(row=>row.context.batch.id===id&&needsAttention(row)).length;}
 const filteredReviewEntries=computed(()=>reviewEntries.value.filter(row=>{
   const action=row.context.actions[row.item.key],query=reviewSearch.value.trim().toLocaleLowerCase();
@@ -151,7 +168,7 @@ function allSelected(name:string){const value=choices[name],available=value?.ava
 function selectFolderDirectories(name:string,selected:boolean){if(busy.value)return;const choice=choices[name];choice.directories=selected?choice.available.filter(item=>item.selectable).map(item=>item.name):[];}
 async function saveSettings(){if(busy.value)return;const current=generation;busy.value=true;error.value='';try{await api.saveAdmissionSettings(waitingRoot.value);if(current===generation&&!disposed)await loadWorkspace();}catch(cause){if(current===generation)error.value=cause instanceof Error?cause.message:'设置保存失败';}finally{if(current===generation)busy.value=false;}}
 async function loadRecent(page=1){const current=generation;try{const result=await api.fetchAdmissionCollections(page);if(current===generation&&!disposed)recent.value=result;}catch(cause){if(current===generation)notice.value=cause instanceof Error?cause.message:'最近批次读取失败';}}
-async function readItems(batch:AdmissionCollection['batches'][number],current:number){const items:AdmissionItem[]=[];let page=1,total=Infinity;while(items.length<total){const result=await api.fetchAdmissionItems(batch.id,page++,100);if(current!==generation||disposed)return;items.push(...result.items);total=result.total;if(!result.items.length)break;}if(current!==generation||disposed)return;const previous=contexts[batch.id];const context:BatchContext={batch,items,actions:previous?.actions??{},works:previous?.works??{}};for(const item of items){if(context.actions[item.key])continue;const suggested=batch.state==='draft'?item.suggestedAction:undefined,work=suggested?.action==='existing'?item.candidates.find(work=>work.workId===suggested.workId):undefined;context.actions[item.key]=suggested&&(suggested.action!=='existing'||work)?{...suggested,key:item.key,selectionOrigin:'manual',approvedAds:[...(suggested.approvedAds??[])],acceptSourceIds:[...(suggested.acceptSourceIds??[])]}:{...admissionAction(item,'defer'),selectionOrigin:'automatic'};if(work)context.works[item.key]=work;}contexts[batch.id]=context;}
+async function readItems(batch:AdmissionCollection['batches'][number],current:number){const items:AdmissionItem[]=[];let page=1,total=Infinity;while(items.length<total){const result=await api.fetchAdmissionItems(batch.id,page++,100);if(current!==generation||disposed)return;items.push(...result.items);total=result.total;if(!result.items.length)break;}if(current!==generation||disposed)return;const previous=contexts[batch.id];const context:BatchContext={batch,items,actions:previous?.actions??{},works:previous?.works??{}};for(const item of items){if(context.actions[item.key])continue;const suggested=batch.state==='draft'?item.suggestedAction:undefined,work=suggested?.action==='existing'?item.candidates.find(work=>work.workId===suggested.workId):undefined;context.actions[item.key]=normalizeAdmissionScopeAction(item,suggested&&(suggested.action!=='existing'||work)?{...suggested,key:item.key,selectionOrigin:'manual',approvedAds:[...(suggested.approvedAds??[])],acceptSourceIds:[...(suggested.acceptSourceIds??[])]}:{...admissionAction(item,'defer'),selectionOrigin:'automatic'});if(work)context.works[item.key]=work;}contexts[batch.id]=context;}
 async function readAllItems(batches:AdmissionCollection['batches'],current:number){itemsLoading.value=true;try{let index=0;const worker=async()=>{while(index<batches.length&&current===generation&&!disposed){const batch=batches[index++];await readItems(batch,current);}};await Promise.all([worker(),worker()]);}finally{if(current===generation)itemsLoading.value=false;}}
 function stopPoll(){if(timer)clearTimeout(timer);timer=undefined;}
 function schedulePoll(){stopPoll();if(active.value&&!disposed&&pollFailures<3&&!document.hidden)timer=setTimeout(()=>void refreshCollection(true),2500);}

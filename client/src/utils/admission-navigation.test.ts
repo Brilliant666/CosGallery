@@ -1,8 +1,19 @@
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {carryRefreshedChoices,lastAdmissionCollection,rememberAdmissionCollection,restoreAdmissionDraft,saveAdmissionDraft,type DraftEntry} from './admission-navigation';
+import {admissionScopeReviewReason,confirmAdmissionScope} from './admission-ui';
 const row:DraftEntry={batchId:'b',creatorId:17,item:{key:'i',sourceRelativePath:'same',targetPath:'gallery/same',displayTitle:'same',group:'A',summary:{images:1,videos:0,other:0,bytes:10},candidates:[],conflicts:[],ads:[],state:'preview'},action:{key:'i',action:'skip',approvedAds:[],acceptSourceIds:[]}};
 describe('tab-local admission navigation hints',()=>{
   beforeEach(()=>sessionStorage.clear());
+  it('repairs the old tab default only after the server marks it and saves the explicit scope acknowledgement',()=>{
+    const legacy={...row,action:{...row.action,action:'defer' as const,selectionOrigin:'manual' as const,reason:admissionScopeReviewReason}};
+    const marked={...legacy,item:{...row.item,scopeReviewRequired:true as const}};
+    saveAdmissionDraft('c',[legacy]);
+    const waiting=restoreAdmissionDraft('c',[marked])[0]!.action;expect(waiting.selectionOrigin).toBe('scope-review');
+    saveAdmissionDraft('c',[{...marked,action:waiting}]);expect(restoreAdmissionDraft('c',[marked])[0]?.action.action).toBe('defer');
+    const confirmed=confirmAdmissionScope(marked.item,waiting);saveAdmissionDraft('c',[{...marked,action:confirmed}]);
+    expect(restoreAdmissionDraft('c',[marked])[0]?.action).toMatchObject({action:'new',selectionOrigin:'automatic',scopeConfirmed:true});
+    expect(carryRefreshedChoices([{...marked,action:confirmed}],[marked])[0]?.action.scopeConfirmed).toBe(true);
+  });
   it('remembers only a collection id and clears it when deliberately starting a new scope',()=>{rememberAdmissionCollection('c');expect(lastAdmissionCollection()).toBe('c');rememberAdmissionCollection(null);expect(lastAdmissionCollection()).toBeNull();});
   it('retains manual skip across evidence changes only within the same source scope',()=>{
     saveAdmissionDraft('c',[row]);expect(restoreAdmissionDraft('c',[row])[0]?.action).toEqual(row.action);
