@@ -124,7 +124,15 @@ export class LocalAdmissionWebService {
     for(const entry of (await fs.readdir(root,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans-CN'))){
       if((!entry.isDirectory()&&!entry.isSymbolicLink())||reservedDirectory(entry.name))continue;
       let reason:string|undefined;
-      try{await strictDirectory(path.join(root,entry.name));await assertPathInsideLocalIngestRoot(root,path.join(root,entry.name),{directChild:true});}catch(e){reason=message(e);}
+      try{
+        const parentPath=path.join(root,entry.name);
+        await strictDirectory(parentPath);await assertPathInsideLocalIngestRoot(root,parentPath,{directChild:true});
+        // Completed imports may leave internal attachment/review containers. Do
+        // not offer these parents as pending creators; never traverse or delete
+        // the containers, or hide ordinary files, links and unreadable content.
+        const children=await fs.readdir(parentPath,{withFileTypes:true});
+        if(children.length>0&&children.every(child=>child.isDirectory()&&!child.isSymbolicLink()&&reservedDirectory(child.name)))continue;
+      }catch(e){reason=message(e);}
       const matchesByCreator=new Map<number,{creatorId:number;creatorName:string;matchedName:string;matchKind:'canonical'|'alias'}>();
       for(const row of names.filter(row=>normalize(String(row.matchedName))===normalize(entry.name))) {
         const creatorId=Number(row.creatorId),matchKind=String(row.matchKind) as 'canonical'|'alias';

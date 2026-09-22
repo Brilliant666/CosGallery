@@ -41,7 +41,7 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     db.prepare("INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,?,?,'another-source')").run(creators[0],'甲的别名','甲的别名');
     await fs.mkdir(path.join(waiting,'甲的别名'));await fs.mkdir(path.join(waiting,'未知名称'));await fs.mkdir(path.join(waiting,'.local-admission-attachments'));
     const before=db.prepare('SELECT * FROM archive_catalog_creators ORDER BY id').all(),spy=vi.spyOn(fs,'readdir');
-    const workspace=await service.workspace();expect(spy.mock.calls.every(call=>call[0]===waiting)).toBe(true);spy.mockRestore();
+    const workspace=await service.workspace();expect(spy.mock.calls.every(call=>call[0]===waiting||path.dirname(String(call[0]))===waiting)).toBe(true);spy.mockRestore();
     expect(workspace.items.find(item=>item.name==='甲的别名')?.matches).toEqual([{creatorId:creators[0],creatorName:names[0],matchedName:'甲的别名',matchKind:'alias'}]);
     expect(workspace.items.find(item=>item.name==='未知名称')?.matches).toEqual([]);expect(workspace.items.some(item=>item.name.startsWith('.local-'))).toBe(false);
     expect(workspace.items.find(item=>item.name===names[0])?.matches).toEqual([{creatorId:creators[0],creatorName:names[0],matchedName:names[0],matchKind:'canonical'}]);
@@ -49,6 +49,45 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     db.prepare('UPDATE archive_catalog_creators SET is_active=0 WHERE id=?').run(creators[1]);
     expect((await service.workspace()).items.find(item=>item.name===names[1])?.matches).toEqual([]);expect(service.creators(names[1]).items).toEqual([]);
     db.prepare('UPDATE archive_catalog_creators SET is_active=1 WHERE id=?').run(creators[1]);expect(db.prepare('SELECT * FROM archive_catalog_creators ORDER BY id').all()).toEqual(before);
+  });
+  it('omits parents containing only real internal residual directories without traversing or deleting their files',async()=>{
+    const residualNames=['已完成仅附件','已完成仅审核隔离'];
+    const directories=[['.local-admission-attachments'],['.local-review-originals','.local-review-staging']];
+    const files:string[]=[];
+    for(let n=0;n<residualNames.length;n++)for(const directory of directories[n]){
+      const container=path.join(waiting,residualNames[n],directory);await fs.mkdir(container,{recursive:true});
+      const file=path.join(container,'retained.txt');await fs.writeFile(file,'retained historical attachment');files.push(file);
+    }
+    const read=vi.spyOn(fs,'readdir'),remove=vi.spyOn(fs,'rm'),unlink=vi.spyOn(fs,'unlink'),move=vi.spyOn(fs,'rename');
+    const workspace=await service.workspace();
+    expect(workspace.items.filter(item=>residualNames.includes(item.name))).toEqual([]);
+    expect(read.mock.calls.every(call=>call[0]===waiting||path.dirname(String(call[0]))===waiting)).toBe(true);
+    expect(remove).not.toHaveBeenCalled();expect(unlink).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
+    for(const file of files)expect(await fs.readFile(file,'utf8')).toBe('retained historical attachment');
+  });
+  it('keeps ordinary content, empty parents and reserved-name symbolic links visible for manual handling',async()=>{
+    const cases=['附件加作品','附件加普通文件','系统名字普通文件','系统名字链接','空博主父目录'];
+    for(const name of cases)await fs.mkdir(path.join(waiting,name),{recursive:true});
+    await fs.mkdir(path.join(waiting,cases[0],'.local-admission-attachments'));await fs.mkdir(path.join(waiting,cases[0],'仍需处理作品'));
+    await fs.mkdir(path.join(waiting,cases[1],'.local-review-originals'));await fs.writeFile(path.join(waiting,cases[1],'notes.txt'),'manual content');
+    await fs.writeFile(path.join(waiting,cases[2],'.local-admission-attachments'),'not a system directory');
+    const linkTarget=path.join(root,'outside-waiting-link-target');await fs.mkdir(linkTarget);
+    await fs.writeFile(path.join(linkTarget,'important.txt'),'do not follow');
+    await fs.symlink(linkTarget,path.join(waiting,cases[3],'.local-admission-attachments'),process.platform==='win32'?'junction':'dir');
+    const read=vi.spyOn(fs,'readdir'),workspace=await service.workspace();
+    expect(workspace.items.filter(item=>cases.includes(item.name)).map(item=>item.name).sort()).toEqual([...cases].sort());
+    expect(read.mock.calls.some(call=>String(call[0]).startsWith(linkTarget))).toBe(false);
+    expect((await fs.lstat(path.join(waiting,cases[3],'.local-admission-attachments'))).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(path.join(linkTarget,'important.txt'),'utf8')).toBe('do not follow');
+  });
+  it('keeps an unreadable parent visible and nonselectable instead of assuming it only contains residuals',async()=>{
+    const name='无法读取需人工核对',parent=path.join(waiting,name);await fs.mkdir(parent);
+    const readdir=fs.readdir;
+    vi.spyOn(fs,'readdir').mockImplementation((async (...args:Parameters<typeof fs.readdir>)=>{
+      if(String(args[0])===parent)throw Object.assign(new Error('Cannot inspect waiting parent'),{code:'EACCES'});
+      return readdir(...args);
+    }) as typeof fs.readdir);
+    expect((await service.workspace()).items.find(item=>item.name===name)).toMatchObject({name,selectable:false,reason:'Cannot inspect waiting parent'});
   });
   it('rejects traversal and repeated parent/creator scopes, and flags containers without automatically splitting or blocking explicit boundaries',async()=>{
     await expect(service.previewCollection({scopes:[{creatorId:creators[0],parent:'..',directories:['x']}]})).rejects.toThrow();

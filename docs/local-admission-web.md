@@ -333,3 +333,18 @@ production. A 4141 candidate update requires paired client/server/CLI artifacts,
 current backup and the normal PyCharm maintenance window. PR38 stays Draft; Script
 PR13 and the installed plugin remain unchanged. Passing tests or installing a candidate
 does not mean the user has accepted the product for merge.
+
+### Parents containing only internal residual directories
+
+The waiting-area workspace inspects only the immediate children of each safe creator
+parent. A nonempty parent containing exclusively real reserved `.local-admission-*`
+or `.local-review-*` directories is omitted from pending creator selection. This is a
+read-only presentation filter: it does not enumerate those containers or remove them.
+Ordinary directories/files, reserved-name files or links, and empty parents remain
+visible. Unreadable parents remain visible with their error and cannot be selected.
+
+Historical advertisement cleanup remains a separate explicit operation through
+`preview-recycle-advertisements` and `recycle-advertisements`, using the immutable
+original plan and exact approved files. It records recycling/removal evidence without
+replaying admission. Merely opening or refreshing the waiting area never cleans old
+attachments, and a hidden parent is not proof that every historical job succeeded.
