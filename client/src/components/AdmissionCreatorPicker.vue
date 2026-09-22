@@ -1,0 +1,10 @@
+<template><section class="creator-picker" aria-label="选择规范博主"><form @submit.prevent="search(1)"><input v-model="query" placeholder="搜索规范名称或已登记别名" aria-label="搜索规范博主" /><button :disabled="loading">查找</button></form><p v-if="error" role="alert">{{ error }}</p><div class="choices"><button v-for="creator in result?.items" :key="creator.id" @click="emit('select',creator)"><strong>{{ creator.name }}</strong><small>{{ creator.aliases.join(' / ') }}</small></button></div><p v-if="result&&!result.total">没有匹配的启用博主。请先在博主库核对，不创建重复身份。</p><div v-if="result&&result.total>result.pageSize" class="pages"><button :disabled="loading||result.page<=1" @click="search(result.page-1)">上一页</button><span>{{ result.page }}</span><button :disabled="loading||result.page*result.pageSize>=result.total" @click="search(result.page+1)">下一页</button></div></section></template>
+<script setup lang="ts">
+import { onBeforeUnmount,ref } from 'vue';
+import { searchAdmissionCreators } from '../api/local-admission';
+import type { AdmissionCreator,AdmissionPage } from '../types/local-admission';
+const emit=defineEmits<{select:[creator:AdmissionCreator]}>(),query=ref(''),result=ref<AdmissionPage<AdmissionCreator>|null>(null),loading=ref(false),error=ref('');let sequence=0;
+async function search(page:number){const request=++sequence;loading.value=true;error.value='';try{const value=await searchAdmissionCreators(query.value.trim(),page);if(request===sequence)result.value=value;}catch(cause){if(request===sequence)error.value=cause instanceof Error?cause.message:'博主读取失败';}finally{if(request===sequence)loading.value=false;}}
+onBeforeUnmount(()=>sequence++);
+</script>
+<style scoped>.creator-picker{padding:.8rem;border:1px solid #8883;border-radius:.7rem;margin:.7rem 0}form,.pages{display:flex;gap:.5rem;align-items:center}input{min-width:0;flex:1}.choices{display:grid;gap:.4rem;margin-top:.6rem}.choices button{text-align:left}small{display:block;opacity:.7}input,button{font:inherit;padding:.55rem .7rem;border:1px solid #8884;border-radius:.5rem;background:var(--bg,#fafafa);color:inherit}button{cursor:pointer}button:disabled{opacity:.4}p{font-size:.8rem}</style>

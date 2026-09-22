@@ -445,6 +445,7 @@ describe('ArchiveCatalogView', () => {
 
   it('keeps one roster and switches workspaces without business writes', async () => {
     const wrapper=mount(ArchiveCatalogView); await flushPromises();
+    expect(wrapper.find('[aria-label="账本工作区"] a[href="/local-admission"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="catalog-creator"]').exists()).toBe(false);
     expect(wrapper.findAll('[data-test="managed-roster-slot"]')).toHaveLength(1);
     expect(wrapper.get('[aria-label="本地入库"]').isVisible()).toBe(false);

@@ -55,6 +55,7 @@ type ArchiveCatalogCreatorPipelineOptions = {
   creatorId: number;
   creatorFolderName: string;
   workFolderName?: string;
+  reviewDownloadTaskId?: number;
   defaultInboxRoot?: string;
   onProgress?: (message: string) => void;
 };
@@ -186,6 +187,10 @@ export class ArchiveCatalogPipelineService {
     }
     const creatorFolderName = options.creatorFolderName.trim();
     if (!creatorFolderName) throw new Error('博主定向刷新需要 creatorFolderName。');
+    if (options.reviewDownloadTaskId !== undefined
+      && (!Number.isSafeInteger(options.reviewDownloadTaskId) || options.reviewDownloadTaskId <= 0 || !options.workFolderName?.trim())) {
+      throw new Error('审核恢复需要精确下载任务 ID 和作品目录范围。');
+    }
 
     const galleryRoot = path.resolve(options.galleryRoot);
     const catalogService = new ArchiveCatalogService(this.database);
@@ -202,12 +207,18 @@ export class ArchiveCatalogPipelineService {
       ?? downloadService.getLatestTargetRoot()
       ?? options.defaultInboxRoot
       ?? path.join(path.dirname(galleryRoot), 'cos待入库');
-    options.onProgress?.(`正在更新博主缺失任务：${creatorFolderName}……`);
-    const plan = downloadService.planMissing({
+    options.onProgress?.(options.reviewDownloadTaskId === undefined
+      ? `正在更新博主缺失任务：${creatorFolderName}……`
+      : `正在核对审核恢复的原下载任务：${creatorFolderName}……`);
+    const plan: ArchiveDownloadPlanResult = options.reviewDownloadTaskId === undefined ? downloadService.planMissing({
       targetRoot,
       provider: 'baidu',
       creatorIds: [options.creatorId]
-    });
+    }) : {
+      created: 0, existing: 0, removedOutOfScope: 0,
+      reconciledLocal: downloadService.reconcileReviewedLocalTask(options.reviewDownloadTaskId, options.creatorId),
+      skippedWithoutOrder: 0, skippedWithoutDelivery: 0, targetRoot
+    };
 
     return {
       refreshedAt: new Date().toISOString(),

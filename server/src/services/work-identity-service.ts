@@ -12,6 +12,22 @@ export type LocalIdentityInput = {
 export class WorkIdentityService {
   constructor(private readonly database: DatabaseSync) {}
 
+  private transaction<T>(action: () => T): T {
+    // Reserve the top-level writer before reading identity. A deferred SAVEPOINT
+    // can otherwise fail its read-to-write upgrade immediately when the catalog
+    // worker owns the writer, despite busy_timeout. Preserve caller transactions.
+    const ownWriteTransaction = !this.database.isTransaction;
+    this.database.exec(ownWriteTransaction ? 'BEGIN IMMEDIATE' : 'SAVEPOINT local_identity');
+    try {
+      const result = action();
+      this.database.exec(ownWriteTransaction ? 'COMMIT' : 'RELEASE local_identity');
+      return result;
+    } catch (error) {
+      this.database.exec(ownWriteTransaction ? 'ROLLBACK' : 'ROLLBACK TO local_identity; RELEASE local_identity');
+      throw error;
+    }
+  }
+
   private decision(key: string, kind: string, workId: number | null, localId: number | null,
     sourceId: number | null, reason: string, payload: unknown): number {
     if (!key.trim() || !reason.trim()) throw new Error('An explicit decision key and reason are required');
@@ -29,14 +45,13 @@ export class WorkIdentityService {
 
   registerLocal(input: LocalIdentityInput): { workId: number; localWorkId: number; decisionId: number } {
     if (!input.title.trim() || !input.reason.trim() || !input.key.trim()) throw new Error('Title, reason and key are required');
-    const old = this.database.prepare('SELECT * FROM archive_catalog_work_decisions WHERE decision_key=?')
-      .get(input.key) as { work_id: number; local_work_id: number; id: number; payload_json: string; state: string } | undefined;
-    if (old) {
-      if (old.payload_json !== JSON.stringify(input) || old.state !== 'active') throw new Error('Admission identity content changed; a new confirmation is required');
-      return { workId: old.work_id, localWorkId: old.local_work_id, decisionId: old.id };
-    }
-    this.database.exec('SAVEPOINT local_identity');
-    try {
+    return this.transaction(() => {
+      const old = this.database.prepare('SELECT * FROM archive_catalog_work_decisions WHERE decision_key=?')
+        .get(input.key) as { work_id: number; local_work_id: number; id: number; payload_json: string; state: string } | undefined;
+      if (old) {
+        if (old.payload_json !== JSON.stringify(input) || old.state !== 'active') throw new Error('Admission identity content changed; a new confirmation is required');
+        return { workId: old.work_id, localWorkId: old.local_work_id, decisionId: old.id };
+      }
       const creator = this.database.prepare('SELECT id FROM archive_catalog_creators WHERE id=? AND is_active=1').get(input.creatorId);
       if (!creator) throw new Error('Active canonical creator not found');
       let workId = input.workId;
@@ -69,9 +84,8 @@ export class WorkIdentityService {
         VALUES(?,?,?,?,?,'matched','manual-admission',CURRENT_TIMESTAMP,?,?)`).run(folderId,workId,relative,path.resolve(input.absolutePath),relative,input.localOnly?'local_only':'manual',JSON.stringify({origin:'local-admission',key:input.key,acceptExistingVersion:input.acceptExistingVersion===true})).lastInsertRowid);
       this.database.prepare("UPDATE archive_catalog_works SET title_policy='manual' WHERE id=?").run(workId);
       const decisionId = this.decision(input.key,'same_work',workId,localId,input.sourceWorkId??null,input.reason,input);
-      this.database.exec('RELEASE local_identity');
       return {workId,localWorkId:localId,decisionId};
-    } catch(error) { this.database.exec('ROLLBACK TO local_identity; RELEASE local_identity'); throw error; }
+    });
   }
 
   attachPost(localWorkId: number, postId: number): void {

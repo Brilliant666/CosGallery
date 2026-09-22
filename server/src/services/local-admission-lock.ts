@@ -47,7 +47,12 @@ async function runLocked<T>(database: DatabaseSync, kind: string, allowNested: b
 }
 
 export function runAdmissionExclusive<T>(database: DatabaseSync, action: () => Promise<T>): Promise<T> {
-  return runLocked(database, 'admission', false, action);
+  return runLocked(database, 'admission', context.getStore()?.kind === 'admission-collection', action);
+}
+
+/** One serial collection owns the same cross-process lock, including gaps between children. */
+export function runAdmissionCollectionExclusive<T>(database: DatabaseSync, action: () => Promise<T>): Promise<T> {
+  return runLocked(database, 'admission-collection', false, action);
 }
 
 /** Allows the admission's own scoped scanner, but excludes unrelated workers. */

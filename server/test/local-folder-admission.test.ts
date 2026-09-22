@@ -78,6 +78,17 @@ describe.sequential('actual local directory admission and recovery',()=>{
   await fs.writeFile(path.join(p.items[0].targetPath,'keep.txt'),'external change');
   await expect(service.apply(p)).rejects.toThrow('changed');
  });
+ it('CLI previews apply global exact-image ad defaults only to new unconfirmed plans',async()=>{
+  const name='NO.114 Global image ads',dir=await make(name);
+  await fs.copyFile(path.join(dir,'nested','1.jpg'),path.join(dir,'492.jpg'));
+  await fs.copyFile(path.join(dir,'nested','1.jpg'),path.join(dir,'009-01.jpg'));
+  const preview=await service.preview({creatorId:creator,inputRoot:input,directories:[name]});
+  expect(preview.confirmed).toBe(false);expect(preview.items[0].approvedAds.sort()).toEqual(['009-01.jpg','492.jpg']);
+  const plan={...preview,confirmed:true,items:preview.items.map(i=>({...i,reason:'Global image advertisement policy'}))};
+  await service.apply(plan);await service.apply(plan);
+  for(const ad of plan.items[0].approvedAds)await expect(fs.stat(path.join(input,'.local-admission-attachments',plan.planId,plan.items[0].key,ad))).resolves.toBeTruthy();
+  await expect(fs.stat(path.join(plan.items[0].targetPath,'nested','1.jpg'))).resolves.toBeTruthy();
+ });
  it('records audited removal, resumes remaining items and retains original plan and IDs',async()=>{
   await make('Recovery first');await make('Recovery next');
   await fs.writeFile(path.join(input,'Recovery first','bad.jpg'),'');

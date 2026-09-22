@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { canonicalizeLocalIngestPath } from '../utils/local-ingest-paths.js';
+import { isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 
 export const STAGING_MOVE_MANIFEST = '.staging-move.json';
 const BUILD_DIRECTORY = 'ready-building-move';
@@ -99,9 +100,10 @@ async function checkedManifest(binding: StagingMoveBinding, value: unknown): Pro
     if (seen.has(relativeKey)) fail('Duplicate staging file identity');
     seen.add(relativeKey);
     const extension = path.extname(file.relativePath).toLowerCase();
-    if ((file.kind === 'image' && !['.jpg', '.jpeg', '.png', '.gif'].includes(extension))
+    if ((file.kind === 'image' && !['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension))
       || (file.kind === 'video' && !['.mp4', '.mov', '.mkv'].includes(extension))
-      || (file.kind === 'advertisement' && !['.txt', '.html', '.htm', '.url'].includes(extension))
+      || (file.kind === 'advertisement' && !['.txt', '.html', '.htm', '.url'].includes(extension)
+        && !isKnownAdvertisementImage(file.relativePath))
       || (file.kind === 'ignored' && file.relativePath !== '.DS_Store')) fail('Staging file classification changed');
   }
   if (!manifest.files.some(isMedia)) fail('Staging manifest has no media');

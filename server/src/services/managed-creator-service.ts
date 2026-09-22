@@ -40,14 +40,19 @@ export class ManagedCreatorService {
     this.query = new ArchiveCatalogQueryService(database);
   }
 
-  private transaction<T>(action: () => T): T {
-    this.database.exec('SAVEPOINT managed_creator_mutation');
+  private transaction<T>(action: () => T, acquireWriter = false): T {
+    // A top-level folder link must reserve its writer before reading ownership.
+    // A SAVEPOINT starts deferred: an independent catalog publisher can otherwise
+    // acquire the writer between our reads and UPDATE, making the upgrade fail
+    // immediately despite busy_timeout. Never commit a caller-owned transaction.
+    const ownWriteTransaction = acquireWriter && !this.database.isTransaction;
+    this.database.exec(ownWriteTransaction ? 'BEGIN IMMEDIATE' : 'SAVEPOINT managed_creator_mutation');
     try {
       const result = action();
-      this.database.exec('RELEASE managed_creator_mutation');
+      this.database.exec(ownWriteTransaction ? 'COMMIT' : 'RELEASE managed_creator_mutation');
       return result;
     } catch (error) {
-      this.database.exec('ROLLBACK TO managed_creator_mutation; RELEASE managed_creator_mutation');
+      this.database.exec(ownWriteTransaction ? 'ROLLBACK' : 'ROLLBACK TO managed_creator_mutation; RELEASE managed_creator_mutation');
       throw error;
     }
   }
@@ -201,7 +206,7 @@ export class ManagedCreatorService {
           timestamp, timestamp, timestamp, folderId);
       }
       return this.requireCreator(creatorId);
-    });
+    }, true);
   }
 
   unlinkFolder(folderId: number, input: unknown) {

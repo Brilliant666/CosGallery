@@ -1,13 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { databaseManager } from '../db/database.js';
-import {
-  localIngestService,
-  type LocalIngestManualPlacementInput
-} from '../services/local-ingest-service.js';
-import { localIngestSettingsService } from '../services/local-ingest-settings-service.js';
-import { recycleBinAdapter } from '../services/recycle-bin-adapter.js';
+import type { LocalIngestManualPlacementInput } from '../services/local-ingest-service.js';
+let closeDatabase = () => {};
 
 function print(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -28,6 +23,42 @@ function manualPlacementItems(value: unknown): LocalIngestManualPlacementInput[]
 
 async function main(): Promise<void> {
   const [command = 'jobs', ...args] = process.argv.slice(2);
+  if (command === '--help' || command === 'help') {
+    process.stdout.write('Stage3 local ingest (Node24)\npreview-review <absolute-request.json> (read-only; confirmed:false)\nresume-review <absolute-confirmed-plan.json> (original job only; no re-extraction)\nOther existing commands: jobs, scan, run, batch, cleanup, adopt-manual, retain-originals, configure, validate.\nReview commands require explicit DATA_ROOT, DB_DIR, GALLERY_ROOT, THUMBNAILS_DIR, PREVIEWS_DIR.\n');
+    return;
+  }
+  if (command === 'preview-review' || command === 'resume-review') {
+    if (args.length !== 1 || !path.isAbsolute(args[0])) throw new Error(`Usage: local-ingest ${command} <absolute-plan.json>`);
+    for (const key of ['DATA_ROOT', 'DB_DIR', 'GALLERY_ROOT', 'THUMBNAILS_DIR', 'PREVIEWS_DIR']) {
+      if (!process.env[key] || !path.isAbsolute(process.env[key]!)) throw new Error(`Explicit absolute ${key} is required`);
+    }
+    const input = JSON.parse(await fs.readFile(args[0], 'utf8'));
+    if (command === 'preview-review') {
+      const { DatabaseSync } = await import('node:sqlite');
+      const { appConfig } = await import('../config/env.js');
+      const { LocalIngestService } = await import('../services/local-ingest-service.js');
+      const { LocalIngestSettingsService } = await import('../services/local-ingest-settings-service.js');
+      const db = new DatabaseSync(appConfig.databasePath, { readOnly: true });
+      closeDatabase = () => db.close();
+      const settings = new LocalIngestSettingsService(appConfig.galleryRoot, {
+        get: key => (db.prepare('SELECT value FROM app_settings WHERE key=?').get(key) as {value:string}|undefined)?.value ?? null,
+        setMany: () => { throw new Error('Preview settings are read-only'); }
+      });
+      print(await new LocalIngestService(db, settings).previewReview(input));
+      return;
+    }
+  }
+  const { databaseManager } = await import('../db/database.js');
+  const { localIngestService } = await import('../services/local-ingest-service.js');
+  const { localIngestSettingsService } = await import('../services/local-ingest-settings-service.js');
+  const { recycleBinAdapter } = await import('../services/recycle-bin-adapter.js');
+  closeDatabase = () => databaseManager.close();
+  if (command === 'resume-review') {
+    const result = await localIngestService.resumeReview(JSON.parse(await fs.readFile(args[0], 'utf8')));
+    print(result);
+    if (result.status !== 'ingested') process.exitCode = 1;
+    return;
+  }
   if (command === 'configure') {
     const current = localIngestSettingsService.get();
     print(localIngestSettingsService.save({ ...current, allowlist: args }));
@@ -94,4 +125,4 @@ void main()
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   })
-  .finally(() => databaseManager.close());
+  .finally(() => closeDatabase());

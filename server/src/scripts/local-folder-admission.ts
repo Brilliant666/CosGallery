@@ -7,9 +7,15 @@ const help=`Local folder admission (Node 24)
   local-folder-admission apply <absolute-confirmed-plan.json>
   local-folder-admission resume <absolute-confirmed-plan.json>
   local-folder-admission recover <absolute-confirmed-removals.json>
+  local-folder-admission preview-recycle-advertisements <absolute-scope.json>
+  local-folder-admission recycle-advertisements <absolute-confirmed-advertisements.json>
   local-folder-admission decide <absolute-decision.json>
-Scope: {creatorId,inputRoot,directories:["original directory name"]}
-Decisions: bind-source | exclude-source | accept-version | primary | revoke.
+Scope: {creatorId,inputRoot,directories:["original directory name"],sourceEvidenceId?,acceptExistingVersion?}
+sourceEvidenceId records batch provenance only; it never satisfies acquisition.
+Advertisement preview scope: {planId,itemKeys:["exact completed item key"]}.
+Review the returned exact files, set confirmed:true and reason before recycle-advertisements.
+Decisions: bind-source | exclude-source | accept-version | primary | revoke | link-evidence.
+link-evidence records post-admission provenance without changing an old plan.
 All commands require explicit DATA_ROOT, DB_DIR, GALLERY_ROOT, THUMBNAILS_DIR,
 PREVIEWS_DIR. Preview opens the existing database read-only and prints JSON.
 Apply/resume never start queues; only the selected directories are indexed.
@@ -20,18 +26,21 @@ async function main(){
   if(command==='help'||command==='--help'){process.stdout.write(help+'\n');return;}
   // Reserve stdout for a single machine-readable result, including real scanner runs.
   console.log=console.error;console.info=console.error;
-  if(!['preview','apply','resume','recover','decide'].includes(command)||!filename||!path.isAbsolute(filename)||extra.length)throw Error(help);
+  if(!['preview','apply','resume','recover','decide','preview-recycle-advertisements','recycle-advertisements'].includes(command)||!filename||!path.isAbsolute(filename)||extra.length)throw Error(help);
   for(const key of ['DATA_ROOT','DB_DIR','GALLERY_ROOT','THUMBNAILS_DIR','PREVIEWS_DIR'])if(!process.env[key]||!path.isAbsolute(process.env[key]!))throw Error(`Explicit absolute ${key} is required`);
   const input=JSON.parse(await fs.readFile(filename,'utf8'));
   const {appConfig}=await import('../config/env.js');
   process.stderr.write(`STORAGE ${JSON.stringify({dataRoot:appConfig.dataRoot,dbDir:appConfig.dbDir,galleryRoot:appConfig.galleryRoot,thumbnailsDir:appConfig.thumbnailsDir,previewsDir:appConfig.previewsDir})}\n`);
   const {LocalFolderAdmissionService}=await import('../services/local-folder-admission-service.js');
   const {databaseManager}=await import('../db/database.js');
-  const db=command==='preview'?new DatabaseSync(appConfig.databasePath,{readOnly:true}):databaseManager.connection;
+  const readOnly=command==='preview'||command==='preview-recycle-advertisements';
+  const db=readOnly?new DatabaseSync(appConfig.databasePath,{readOnly:true}):databaseManager.connection;
   try {
     let result:unknown;
     const service=new LocalFolderAdmissionService(db,appConfig.galleryRoot);
     if(command==='preview')result=await service.preview(input);
+    else if(command==='preview-recycle-advertisements')result=await service.previewAdvertisementRecycling(input);
+    else if(command==='recycle-advertisements')result=await service.recycleAdvertisements(input);
     else if(command==='recover')result=await service.recover(input);
     else if(command==='apply'||command==='resume')result=await service.apply(input);
     else {
@@ -40,6 +49,7 @@ async function main(){
       const identity=new WorkIdentityService(db);
       const {z}=await import('zod');const id=z.number().int().positive();const reason=z.string().trim().min(1);
       switch(input.kind){
+        case 'link-evidence':{const {SourceEvidenceService}=await import('../services/source-evidence-service.js');result=new SourceEvidenceService(db).linkAdmission(z.object({observationId:id,creatorId:id,workId:id,localWorkId:id.optional(),reason,key:reason}).parse(input));break;}
         case 'bind-source':result={decisionId:identity.bindSource(z.object({workId:id,collectionId:id,sourceWorkId:reason,reason,key:reason}).parse(input))};break;
         case 'exclude-source':{const d=z.object({localWorkId:id,sourceWorkId:id,reason,key:reason}).parse(input);result={decisionId:identity.excludeSource(d.localWorkId,d.sourceWorkId,d.reason,d.key)};break;}
         case 'primary':{const d=z.object({localWorkId:id,reason}).parse(input);identity.choosePrimary(d.localWorkId,d.reason);result={completed:true};break;}
@@ -49,6 +59,6 @@ async function main(){
       }
     }
     process.stdout.write(JSON.stringify(result,null,2)+'\n');
-  } finally {if(command==='preview')db.close();else databaseManager.close();}
+  } finally {if(readOnly)db.close();else databaseManager.close();}
 }
 void main().catch(error=>{process.stderr.write((error instanceof Error?error.message:String(error))+'\n');process.exitCode=1;});
