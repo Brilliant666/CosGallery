@@ -35,7 +35,14 @@ describe('admission action provenance and safe candidates',()=>{
   });
   it('requires every safety condition before considering an A item automatically selectable',()=>{
     expect(isAdmissionSafeCandidate(item)).toBe(true);
-    for(const changed of [{group:'B' as const},{candidates:[{workId:1}]},{conflicts:['collision']},{structureWarnings:['nested']},{needsBoundaryReview:true}])expect(isAdmissionSafeCandidate({...item,...changed} as AdmissionItem)).toBe(false);
+    for(const changed of [{group:'B' as const},{candidates:[{workId:1}]},{conflicts:['collision']},{structureWarnings:['nested']},{needsBoundaryReview:true},{currentDisposition:{status:'unresolved' as const}}])expect(isAdmissionSafeCandidate({...item,...changed} as AdmissionItem)).toBe(false);
+  });
+  it('demotes only an automatic new choice when historical coverage is unresolved, retaining manual decisions',()=>{
+    const unknown={...item,currentDisposition:{status:'unresolved' as const}};
+    const automatic={...admissionAction(item,'new'),selectionOrigin:'automatic' as const,cancelledAds:['ad.txt']};
+    expect(normalizeAdmissionScopeAction(unknown,automatic)).toMatchObject({action:'defer',selectionOrigin:'automatic',approvedAds:[],cancelledAds:['ad.txt']});
+    const manual={...automatic,selectionOrigin:'manual' as const,displayTitle:'用户明确的整套标题'};expect(normalizeAdmissionScopeAction(unknown,manual)).toBe(manual);
+    expect(confirmAdmissionScope({...unknown,scopeReviewRequired:true},{...automatic,action:'defer',selectionOrigin:'scope-review',reason:admissionScopeReviewReason})).toMatchObject({action:'defer'});
   });
   it('records a manually edited title without making an ad cancellation a manual selection',async()=>{
     const action={...admissionAction(item,'new'),selectionOrigin:'automatic' as const};

@@ -27,6 +27,6 @@ export function carryRepreviewChoices(previous:RepreviewEntry[],next:RepreviewEn
     const action={...old.action,key:entry.item.key,approvedAds:[...(old.action.approvedAds??[])],acceptSourceIds:[...(old.action.acceptSourceIds??[])]};
     if(old.action.cancelledAds)action.cancelledAds=[...old.action.cancelledAds];
     if(action.action==='same-as')action.sameAsKey=next.find(row=>row.batchId===entry.batchId&&matching.get(row)?.item.key===old.action.sameAsKey)!.item.key;
-    return {...entry,key:entry.item.key,action,work:old.work};
+    return {...entry,key:entry.item.key,action:normalizeAdmissionScopeAction(entry.item,action),work:old.work};
   });
 }

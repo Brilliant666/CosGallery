@@ -5,11 +5,13 @@ export const admissionGroups = {A:'无冲突的新作品',B:'已有作品候选�
 export const admissionActionLabels = {new:'新独立作品',existing:'对应已有作品','same-as':'与本批目录同套',skip:'跳过',defer:'暂缓'};
 export const isAdmissionSelected = (action:AdmissionAction) => ['new','existing','same-as'].includes(action.action);
 export const isAdmissionCompletedLater = (item:AdmissionItem) => item.currentDisposition?.status==='completed_later';
-export const isAdmissionSafeCandidate = (item:AdmissionItem) => !isAdmissionCompletedLater(item)&&item.group==='A'&&!item.candidates.length&&!item.conflicts.length&&!item.structureWarnings?.length&&!item.needsBoundaryReview;
+export const isAdmissionSafeCandidate = (item:AdmissionItem) => !item.currentDisposition&&item.group==='A'&&!item.candidates.length&&!item.conflicts.length&&!item.structureWarnings?.length&&!item.needsBoundaryReview;
 export const mediaSize = (value:number) => value>=1024**3?`${(value/1024**3).toFixed(2)} GiB`:value>=1024**2?`${(value/1024**2).toFixed(2)} MiB`:`${value} B`;
 export const admissionScopeReviewReason = '旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品';
-/** Only the exact old system default can be upgraded; never reinterpret an edited choice. */
+/** Reconcile unsubmitted system defaults only; never reinterpret an explicit user choice. */
 export function normalizeAdmissionScopeAction(item:AdmissionItem,action:AdmissionAction):AdmissionAction {
+  if(item.currentDisposition?.status==='unresolved'&&action.selectionOrigin==='automatic'&&action.action==='new')
+    return {...action,action:'defer',primary:false,approvedAds:[],acceptSourceIds:[],reason:'历史范围后续处置待核对，不自动视作待入库作品'};
   if(item.scopeReviewRequired&&!action.scopeConfirmed&&action.action==='defer'&&action.reason===admissionScopeReviewReason
     &&action.workId===undefined&&action.sameAsKey===undefined&&!action.primary
     &&(action.displayTitle===undefined||action.displayTitle===item.displayTitle)
