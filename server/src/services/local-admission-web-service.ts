@@ -26,7 +26,8 @@ export const webExecuteSchema = z.object({ requestKey:z.string().min(1).max(150)
   adsConfirmed:z.literal(true).optional(), advertisementDisposition:z.literal('recycle_bin').optional(), actions:z.array(actionSchema).min(1).max(500) }).strict();
 export const webResumeSchema = z.object({requestKey:z.string().min(1).max(150),confirmed:z.literal(true)}).strict();
 export const collectionPreviewSchema=z.object({scopes:z.array(webPreviewSchema).min(1).max(100)}).strict();
-export const collectionRepreviewSchema=collectionPreviewSchema.partial();
+export const collectionRepreviewSchema=collectionPreviewSchema.partial().extend({refreshDirectories:z.boolean().optional()})
+  .refine(value=>!(value.scopes&&value.refreshDirectories),'调整范围和重新读取目录不能同时指定');
 export const collectionExecuteSchema=z.object({requestKey:z.string().min(1).max(150),confirmed:z.literal(true),
   batches:z.array(webExecuteSchema.omit({requestKey:true,confirmed:true}).extend({batchId:z.string().uuid()})).min(1).max(100)}).strict();
 type Preview = Awaited<ReturnType<LocalFolderAdmissionService['preview']>>;
@@ -36,7 +37,9 @@ export type AdmissionWorkChoice = {workId:number;title:string;catalogNo:string|n
   thumbnailUrl:string|null;primaryLocalWorkId:number|null;localState:string;originalDirectories:string[];sources:Source[]};
 type Batch = {id:string;creator_id:number;input_root:string;source_evidence_id:number|null;state:string;created_at:string;updated_at:string;
   error:string|null;context_json:string;confirmed_json:string|null;owner_pid:number|null;owner_token:string|null};
-type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waitingRoot:string;workFacts:Record<string,string>;sourceFacts:Record<string,string>;previousCollectionId?:string;remainingFromCollectionId?:string;remainingSourceSignature?:string;parentCleanup?:AdmissionParentCleanupResult};
+type DirectoryRefresh = {added:{creatorId:number;parent:string;name:string}[];removed:{creatorId:number;parent:string;name:string}[];warnings:string[]};
+type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waitingRoot:string;workFacts:Record<string,string>;sourceFacts:Record<string,string>;previousCollectionId?:string;remainingFromCollectionId?:string;remainingSourceSignature?:string;parentCleanup?:AdmissionParentCleanupResult;
+  knownSiblingDirectories?:string[];directoryRefresh?:DirectoryRefresh};
 type NextAction = {nextAction:'review_files'|'resume_plan'|'prepare_preview'|'none';nextActionReason:string};
 type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTitle:string;group:'A'|'B'|'C'|'D';
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
@@ -199,6 +202,7 @@ export class LocalAdmissionWebService {
   private async preparePreview(raw:unknown):Promise<PreparedPreview> {
     const scope=webPreviewSchema.parse(raw);this.creator(scope.creatorId);const root=await this.validateRoot();
     const inputRoot=path.join(root,scope.parent);await strictDirectory(inputRoot);await assertPathInsideLocalIngestRoot(root,inputRoot,{directChild:true});
+    const siblings=await this.siblingEntries(inputRoot);
     if(new Set(scope.directories.map(d=>process.platform==='win32'?d.toLowerCase():d)).size!==scope.directories.length)throw new AdmissionWebError('选择了重复目录',400);
     const id=randomUUID(),items:{summary:Summary;preview:PreviewItem|null}[]=[];let creatorDirectory='';const version=this.thumbnailVersion();
     for(const name of scope.directories){
@@ -229,7 +233,15 @@ export class LocalAdmissionWebService {
       displayTitle:item.summary.displayTitle,group:item.summary.group,conflicts:item.summary.conflicts,
       ads:item.summary.ads,advertisementRulesVersion,structureWarnings:item.summary.structureWarnings??[]
     });
+    // Operational scope metadata must not invalidate unchanged per-work review facts.
+    context.knownSiblingDirectories=siblings.filter(entry=>entry.directory).map(entry=>entry.name);
+    if(hash(siblings)!==hash(await this.siblingEntries(inputRoot)))throw new AdmissionWebError('核对期间父目录范围发生变化，请待整理结束后重新读取');
     return {id,scope,inputRoot,context,items};
+  }
+  private async siblingEntries(inputRoot:string) {
+    return (await fs.readdir(inputRoot,{withFileTypes:true})).filter(entry=>!reservedDirectory(entry.name))
+      .map(entry=>({name:entry.name,directory:entry.isDirectory()&&!entry.isSymbolicLink(),link:entry.isSymbolicLink()}))
+      .sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans-CN'));
   }
   private savePreview({id,scope,inputRoot,context,items}:PreparedPreview) {
       this.db.prepare(`INSERT INTO local_admission_web_batches(id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,context_json)
@@ -370,7 +382,11 @@ export class LocalAdmissionWebService {
       WHERE c.collection_id=? AND json_extract(b.context_json,'$.previousCollectionId') IS NOT NULL LIMIT 1`).get(id);
     const next=this.db.prepare(`SELECT DISTINCT c.collection_id FROM local_admission_web_collection_batches c
       JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE json_extract(b.context_json,'$.previousCollectionId')=? ORDER BY c.collection_id`).all(id);
+    const refresh=this.db.prepare(`SELECT json_extract(b.context_json,'$.directoryRefresh') report
+      FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id
+      WHERE c.collection_id=? AND json_extract(b.context_json,'$.directoryRefresh') IS NOT NULL LIMIT 1`).get(id);
     return {id,state,createdAt:row.created_at,updatedAt:row.updated_at,error:state==='completed'?null:row.error,totals,batches,remainingCount:row.has_confirmation?this.remainingItems(id).length:0,
+      ...(refresh?{directoryRefresh:JSON.parse(String(refresh.report)) as DirectoryRefresh}:{}),
       previousCollectionId:previous?String(previous.previous_id):null,nextCollectionIds:next.map(child=>String(child.collection_id))};
   }
   collections(page=1) {
@@ -406,9 +422,10 @@ export class LocalAdmissionWebService {
     for(const scope of scopes)prepared.push(await this.preparePreview(scope));
     return prepared;
   }
-  private publishCollectionPreview(prepared:PreparedPreview[],previousId?:string,remainingSignature?:string) {
+  private publishCollectionPreview(prepared:PreparedPreview[],previousId?:string,remainingSignature?:string,requireIdle=false) {
     const id=randomUUID(),stamp=now();this.db.exec('BEGIN IMMEDIATE');
     try{
+      if(requireIdle){this.assertIdle();for(const child of prepared)this.assertCreatorIdle(child.scope.creatorId);}
       // Another request may confirm while the selected manifests are read.
       // Recheck under the same transaction that publishes the new draft.
       if(previousId){
@@ -435,11 +452,55 @@ export class LocalAdmissionWebService {
   }
   async repreviewCollection(id:string,raw:unknown={}) {
     const request=collectionRepreviewSchema.parse(raw);this.assertDraftCollection(id);
-    const prepared=await this.prepareCollectionPreview(request.scopes?{scopes:request.scopes}:this.collectionScope(id));
+    const prepared=request.refreshDirectories?await this.refreshCollectionDirectories(id):await this.prepareCollectionPreview(request.scopes?{scopes:request.scopes}:this.collectionScope(id));
     const lineage=this.db.prepare(`SELECT json_extract(b.context_json,'$.remainingFromCollectionId') origin,json_extract(b.context_json,'$.remainingSourceSignature') signature FROM local_admission_web_collection_batches c
       JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=? AND json_extract(b.context_json,'$.remainingFromCollectionId') IS NOT NULL LIMIT 1`).get(id);
     if(lineage)for(const child of prepared){child.context.remainingFromCollectionId=String(lineage.origin);child.context.remainingSourceSignature=String(lineage.signature);}
-    return this.publishCollectionPreview(prepared,id);
+    return this.publishCollectionPreview(prepared,id,undefined,request.refreshDirectories===true);
+  }
+  private async refreshCollectionDirectories(id:string):Promise<PreparedPreview[]> {
+    this.assertIdle();
+    const report:DirectoryRefresh={added:[],removed:[],warnings:[]};
+    const prepared:PreparedPreview[]=[];
+    const normalize=(name:string)=>process.platform==='win32'?name.toLowerCase():name;
+    for(const scope of this.collectionScope(id).scopes){
+      this.assertCreatorIdle(scope.creatorId);
+      const old=this.db.prepare(`SELECT b.input_root,b.context_json FROM local_admission_web_collection_batches c
+        JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=? AND b.creator_id=?`).get(id,scope.creatorId)!;
+      const context=JSON.parse(String(old.context_json)) as Context;
+      const inputRoot=path.join(this.settings().waitingRoot,scope.parent);
+      if(!same(inputRoot,String(old.input_root))||!same(this.settings().waitingRoot,context.waitingRoot))
+        throw new AdmissionWebError('等待区设置已改变，请从选择范围核对原目录，不能自动改用新位置');
+      await this.validateRoot();await strictDirectory(inputRoot);await assertPathInsideLocalIngestRoot(context.waitingRoot,inputRoot,{directChild:true});
+      const entries=await this.siblingEntries(inputRoot),byName=new Map(entries.map(entry=>[normalize(entry.name),entry]));
+      const selected=new Set(scope.directories.map(normalize));
+      const known=new Set(context.knownSiblingDirectories?.map(normalize)??[]);
+      const retained=scope.directories.filter(name=>byName.has(normalize(name)));
+      const reserved=new Set<string>();
+      for(const row of this.db.prepare(`SELECT json_extract(i.summary_json,'$.sourceRelativePath') relative
+        FROM local_admission_web_batches b JOIN local_admission_web_items i ON i.batch_id=b.id
+        WHERE b.confirmed_json IS NOT NULL AND i.action<>'defer' AND lower(b.input_root)=lower(?)`).all(inputRoot))reserved.add(normalize(String(row.relative)));
+      for(const row of this.db.prepare(`SELECT json_extract(j.value,'$.sourceRelativePath') relative FROM archive_local_admission_plans p,json_each(p.payload_json,'$.items') j
+        WHERE NOT EXISTS(SELECT 1 FROM local_admission_web_batches b WHERE b.id=p.plan_id)
+          AND lower(json_extract(p.payload_json,'$.inputRoot'))=lower(?)`).all(inputRoot))reserved.add(normalize(String(row.relative)));
+      const discovered=entries.filter(entry=>entry.directory&&!selected.has(normalize(entry.name))&&!known.has(normalize(entry.name)));
+      const added=discovered.filter(entry=>!reserved.has(normalize(entry.name)));
+      if(discovered.length!==added.length)report.warnings.push(`${scope.parent}：已由其他确认计划占用或已跳过的目录未自动加入，请从原记录处理。`);
+      for(const name of scope.directories)if(!byName.has(normalize(name)))report.removed.push({creatorId:scope.creatorId,parent:scope.parent,name});
+      for(const entry of added)report.added.push({creatorId:scope.creatorId,parent:scope.parent,name:entry.name});
+      if(entries.some(entry=>entry.link&&!selected.has(normalize(entry.name))))report.warnings.push(`${scope.parent}：目录链接未加入核对范围。`);
+      if(added.length&&!context.knownSiblingDirectories)report.warnings.push(`${scope.parent}：旧预览未记录完整父目录范围，新发现的 ${added.length} 个目录先暂缓，请核对是否属于本批拆分后的作品。`);
+      if(!retained.length&&!added.length)continue;
+      const child=await this.preparePreview({...scope,directories:[...retained,...added.map(entry=>entry.name)]});
+      if(hash(entries)!==hash(await this.siblingEntries(inputRoot)))throw new AdmissionWebError('重新读取期间目录范围发生变化，请待整理结束后重试；原草稿保持');
+      if(!context.knownSiblingDirectories)for(const item of child.items)if(added.some(entry=>entry.name===item.summary.sourceRelativePath))
+        item.summary.suggestedAction={key:item.summary.key,action:'defer',reason:'旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品'};
+      prepared.push(child);
+    }
+    if(!prepared.length)throw new AdmissionWebError('本批博主下没有可核对的作品目录，原草稿保留；请先完成目录整理或调整导入范围');
+    this.assertIdle();for(const child of prepared)this.assertCreatorIdle(child.scope.creatorId);
+    prepared[0]!.context.directoryRefresh=report;
+    return prepared;
   }
   private remainingItems(id:string) {
     // DB-only projection: progress reads never re-inventory files or parse full manifests.
@@ -507,6 +568,10 @@ export class LocalAdmissionWebService {
     for(const child of prepared){
       child.context.remainingFromCollectionId=id;
       child.context.remainingSourceSignature=sourceSignature;
+      const origin=remaining.find(row=>row.creatorId===child.scope.creatorId)!;
+      // Keep the original exclusion boundary, including legacy drafts with no inventory.
+      const originalContext=JSON.parse(this.row(origin.batchId).context_json) as Context;
+      child.context.knownSiblingDirectories=originalContext.knownSiblingDirectories;
       for(const item of child.items){
         const old=remaining.find(row=>row.creatorId===child.scope.creatorId&&row.summary.sourceRelativePath===item.summary.sourceRelativePath);
         const decision=confirmation.batches?.find(batch=>batch.batchId===old?.batchId)?.actions.find(action=>action.key===old?.summary.key);

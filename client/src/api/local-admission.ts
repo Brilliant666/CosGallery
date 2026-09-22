@@ -23,6 +23,7 @@ export const fetchAdmissionCollections = (page=1) => requestJson<AdmissionPage<A
 export const fetchAdmissionCollection = (collectionId:string) => requestJson<AdmissionCollection>(`${root}/collections/${id(collectionId)}`);
 export const fetchAdmissionCollectionScope = (collectionId:string) => requestJson<{scopes:AdmissionPreviewInput[]}>(`${root}/collections/${id(collectionId)}/scope`);
 export const repreviewAdmissionCollection = (collectionId:string,scopes?:AdmissionPreviewInput[]) => send<AdmissionCollection>(`/collections/${id(collectionId)}/repreview`,scopes?{scopes}:{});
+export const refreshAdmissionCollectionDirectories = (collectionId:string) => send<AdmissionCollection>(`/collections/${id(collectionId)}/repreview`,{refreshDirectories:true});
 export const executeAdmissionCollection = (collectionId:string,input:AdmissionCollectionExecuteInput) => send<AdmissionCollection>(`/collections/${id(collectionId)}/execute`,input);
 export const resumeAdmissionCollection = (collectionId:string,input:AdmissionResumeInput) => send<AdmissionCollection>(`/collections/${id(collectionId)}/resume`,input);
 export const previewRemainingAdmissionCollection = (collectionId:string) => send<AdmissionCollection>(`/collections/${id(collectionId)}/remaining-preview`,{});

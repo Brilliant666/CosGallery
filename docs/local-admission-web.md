@@ -157,11 +157,15 @@ The controls distinguish three operations:
 - **上一步：调整导入范围** reopens the unsubmitted draft's selected creators and
   directories. Renamed/new directories are not automatically selected. Cancel returns
   to the same review; submitting the edited scope creates a new unconfirmed preview.
-- **重新检查并更新选择** inventories the selected scope and creates a new draft.
+- **重新读取并核对** rereads the selected creator parents and creates a new draft.
+  It handles both edits inside existing works and splitting/renaming collections into
+  new direct-child work directories. Removed paths and newly discovered directories
+  are recorded in the preview; no physical files are deleted by this operation.
   Automatically deferred or selected new works are reconsidered against fresh facts;
   now-safe new works are selected in the same operation. Manual defer/skip remain,
-  and changed manual identity decisions require review. A rename or changed album
-  boundary needs an explicit scope adjustment first. There is no separate supplement button.
+  and changed manual identity decisions require review. New paths never inherit an
+  old collection's identity or advertisement approvals. Changing creator or parent
+  still needs explicit scope adjustment. There is no separate supplement button.
 - **更新进度** (results), or **读取已保存状态** (review technical details), reads saved
   server state only. Neither inventories disk nor resumes work. Refresh reconciles
   any changed saved summary with current choices, without overwriting manual decisions.
@@ -284,6 +288,18 @@ The collection endpoints live under `/api/admin/local-admission/collections`;
 `GET /:id/scope` returns the saved scope without filesystem inventory, and
 `POST /:id/repreview` prepares a new unconfirmed draft from that scope or an explicitly
 edited replacement. The original collection remains unchanged. These add no migration.
+The explicit `{refreshDirectories:true}` form powers **重新读取并核对**; it cannot be
+combined with `scopes`. A shallow sibling-name inventory stored in batch context keeps
+previously unselected siblings outside the refreshed scope. Internal directories,
+linked new paths and paths reserved by other confirmed plans are not added. Existing
+selected paths that become invalid remain visible as conflicts. Scope metadata is
+excluded from work review fingerprints. It adds no migration or execution authority.
+Legacy contexts have no such inventory: newly discovered paths are shown with an
+explicit range warning and suggested manual deferral, not automatically selected.
+Optional `directoryRefresh` metadata preserves the added/removed report after reload.
+If no reviewable directories remain, the operation reports this and keeps the old
+draft rather than publishing an empty collection. Concurrent changes during reading
+require another refresh; draft and activity guards are checked again when publishing.
 `workspace` reads configured top-level directories and `creators` searches active
 canonical identities and registered aliases. These have the same manager access and
 write-intent checks as single-creator admission. All-deferred creators remain explicit
@@ -358,6 +374,8 @@ checkpoint. Completed/skipped entries and exact paths claimed by another immutab
 plan are excluded. Local targets registered after the original preview are excluded;
 pre-existing identity conflicts remain reviewable. Missing original directory names
 stay visible as conflicts; renamed/new directories are never silently substituted.
+From that follow-up draft, **重新读取并核对** can discover the split replacements
+without returning to step 1; the original sibling exclusion boundary is retained.
 Manual deferral reasons survive. Repeat clicks, including concurrent requests, reuse
 the existing current follow-up draft. Rechecking that draft preserves its lineage.
 Original confirmations, plans, checkpoints and request receipts remain immutable.

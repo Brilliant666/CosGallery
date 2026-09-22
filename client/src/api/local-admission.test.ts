@@ -5,6 +5,12 @@ const fetchMock=vi.fn<typeof fetch>();
 describe('local admission and review managed HTTP contracts',()=>{
   beforeEach(()=>{vi.stubGlobal('fetch',fetchMock);fetchMock.mockReset().mockResolvedValue(new Response('{}',{headers:{'content-type':'application/json'}}));});
   afterEach(()=>vi.unstubAllGlobals());
+  it('requests directory discovery separately from explicitly edited scopes',async()=>{
+    await admission.refreshAdmissionCollectionDirectories('集合 / 原批');const [url,options]=fetchMock.mock.calls[0]!;
+    expect(url).toBe(`/api/admin/local-admission/collections/${encodeURIComponent('集合 / 原批')}/repreview`);
+    expect(options?.method).toBe('POST');expect(JSON.parse(String(options?.body))).toEqual({refreshDirectories:true});
+    expect(new Headers(options?.headers).get('x-foldergram-intent')).toBe('1');
+  });
   it.each([
     [admission.previewRemainingAdmissionCollection,'remaining-preview'],
     [admission.cleanupAdmissionCollectionParents,'cleanup-empty-parents'],

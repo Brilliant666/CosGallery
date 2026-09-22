@@ -63,6 +63,11 @@ export interface AdmissionCollection {
   previousCollectionId?:string|null;
   nextCollectionIds?:string[];
   remainingCount?:number;
+  directoryRefresh?: {
+    added:Array<{creatorId:number;parent:string;name:string}>;
+    removed:Array<{creatorId:number;parent:string;name:string}>;
+    warnings:string[];
+  };
 }
 export interface AdmissionCollectionExecuteInput {
   requestKey:string;confirmed:true;

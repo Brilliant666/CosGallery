@@ -31,6 +31,8 @@ describe.sequential('durable multi-creator local admission collections',()=>{
   afterAll(async()=>{await service?.waitForIdle();manager?.close();vi.unstubAllEnvs();});
   async function make(index:number,title:string){const dir=path.join(waiting,names[index],title);await fs.mkdir(dir,{recursive:true});
     await sharp({create:{width:14,height:20,channels:3,background:'#bbaa99'}}).jpeg().toFile(path.join(dir,'photo.jpg'));return dir;}
+  async function makeWithin(parent:string,title:string){const dir=path.join(waiting,parent,title);await fs.mkdir(dir,{recursive:true});
+    await sharp({create:{width:14,height:20,channels:3,background:'#ccbbaa'}}).jpeg().toFile(path.join(dir,'photo.jpg'));return dir;}
   async function preview(prefix:string){for(let n=0;n<2;n++)await make(n,prefix);
     return service.previewCollection({scopes:creators.map((creatorId,n)=>({creatorId,parent:names[n],directories:[prefix]}))});}
   function request(collection:ReturnType<typeof service.collection>){return {requestKey:randomUUID(),confirmed:true as const,
@@ -274,6 +276,107 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     expect(db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(fresh.batches[0].id)?.confirmed_json).toBeNull();
     await expect(fs.stat(path.join(waiting,names[0],selected[0]))).resolves.toBeTruthy();
   });
+  it('refreshes selected creator parents after a split without expanding originally unselected siblings or executing anything',async()=>{
+    const db=manager.connection,parents=['刷新范围甲','刷新范围乙'],selected=['原保留作品','内部更新作品','待拆分合集'],unselected='原有但未选择';
+    for(const title of [...selected,unselected])await makeWithin(parents[0],title);await makeWithin(parents[1],'另一博主原作品');
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent:parents[0],directories:selected},{creatorId:creators[1],parent:parents[1],directories:['另一博主原作品']}]}),batchId=original.batches[0].id;
+    const oldItems=service.items(batchId).items,context=JSON.parse(String(db.prepare('SELECT context_json FROM local_admission_web_batches WHERE id=?').get(batchId)!.context_json));
+    expect(context.knownSiblingDirectories).toEqual(expect.arrayContaining([...selected,unselected]));
+    const before=()=>({collection:db.prepare('SELECT * FROM local_admission_web_collections WHERE id=?').get(original.id),
+      batches:original.batches.map(batch=>db.prepare('SELECT * FROM local_admission_web_batches WHERE id=?').get(batch.id)),
+      items:original.batches.map(batch=>db.prepare('SELECT * FROM local_admission_web_items WHERE batch_id=? ORDER BY position').all(batch.id))});
+    const saved=before();
+    await fs.rename(path.join(waiting,parents[0],selected[2]),path.join(root,'已拆出原合集'));
+    const added=['拆分后第一套','拆分后第二套'];for(const title of added)await makeWithin(parents[0],title);
+    await fs.appendFile(path.join(waiting,parents[0],selected[1],'photo.jpg'),'synthetic changed metadata');
+    await makeWithin(parents[0],'.local-admission-attachments');await makeWithin(parents[0],'.local-review-originals');
+    await fs.writeFile(path.join(waiting,parents[0],'普通说明.txt'),'not a work directory');
+    const outside=path.join(root,'不可跟随的链接目标');await fs.mkdir(outside);await fs.writeFile(path.join(outside,'private.txt'),'leave untouched');
+    await fs.symlink(outside,path.join(waiting,parents[0],'新符号链接'),process.platform==='win32'?'junction':'dir');
+    await makeWithin('未选择的博主父目录','新作品不能引入');
+    const counts=()=>Object.fromEntries(['archive_local_admission_plans','archive_local_admission_items','local_admission_web_requests','local_admission_web_collection_requests','archive_catalog_works','archive_catalog_local_works']
+      .map(table=>[table,db.prepare(`SELECT COUNT(*) n FROM ${table}`).get()!.n]));
+    const savedCounts=counts(),execute=vi.spyOn(Admission.prototype,'apply'),move=vi.spyOn(fs,'rename'),inventory=vi.spyOn(Admission.prototype,'preview');
+    const refreshed=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(refreshed).toMatchObject({state:'draft',previousCollectionId:original.id});
+    expect(refreshed.directoryRefresh.added).toHaveLength(2);
+    expect(refreshed.directoryRefresh.added).toEqual(expect.arrayContaining(added.map(name=>({creatorId:creators[0],parent:parents[0],name}))));
+    expect(refreshed.directoryRefresh.removed).toEqual([{creatorId:creators[0],parent:parents[0],name:selected[2]}]);
+    const scopes=service.collectionScope(refreshed.id).scopes;
+    expect(scopes.map(scope=>scope.parent)).toEqual(parents);expect(scopes[0].directories.slice().sort()).toEqual([selected[0],selected[1],...added].sort());
+    expect(scopes[1].directories).toEqual(['另一博主原作品']);
+    expect(inventory.mock.calls.flatMap(([scope])=>scope.directories)).not.toContain(unselected);
+    expect(inventory.mock.calls.flatMap(([scope])=>scope.directories)).not.toContain('新符号链接');
+    const newItems=service.items(refreshed.batches[0].id).items,byName=(items:typeof oldItems,name:string)=>items.find(item=>item.sourceRelativePath===name)!;
+    expect(byName(newItems,selected[0]).reviewFingerprint).toBe(byName(oldItems,selected[0]).reviewFingerprint);
+    expect(byName(newItems,selected[1]).reviewFingerprint).not.toBe(byName(oldItems,selected[1]).reviewFingerprint);
+    expect(byName(newItems,selected[1]).summary.bytes).toBeGreaterThan(byName(oldItems,selected[1]).summary.bytes);
+    expect(newItems.every(item=>item.action==='defer')).toBe(true);
+    expect(before()).toEqual(saved);expect(counts()).toEqual(savedCounts);expect(execute).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(outside,'private.txt'),'utf8')).toBe('leave untouched');
+    for(const batch of refreshed.batches)expect(db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(batch.id)!.confirmed_json).toBeNull();
+  });
+  it('keeps newly discovered legacy-draft directories explicitly deferred when no sibling baseline was saved',async()=>{
+    const db=manager.connection,parent='旧草稿无兄弟基线',selected='旧选择',unselected='原有未选但旧草稿未记录';
+    await makeWithin(parent,selected);await makeWithin(parent,unselected);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[selected]}]}),batchId=original.batches[0].id;
+    const context=JSON.parse(String(db.prepare('SELECT context_json FROM local_admission_web_batches WHERE id=?').get(batchId)!.context_json));
+    delete context.knownSiblingDirectories;db.prepare('UPDATE local_admission_web_batches SET context_json=? WHERE id=?').run(JSON.stringify(context),batchId);
+    const originalState=db.prepare('SELECT * FROM local_admission_web_batches WHERE id=?').get(batchId),added='后来新目录';await makeWithin(parent,added);
+    const execute=vi.spyOn(Admission.prototype,'apply'),refreshed=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(refreshed.directoryRefresh.warnings.length).toBeGreaterThan(0);
+    expect(refreshed.directoryRefresh.added).toEqual(expect.arrayContaining([unselected,added].map(name=>({creatorId:creators[0],parent,name}))));
+    const items=service.items(refreshed.batches[0].id).items;
+    for(const name of [unselected,added])expect(items.find(item=>item.sourceRelativePath===name)?.suggestedAction).toMatchObject({action:'defer'});
+    expect(items.every(item=>item.action==='defer')).toBe(true);expect(execute).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT * FROM local_admission_web_batches WHERE id=?').get(batchId)).toEqual(originalState);
+  });
+  it('does not replace the original draft when rereading leaves no eligible selected directories',async()=>{
+    const db=manager.connection,parent='刷新后无可选目录',title='已移出作品';await makeWithin(parent,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]});
+    await fs.rename(path.join(waiting,parent,title),path.join(root,'刷新移出的作品'));await makeWithin(parent,'.local-admission-attachments');
+    const count=Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n),saved=db.prepare('SELECT * FROM local_admission_web_collections WHERE id=?').get(original.id);
+    const apply=vi.spyOn(Admission.prototype,'apply'),move=vi.spyOn(fs,'rename');
+    await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow(/目录|范围/);
+    expect(db.prepare('SELECT * FROM local_admission_web_collections WHERE id=?').get(original.id)).toEqual(saved);
+    expect(service.collection(original.id).nextCollectionIds).toEqual([]);expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count);
+    expect(apply).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
+  });
+  it('rejects refreshed-directory requests for confirmed or active collections before touching the filesystem',async()=>{
+    const db=manager.connection,parent='刷新确认保护',title='保持原记录';await makeWithin(parent,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]});
+    const read=vi.spyOn(fs,'readdir'),scan=vi.spyOn(Admission.prototype,'preview'),count=Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n);
+    db.prepare("UPDATE local_admission_web_collections SET confirmed_json='{}' WHERE id=?").run(original.id);
+    await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow('不能重新预览');
+    db.prepare('UPDATE local_admission_web_collections SET confirmed_json=NULL,owner_pid=?,owner_token=? WHERE id=?').run(process.pid,'synthetic-refresh-owner',original.id);
+    await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow('不能重新预览');
+    db.prepare('UPDATE local_admission_web_collections SET owner_pid=NULL,owner_token=NULL WHERE id=?').run(original.id);
+    db.prepare('UPDATE local_admission_web_batches SET owner_pid=?,owner_token=? WHERE id=?').run(process.pid,'synthetic-child-owner',original.batches[0].id);
+    try{await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow(/子批次|执行/);}
+    finally{db.prepare('UPDATE local_admission_web_batches SET owner_pid=NULL,owner_token=NULL WHERE id=?').run(original.batches[0].id);}
+    expect(read).not.toHaveBeenCalled();expect(scan).not.toHaveBeenCalled();expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count);
+  });
+  it('does not automatically select newly discovered directories already claimed or skipped by another confirmed plan',async()=>{
+    const db=manager.connection,parent='刷新范围其他计划占用',originalTitle='原范围作品';await makeWithin(parent,originalTitle);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[originalTitle]}]});
+    const reservedNames=['其他入口已确认','其他入口明确跳过'];
+    for(const [index,title] of reservedNames.entries()){
+      await makeWithin(parent,title);const other=await service.preview({creatorId:creators[0],parent,directories:[title]});
+      if(index===0)vi.spyOn(Admission.prototype,'apply').mockRejectedValueOnce(new Error('Synthetic stop before archive plan registration'));
+      await service.execute(other.id,{requestKey:randomUUID(),confirmed:true,acceptExistingVersion:true,actions:other.items.map(item=>({key:item.key,action:index?'skip':'new'}))});
+      await service.waitForIdle();vi.restoreAllMocks();
+      expect(db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(other.id)!.confirmed_json).not.toBeNull();
+      expect(db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=?').get(other.id)).toBeUndefined();
+    }
+    const free='新发现且未占用';await makeWithin(parent,free);
+    const plans=db.prepare('SELECT * FROM archive_local_admission_plans ORDER BY plan_id').all(),apply=vi.spyOn(Admission.prototype,'apply');
+    const refreshed=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(service.collectionScope(refreshed.id).scopes[0].directories).toEqual([originalTitle,free]);
+    expect(refreshed.directoryRefresh.added).toEqual([{creatorId:creators[0],parent,name:free}]);
+    expect(refreshed.directoryRefresh.warnings.join(' ')).toMatch(/占用|跳过|确认计划/);
+    expect(db.prepare('SELECT * FROM archive_local_admission_plans ORDER BY plan_id').all()).toEqual(plans);expect(apply).not.toHaveBeenCalled();
+    for(const title of reservedNames)await expect(fs.stat(path.join(waiting,parent,title))).resolves.toBeTruthy();
+  });
   it('fingerprints arbitrary searched Works and their source/task facts even when they are not item candidates',async()=>{
     const db=manager.connection,title='018 文件稳定身份变化';await make(0,title);
     const workId=Number(db.prepare('INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,?)').run(creators[0],'完全不同的既有作品').lastInsertRowid);
@@ -346,6 +449,9 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     const result=await requestTestApp(app,'POST',`${base}/repreview`,{'x-foldergram-intent':'1'},{});
     expect(result.status).toBe(201);expect(result.body.state).toBe('draft');expect(result.body.id).not.toBe(original.id);
     expect(service.collectionScope(result.body.id)).toEqual(scope.body);
+    const added='021 HTTP目录刷新新增';await make(0,added);
+    const refreshed=await requestTestApp(app,'POST',`${base}/repreview`,{'x-foldergram-intent':'1'},{refreshDirectories:true});
+    expect(refreshed.status).toBe(201);expect(refreshed.body.directoryRefresh.added).toEqual([{creatorId:creators[0],parent:names[0],name:added}]);
     expect((await requestTestApp(app,'POST',`${base}/repreview`,{'x-foldergram-intent':'1'},{scopes:[]})).status).toBe(400);
     expect((await requestTestApp(app,'POST',`${base}/repreview`,{'x-foldergram-intent':'1'},{scopes:[{creatorId:creators[0],parent:'..',directories:['bad']}]})).status).toBe(400);
   });

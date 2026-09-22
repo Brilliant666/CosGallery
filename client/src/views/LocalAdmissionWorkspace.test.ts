@@ -80,7 +80,7 @@ describe('independent multi-creator admission workspace',()=>{
     const {wrapper}=await render('?collection=collection-one',false);
     expect(wrapper.findAll('.item-card').map(card=>card.attributes('data-test'))).toEqual(['admission-item-a-candidate','admission-item-b-complex']);
     expect(wrapper.find('[data-test=collection-select-safe]').exists()).toBe(false);
-    expect(wrapper.get('[data-test=collection-repreview]').text()).toBe('重新检查并更新选择');
+    expect(wrapper.get('[data-test=collection-repreview]').text()).toBe('重新读取并核对');
     await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('博主乙');
     expect(wrapper.findAll('.item-card')).toHaveLength(1);
     await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('');
@@ -177,20 +177,53 @@ describe('independent multi-creator admission workspace',()=>{
     let fresh=false;
     vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>({...collection(),id,batches:[{...batch(fresh?'a2':'a'),totals:{total:2,selected:0,completed:0,skipped:0,deferred:2}}]}));
     vi.mocked(api.fetchAdmissionItems).mockImplementation(async()=>({items:['one','two'].map(name=>({...item(fresh?`new-${name}`:name),sourceRelativePath:name,reviewFingerprint:fresh&&name==='two'?'changed':'same'})),total:2,page:1,pageSize:100}));
-    vi.mocked(api.repreviewAdmissionCollection).mockImplementation(async()=>{fresh=true;return {...collection(),id:'fresh'};});
+    vi.mocked(api.refreshAdmissionCollectionDirectories).mockImplementation(async()=>{fresh=true;return {...collection(),id:'fresh'};});
     const {wrapper,router}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-one] select').setValue('skip');
     await wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();await showAllReview(wrapper);
-    expect(router.currentRoute.value.query.collection).toBe('fresh');expect(api.repreviewAdmissionCollection).toHaveBeenCalledWith('collection-one');
+    expect(router.currentRoute.value.query.collection).toBe('fresh');expect(api.refreshAdmissionCollectionDirectories).toHaveBeenCalledWith('collection-one');expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test=admission-item-new-one] select').element.value).toBe('skip');
     expect(wrapper.get('[data-test=admission-item-new-two] select').element.value).toBe('new');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('keeps the original draft and choices when a concurrent confirmation rejects repreview',async()=>{
-    vi.mocked(api.repreviewAdmissionCollection).mockRejectedValue(new RequestError('原批已确认',409));
+    vi.mocked(api.refreshAdmissionCollectionDirectories).mockRejectedValue(new RequestError('原批已确认',409));
     const {wrapper,router}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-item-a-first] select').setValue('skip');
     await wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();
     expect(router.currentRoute.value.query.collection).toBe('collection-one');expect(wrapper.text()).toContain('原批已确认');expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('skip');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('discovers split directories in review, reports persistent scope changes, and does not inherit the old bundle identity',async()=>{
+    let fresh=false;
+    const changes={added:['拆分甲','拆分乙','历史范围待核对'].map(name=>({creatorId:17,parent:'甲别名',name})),removed:[{creatorId:17,parent:'甲别名',name:'原合集'}],warnings:['历史草稿没有记录完整范围，新发现目录请核对。']};
+    const work={workId:91,title:'原合集对应作品',catalogNo:1,images:2,videos:0,thumbnailUrl:null,primaryLocalWorkId:19,localState:'available',originalDirectories:['原合集'],sources:[]};
+    vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>({...collection(),id,batches:[batch(fresh?'a2':'a')],...(fresh?{directoryRefresh:changes,previousCollectionId:'collection-one'}:{})}));
+    vi.mocked(api.fetchAdmissionItems).mockImplementation(async()=>({items:fresh?[
+      {...item('stable-new'),sourceRelativePath:'保留人工判断',reviewFingerprint:'same'},
+      {...item('child-a'),sourceRelativePath:'拆分甲'},
+      {...item('child-b'),sourceRelativePath:'拆分乙'},
+      {...item('legacy-new'),sourceRelativePath:'历史范围待核对',suggestedAction:{key:'legacy-new',action:'defer',reason:'历史范围待核对'}},
+    ]:[{...item('stable'),sourceRelativePath:'保留人工判断',reviewFingerprint:'same'},{...item('bundle','D'),sourceRelativePath:'原合集',candidates:[work],suggestedAction:{key:'bundle',action:'existing',workId:91,approvedAds:['原合集广告.txt']}}],total:fresh?4:2,page:1,pageSize:100}));
+    vi.mocked(api.refreshAdmissionCollectionDirectories).mockImplementation(async()=>{fresh=true;return {...collection(),id:'fresh',directoryRefresh:changes};});
+    const {wrapper,router}=await render('?collection=collection-one');
+    await wrapper.get('[data-test=admission-item-stable] select').setValue('defer');
+    await wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();await showAllReview(wrapper);
+    expect(api.refreshAdmissionCollectionDirectories).toHaveBeenCalledExactlyOnceWith('collection-one');
+    expect(api.fetchAdmissionWorkspace).not.toHaveBeenCalled();expect(api.fetchAdmissionDirectories).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.query.collection).toBe('fresh');
+    expect(wrapper.text()).toContain('新增目录 3 个、移出目录 1 个');
+    expect(wrapper.get('[data-test=directory-refresh]').text()).toContain('移出：甲别名 / 原合集');
+    expect(wrapper.get('[data-test=directory-refresh]').text()).toContain('新增：甲别名 / 拆分甲');
+    expect(wrapper.get('[data-test=directory-refresh]').text()).toContain(changes.warnings[0]);
+    expect(wrapper.get('[data-test=admission-item-stable-new] select').element.value).toBe('defer');
+    expect(wrapper.get('[data-test=admission-item-legacy-new] select').element.value).toBe('defer');
+    expect(wrapper.get('[data-test=admission-item-child-a] select').element.value).toBe('new');
+    expect(wrapper.get('[data-test=admission-item-child-a]').text()).not.toContain(work.title);
+    expect(wrapper.get('[data-test=admission-item-child-a]').text()).not.toContain('原合集广告.txt');
+    expect(wrapper.find('[data-test=admission-item-bundle]').exists()).toBe(false);
+    wrapper.unmount();const returned=await render('?collection=fresh');
+    expect(returned.wrapper.get('[data-test=directory-refresh]').text()).toContain('新增 3 个 · 移出 1 个');
+    expect(api.refreshAdmissionCollectionDirectories).toHaveBeenCalledTimes(1);
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('preselects safe items once, preserves manual defer on refresh/return, and only reselects on explicit request',async()=>{
     const {wrapper}=await render('?collection=collection-one');
@@ -317,7 +350,7 @@ describe('independent multi-creator admission workspace',()=>{
     expect(wrapper.text()).toContain('已勾选 0 个具体文件');
     wrapper.unmount();const returned=await render('?collection=collection-one');
     expect(returned.wrapper.text()).toContain('已勾选 0 个具体文件');
-    vi.mocked(api.repreviewAdmissionCollection).mockResolvedValue({...collection(),id:'fresh'});
+    vi.mocked(api.refreshAdmissionCollectionDirectories).mockResolvedValue({...collection(),id:'fresh'});
     await returned.wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();
     expect(returned.router.currentRoute.value.query.collection).toBe('fresh');
     await showAllReview(returned.wrapper);expect(returned.wrapper.get('[data-test=admission-item-first] select').element.value).toBe('new');

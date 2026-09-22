@@ -28,7 +28,14 @@
     </section>
 
     <template v-if="collection&&!editingScope">
-      <section class="panel overview"><div class="heading"><h2>{{ stateLabel(collection.state) }}</h2><div class="toolbar"><button v-if="collection.state==='draft'" data-test="collection-repreview" :disabled="locked" @click="repreviewFiles">重新检查并更新选择</button><button v-else :disabled="busy" @click="refreshCollection()">更新进度</button><button v-if="!active&&collection.state!=='draft'" :disabled="busy" @click="startNew">新建批次</button></div></div><p>{{ collection.totals.creators }} 位博主 · {{ collection.totals.total }} 个目录 · {{ collection.totals.completed }} 已完成<span v-if="collection.totals.failedCreators"> · {{ collection.totals.failedCreators }} 位需处理</span></p><p v-if="active" role="status">后台按博主串行处理。关闭页面不取消；进度自动更新，不会自动运行其他历史任务。</p><p v-if="collection.error" class="error">{{ collection.error }}</p><details><summary>技术详情</summary><p>{{ collection.id }} · {{ collection.updatedAt }}</p><button v-if="collection.state==='draft'" :disabled="busy" @click="refreshCollection()">读取已保存状态</button></details><div v-if="collection.previousCollectionId||collection.nextCollectionIds?.length" class="toolbar lineage"><button v-if="collection.previousCollectionId" :disabled="busy" @click="openCollection(collection.previousCollectionId)">查看上次预览</button><button v-for="id in collection.nextCollectionIds" :key="id" :disabled="busy" @click="openCollection(id)">查看后续预览 · {{ id.slice(0,8) }}</button><span v-if="collection.nextCollectionIds?.length" class="hint">当前为旧预览；后续预览保留在历史中，不会自动执行。</span></div></section>
+      <section class="panel overview"><div class="heading"><h2>{{ stateLabel(collection.state) }}</h2><div class="toolbar"><button v-if="collection.state==='draft'" data-test="collection-repreview" :disabled="locked" @click="repreviewFiles">重新读取并核对</button><button v-else :disabled="busy" @click="refreshCollection()">更新进度</button><button v-if="!active&&collection.state!=='draft'" :disabled="busy" @click="startNew">新建批次</button></div></div><p>{{ collection.totals.creators }} 位博主 · {{ collection.totals.total }} 个目录 · {{ collection.totals.completed }} 已完成<span v-if="collection.totals.failedCreators"> · {{ collection.totals.failedCreators }} 位需处理</span></p><p v-if="active" role="status">后台按博主串行处理。关闭页面不取消；进度自动更新，不会自动运行其他历史任务。</p><p v-if="collection.error" class="error">{{ collection.error }}</p><details><summary>技术详情</summary><p>{{ collection.id }} · {{ collection.updatedAt }}</p><button v-if="collection.state==='draft'" :disabled="busy" @click="refreshCollection()">读取已保存状态</button></details><div v-if="collection.previousCollectionId||collection.nextCollectionIds?.length" class="toolbar lineage"><button v-if="collection.previousCollectionId" :disabled="busy" @click="openCollection(collection.previousCollectionId)">查看上次预览</button><button v-for="id in collection.nextCollectionIds" :key="id" :disabled="busy" @click="openCollection(id)">查看后续预览 · {{ id.slice(0,8) }}</button><span v-if="collection.nextCollectionIds?.length" class="hint">当前为旧预览；后续预览保留在历史中，不会自动执行。</span></div></section>
+
+      <details v-if="collection.directoryRefresh" class="panel directory-refresh" data-test="directory-refresh">
+        <summary>本次目录变化 · 新增 {{ collection.directoryRefresh.added.length }} 个 · 移出 {{ collection.directoryRefresh.removed.length }} 个</summary>
+        <p class="hint">重新读取本批已选博主的父目录；“移出”仅表示不再纳入这份新预览，不会删除文件，旧草稿仍保留。新增目录不继承旧合集的作品身份或广告批准，需核对本次选择后确认执行。</p>
+        <ul><li v-for="entry in collection.directoryRefresh.added" :key="`add:${entry.creatorId}:${entry.parent}:${entry.name}`">新增：{{ entry.parent }} / {{ entry.name }}</li><li v-for="entry in collection.directoryRefresh.removed" :key="`remove:${entry.creatorId}:${entry.parent}:${entry.name}`">移出：{{ entry.parent }} / {{ entry.name }}</li></ul>
+        <p v-for="(warning,index) in collection.directoryRefresh.warnings" :key="index" class="warning">{{ warning }}</p>
+      </details>
 
       <section v-if="!active&&collection.state!=='draft'" class="panel" aria-label="本批剩余项与目录收尾">
         <h2>已入库 {{ collection.totals.completed }} 项 · 待核查 {{ collection.remainingCount??collection.totals.deferred }} 项</h2>
@@ -40,9 +47,9 @@
 
       <section v-if="collection.state==='draft'" class="panel" aria-label="多博主集中核对">
         <div class="heading"><div><h2>核对作品身份与文件范围</h2><p class="hint">无冲突的新作品自动选中。优先处理下面的待判断项；人工暂缓和跳过保留，预选不等于执行。</p></div></div>
-        <p class="hint">整理所选目录内的文件后，点击“重新检查并更新选择”；新增、改名或拆分作品目录，先用“上一步：调整导入范围”。旧草稿未记录选择来源的项目不会被擅自补选。</p>
+        <p class="hint">整理文件，或在本批已选博主父目录内新增、改名、拆分作品目录后，点击“重新读取并核对”即可重读并显示目录变化，无需返回第1步。更换博主或父目录时再用“上一步：调整导入范围”。新目录不继承旧合集身份或广告批准；旧草稿未记录的范围需核对，确认后才执行。</p>
         <p class="hint">未提交选择仅保存在当前浏览器标签页，刷新或同页返回可恢复；换浏览器或关闭标签页后不保证保留。后台确认与执行记录由服务端保存。</p>
-        <details class="boundary-help"><summary>冲突 / 需整理的目录怎么处理？</summary><p>边界提示不代表文件损坏。确认整组属于一套，可逐项选择整套接纳并保留内部结构；确为多套时，先在尚未执行的等待区按一套一个目录整理，再调整导入范围。已有作品或目标冲突须判断身份，不覆盖或用改名掩盖冲突。</p></details>
+        <details class="boundary-help"><summary>冲突 / 需整理的目录怎么处理？</summary><p>边界提示不代表文件损坏。确认整组属于一套，可逐项选择整套接纳并保留内部结构；确为多套时，先在尚未执行的等待区按一套一个目录整理，再点击“重新读取并核对”。更换博主或父目录才需调整导入范围。已有作品或目标冲突须判断身份，不覆盖或用改名掩盖冲突。</p></details>
         <AdmissionAcquisitionPolicy :retry="!!pending" />
         <AdmissionAdsPicker :entries="allEntries" :locked="locked" :recycle-ads="!pending" @change="invalidateConfirmation" />
         <div class="creator-tabs" role="tablist" aria-label="按博主核对"><button role="tab" :aria-selected="activeBatchId==='all'" @click="activeBatchId='all';page=1">全部博主</button><button v-for="entry in collection.batches" :key="entry.id" role="tab" :aria-selected="activeBatchId===entry.id" @click="activeBatchId=entry.id;page=1">{{ entry.creatorName }} <small>{{ contexts[entry.id]?.items.length??entry.totals.total }} 目录 · {{ pendingFor(entry.id) }} 待处理</small></button></div>
@@ -205,9 +212,9 @@ async function preview(){
 }
 async function repreviewFiles(){
   if(locked.value||collection.value?.state!=='draft')return;saveDraft();const id=collection.value.id,previous=repreviewEntries();let current=generation;busy.value=true;error.value='';
-  try{const result=await api.repreviewAdmissionCollection(id);if(current!==generation||disposed)return;current++;await openCollection(result.id,previous);
-    if(current===generation&&!disposed){const priorSelected=new Set(previous.filter(row=>isAdmissionSelected(row.action)).map(row=>`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`));const added=repreviewEntries().filter(row=>isAdmissionSelected(row.action)&&!priorSelected.has(`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`)).length;notice.value=`已重新检查并更新选择：新增选中 ${added} 个，当前 ${selectedCount.value} 个入库、${deferredCount.value} 个暂缓。人工决定和已有广告取消保留；新增或改名目录请调整导入范围。`;await loadRecent();}}
-  catch(cause){if(current===generation&&!disposed)error.value=cause instanceof Error?cause.message:'重新检查文件失败';}finally{if(current===generation&&!disposed)busy.value=false;}
+  try{const result=await api.refreshAdmissionCollectionDirectories(id);if(current!==generation||disposed)return;current++;await openCollection(result.id,previous);
+    if(current===generation&&!disposed&&collection.value?.id===result.id){const priorSelected=new Set(previous.filter(row=>isAdmissionSelected(row.action)).map(row=>`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`));const selected=repreviewEntries().filter(row=>isAdmissionSelected(row.action)&&!priorSelected.has(`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`)).length;const changes=collection.value.directoryRefresh;notice.value=`已重新读取并核对：${changes?`新增目录 ${changes.added.length} 个、移出目录 ${changes.removed.length} 个；`:''}新增选中 ${selected} 个，当前 ${selectedCount.value} 个入库、${deferredCount.value} 个暂缓。依据仍适用的人工决定和已有广告取消保留；新目录请核对后统一确认。`;await loadRecent();}}
+  catch(cause){if(current===generation&&!disposed)error.value=cause instanceof Error?cause.message:'重新读取并核对失败';}finally{if(current===generation&&!disposed)busy.value=false;}
 }
 async function continueRemaining(){
   if(!collection.value||busy.value||active.value||collection.value.state==='draft'||!collection.value.remainingCount)return;
