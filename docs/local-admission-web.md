@@ -340,11 +340,41 @@ The waiting-area workspace inspects only the immediate children of each safe cre
 parent. A nonempty parent containing exclusively real reserved `.local-admission-*`
 or `.local-review-*` directories is omitted from pending creator selection. This is a
 read-only presentation filter: it does not enumerate those containers or remove them.
-Ordinary directories/files, reserved-name files or links, and empty parents remain
-visible. Unreadable parents remain visible with their error and cannot be selected.
+Empty parents are also omitted. Ordinary directories/files and reserved-name files
+or links remain visible. Unreadable parents remain visible with their error and cannot be selected.
 
 Historical advertisement cleanup remains a separate explicit operation through
 `preview-recycle-advertisements` and `recycle-advertisements`, using the immutable
 original plan and exact approved files. It records recycling/removal evidence without
 replaying admission. Merely opening or refreshing the waiting area never cleans old
 attachments, and a hidden parent is not proof that every historical job succeeded.
+
+### Continue unresolved items and finalize empty parents
+
+An inactive confirmed collection exposes `remainingCount` and an explicit
+`POST /collections/:id/remaining-preview` action. This creates a linked, unconfirmed
+draft directly in review, containing only original deferred entries with no execution
+checkpoint. Completed/skipped entries and exact paths claimed by another immutable
+plan are excluded. Local targets registered after the original preview are excluded;
+pre-existing identity conflicts remain reviewable. Missing original directory names
+stay visible as conflicts; renamed/new directories are never silently substituted.
+Manual deferral reasons survive. Repeat clicks, including concurrent requests, reuse
+the existing current follow-up draft. Rechecking that draft preserves its lineage.
+Original confirmations, plans, checkpoints and request receipts remain immutable.
+
+After successful web admission, only that batch's verified empty creator parent is
+eligible for recycling. Ordinary content, deferred directories and internal retained
+attachments prevent cleanup. A separate result records cleanup success or failure;
+failure must not downgrade completed admission. The helper checks direct-child scope,
+ancestors, activity, identity and emptiness, isolates the empty directory under a
+reserved temporary name, and restores it when new content or a recycle failure is
+observed. Arbitrary external writers cannot be atomically locked by the Windows
+recycle API; a failed restore reports its retained location without overwriting a
+recreated parent. Only the helper's empty wrapper is removed non-recursively.
+
+Historical empty parents require the explicit `POST /collections/:id/cleanup-empty-parents`
+action in results. Listing, refreshing and restarting do not perform historical cleanup.
+Both actions require management authorization and write intent, reject active owners
+and preserve activity/claim protection. No migration or automatic remaining-job execution
+is introduced. Rapid-iteration runtime management may be performed by Codex when the
+user explicitly authorizes it, using the same production entry and configuration.

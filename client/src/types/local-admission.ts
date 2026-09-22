@@ -42,6 +42,7 @@ export interface AdmissionBatch {
   totals: { total: number; selected: number; completed: number; skipped: number; deferred: number };
   items?: AdmissionItem[];
   collectionId?: string | null;
+  parentCleanup?: {status:'recycled'|'not_empty'|'failed'|'not_applicable';message:string};
 }
 export interface AdmissionPreviewInput {
   creatorId: number; parent: string; directories: string[]; sourceEvidenceId?: number; acceptExistingVersion: boolean;
@@ -61,6 +62,7 @@ export interface AdmissionCollection {
   batches:Array<AdmissionBatch & {parent:string}>;
   previousCollectionId?:string|null;
   nextCollectionIds?:string[];
+  remainingCount?:number;
 }
 export interface AdmissionCollectionExecuteInput {
   requestKey:string;confirmed:true;

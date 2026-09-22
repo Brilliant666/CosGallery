@@ -25,3 +25,5 @@ export const fetchAdmissionCollectionScope = (collectionId:string) => requestJso
 export const repreviewAdmissionCollection = (collectionId:string,scopes?:AdmissionPreviewInput[]) => send<AdmissionCollection>(`/collections/${id(collectionId)}/repreview`,scopes?{scopes}:{});
 export const executeAdmissionCollection = (collectionId:string,input:AdmissionCollectionExecuteInput) => send<AdmissionCollection>(`/collections/${id(collectionId)}/execute`,input);
 export const resumeAdmissionCollection = (collectionId:string,input:AdmissionResumeInput) => send<AdmissionCollection>(`/collections/${id(collectionId)}/resume`,input);
+export const previewRemainingAdmissionCollection = (collectionId:string) => send<AdmissionCollection>(`/collections/${id(collectionId)}/remaining-preview`,{});
+export const cleanupAdmissionCollectionParents = (collectionId:string) => send<AdmissionCollection>(`/collections/${id(collectionId)}/cleanup-empty-parents`,{});

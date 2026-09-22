@@ -39,7 +39,8 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     const db=manager.connection;
     db.prepare("INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,?,?,'manual')").run(creators[0],'甲的别名','甲的别名');
     db.prepare("INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,?,?,'another-source')").run(creators[0],'甲的别名','甲的别名');
-    await fs.mkdir(path.join(waiting,'甲的别名'));await fs.mkdir(path.join(waiting,'未知名称'));await fs.mkdir(path.join(waiting,'.local-admission-attachments'));
+    await fs.mkdir(path.join(waiting,'甲的别名','待核对作品'),{recursive:true});await fs.mkdir(path.join(waiting,'未知名称','待核对作品'),{recursive:true});await fs.mkdir(path.join(waiting,'.local-admission-attachments'));
+    for(const name of names)await fs.mkdir(path.join(waiting,name,'身份发现样本'),{recursive:true});
     const before=db.prepare('SELECT * FROM archive_catalog_creators ORDER BY id').all(),spy=vi.spyOn(fs,'readdir');
     const workspace=await service.workspace();expect(spy.mock.calls.every(call=>call[0]===waiting||path.dirname(String(call[0]))===waiting)).toBe(true);spy.mockRestore();
     expect(workspace.items.find(item=>item.name==='甲的别名')?.matches).toEqual([{creatorId:creators[0],creatorName:names[0],matchedName:'甲的别名',matchKind:'alias'}]);
@@ -65,7 +66,7 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     expect(remove).not.toHaveBeenCalled();expect(unlink).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
     for(const file of files)expect(await fs.readFile(file,'utf8')).toBe('retained historical attachment');
   });
-  it('keeps ordinary content, empty parents and reserved-name symbolic links visible for manual handling',async()=>{
+  it('hides empty parents but keeps ordinary content and reserved-name symbolic links visible for manual handling',async()=>{
     const cases=['附件加作品','附件加普通文件','系统名字普通文件','系统名字链接','空博主父目录'];
     for(const name of cases)await fs.mkdir(path.join(waiting,name),{recursive:true});
     await fs.mkdir(path.join(waiting,cases[0],'.local-admission-attachments'));await fs.mkdir(path.join(waiting,cases[0],'仍需处理作品'));
@@ -75,7 +76,8 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     await fs.writeFile(path.join(linkTarget,'important.txt'),'do not follow');
     await fs.symlink(linkTarget,path.join(waiting,cases[3],'.local-admission-attachments'),process.platform==='win32'?'junction':'dir');
     const read=vi.spyOn(fs,'readdir'),workspace=await service.workspace();
-    expect(workspace.items.filter(item=>cases.includes(item.name)).map(item=>item.name).sort()).toEqual([...cases].sort());
+    expect(workspace.items.filter(item=>cases.includes(item.name)).map(item=>item.name).sort()).toEqual(cases.slice(0,4).sort());
+    expect(await fs.readdir(path.join(waiting,cases[4]))).toEqual([]);
     expect(read.mock.calls.some(call=>String(call[0]).startsWith(linkTarget))).toBe(false);
     expect((await fs.lstat(path.join(waiting,cases[3],'.local-admission-attachments'))).isSymbolicLink()).toBe(true);
     expect(await fs.readFile(path.join(linkTarget,'important.txt'),'utf8')).toBe('do not follow');
@@ -347,6 +349,166 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     expect((await requestTestApp(app,'POST',`${base}/repreview`,{'x-foldergram-intent':'1'},{scopes:[]})).status).toBe(400);
     expect((await requestTestApp(app,'POST',`${base}/repreview`,{'x-foldergram-intent':'1'},{scopes:[{creatorId:creators[0],parent:'..',directories:['bad']}]})).status).toBe(400);
   });
+  it('continues only unstarted deferred items in a linked draft while preserving completed identities and immutable receipts',async()=>{
+    const db=manager.connection,titles=['024 已完成作品','025 暂缓作品','026 明确跳过'],second='027 另一博主暂缓';
+    for(const title of titles)await make(0,title);await make(1,second);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:titles},{creatorId:creators[1],parent:names[1],directories:[second]}]}),input=request(original);
+    expect(original.remainingCount).toBe(0);
+    await expect(service.remainingCollection(original.id)).rejects.toThrow('未确认');
+    input.batches[0].actions=input.batches[0].actions.map((item,index)=>({...item,action:['new','defer','skip'][index],...(index===1?{reason:'等待用户确定拆分边界'}:{})})) as typeof input.batches[0]['actions'];
+    input.batches[1].actions=input.batches[1].actions.map(item=>({...item,action:'defer'})) as typeof input.batches[1]['actions'];
+    await service.executeCollection(original.id,input);await service.waitForIdle();
+    expect(service.collection(original.id)).toMatchObject({state:'completed',remainingCount:2,totals:{completed:1,deferred:2,skipped:1}});
+    const snapshot=()=>({collection:db.prepare('SELECT * FROM local_admission_web_collections WHERE id=?').get(original.id),
+      batches:original.batches.map(batch=>db.prepare('SELECT * FROM local_admission_web_batches WHERE id=?').get(batch.id)),
+      items:original.batches.map(batch=>db.prepare('SELECT * FROM local_admission_web_items WHERE batch_id=? ORDER BY position').all(batch.id)),
+      plans:original.batches.map(batch=>db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)),
+      checkpoints:original.batches.map(batch=>db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? ORDER BY item_key').all(batch.id)),
+      receipts:db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE collection_id=? ORDER BY request_key').all(original.id)});
+    const before=snapshot(),apply=vi.spyOn(Admission.prototype,'apply'),move=vi.spyOn(fs,'rename');
+    const [next,concurrent]=await Promise.all([service.remainingCollection(original.id),service.remainingCollection(original.id)]);
+    expect(concurrent.id).toBe(next.id);
+    expect(next).toMatchObject({state:'draft',remainingCount:0,previousCollectionId:original.id,totals:{creators:2,total:2}});
+    expect(service.collectionScope(next.id).scopes.map(scope=>scope.directories)).toEqual([[titles[1]],[second]]);
+    expect(service.items(next.batches[0].id).items[0].suggestedAction).toMatchObject({action:'defer',reason:'等待用户确定拆分边界'});
+    expect(next.batches.flatMap(batch=>service.items(batch.id).items).every(item=>item.action==='defer'&&item.executionState===null)).toBe(true);
+    expect(db.prepare('SELECT confirmed_json FROM local_admission_web_collections WHERE id=?').get(next.id)?.confirmed_json).toBeNull();
+    for(const batch of next.batches)expect(db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(batch.id)?.confirmed_json).toBeNull();
+    expect(snapshot()).toEqual(before);expect(apply).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
+    const count=Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n);
+    service=new Service(db,gallery);
+    expect((await service.remainingCollection(original.id)).id).toBe(next.id);
+    expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count);
+    expect(service.collection(original.id).remainingCount).toBe(2);
+    expect(snapshot()).toEqual(before);
+    const adjusted=await service.repreviewCollection(next.id,{});
+    expect(adjusted.previousCollectionId).toBe(next.id);
+    expect((await service.remainingCollection(original.id)).id).toBe(adjusted.id);
+    expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count+1);
+    expect(snapshot()).toEqual(before);
+  });
+  it('never reintroduces an item with any original execution checkpoint even if its web action says defer',async()=>{
+    const db=manager.connection,states=['planned','move_intent','files_verified','indexed','completed'];
+    const titles=['028 真实已完成',...states.map(state=>`028 状态 ${state}`),'028 真正未开始'];
+    for(const title of titles)await make(0,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:titles}]}),input=request(original);
+    input.batches[0].actions=input.batches[0].actions.map((item,index)=>({...item,action:index?'defer':'new'})) as typeof input.batches[0]['actions'];
+    await service.executeCollection(original.id,input);await service.waitForIdle();
+    const batchId=original.batches[0].id,items=service.items(batchId).items;
+    for(const [index,state] of states.entries())db.prepare('INSERT INTO archive_local_admission_items(plan_id,item_key,state,manifest_json) VALUES(?,?,?,?)').run(batchId,items[index+1].key,state,'[]');
+    const old=db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? ORDER BY item_key').all(batchId);
+    expect(service.collection(original.id).remainingCount).toBe(1);
+    const next=await service.remainingCollection(original.id);
+    expect(service.collectionScope(next.id).scopes[0].directories).toEqual([titles.at(-1)]);
+    expect(db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? ORDER BY item_key').all(batchId)).toEqual(old);
+  });
+  it('rejects continuing deferred items while their collection or child has a live owner',async()=>{
+    const db=manager.connection,original=await preview('029 活动拥有者'),input=request(original);
+    input.batches=input.batches.map(batch=>({...batch,actions:batch.actions.map(item=>({...item,action:'defer'}))})) as typeof input.batches;
+    await service.executeCollection(original.id,input);await service.waitForIdle();
+    const count=Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n),scan=vi.spyOn(Admission.prototype,'preview');
+    for(const [table,id] of [['local_admission_web_collections',original.id],['local_admission_web_batches',original.batches[0].id]]){
+      db.prepare(`UPDATE ${table} SET state='running',owner_pid=?,owner_token='active-synthetic-owner' WHERE id=?`).run(process.pid,id);
+      try{await expect(service.remainingCollection(original.id)).rejects.toThrow(/执行|拥有|owner|活动/);}
+      finally{db.prepare(`UPDATE ${table} SET state='completed',owner_pid=NULL,owner_token=NULL WHERE id=?`).run(id);}
+    }
+    expect(scan).not.toHaveBeenCalled();expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count);
+  });
+  it('keeps the exact missing deferred name as a review conflict instead of silently admitting renamed or newly added directories',async()=>{
+    const db=manager.connection,title='030 原暂缓目录';await make(0,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:[title]}]}),input=request(original);
+    input.batches[0].actions=input.batches[0].actions.map(item=>({...item,action:'defer'})) as typeof input.batches[0]['actions'];
+    await service.executeCollection(original.id,input);await service.waitForIdle();
+    await fs.rename(path.join(waiting,names[0],title),path.join(waiting,names[0],'030 用户改名后的目录'));await make(0,'030 后来新增目录');
+    const apply=vi.spyOn(Admission.prototype,'apply'),move=vi.spyOn(fs,'rename'),before=db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE collection_id=?').all(original.id);
+    const next=await service.remainingCollection(original.id),items=service.items(next.batches[0].id).items;
+    expect(items).toHaveLength(1);expect(items[0]).toMatchObject({sourceRelativePath:title,action:'defer',group:'D'});expect(items[0].conflicts.length).toBeGreaterThan(0);
+    expect(service.collectionScope(next.id).scopes[0].directories).toEqual([title]);expect(service.collection(original.id).remainingCount).toBe(1);
+    expect((await service.remainingCollection(original.id)).id).toBe(next.id);
+    expect(db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE collection_id=?').all(original.id)).toEqual(before);
+    expect(apply).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
+  });
+  it('excludes deferred paths already admitted or reserved by another immutable confirmed plan',async()=>{
+    const db=manager.connection,titles=['031 后来其他入口已收录','032 后来其他入口已开始','033 仍然暂缓'];
+    for(const title of titles)await make(0,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:titles}]}),input=request(original);
+    input.batches[0].actions=input.batches[0].actions.map(item=>({...item,action:'defer'})) as typeof input.batches[0]['actions'];
+    await service.executeCollection(original.id,input);await service.waitForIdle();
+    for(const [index,title] of titles.slice(0,2).entries()){
+      const later=await service.preview({creatorId:creators[0],parent:names[0],directories:[title]});
+      if(index===1){const apply=Admission.prototype.apply;vi.spyOn(Admission.prototype,'apply').mockImplementationOnce(function(this:InstanceType<typeof Admission>,plan){return apply.call(this,plan,{stopAfterMove:true});});}
+      await service.execute(later.id,{requestKey:randomUUID(),confirmed:true,acceptExistingVersion:true,actions:later.items.map(item=>({key:item.key,action:'new'}))});await service.waitForIdle();vi.restoreAllMocks();
+      expect(db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(later.id)).toBeTruthy();
+    }
+    const facts=db.prepare('SELECT * FROM archive_catalog_local_works ORDER BY id').all();
+    expect(service.collection(original.id).remainingCount).toBe(1);
+    const next=await service.remainingCollection(original.id);
+    expect(service.collectionScope(next.id).scopes[0].directories).toEqual([titles[2]]);
+    expect(db.prepare('SELECT * FROM archive_catalog_local_works ORDER BY id').all()).toEqual(facts);
+  });
+  it('requires explicit write intent to create a remaining draft and never creates one through GET',async()=>{
+    const original=await preview('034 暂缓续接接口'),input=request(original);
+    input.batches=input.batches.map(batch=>({...batch,actions:batch.actions.map(item=>({...item,action:'defer'}))})) as typeof input.batches;
+    await service.executeCollection(original.id,input);await service.waitForIdle();
+    const {createApp}=await import('../src/app.js'),app=createApp(),url=`/api/admin/local-admission/collections/${original.id}/remaining-preview`;
+    const count=Number(manager.connection.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n);
+    expect((await requestTestApp(app,'GET',url)).status).not.toBe(201);
+    expect((await requestTestApp(app,'POST',url,{},{})).status).toBe(403);
+    const cleanupUrl=`/api/admin/local-admission/collections/${original.id}/cleanup-empty-parents`;
+    expect((await requestTestApp(app,'GET',cleanupUrl)).status).not.toBe(200);
+    expect((await requestTestApp(app,'POST',cleanupUrl,{},{})).status).toBe(403);
+    expect(Number(manager.connection.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count);
+    const result=await requestTestApp(app,'POST',url,{'x-foldergram-intent':'1'},{});
+    expect(result.status).toBe(201);expect(result.body).toMatchObject({state:'draft',previousCollectionId:original.id});
+    const repeated=await requestTestApp(app,'POST',url,{'x-foldergram-intent':'1'},{});expect(repeated.body.id).toBe(result.body.id);
+    expect(Number(manager.connection.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count+1);
+  });
+  it('respects another confirmed web plan before it has created an archive checkpoint or LocalWork',async()=>{
+    const db=manager.connection,titles=['035 确认后尚未开始','035 未占用暂缓'];
+    for(const title of titles)await make(0,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:titles}]}),input=request(original);
+    input.batches[0].actions=input.batches[0].actions.map(item=>({...item,action:'defer'})) as typeof input.batches[0]['actions'];
+    await service.executeCollection(original.id,input);await service.waitForIdle();
+    const reserved=await service.preview({creatorId:creators[0],parent:names[0],directories:[titles[0]]});
+    vi.spyOn(Admission.prototype,'apply').mockRejectedValueOnce(new Error('Synthetic process failure before registering the archive plan'));
+    await service.execute(reserved.id,{requestKey:randomUUID(),confirmed:true,acceptExistingVersion:true,actions:reserved.items.map(item=>({key:item.key,action:'new'}))});await service.waitForIdle();vi.restoreAllMocks();
+    const confirmation=db.prepare('SELECT confirmed_json,owner_pid,owner_token FROM local_admission_web_batches WHERE id=?').get(reserved.id);
+    expect(confirmation?.confirmed_json).not.toBeNull();expect(confirmation).toMatchObject({owner_pid:null,owner_token:null});
+    expect(db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(reserved.id)).toBeUndefined();
+    expect(db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=?').get(reserved.id)).toBeUndefined();
+    expect(service.collection(original.id).remainingCount).toBe(1);
+    const next=await service.remainingCollection(original.id);
+    expect(service.collectionScope(next.id).scopes[0].directories).toEqual([titles[1]]);
+    expect(db.prepare('SELECT confirmed_json,owner_pid,owner_token FROM local_admission_web_batches WHERE id=?').get(reserved.id)).toEqual(confirmation);
+    await expect(fs.stat(path.join(waiting,names[0],titles[0]))).resolves.toBeTruthy();
+  });
+  it('excludes a target registered after confirmation without hiding target conflicts already present in the original preview',async()=>{
+    const db=manager.connection,titles=['036 后来扫描已登记目标','036 尚未登记','036 原来已有目标冲突'];
+    for(const title of titles)await make(0,title);
+    const folder=db.prepare('SELECT id,absolute_path FROM archive_catalog_local_creator_folders WHERE creator_id=? AND is_active=1 ORDER BY id LIMIT 1').get(creators[0])!;
+    const register=(title:string,target:string,createdAt:string)=>{
+      const workId=Number(db.prepare('INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,?)').run(creators[0],title).lastInsertRowid);
+      return Number(db.prepare(`INSERT INTO archive_catalog_local_works(local_creator_folder_id,work_id,relative_path,absolute_path,folder_name,match_status,scanned_at,created_at)
+        VALUES(?,?,?,?,?,'unmatched',?,?)`).run(folder.id,workId,title,target,title,createdAt,createdAt).lastInsertRowid);
+    };
+    const oldTarget=path.join(String(folder.absolute_path),titles[2]);await fs.mkdir(oldTarget,{recursive:true});
+    const oldLocalId=register(titles[2],oldTarget,'2000-01-01T00:00:00.000Z');
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:titles}]}),input=request(original);
+    expect(service.items(original.batches[0].id).items[2].conflicts).toContain('target exists');
+    input.batches[0].actions=input.batches[0].actions.map(item=>({...item,action:'defer'})) as typeof input.batches[0]['actions'];
+    await service.executeCollection(original.id,input);await service.waitForIdle();
+    const item=service.items(original.batches[0].id).items[0];
+    const laterThanOriginal=new Date(Date.parse(String(db.prepare('SELECT created_at FROM local_admission_web_collections WHERE id=?').get(original.id)!.created_at))+1000).toISOString();
+    const localId=register(titles[0],item.targetPath,laterThanOriginal);
+    const facts=()=>db.prepare('SELECT * FROM archive_catalog_local_works WHERE id IN (?,?) ORDER BY id').all(localId,oldLocalId),before=facts();
+    expect(db.prepare('SELECT * FROM archive_local_admission_items WHERE local_work_id=?').get(localId)).toBeUndefined();
+    expect(service.collection(original.id).remainingCount).toBe(2);
+    const next=await service.remainingCollection(original.id);
+    expect(service.collectionScope(next.id).scopes[0].directories).toEqual([titles[1],titles[2]]);
+    expect(service.items(next.batches[0].id).items[1].conflicts).toContain('target exists');
+    expect(facts()).toEqual(before);
+    await expect(fs.stat(path.join(waiting,names[0],titles[0]))).resolves.toBeTruthy();
+  });
   it('keeps workspace, identity search and collection mutations behind management auth and explicit write intent',async()=>{
     const original=await preview('022 重检权限'),{createApp}=await import('../src/app.js');const app=createApp();
     const denied=await requestTestApp(app,'POST','/api/admin/local-admission/collections/previews',{},{});expect(denied.status).toBe(403);
@@ -357,9 +519,11 @@ describe.sequential('durable multi-creator local admission collections',()=>{
       expect((await requestTestApp(app,'GET',`/api/admin/local-admission/${route}`)).status).toBe(401);
       expect((await requestTestApp(app,'GET',`/api/admin/local-admission/${route}`,{cookie})).status).toBe(403);
     }
-    const route=`/api/admin/local-admission/collections/${original.id}/repreview`;
-    expect((await requestTestApp(app,'POST',route,{'x-foldergram-intent':'1'},{})).status).toBe(401);
-    expect((await requestTestApp(app,'POST',route,{'x-foldergram-intent':'1',cookie},{})).status).toBe(403);
+    for(const action of ['repreview','remaining-preview','cleanup-empty-parents']){
+      const route=`/api/admin/local-admission/collections/${original.id}/${action}`;
+      expect((await requestTestApp(app,'POST',route,{'x-foldergram-intent':'1'},{})).status).toBe(401);
+      expect((await requestTestApp(app,'POST',route,{'x-foldergram-intent':'1',cookie},{})).status).toBe(403);
+    }
   });
   it('persists explicit web recycle policy, reports recycle failure as partial, and resumes the same indexed item',async()=>{
     const dir=await make(0,'023 网页广告回收');await fs.writeFile(path.join(dir,'图集网站永久发布页.txt'),'synthetic advertisement');

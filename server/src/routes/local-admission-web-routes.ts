@@ -15,6 +15,8 @@ export function createLocalAdmissionWebRouter(service?:LocalAdmissionWebService)
   router.get('/collections/:id',(req,res)=>res.json(current().collection(id.parse(req.params.id))));
   router.get('/collections/:id/scope',(req,res)=>res.json(current().collectionScope(id.parse(req.params.id))));
   router.post('/collections/:id/repreview',async(req,res)=>res.status(201).json(await current().repreviewCollection(id.parse(req.params.id),req.body)));
+  router.post('/collections/:id/remaining-preview',async(req,res)=>{z.object({}).strict().parse(req.body);res.status(201).json(await current().remainingCollection(id.parse(req.params.id)));});
+  router.post('/collections/:id/cleanup-empty-parents',async(req,res)=>{z.object({}).strict().parse(req.body);res.json(await current().cleanupEmptyParents(id.parse(req.params.id)));});
   router.post('/collections/:id/execute',async(req,res)=>res.status(202).json(await current().executeCollection(id.parse(req.params.id),req.body)));
   router.post('/collections/:id/resume',(req,res)=>res.status(202).json(current().resumeCollection(id.parse(req.params.id),req.body)));
   router.put('/settings',async(req,res)=>res.json(await current().saveSettings(z.object({waitingRoot:z.string().min(1).max(4000)}).strict().parse(req.body).waitingRoot)));

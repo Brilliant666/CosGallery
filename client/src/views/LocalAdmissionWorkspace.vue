@@ -30,6 +30,14 @@
     <template v-if="collection&&!editingScope">
       <section class="panel overview"><div class="heading"><h2>{{ stateLabel(collection.state) }}</h2><div class="toolbar"><button v-if="collection.state==='draft'" data-test="collection-repreview" :disabled="locked" @click="repreviewFiles">重新检查并更新选择</button><button v-else :disabled="busy" @click="refreshCollection()">更新进度</button><button v-if="!active&&collection.state!=='draft'" :disabled="busy" @click="startNew">新建批次</button></div></div><p>{{ collection.totals.creators }} 位博主 · {{ collection.totals.total }} 个目录 · {{ collection.totals.completed }} 已完成<span v-if="collection.totals.failedCreators"> · {{ collection.totals.failedCreators }} 位需处理</span></p><p v-if="active" role="status">后台按博主串行处理。关闭页面不取消；进度自动更新，不会自动运行其他历史任务。</p><p v-if="collection.error" class="error">{{ collection.error }}</p><details><summary>技术详情</summary><p>{{ collection.id }} · {{ collection.updatedAt }}</p><button v-if="collection.state==='draft'" :disabled="busy" @click="refreshCollection()">读取已保存状态</button></details><div v-if="collection.previousCollectionId||collection.nextCollectionIds?.length" class="toolbar lineage"><button v-if="collection.previousCollectionId" :disabled="busy" @click="openCollection(collection.previousCollectionId)">查看上次预览</button><button v-for="id in collection.nextCollectionIds" :key="id" :disabled="busy" @click="openCollection(id)">查看后续预览 · {{ id.slice(0,8) }}</button><span v-if="collection.nextCollectionIds?.length" class="hint">当前为旧预览；后续预览保留在历史中，不会自动执行。</span></div></section>
 
+      <section v-if="!active&&collection.state!=='draft'" class="panel" aria-label="本批剩余项与目录收尾">
+        <h2>已入库 {{ collection.totals.completed }} 项 · 待核查 {{ collection.remainingCount??collection.totals.deferred }} 项</h2>
+        <p v-if="collection.remainingCount" class="hint">只带入尚未执行的暂缓目录，直接进入后续核对；原确认计划与已完成作品不变。已经移动的异常项仍按原检查点恢复。</p>
+        <div class="toolbar"><button v-if="collection.remainingCount" class="primary" data-test="collection-remaining" :disabled="busy||itemsLoading" @click="continueRemaining">继续核对剩余 {{ collection.remainingCount }} 项</button><button data-test="collection-cleanup-parents" :disabled="busy" @click="cleanupParents">清理本批空目录</button></div>
+        <p class="hint">入库完成后仅回收已清空、没有活动任务的博主父目录，非空目录保留。历史残留需点击“清理本批空目录”送入Windows回收站；读取或刷新不会触发清理。</p>
+        <p v-for="entry in collection.batches.filter(batch=>batch.parentCleanup)" :key="entry.id" :class="entry.parentCleanup?.status==='failed'?'error':'hint'">{{ entry.creatorName }}：{{ entry.parentCleanup?.message }}</p>
+      </section>
+
       <section v-if="collection.state==='draft'" class="panel" aria-label="多博主集中核对">
         <div class="heading"><div><h2>核对作品身份与文件范围</h2><p class="hint">无冲突的新作品自动选中。优先处理下面的待判断项；人工暂缓和跳过保留，预选不等于执行。</p></div></div>
         <p class="hint">整理所选目录内的文件后，点击“重新检查并更新选择”；新增、改名或拆分作品目录，先用“上一步：调整导入范围”。旧草稿未记录选择来源的项目不会被擅自补选。</p>
@@ -46,6 +54,7 @@
           </details>
           <div class="pagination"><button :disabled="page<=1" @click="page--">上一页目录</button><span>第 {{ page }} / {{ Math.max(1,Math.ceil(filteredReviewEntries.length/20)) }} 页 · {{ filteredReviewEntries.length }} 目录</span><button :disabled="page*20>=filteredReviewEntries.length" @click="page++">下一页目录</button></div>
         </div>
+        <p class="hint">确认入库后，完成时会将本批已清空的博主父目录送入Windows回收站；仍有暂缓作品或其他文件的非空目录保留，不自动处理剩余项。</p>
         <p v-if="pending" class="warning">执行回执尚未确认。原范围与选择已保留，只能核对并重试原请求，不会再次建立计划。</p>
         <div class="stage-actions"><button data-test="collection-edit-scope" :disabled="locked" @click="editScope">上一步：调整导入范围</button><strong>{{ selectedCount }} 接纳 · {{ skippedCount }} 跳过 · {{ deferredCount }} 暂缓</strong><button class="primary" data-test="collection-confirm" :disabled="busy||itemsLoading||!allEntries.length" @click="showConfirm=true">{{ pending?'核对并重试原提交':'核对全部并确认' }}</button></div>
       </section>
@@ -109,7 +118,7 @@ const filteredReviewEntries=computed(()=>reviewEntries.value.filter(row=>{
 const visibleReviewEntries=computed(()=>filteredReviewEntries.value.slice((page.value-1)*20,page.value*20));
 function invalidateConfirmation(){confirmed.value=false;adsConfirmed.value=false;saveDraft();}
 const selectionError=computed(()=>{for(const entry of collection.value?.batches??[]){const context=contexts[entry.id];if(!context)return '目录摘要尚未读取完成。';const message=validateAdmissionSelection(entriesFor(context));if(message)return `${entry.creatorName}：${message}`;}return '';});
-const stateLabel=(state:AdmissionCollection['state'])=>({draft:'预览草稿 · 未执行',queued:'等待后台执行',running:'后台处理中',completed:'本批处理完成',partial:'部分完成 · 有项目需处理',interrupted:'中断 · 原批次保留'}[state]);
+const stateLabel=(state:AdmissionCollection['state'])=>({draft:'预览草稿 · 未执行',queued:'等待后台执行',running:'后台处理中',completed:'本批执行已结束 · 请查看结果',partial:'部分完成 · 有项目需处理',interrupted:'中断 · 原批次保留'}[state]);
 const batchStateLabel=(state:AdmissionBatch['state'])=>({draft:'待确认',queued:'等待处理',running:'处理中',completed:'完成',needs_review:'需要查看',interrupted:'中断',failed:'失败'}[state]);
 const time=(value:string)=>new Date(value).toLocaleString();
 const storageKey=(id:string)=>`cosgallery:admission:collection:${id}`;
@@ -199,6 +208,21 @@ async function repreviewFiles(){
   try{const result=await api.repreviewAdmissionCollection(id);if(current!==generation||disposed)return;current++;await openCollection(result.id,previous);
     if(current===generation&&!disposed){const priorSelected=new Set(previous.filter(row=>isAdmissionSelected(row.action)).map(row=>`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`));const added=repreviewEntries().filter(row=>isAdmissionSelected(row.action)&&!priorSelected.has(`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`)).length;notice.value=`已重新检查并更新选择：新增选中 ${added} 个，当前 ${selectedCount.value} 个入库、${deferredCount.value} 个暂缓。人工决定和已有广告取消保留；新增或改名目录请调整导入范围。`;await loadRecent();}}
   catch(cause){if(current===generation&&!disposed)error.value=cause instanceof Error?cause.message:'重新检查文件失败';}finally{if(current===generation&&!disposed)busy.value=false;}
+}
+async function continueRemaining(){
+  if(!collection.value||busy.value||active.value||collection.value.state==='draft'||!collection.value.remainingCount)return;
+  const id=collection.value.id;let current=generation;busy.value=true;error.value='';
+  try{const result=await api.previewRemainingAdmissionCollection(id);if(current!==generation||disposed)return;current++;await openCollection(result.id);
+    if(current===generation&&!disposed&&collection.value?.id===result.id){notice.value='已打开剩余项的后续核对草稿。原暂缓选择保留，请核对作品边界后再确认；不会自动执行。';await loadRecent();}}
+  catch(cause){if(current===generation&&!disposed)error.value=cause instanceof Error?cause.message:'剩余目录核对暂不可用';}
+  finally{if(current===generation&&!disposed)busy.value=false;}
+}
+async function cleanupParents(){
+  if(!collection.value||busy.value||active.value||collection.value.state==='draft')return;
+  const current=generation,id=collection.value.id;busy.value=true;error.value='';
+  try{const result=await api.cleanupAdmissionCollectionParents(id);if(current!==generation||disposed)return;collection.value=result;notice.value='本批空目录检查完成，请查看各博主的清理结果；非空目录保持。';await loadRecent();}
+  catch(cause){if(current===generation&&!disposed)error.value=cause instanceof Error?cause.message:'空目录清理失败';}
+  finally{if(current===generation&&!disposed)busy.value=false;}
 }
 function selectSafe(restored?:Set<string>){
   if(locked.value)return;

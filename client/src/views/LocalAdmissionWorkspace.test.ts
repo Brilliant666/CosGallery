@@ -22,6 +22,49 @@ describe('independent multi-creator admission workspace',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();sessionStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
   afterEach(()=>vi.useRealTimers());
+  it('opens remaining deferred work directly as a linked draft, keeping boundary review and manual deferral',async()=>{
+    const done={...collection('completed'),remainingCount:1,totals:{...collection().totals,completed:3,deferred:1}};
+    const next={...collection(),id:'remaining-draft',remainingCount:0,previousCollectionId:done.id,batches:[batch('remaining')]};
+    vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>id===done.id?done:next);
+    vi.mocked(api.previewRemainingAdmissionCollection).mockResolvedValue(next);
+    vi.mocked(api.fetchAdmissionItems).mockImplementation(async id=>({items:id==='remaining'?[{...item('complex','D'),needsBoundaryReview:true,structureWarnings:['两个含媒体分支'],suggestedAction:{key:'complex',action:'defer',reason:'用户暂缓'}}]:[{...item('done'),state:'completed'}],total:1,page:1,pageSize:100}));
+    const {wrapper,router}=await render('?collection=collection-one',false);
+    expect(wrapper.text()).toContain('已入库 3 项 · 待核查 1 项');
+    expect(wrapper.text()).not.toContain('本批处理完成');
+    await wrapper.get('[data-test=collection-remaining]').trigger('click');await flushPromises();
+    expect(api.previewRemainingAdmissionCollection).toHaveBeenCalledExactlyOnceWith(done.id);
+    expect(router.currentRoute.value.query.collection).toBe(next.id);
+    expect(wrapper.text()).toContain('核对作品身份与文件范围');expect(wrapper.text()).toContain('两个含媒体分支');
+    expect(wrapper.get('.review-row').element.hasAttribute('open')).toBe(true);
+    expect(wrapper.get('[data-test=admission-item-complex] select').element.value).toBe('defer');
+    expect(button(wrapper,'查看上次预览')).toBeTruthy();
+    expect(api.fetchAdmissionWorkspace).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('retains original results on a rejected continuation and never falls back to replay',async()=>{
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),remainingCount:1});
+    vi.mocked(api.previewRemainingAdmissionCollection).mockRejectedValue(new RequestError('仍有活动任务，请稍后再核对',409));
+    const {wrapper,router}=await render('?collection=collection-one',false);
+    await wrapper.get('[data-test=collection-remaining]').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query.collection).toBe('collection-one');expect(wrapper.text()).toContain('仍有活动任务');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('cleans only after an explicit result action and renders returned parent outcomes',async()=>{
+    const result={...collection('completed'),remainingCount:0,batches:[{...batch(),parentCleanup:{status:'not_empty' as const,message:'非空父目录保持'}},{...batch('b',88),parentCleanup:{status:'recycled' as const,message:'空父目录已送入Windows回收站'}}]};
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(result);vi.mocked(api.cleanupAdmissionCollectionParents).mockResolvedValue(result);
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.find('[data-test=collection-remaining]').exists()).toBe(false);
+    await button(wrapper,'更新进度').trigger('click');await flushPromises();expect(api.cleanupAdmissionCollectionParents).not.toHaveBeenCalled();
+    await wrapper.get('[data-test=collection-cleanup-parents]').trigger('click');await flushPromises();
+    expect(api.cleanupAdmissionCollectionParents).toHaveBeenCalledExactlyOnceWith('collection-one');
+    expect(wrapper.text()).toContain('博主甲：非空父目录保持');expect(wrapper.text()).toContain('博主乙：空父目录已送入Windows回收站');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it.each(['draft','queued','running'] as const)('does not offer remaining or cleanup writes for %s collections',async state=>{
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(state),remainingCount:2});
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.find('[data-test=collection-remaining]').exists()).toBe(false);expect(wrapper.find('[data-test=collection-cleanup-parents]').exists()).toBe(false);
+    expect(api.previewRemainingAdmissionCollection).not.toHaveBeenCalled();expect(api.cleanupAdmissionCollectionParents).not.toHaveBeenCalled();
+  });
   it('reconciles changed saved ad evidence on status refresh while keeping cancellation and request authority',async()=>{
     const original={...item('a-first'),reviewFingerprint:'same-manifest'};
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});
@@ -172,7 +215,7 @@ describe('independent multi-creator admission workspace',()=>{
     await wrapper.findAll('a').find(link=>link.text()==='查看图集')!.trigger('click');await flushPromises();
     expect(router.currentRoute.value.name).toBe('canonical-work-gallery');wrapper.unmount();
     const returned=await render();expect(returned.router.currentRoute.value.query.collection).toBe('collection-one');
-    expect(returned.wrapper.text()).toContain('本批处理完成');expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+    expect(returned.wrapper.text()).toContain('本批执行已结束');expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
     const reads=vi.mocked(api.fetchAdmissionWorkspace).mock.calls.length;
     await button(returned.wrapper,'新建批次').trigger('click');await flushPromises();
     expect(api.fetchAdmissionWorkspace).toHaveBeenCalledTimes(reads+1);
@@ -295,7 +338,7 @@ describe('independent multi-creator admission workspace',()=>{
     const original=JSON.parse(JSON.stringify(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]));wrapper.unmount();const returned=await render('?collection=collection-one');expect(returned.wrapper.text()).toContain('回执尚未确认');expect(returned.wrapper.get('[data-test=collection-repreview]').attributes('disabled')).toBeDefined();await returned.wrapper.get('[data-test=collection-confirm]').trigger('click');await returned.wrapper.get('[role=dialog] input').setValue(true);await returned.wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();expect(vi.mocked(api.executeAdmissionCollection).mock.calls[1]![1]).toEqual(original);expect(api.executeAdmission).not.toHaveBeenCalled();
   });
   it('polls only lightweight collection state, stops after completion, and never automatically resumes',async()=>{
-    vi.useFakeTimers();vi.mocked(api.fetchAdmissionCollection).mockResolvedValueOnce(collection('running')).mockResolvedValue(collection('completed'));const {wrapper}=await render('?collection=collection-one');await vi.advanceTimersByTimeAsync(2500);await flushPromises();expect(wrapper.text()).toContain('本批处理完成');const calls=vi.mocked(api.fetchAdmissionCollection).mock.calls.length;await vi.advanceTimersByTimeAsync(15000);expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(calls);expect(api.executeAdmission).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+    vi.useFakeTimers();vi.mocked(api.fetchAdmissionCollection).mockResolvedValueOnce(collection('running')).mockResolvedValue(collection('completed'));const {wrapper}=await render('?collection=collection-one');await vi.advanceTimersByTimeAsync(2500);await flushPromises();expect(wrapper.text()).toContain('本批执行已结束');const calls=vi.mocked(api.fetchAdmissionCollection).mock.calls.length;await vi.advanceTimersByTimeAsync(15000);expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(calls);expect(api.executeAdmission).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('retries mixed historical creator policies unchanged, then uses the default only for a new confirmation',async()=>{
     const original={requestKey:'mixed-original',confirmed:true,batches:[{batchId:'a',acceptExistingVersion:false,actions:[{key:'a-first',action:'new',approvedAds:[]},{key:'a-candidate',action:'defer'}]},{batchId:'b',acceptExistingVersion:true,actions:[{key:'b-first',action:'new',approvedAds:[]},{key:'b-complex',action:'defer'}]}]};

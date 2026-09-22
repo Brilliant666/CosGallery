@@ -10,6 +10,7 @@ import { localIngestSettingsService } from './local-ingest-settings-service.js';
 import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/local-ingest-paths.js';
 import { LOCAL_ADMISSION_LOCK_KEY, runAdmissionCollectionExclusive } from './local-admission-lock.js';
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
+import { recycleEmptyAdmissionParent, type AdmissionParentCleanupResult } from './local-admission-parent-cleanup.js';
 
 const ROOT_KEY = 'local-admission.waiting-root.v1';
 const reservedDirectory = (name:string) => /^\.local-(?:admission|review)-/i.test(name);
@@ -35,7 +36,7 @@ export type AdmissionWorkChoice = {workId:number;title:string;catalogNo:string|n
   thumbnailUrl:string|null;primaryLocalWorkId:number|null;localState:string;originalDirectories:string[];sources:Source[]};
 type Batch = {id:string;creator_id:number;input_root:string;source_evidence_id:number|null;state:string;created_at:string;updated_at:string;
   error:string|null;context_json:string;confirmed_json:string|null;owner_pid:number|null;owner_token:string|null};
-type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waitingRoot:string;workFacts:Record<string,string>;sourceFacts:Record<string,string>;previousCollectionId?:string};
+type Context = {galleryRoot:string;creatorDirectory:string;parent:string;waitingRoot:string;workFacts:Record<string,string>;sourceFacts:Record<string,string>;previousCollectionId?:string;remainingFromCollectionId?:string;remainingSourceSignature?:string;parentCleanup?:AdmissionParentCleanupResult};
 type NextAction = {nextAction:'review_files'|'resume_plan'|'prepare_preview'|'none';nextActionReason:string};
 type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTitle:string;group:'A'|'B'|'C'|'D';
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
@@ -131,7 +132,7 @@ export class LocalAdmissionWebService {
         // not offer these parents as pending creators; never traverse or delete
         // the containers, or hide ordinary files, links and unreadable content.
         const children=await fs.readdir(parentPath,{withFileTypes:true});
-        if(children.length>0&&children.every(child=>child.isDirectory()&&!child.isSymbolicLink()&&reservedDirectory(child.name)))continue;
+        if(children.length===0||children.every(child=>child.isDirectory()&&!child.isSymbolicLink()&&reservedDirectory(child.name)))continue;
       }catch(e){reason=message(e);}
       const matchesByCreator=new Map<number,{creatorId:number;creatorName:string;matchedName:string;matchKind:'canonical'|'alias'}>();
       for(const row of names.filter(row=>normalize(String(row.matchedName))===normalize(entry.name))) {
@@ -249,14 +250,18 @@ export class LocalAdmissionWebService {
   private effectiveState(row:Pick<Batch,'state'|'owner_pid'>){return ['queued','running'].includes(row.state)&&!alive(row.owner_pid)?'interrupted':row.state;}
   get(id:string) {
     // No manifest/content reads, hashing or directory traversal on progress polling.
-    const row=this.db.prepare(`SELECT id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,error,owner_pid FROM local_admission_web_batches WHERE id=?`).get(id) as Omit<Batch,'context_json'|'confirmed_json'|'owner_token'>|undefined;
+    const row=this.db.prepare(`SELECT id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,error,owner_pid,context_json FROM local_admission_web_batches WHERE id=?`).get(id) as Omit<Batch,'confirmed_json'|'owner_token'>|undefined;
     if(!row)throw new AdmissionWebError('导入批次不存在',404);
     const counts=this.db.prepare(`SELECT COUNT(*) total,SUM(action NOT IN ('skip','defer')) selected,SUM(action='skip') skipped,SUM(action='defer') deferred
       FROM local_admission_web_items WHERE batch_id=?`).get(id)!;
     const completed=Number(this.db.prepare("SELECT COUNT(*) n FROM archive_local_admission_items WHERE plan_id=? AND state='completed'").get(id)!.n);
     const reconciled=Number(counts.selected)>0&&completed===Number(counts.selected);
+    const cleanup=(JSON.parse(row.context_json) as Context).parentCleanup;
+    const cleanupMessage=cleanup?({recycled:'空博主目录已放入回收站',not_empty:'父目录仍有内容，已保留',not_applicable:'父目录已不存在，无需清理',failed:'空目录清理未完成，已入库作品不受影响'}[cleanup.status]
+      +(cleanup.message?`：${cleanup.message}`:'')+(cleanup.retainedPath?`；保留位置：${cleanup.retainedPath}`:'')):undefined;
     return {id,planId:id,collectionId:this.collectionId(id),creatorId:row.creator_id,creatorName:String(this.db.prepare('SELECT canonical_name FROM archive_catalog_creators WHERE id=?').get(row.creator_id)?.canonical_name??''),
       inputRoot:row.input_root,sourceEvidenceId:row.source_evidence_id,state:reconciled?'completed':this.effectiveState(row),createdAt:row.created_at,updatedAt:row.updated_at,error:reconciled?null:row.error,
+      ...(cleanup?{parentCleanup:{...cleanup,message:cleanupMessage!}}:{}),
       totals:{total:Number(counts.total),selected:Number(counts.selected??0),completed,skipped:Number(counts.skipped??0),deferred:Number(counts.deferred??0)}};
   }
   list(creatorId?:number,page=1) {const where=creatorId?'WHERE creator_id=?':'';const args=creatorId?[creatorId]:[];
@@ -365,7 +370,7 @@ export class LocalAdmissionWebService {
       WHERE c.collection_id=? AND json_extract(b.context_json,'$.previousCollectionId') IS NOT NULL LIMIT 1`).get(id);
     const next=this.db.prepare(`SELECT DISTINCT c.collection_id FROM local_admission_web_collection_batches c
       JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE json_extract(b.context_json,'$.previousCollectionId')=? ORDER BY c.collection_id`).all(id);
-    return {id,state,createdAt:row.created_at,updatedAt:row.updated_at,error:state==='completed'?null:row.error,totals,batches,
+    return {id,state,createdAt:row.created_at,updatedAt:row.updated_at,error:state==='completed'?null:row.error,totals,batches,remainingCount:row.has_confirmation?this.remainingItems(id).length:0,
       previousCollectionId:previous?String(previous.previous_id):null,nextCollectionIds:next.map(child=>String(child.collection_id))};
   }
   collections(page=1) {
@@ -401,12 +406,20 @@ export class LocalAdmissionWebService {
     for(const scope of scopes)prepared.push(await this.preparePreview(scope));
     return prepared;
   }
-  private publishCollectionPreview(prepared:PreparedPreview[],previousId?:string) {
+  private publishCollectionPreview(prepared:PreparedPreview[],previousId?:string,remainingSignature?:string) {
     const id=randomUUID(),stamp=now();this.db.exec('BEGIN IMMEDIATE');
     try{
       // Another request may confirm while the selected manifests are read.
       // Recheck under the same transaction that publishes the new draft.
-      if(previousId)this.assertDraftCollection(previousId);
+      if(previousId){
+        if(remainingSignature===undefined)this.assertDraftCollection(previousId);
+        else {
+          this.assertRemainingIdle(previousId);
+          const existing=this.remainingDraft(previousId);
+          if(existing){this.db.exec('COMMIT');return this.collection(existing);}
+          if(hash(this.remainingItems(previousId))!==remainingSignature)throw new AdmissionWebError('剩余范围已变化，请刷新后重新核对');
+        }
+      }
       this.db.prepare("INSERT INTO local_admission_web_collections(id,state,created_at,updated_at) VALUES(?,'draft',?,?)").run(id,stamp,stamp);
       for(const [position,child] of prepared.entries()){
         // Draft lineage is published with its children; original confirmations stay immutable.
@@ -423,7 +436,104 @@ export class LocalAdmissionWebService {
   async repreviewCollection(id:string,raw:unknown={}) {
     const request=collectionRepreviewSchema.parse(raw);this.assertDraftCollection(id);
     const prepared=await this.prepareCollectionPreview(request.scopes?{scopes:request.scopes}:this.collectionScope(id));
+    const lineage=this.db.prepare(`SELECT json_extract(b.context_json,'$.remainingFromCollectionId') origin,json_extract(b.context_json,'$.remainingSourceSignature') signature FROM local_admission_web_collection_batches c
+      JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=? AND json_extract(b.context_json,'$.remainingFromCollectionId') IS NOT NULL LIMIT 1`).get(id);
+    if(lineage)for(const child of prepared){child.context.remainingFromCollectionId=String(lineage.origin);child.context.remainingSourceSignature=String(lineage.signature);}
     return this.publishCollectionPreview(prepared,id);
+  }
+  private remainingItems(id:string) {
+    // DB-only projection: progress reads never re-inventory files or parse full manifests.
+    const rows=this.db.prepare(`SELECT b.id batch_id,b.creator_id,b.input_root,b.source_evidence_id,json_extract(b.context_json,'$.parent') parent,i.item_key,
+      json_extract(i.summary_json,'$.sourceRelativePath') relative,json_extract(i.summary_json,'$.targetPath') target
+      FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id
+      JOIN local_admission_web_items i ON i.batch_id=b.id
+      WHERE c.collection_id=? AND i.action='defer'
+        AND NOT EXISTS(SELECT 1 FROM archive_local_admission_items a WHERE a.plan_id=b.id AND a.item_key=i.item_key)
+      ORDER BY c.position,i.position`).all(id);
+    if(!rows.length)return [];
+    const reserved=new Set<string>();
+    const key=(root:string,relative:string)=>{const resolved=path.resolve(root,relative);return process.platform==='win32'?resolved.toLowerCase():resolved;};
+    const laterLocalTargets=new Set(this.db.prepare(`SELECT l.absolute_path FROM archive_catalog_local_works l
+      WHERE l.is_active=1 AND l.work_id IS NOT NULL AND julianday(l.created_at)>julianday((SELECT created_at FROM local_admission_web_collections WHERE id=?))`).all(id)
+      .map(row=>key(String(row.absolute_path),'.')));
+    for(const root of new Set(rows.map(row=>String(row.input_root)))){
+      for(const other of this.db.prepare(`SELECT b.input_root,json_extract(i.summary_json,'$.sourceRelativePath') relative
+        FROM local_admission_web_batches b JOIN local_admission_web_items i ON i.batch_id=b.id
+        WHERE b.confirmed_json IS NOT NULL AND i.action<>'defer' AND lower(b.input_root)=lower(?)`).all(root))reserved.add(key(String(other.input_root),String(other.relative)));
+      // CLI plans may exist without any web batch. Only project exact paths from the saved plan.
+      for(const other of this.db.prepare(`SELECT json_extract(p.payload_json,'$.inputRoot') input_root,json_extract(j.value,'$.sourceRelativePath') relative
+        FROM archive_local_admission_plans p,json_each(p.payload_json,'$.items') j
+        WHERE NOT EXISTS(SELECT 1 FROM local_admission_web_batches b WHERE b.id=p.plan_id)
+          AND lower(json_extract(p.payload_json,'$.inputRoot'))=lower(?)`).all(root))reserved.add(key(String(other.input_root),String(other.relative)));
+    }
+    return rows.map(row=>({batchId:String(row.batch_id),creatorId:Number(row.creator_id),inputRoot:String(row.input_root),sourceEvidenceId:row.source_evidence_id==null?undefined:Number(row.source_evidence_id),
+      context:{parent:String(row.parent)},summary:{key:String(row.item_key),sourceRelativePath:String(row.relative),targetPath:String(row.target??'')}}))
+      .filter(row=>!reserved.has(key(row.inputRoot,row.summary.sourceRelativePath))&&(!row.summary.targetPath||!laterLocalTargets.has(key(row.summary.targetPath,'.'))));
+  }
+  private assertRemainingIdle(id:string) {
+    const row=this.collectionRow(id);
+    if(!row.has_confirmation)throw new AdmissionWebError('未确认批次请在原集中核对页面继续');
+    if(alive(row.owner_pid))throw new AdmissionWebError('集中导入仍有活动执行所有者');
+    for(const child of this.db.prepare(`SELECT b.owner_pid FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=?`).all(id))
+      if(alive(Number(child.owner_pid)))throw new AdmissionWebError('子批次仍有活动执行所有者');
+    this.assertIdle();
+  }
+  private remainingDraft(id:string):string|null {
+    const signature=this.remainingSignature(id);
+    const candidates=this.db.prepare(`SELECT DISTINCT c.id,c.created_at FROM local_admission_web_collections c
+      JOIN local_admission_web_collection_batches cb ON cb.collection_id=c.id JOIN local_admission_web_batches b ON b.id=cb.batch_id
+      WHERE c.state='draft' AND c.confirmed_json IS NULL AND c.owner_pid IS NULL
+        AND json_extract(b.context_json,'$.remainingFromCollectionId')=? AND json_extract(b.context_json,'$.remainingSourceSignature')=?
+        AND NOT EXISTS(SELECT 1 FROM local_admission_web_batches next WHERE json_extract(next.context_json,'$.previousCollectionId')=c.id)
+      ORDER BY c.created_at DESC,c.id DESC`).all(id,signature);
+    for(const candidate of candidates){try{this.assertDraftCollection(String(candidate.id));return String(candidate.id);}catch{/* a child has already been confirmed */}}
+    return null;
+  }
+  private remainingSignature(id:string) {return hash(this.remainingItems(id).map(row=>[row.batchId,row.summary.key,row.inputRoot,row.summary.sourceRelativePath]));}
+  async remainingCollection(id:string) {
+    this.assertRemainingIdle(id);
+    const remaining=this.remainingItems(id);if(!remaining.length)throw new AdmissionWebError('没有尚未执行的暂缓项；已开始项请继续原确认计划');
+    const sourceSignature=hash(remaining.map(row=>[row.batchId,row.summary.key,row.inputRoot,row.summary.sourceRelativePath]));
+    const existing=this.remainingDraft(id);if(existing)return this.collection(existing);
+    const scopes=new Map<string,z.infer<typeof webPreviewSchema>>();
+    for(const item of remaining){
+      this.assertCreatorIdle(item.creatorId);
+      if(!same(path.join(this.settings().waitingRoot,item.context.parent),item.inputRoot))throw new AdmissionWebError('等待区设置已改变，请从选择范围核对原目录，不能自动改用新位置');
+      if(!scopes.has(item.batchId))scopes.set(item.batchId,{creatorId:item.creatorId,parent:item.context.parent,directories:[],sourceEvidenceId:item.sourceEvidenceId,acceptExistingVersion:true});
+      scopes.get(item.batchId)!.directories.push(item.summary.sourceRelativePath);
+    }
+    const prepared=await this.prepareCollectionPreview({scopes:[...scopes.values()]});
+    const confirmation=JSON.parse(String(this.db.prepare('SELECT confirmed_json FROM local_admission_web_collections WHERE id=?').get(id)!.confirmed_json)) as z.infer<typeof collectionExecuteSchema>;
+    for(const child of prepared){
+      child.context.remainingFromCollectionId=id;
+      child.context.remainingSourceSignature=sourceSignature;
+      for(const item of child.items){
+        const old=remaining.find(row=>row.creatorId===child.scope.creatorId&&row.summary.sourceRelativePath===item.summary.sourceRelativePath);
+        const decision=confirmation.batches?.find(batch=>batch.batchId===old?.batchId)?.actions.find(action=>action.key===old?.summary.key);
+        if(decision?.reason)item.summary.suggestedAction={key:item.summary.key,action:'defer',reason:decision.reason};
+      }
+    }
+    return this.publishCollectionPreview(prepared,id,hash(remaining));
+  }
+  private async cleanupParent(batchId:string,assertIdle:()=>void) {
+    const batch=this.row(batchId),context=JSON.parse(batch.context_json) as Context;
+    if(this.get(batchId).state!=='completed'||this.get(batchId).totals.completed===0)return;
+    const result=await recycleEmptyAdmissionParent({waitingRoot:context.waitingRoot,parentPath:batch.input_root,assertIdle});
+    // Cleanup has a separate outcome, never rewrites the confirmed plan or a completed item.
+    if(result.status==='not_applicable'&&context.parentCleanup?.status==='recycled')return;
+    this.db.prepare('UPDATE local_admission_web_batches SET context_json=? WHERE id=?').run(JSON.stringify({...context,parentCleanup:result}),batchId);
+  }
+  private async finalizeParent(batchId:string,assertIdle:()=>void) {
+    try{await this.cleanupParent(batchId,assertIdle);}
+    catch(error){console.error('[local-admission-web] empty parent cleanup record failed; admission remains completed:',message(error));}
+  }
+  async cleanupEmptyParents(id:string) {
+    this.assertRemainingIdle(id);
+    await runAdmissionCollectionExclusive(this.db,async()=>{
+      for(const child of this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=? ORDER BY position').all(id))
+        await this.cleanupParent(String(child.batch_id),()=>{this.assertIdle(undefined,undefined,true);this.assertCreatorIdle(this.row(String(child.batch_id)).creator_id);});
+    });
+    return this.collection(id);
   }
   private collectionRequest(key:string,id:string,kind:string,payload:unknown) {
     const row=this.db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE request_key=?').get(key);
@@ -504,6 +614,7 @@ export class LocalAdmissionWebService {
               await strictDirectory(plan.inputRoot);await strictDirectory(plan.galleryRoot);this.creator(plan.creatorId);this.assertCreatorIdle(plan.creatorId);
               await this.admission.apply(plan);
               this.db.prepare("UPDATE local_admission_web_batches SET state='completed',error=NULL,updated_at=? WHERE id=? AND owner_token=?").run(now(),childId,token);
+              await this.finalizeParent(childId,()=>{this.assertIdle(undefined,id,true);this.assertCreatorIdle(plan.creatorId);});
             }catch(e){
               const checkpoint=this.db.prepare('SELECT state FROM archive_local_admission_items WHERE plan_id=? AND last_error IS NOT NULL ORDER BY rowid LIMIT 1').get(childId);
               this.db.prepare('UPDATE local_admission_web_batches SET state=?,error=?,updated_at=? WHERE id=? AND owner_token=?')
@@ -522,11 +633,11 @@ export class LocalAdmissionWebService {
     });
     this.tasks.set(key,task);void task.catch(error=>console.error('[local-admission-web] collection dispatch record failed:',message(error)));
   }
-  private assertIdle(exceptId?:string,exceptCollection?:string) {
+  private assertIdle(exceptId?:string,exceptCollection?:string,insideOwnedLock=false) {
     for(const row of this.db.prepare("SELECT id,owner_pid FROM local_admission_web_collections WHERE state IN ('queued','running')").all()){
       if(row.id!==exceptCollection&&alive(Number(row.owner_pid)))throw new AdmissionWebError('已有集中导入正在执行，请等待完成');}
     const operation=this.db.prepare('SELECT value FROM app_settings WHERE key=?').get(LOCAL_ADMISSION_LOCK_KEY);
-    if(operation){
+    if(operation&&!insideOwnedLock){
       let owner:{pid:number;token:string;kind:string};
       try{owner=JSON.parse(String(operation.value));}catch{throw new AdmissionWebError('现有执行所有者信息无法核对，请先处理原任务');}
       if(!Number.isSafeInteger(owner.pid)||owner.pid<=0||!owner.token||!owner.kind)throw new AdmissionWebError('现有执行所有者信息无法核对，请先处理原任务');
@@ -648,7 +759,9 @@ export class LocalAdmissionWebService {
     const task=new Promise<void>(resolve=>setImmediate(resolve)).then(async()=>{
       this.db.prepare("UPDATE local_admission_web_batches SET state='running',updated_at=? WHERE id=? AND owner_token=?").run(now(),id,token);
       try {await strictDirectory(plan.inputRoot);await strictDirectory(plan.galleryRoot);this.assertCreatorIdle(plan.creatorId);
-        await this.admission.apply(plan);this.db.prepare("UPDATE local_admission_web_batches SET state='completed',error=NULL,updated_at=? WHERE id=? AND owner_token=?").run(now(),id,token);}
+        await this.admission.apply(plan);this.db.prepare("UPDATE local_admission_web_batches SET state='completed',error=NULL,updated_at=? WHERE id=? AND owner_token=?").run(now(),id,token);
+        try{this.assertIdle(id);await runAdmissionCollectionExclusive(this.db,()=>this.finalizeParent(id,()=>{this.assertIdle(id,undefined,true);this.assertCreatorIdle(plan.creatorId);}));}
+        catch(error){console.error('[local-admission-web] empty parent finalization deferred; admission remains completed:',message(error));}}
       catch(e){
         const checkpoint=this.db.prepare("SELECT state FROM archive_local_admission_items WHERE plan_id=? AND last_error IS NOT NULL ORDER BY rowid LIMIT 1").get(id);
         // File/preview uncertainty needs review; a post-index failure can continue

@@ -5,6 +5,15 @@ const fetchMock=vi.fn<typeof fetch>();
 describe('local admission and review managed HTTP contracts',()=>{
   beforeEach(()=>{vi.stubGlobal('fetch',fetchMock);fetchMock.mockReset().mockResolvedValue(new Response('{}',{headers:{'content-type':'application/json'}}));});
   afterEach(()=>vi.unstubAllGlobals());
+  it.each([
+    [admission.previewRemainingAdmissionCollection,'remaining-preview'],
+    [admission.cleanupAdmissionCollectionParents,'cleanup-empty-parents'],
+  ] as const)('posts a scoped managed action without inventing execution or filesystem input (%s)',async(action,suffix)=>{
+    await action('集合 / 原批');const [url,options]=fetchMock.mock.calls[0]!;
+    expect(url).toBe(`/api/admin/local-admission/collections/${encodeURIComponent('集合 / 原批')}/${suffix}`);
+    expect(options?.method).toBe('POST');expect(JSON.parse(String(options?.body))).toEqual({});
+    expect(new Headers(options?.headers).get('x-foldergram-intent')).toBe('1');
+  });
   it('encodes a selected single parent directory rather than constructing filesystem shell commands',async()=>{await admission.fetchAdmissionDirectories(17,'中文 & 空格');const url=new URL(String(fetchMock.mock.calls[0]?.[0]),'http://localhost');expect(url.pathname).toBe('/api/admin/local-admission/directories');expect(url.searchParams.get('creatorId')).toBe('17');expect(url.searchParams.get('parent')).toBe('中文 & 空格');expect(fetchMock.mock.calls[0]?.[1]?.method).toBeUndefined();});
   it('posts the original explicit execution request with managed intent and same-origin auth',async()=>{const input={requestKey:'same-request',confirmed:true as const,acceptExistingVersion:true,actions:[{key:'中文 item',action:'existing' as const,workId:77,acceptSourceIds:[89],approvedAds:['确认广告.txt']}],adsConfirmed:true as const};await admission.executeAdmission('same-batch',input);const options=fetchMock.mock.calls[0]?.[1];expect(options?.method).toBe('POST');expect(options?.credentials).toBe('same-origin');expect(new Headers(options?.headers).get('x-foldergram-intent')).toBe('1');expect(JSON.parse(String(options?.body))).toEqual(input);});
   it('keeps work search scoped to one creator and a bounded page',async()=>{await admission.fetchAdmissionWorks(17,'NO.001 & 同名',2);const url=new URL(String(fetchMock.mock.calls[0]?.[0]),'http://localhost');expect(url.searchParams.get('q')).toBe('NO.001 & 同名');expect(url.searchParams.get('creatorId')).toBe('17');expect(url.searchParams.get('page')).toBe('2');expect(url.searchParams.get('pageSize')).toBe('20');});
