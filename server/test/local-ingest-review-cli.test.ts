@@ -53,7 +53,9 @@ describe('Stage3 review CLI import and read-only boundary', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/job.*not found/i);
     expect(result.stdout).not.toMatch(/Applying:|migration|validation stage/);
-    expect(await fs.readFile(databasePath)).toEqual(before);
+    // Compare all bytes natively: generic deep equality enumerates this large
+    // SQLite Buffer and can exhaust the test deadline after the CLI has exited.
+    expect((await fs.readFile(databasePath)).equals(before), 'CLI preview must preserve every database byte').toBe(true);
     expect((await fs.readdir(f.root)).sort()).toEqual(['db', 'request.json']);
     expect(await fs.readdir(f.env.DB_DIR)).toEqual(['gallery.sqlite']);
   });
