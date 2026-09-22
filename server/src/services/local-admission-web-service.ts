@@ -11,6 +11,7 @@ import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/lo
 import { LOCAL_ADMISSION_LOCK_KEY, runAdmissionCollectionExclusive } from './local-admission-lock.js';
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { recycleEmptyAdmissionParent, type AdmissionParentCleanupResult } from './local-admission-parent-cleanup.js';
+import { laterAdmissionCompletions, admissionItemIdentity, assertNoLaterAdmissionCompletion, type CurrentAdmissionDisposition } from './local-admission-later-completion.js';
 
 const ROOT_KEY = 'local-admission.waiting-root.v1';
 const reservedDirectory = (name:string) => /^\.local-(?:admission|review)-/i.test(name);
@@ -261,8 +262,21 @@ export class LocalAdmissionWebService {
     if(!row)throw new AdmissionWebError('导入批次不存在',404);return row;}
   private collectionId(batchId:string):string|null {return this.db.prepare('SELECT collection_id FROM local_admission_web_collection_batches WHERE batch_id=?').get(batchId)?.collection_id as string|undefined??null;}
   private assertStandalone(batchId:string) {if(this.collectionId(batchId))throw new AdmissionWebError('此批次属于集中导入，请从集中导入页面确认或继续整个集合');}
+  private assertNotCompletedLater(batchId:string,keys?:string[]) {
+    try{assertNoLaterAdmissionCompletion(this.db,batchId,keys);}catch(error){throw new AdmissionWebError(message(error));}
+  }
+  private assertCollectionScopeNotCompletedLater(id:string,scopes:{creatorId:number;parent:string;directories:string[]}[]) {
+    const batches=this.db.prepare(`SELECT b.id,b.creator_id,json_extract(b.context_json,'$.parent') parent
+      FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=?`).all(id);
+    for(const batch of batches){const selected=scopes.find(scope=>scope.creatorId===batch.creator_id&&scope.parent===batch.parent);if(!selected)continue;
+      const keys=this.db.prepare("SELECT item_key,json_extract(summary_json,'$.sourceRelativePath') relative FROM local_admission_web_items WHERE batch_id=?").all(batch.id)
+        .filter(item=>selected.directories.some(name=>same(path.join(String(batch.parent),name),path.join(String(batch.parent),String(item.relative)))))
+        .map(item=>String(item.item_key));
+      this.assertNotCompletedLater(String(batch.id),keys);
+    }
+  }
   private effectiveState(row:Pick<Batch,'state'|'owner_pid'>){return ['queued','running'].includes(row.state)&&!alive(row.owner_pid)?'interrupted':row.state;}
-  get(id:string) {
+  get(id:string,later=laterAdmissionCompletions(this.db,[id])) {
     // No manifest/content reads, hashing or directory traversal on progress polling.
     const row=this.db.prepare(`SELECT id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,error,owner_pid,context_json FROM local_admission_web_batches WHERE id=?`).get(id) as Omit<Batch,'confirmed_json'|'owner_token'>|undefined;
     if(!row)throw new AdmissionWebError('导入批次不存在',404);
@@ -270,17 +284,24 @@ export class LocalAdmissionWebService {
       FROM local_admission_web_items WHERE batch_id=?`).get(id)!;
     const completed=Number(this.db.prepare("SELECT COUNT(*) n FROM archive_local_admission_items WHERE plan_id=? AND state='completed'").get(id)!.n);
     const reconciled=Number(counts.selected)>0&&completed===Number(counts.selected);
+    const dispositions=this.db.prepare('SELECT item_key,action FROM local_admission_web_items WHERE batch_id=?').all(id)
+      .filter(item=>item.action!=='skip').map(item=>later.get(admissionItemIdentity(id,String(item.item_key))));
+    const completedLater=dispositions.filter(item=>item?.status==='completed_later').length;
+    const unresolved=dispositions.filter(item=>item?.status==='unresolved').length;
     const cleanup=(JSON.parse(row.context_json) as Context).parentCleanup;
     const cleanupMessage=cleanup?({recycled:'空博主目录已放入回收站',not_empty:'父目录仍有内容，已保留',not_applicable:'父目录已不存在，无需清理',failed:'空目录清理未完成，已入库作品不受影响'}[cleanup.status]
       +(cleanup.message?`：${cleanup.message}`:'')+(cleanup.retainedPath?`；保留位置：${cleanup.retainedPath}`:'')):undefined;
     return {id,planId:id,collectionId:this.collectionId(id),creatorId:row.creator_id,creatorName:String(this.db.prepare('SELECT canonical_name FROM archive_catalog_creators WHERE id=?').get(row.creator_id)?.canonical_name??''),
       inputRoot:row.input_root,sourceEvidenceId:row.source_evidence_id,state:reconciled?'completed':this.effectiveState(row),createdAt:row.created_at,updatedAt:row.updated_at,error:reconciled?null:row.error,
       ...(cleanup?{parentCleanup:{...cleanup,message:cleanupMessage!}}:{}),
+      currentTotals:{completedLater,pending:Math.max(0,Number(counts.total)-Number(counts.skipped??0)-completed-completedLater),unresolved},
       totals:{total:Number(counts.total),selected:Number(counts.selected??0),completed,skipped:Number(counts.skipped??0),deferred:Number(counts.deferred??0)}};
   }
   list(creatorId?:number,page=1) {const where=creatorId?'WHERE creator_id=?':'';const args=creatorId?[creatorId]:[];
     const total=Number(this.db.prepare(`SELECT COUNT(*) n FROM local_admission_web_batches ${where}`).get(...args)!.n);
-    return {page,pageSize:30,total,items:this.db.prepare(`SELECT id FROM local_admission_web_batches ${where} ORDER BY created_at DESC,id DESC LIMIT 30 OFFSET ?`).all(...args,(page-1)*30).map(r=>this.get(String(r.id)))};}
+    const ids=this.db.prepare(`SELECT id FROM local_admission_web_batches ${where} ORDER BY created_at DESC,id DESC LIMIT 30 OFFSET ?`).all(...args,(page-1)*30).map(row=>String(row.id));
+    const later=laterAdmissionCompletions(this.db,ids);
+    return {page,pageSize:30,total,items:ids.map(id=>this.get(id,later))};}
   private scopeReviewPaths(batchId:string):Set<string> {
     const batch=this.db.prepare(`SELECT creator_id,json_extract(context_json,'$.parent') parent FROM local_admission_web_batches WHERE id=?`).get(batchId)!;
     // Historical system defaults were stored as ordinary suggested deferrals. Only
@@ -299,7 +320,8 @@ export class LocalAdmissionWebService {
       .map(row=>String(row.relative)));
   }
   items(id:string,page=1,pageSize=24) {
-    const batch=this.get(id);page=Math.max(1,page);pageSize=Math.min(100,Math.max(1,pageSize));
+    const later=laterAdmissionCompletions(this.db,[id]);
+    const batch=this.get(id,later);page=Math.max(1,page);pageSize=Math.min(100,Math.max(1,pageSize));
     const scopeReview=batch.state==='draft'?this.scopeReviewPaths(id):new Set<string>();
     let blocked:string|null=null;
     try{this.assertIdle();this.creator(batch.creatorId);this.assertCreatorIdle(batch.creatorId);}catch(error){blocked=message(error);}
@@ -319,7 +341,10 @@ export class LocalAdmissionWebService {
       // to the manifest, choices, confirmed payload or execution checkpoints.
       if(r.legacy_preview_json){summary.ads=advertisementCandidates((JSON.parse(String(r.legacy_preview_json)) as PreviewItem).manifest);summary.advertisementRulesVersion=advertisementRulesVersion;}
       const state=r.state??(batch.state==='draft'?'preview':['skip','defer'].includes(String(r.action))?r.action:'not_started');
+      const currentDisposition=later.get(admissionItemIdentity(id,String(r.item_key)));
       return {...summary,action:String(r.action),state,executionState:r.state??null,...this.itemNextAction(batch,r,blocked),
+        ...(currentDisposition?{currentDisposition}:{}),
+        ...(currentDisposition?.status==='completed_later'?{nextAction:'none' as const,nextActionReason:'历史批次未完成；本项已在后续批次完成，请查看后续结果。'}:{}),
         lastError:r.last_error??null,workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
   }
   private itemNextAction(batch:ReturnType<LocalAdmissionWebService['get']>,item:Record<string,unknown>,blocked:string|null):NextAction {
@@ -350,6 +375,7 @@ export class LocalAdmissionWebService {
     const items=this.db.prepare(`SELECT x.item_key,x.summary_json,x.action,i.state FROM local_admission_web_items x LEFT JOIN archive_local_admission_items i
       ON i.plan_id=x.batch_id AND i.item_key=x.item_key WHERE x.batch_id=? ORDER BY position`).all(id);
     const selected=items.filter(r=>keys?keys.includes(String(r.item_key)):r.action==='defer');
+    this.assertNotCompletedLater(id,selected.map(row=>String(row.item_key)));
     if(!selected.length||selected.some(r=>r.state))throw new AdmissionWebError('已开始移动的作品只能继续原计划；请选择尚未执行的项目重新预览');
     if(keys&&selected.length!==new Set(keys).size)throw new AdmissionWebError('选择项不属于本批次');
     const next=await this.preview({creatorId:batch.creator_id,parent:context.parent,directories:selected.map(r=>(JSON.parse(String(r.summary_json)) as Summary).sourceRelativePath),
@@ -389,11 +415,14 @@ export class LocalAdmissionWebService {
       FROM local_admission_web_collections WHERE id=?`).get(id) as (Omit<Collection,'confirmed_json'>&{has_confirmation:number})|undefined;
     if(!row)throw new AdmissionWebError('集中导入不存在',404);return row;
   }
-  collection(id:string) {
+  collection(id:string,completedLater?:Map<string,CurrentAdmissionDisposition>) {
     const row=this.collectionRow(id);
     const children=this.db.prepare(`SELECT b.id,json_extract(b.context_json,'$.parent') parent FROM local_admission_web_collection_batches c
       JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=? ORDER BY c.position`).all(id);
-    const batches=children.map(child=>({...this.get(String(child.id)),parent:String(child.parent)}));
+    const later=completedLater??laterAdmissionCompletions(this.db,children.map(child=>String(child.id)));
+    const batches=children.map(child=>({...this.get(String(child.id),later),parent:String(child.parent)}));
+    const currentTotals={completedLater:0,pending:0,unresolved:0};
+    for(const child of batches)for(const key of ['completedLater','pending','unresolved'] as const)currentTotals[key]+=child.currentTotals[key];
     const totals={creators:batches.length,total:0,selected:0,completed:0,skipped:0,deferred:0,failedCreators:0};
     for(const child of batches){for(const key of ['total','selected','completed','skipped','deferred'] as const)totals[key]+=child.totals[key];
       if(['needs_review','failed','interrupted'].includes(child.state))totals.failedCreators++;}
@@ -406,14 +435,16 @@ export class LocalAdmissionWebService {
     const refresh=this.db.prepare(`SELECT json_extract(b.context_json,'$.directoryRefresh') report
       FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id
       WHERE c.collection_id=? AND json_extract(b.context_json,'$.directoryRefresh') IS NOT NULL LIMIT 1`).get(id);
-    return {id,state,createdAt:row.created_at,updatedAt:row.updated_at,error:state==='completed'?null:row.error,totals,batches,remainingCount:row.has_confirmation?this.remainingItems(id).length:0,
+    return {id,state,createdAt:row.created_at,updatedAt:row.updated_at,error:state==='completed'?null:row.error,totals,currentTotals,batches,remainingCount:row.has_confirmation?this.remainingItems(id,later).length:0,
       ...(refresh?{directoryRefresh:JSON.parse(String(refresh.report)) as DirectoryRefresh}:{}),
       previousCollectionId:previous?String(previous.previous_id):null,nextCollectionIds:next.map(child=>String(child.collection_id))};
   }
   collections(page=1) {
     page=Math.max(1,page);const pageSize=20,total=Number(this.db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n);
-    return {page,pageSize,total,items:this.db.prepare('SELECT id FROM local_admission_web_collections ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?')
-      .all(pageSize,(page-1)*pageSize).map(row=>this.collection(String(row.id)))};
+    const ids=this.db.prepare('SELECT id FROM local_admission_web_collections ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?').all(pageSize,(page-1)*pageSize).map(row=>String(row.id));
+    const batchIds=this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id IN (SELECT value FROM json_each(?))').all(JSON.stringify(ids)).map(row=>String(row.batch_id));
+    const later=laterAdmissionCompletions(this.db,batchIds);
+    return {page,pageSize,total,items:ids.map(id=>this.collection(id,later))};
   }
   collectionScope(id:string) {
     this.collectionRow(id);
@@ -450,6 +481,7 @@ export class LocalAdmissionWebService {
       // Another request may confirm while the selected manifests are read.
       // Recheck under the same transaction that publishes the new draft.
       if(previousId){
+        this.assertCollectionScopeNotCompletedLater(previousId,prepared.map(child=>child.scope));
         if(remainingSignature===undefined)this.assertDraftCollection(previousId);
         else {
           this.assertRemainingIdle(previousId);
@@ -473,6 +505,7 @@ export class LocalAdmissionWebService {
   }
   async repreviewCollection(id:string,raw:unknown={}) {
     const request=collectionRepreviewSchema.parse(raw);this.assertDraftCollection(id);
+    if(!request.refreshDirectories)this.assertCollectionScopeNotCompletedLater(id,request.scopes??this.collectionScope(id).scopes);
     const prepared=request.refreshDirectories?await this.refreshCollectionDirectories(id):await this.prepareCollectionPreview(request.scopes?{scopes:request.scopes}:this.collectionScope(id));
     const lineage=this.db.prepare(`SELECT json_extract(b.context_json,'$.remainingFromCollectionId') origin,json_extract(b.context_json,'$.remainingSourceSignature') signature FROM local_admission_web_collection_batches c
       JOIN local_admission_web_batches b ON b.id=c.batch_id WHERE c.collection_id=? AND json_extract(b.context_json,'$.remainingFromCollectionId') IS NOT NULL LIMIT 1`).get(id);
@@ -493,11 +526,17 @@ export class LocalAdmissionWebService {
       const inputRoot=path.join(this.settings().waitingRoot,scope.parent);
       if(!same(inputRoot,String(old.input_root))||!same(this.settings().waitingRoot,context.waitingRoot))
         throw new AdmissionWebError('等待区设置已改变，请从选择范围核对原目录，不能自动改用新位置');
+      const later=laterAdmissionCompletions(this.db,[String(old.id)]);
+      const covered=new Set(this.db.prepare("SELECT item_key,json_extract(summary_json,'$.sourceRelativePath') relative FROM local_admission_web_items WHERE batch_id=?").all(old.id)
+        .filter(row=>later.get(admissionItemIdentity(String(old.id),String(row.item_key)))?.status==='completed_later').map(row=>normalize(String(row.relative))));
+      if(scope.directories.every(name=>covered.has(normalize(name)))){
+        report.warnings.push(`${scope.parent}：原范围已在后续批次完成，未重新读取或加入本次核对。`);continue;
+      }
       await this.validateRoot();await strictDirectory(inputRoot);await assertPathInsideLocalIngestRoot(context.waitingRoot,inputRoot,{directChild:true});
       const entries=await this.siblingEntries(inputRoot),byName=new Map(entries.map(entry=>[normalize(entry.name),entry]));
       const selected=new Set(scope.directories.map(normalize));
       const known=new Set(context.knownSiblingDirectories?.map(normalize)??[]);
-      const retained=scope.directories.filter(name=>byName.has(normalize(name)));
+      const retained=scope.directories.filter(name=>byName.has(normalize(name))&&!covered.has(normalize(name)));
       const reserved=new Set<string>();
       for(const row of this.db.prepare(`SELECT json_extract(i.summary_json,'$.sourceRelativePath') relative
         FROM local_admission_web_batches b JOIN local_admission_web_items i ON i.batch_id=b.id
@@ -526,25 +565,33 @@ export class LocalAdmissionWebService {
     prepared[0]!.context.directoryRefresh=report;
     return prepared;
   }
-  private remainingItems(id:string) {
+  private remainingItems(id:string,completedLater?:Map<string,CurrentAdmissionDisposition>) {
     // DB-only projection: progress reads never re-inventory files or parse full manifests.
+    const ids=this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=?').all(id).map(row=>String(row.batch_id));
+    const later=completedLater??laterAdmissionCompletions(this.db,ids),partiallyCovered=[...later].some(([key,value])=>value.status==='completed_later'&&ids.includes(JSON.parse(key)[0]));
     const rows=this.db.prepare(`SELECT b.id batch_id,b.creator_id,b.input_root,b.source_evidence_id,json_extract(b.context_json,'$.parent') parent,i.item_key,
       json_extract(i.summary_json,'$.sourceRelativePath') relative,json_extract(i.summary_json,'$.targetPath') target
       FROM local_admission_web_collection_batches c JOIN local_admission_web_batches b ON b.id=c.batch_id
       JOIN local_admission_web_items i ON i.batch_id=b.id
-      WHERE c.collection_id=? AND i.action='defer'
-        AND NOT EXISTS(SELECT 1 FROM archive_local_admission_items a WHERE a.plan_id=b.id AND a.item_key=i.item_key)
-      ORDER BY c.position,i.position`).all(id);
+      WHERE c.collection_id=? AND i.action<>'skip'
+        AND (i.action='defer' AND NOT EXISTS(SELECT 1 FROM archive_local_admission_items a WHERE a.plan_id=b.id AND a.item_key=i.item_key)
+          OR ? AND EXISTS(SELECT 1 FROM archive_local_admission_items a WHERE a.plan_id=b.id AND a.item_key=i.item_key
+            AND a.state='planned' AND a.work_id IS NULL AND a.local_work_id IS NULL))
+      ORDER BY c.position,i.position`).all(id,partiallyCovered?1:0);
     if(!rows.length)return [];
     const reserved=new Set<string>();
     const key=(root:string,relative:string)=>{const resolved=path.resolve(root,relative);return process.platform==='win32'?resolved.toLowerCase():resolved;};
+    // Retain the original "target already registered" safeguard, but scope it to
+    // these exact destinations instead of reading every later LocalWork.
     const laterLocalTargets=new Set(this.db.prepare(`SELECT l.absolute_path FROM archive_catalog_local_works l
-      WHERE l.is_active=1 AND l.work_id IS NOT NULL AND julianday(l.created_at)>julianday((SELECT created_at FROM local_admission_web_collections WHERE id=?))`).all(id)
-      .map(row=>key(String(row.absolute_path),'.')));
+      WHERE l.absolute_path IN (SELECT value FROM json_each(?)) AND l.is_active=1 AND l.work_id IS NOT NULL
+        AND julianday(l.created_at)>julianday((SELECT created_at FROM local_admission_web_collections WHERE id=?))`)
+      .all(JSON.stringify(rows.map(row=>String(row.target??''))),id).map(row=>key(String(row.absolute_path),'.')));
     for(const root of new Set(rows.map(row=>String(row.input_root)))){
       for(const other of this.db.prepare(`SELECT b.input_root,json_extract(i.summary_json,'$.sourceRelativePath') relative
         FROM local_admission_web_batches b JOIN local_admission_web_items i ON i.batch_id=b.id
-        WHERE b.confirmed_json IS NOT NULL AND i.action<>'defer' AND lower(b.input_root)=lower(?)`).all(root))reserved.add(key(String(other.input_root),String(other.relative)));
+        WHERE b.confirmed_json IS NOT NULL AND i.action<>'defer' AND lower(b.input_root)=lower(?)
+          AND NOT EXISTS(SELECT 1 FROM local_admission_web_collection_batches c WHERE c.collection_id=? AND c.batch_id=b.id)`).all(root,id))reserved.add(key(String(other.input_root),String(other.relative)));
       // CLI plans may exist without any web batch. Only project exact paths from the saved plan.
       for(const other of this.db.prepare(`SELECT json_extract(p.payload_json,'$.inputRoot') input_root,json_extract(j.value,'$.sourceRelativePath') relative
         FROM archive_local_admission_plans p,json_each(p.payload_json,'$.items') j
@@ -553,7 +600,8 @@ export class LocalAdmissionWebService {
     }
     return rows.map(row=>({batchId:String(row.batch_id),creatorId:Number(row.creator_id),inputRoot:String(row.input_root),sourceEvidenceId:row.source_evidence_id==null?undefined:Number(row.source_evidence_id),
       context:{parent:String(row.parent)},summary:{key:String(row.item_key),sourceRelativePath:String(row.relative),targetPath:String(row.target??'')}}))
-      .filter(row=>!reserved.has(key(row.inputRoot,row.summary.sourceRelativePath))&&(!row.summary.targetPath||!laterLocalTargets.has(key(row.summary.targetPath,'.'))));
+      .filter(row=>!reserved.has(key(row.inputRoot,row.summary.sourceRelativePath))&&later.get(admissionItemIdentity(row.batchId,row.summary.key))?.status!=='completed_later'
+        &&(!row.summary.targetPath||!laterLocalTargets.has(key(row.summary.targetPath,'.'))));
   }
   private assertRemainingIdle(id:string) {
     const row=this.collectionRow(id);
@@ -677,6 +725,7 @@ export class LocalAdmissionWebService {
       this.db.prepare("UPDATE local_admission_web_collections SET state='queued',owner_pid=?,owner_token=?,updated_at=?,error=NULL WHERE id=?").run(process.pid,token,now(),id);
       for(const row of this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=? ORDER BY position').all(id)){
         const batchId=String(row.batch_id);if(this.get(batchId).state==='completed')continue;
+        this.assertNotCompletedLater(batchId);
         const child=this.row(batchId);if(!child.confirmed_json)throw new AdmissionWebError('子批确认记录缺失，不能推断执行');
         admissionPlanSchema.parse(JSON.parse(child.confirmed_json));
         this.db.prepare("UPDATE local_admission_web_batches SET state='queued',owner_pid=?,owner_token=?,updated_at=?,error=NULL WHERE id=?").run(process.pid,token,now(),batchId);
@@ -746,12 +795,13 @@ export class LocalAdmissionWebService {
     const batch=this.row(id);if(batch.confirmed_json||batch.state!=='draft')throw new AdmissionWebError('本批次已有不可变确认计划，请继续原计划');
     const context=JSON.parse(batch.context_json) as Context;
     if(!same(context.waitingRoot,this.settings().waitingRoot)||!same(context.galleryRoot,this.galleryRoot))throw new AdmissionWebError('配置已改变，请重新预览');
-    await this.validateRoot();await strictDirectory(batch.input_root);this.creator(batch.creator_id);
     const saved=this.db.prepare('SELECT item_key,preview_json,summary_json FROM local_admission_web_items WHERE batch_id=? ORDER BY position').all(id);
     const actions=new Map(request.actions.map(a=>[a.key,a]));
     if(actions.size!==request.actions.length||actions.size!==saved.length||saved.some(s=>!actions.has(String(s.item_key))))throw new AdmissionWebError('确认必须覆盖本批准确项目；未处理项请选择跳过或暂缓',400);
     const items:AdmissionPlan['items']=[];
     const selected=saved.filter(s=>!['skip','defer'].includes(actions.get(String(s.item_key))!.action));
+    this.assertNotCompletedLater(id,selected.map(row=>String(row.item_key)));
+    await this.validateRoot();await strictDirectory(batch.input_root);this.creator(batch.creator_id);
     const visited=new Set<string>();const visiting=new Set<string>();
     const add=(key:string)=>{
       if(visited.has(key))return;if(visiting.has(key))throw new AdmissionWebError('同套引用不能形成循环');visiting.add(key);
@@ -798,6 +848,7 @@ export class LocalAdmissionWebService {
     if(current.confirmed_json||current.state!=='draft')throw new AdmissionWebError('该批次已被另一请求确认');
     if(!same(context.waitingRoot,this.settings().waitingRoot)||!same(context.galleryRoot,this.galleryRoot))throw new AdmissionWebError('配置已改变，请重新预览');
     this.creator(batch.creator_id);this.assertCreatorIdle(batch.creator_id);
+    this.assertNotCompletedLater(batch.id,plan?.items.map(item=>item.key)??[]);
     for(const item of plan?.items??[]) {
       if(item.identity.kind==='existing'&&context.workFacts[String(item.identity.workId)]!==this.workFact(item.identity.workId!))throw new AdmissionWebError('准备期间作品身份已变化，请重新预览');
       if(item.acceptVersions.some(a=>context.sourceFacts[String(a.sourceWorkId)]!==this.sourceFact(a.sourceWorkId)))throw new AdmissionWebError('准备期间来源或任务已变化，请重新预览');
@@ -836,6 +887,7 @@ export class LocalAdmissionWebService {
     this.assertIdle(id);const plan=admissionPlanSchema.parse(JSON.parse(row.confirmed_json));const token=randomUUID();
     this.db.exec('BEGIN IMMEDIATE');try{
       this.assertIdle(id);
+      this.assertNotCompletedLater(id,plan.items.map(item=>item.key));
       this.db.prepare("UPDATE local_admission_web_batches SET state='queued',owner_pid=?,owner_token=?,updated_at=?,error=NULL WHERE id=?").run(process.pid,token,now(),id);
       this.db.prepare('INSERT INTO local_admission_web_requests VALUES(?,?,?,?,?)').run(request.requestKey,id,'resume',hash(request),now());
       this.db.exec('COMMIT');

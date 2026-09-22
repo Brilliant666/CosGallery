@@ -24,6 +24,8 @@ export interface AdmissionAction {
   scopeConfirmed?: boolean;
   cancelledAds?: string[];
 }
+export type AdmissionCurrentDisposition = {status:'completed_later';batchId:string;collectionId:string|null;planId:string;itemKey:string;workId:number;localWorkId:number;postId:number|null;completedAt:string|null;completionTimeBasis:'batch_completed'|'unavailable';evidence:'exact_directory_scope'} | {status:'unresolved'};
+export interface AdmissionCurrentTotals { completedLater:number;pending:number;unresolved:number }
 export interface AdmissionItem {
   key: string; sourceRelativePath: string; targetPath: string; displayTitle: string; group: 'A' | 'B' | 'C' | 'D';
   summary: { images: number; videos: number; other: number; bytes: number }; candidates: AdmissionWork[];
@@ -37,6 +39,7 @@ export interface AdmissionItem {
   nextAction?: 'review_files' | 'resume_plan' | 'prepare_preview' | 'none';
   nextActionReason?: string;
   executionState?: string | null;
+  currentDisposition?: AdmissionCurrentDisposition;
 }
 export type AdmissionState = 'draft' | 'queued' | 'running' | 'completed' | 'needs_review' | 'interrupted' | 'failed';
 export interface AdmissionBatch {
@@ -46,6 +49,7 @@ export interface AdmissionBatch {
   items?: AdmissionItem[];
   collectionId?: string | null;
   parentCleanup?: {status:'recycled'|'not_empty'|'failed'|'not_applicable';message:string};
+  currentTotals?: AdmissionCurrentTotals;
 }
 export interface AdmissionPreviewInput {
   creatorId: number; parent: string; directories: string[]; sourceEvidenceId?: number; acceptExistingVersion: boolean;
@@ -66,6 +70,7 @@ export interface AdmissionCollection {
   previousCollectionId?:string|null;
   nextCollectionIds?:string[];
   remainingCount?:number;
+  currentTotals?:AdmissionCurrentTotals;
   directoryRefresh?: {
     added:Array<{creatorId:number;parent:string;name:string}>;
     removed:Array<{creatorId:number;parent:string;name:string}>;

@@ -4,7 +4,8 @@ export interface AdmissionEntry { item:AdmissionItem; action:AdmissionAction }
 export const admissionGroups = {A:'无冲突的新作品',B:'已有作品候选，待本次确认',C:'同名 / 副本需确认',D:'冲突 / 需整理'};
 export const admissionActionLabels = {new:'新独立作品',existing:'对应已有作品','same-as':'与本批目录同套',skip:'跳过',defer:'暂缓'};
 export const isAdmissionSelected = (action:AdmissionAction) => ['new','existing','same-as'].includes(action.action);
-export const isAdmissionSafeCandidate = (item:AdmissionItem) => item.group==='A'&&!item.candidates.length&&!item.conflicts.length&&!item.structureWarnings?.length&&!item.needsBoundaryReview;
+export const isAdmissionCompletedLater = (item:AdmissionItem) => item.currentDisposition?.status==='completed_later';
+export const isAdmissionSafeCandidate = (item:AdmissionItem) => !isAdmissionCompletedLater(item)&&item.group==='A'&&!item.candidates.length&&!item.conflicts.length&&!item.structureWarnings?.length&&!item.needsBoundaryReview;
 export const mediaSize = (value:number) => value>=1024**3?`${(value/1024**3).toFixed(2)} GiB`:value>=1024**2?`${(value/1024**2).toFixed(2)} MiB`:`${value} B`;
 export const admissionScopeReviewReason = '旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品';
 /** Only the exact old system default can be upgraded; never reinterpret an edited choice. */
@@ -17,7 +18,7 @@ export function normalizeAdmissionScopeAction(item:AdmissionItem,action:Admissio
   return action;
 }
 export function confirmAdmissionScope(item:AdmissionItem,previous:AdmissionAction):AdmissionAction {
-  if(previous.selectionOrigin!=='scope-review'||previous.action!=='defer')return previous;
+  if(isAdmissionCompletedLater(item)||previous.selectionOrigin!=='scope-review'||previous.action!=='defer')return previous;
   return {...admissionAction(item,isAdmissionSafeCandidate(item)?'new':'defer',previous),selectionOrigin:'automatic',scopeConfirmed:true,
     reason:isAdmissionSafeCandidate(item)?'用户确认本批目录范围，预选无冲突作品，待最终确认执行':'本批目录范围已确认，作品身份或目录边界仍需核对'};
 }
@@ -63,12 +64,12 @@ export function admissionPayload(entries:AdmissionEntry[],accept:boolean):Admiss
 }
 export function admissionAdSummary(entries:AdmissionEntry[]){
   const rows=new Map<string,{filename:string;type:string;directories:number;files:number;selected:number;automatic:boolean}>();
-  for(const {item,action} of entries.filter(entry=>isAdmissionSelected(entry.action))){
+  for(const {item,action} of entries.filter(entry=>!isAdmissionCompletedLater(entry.item)&&isAdmissionSelected(entry.action))){
     const approved=new Set(action.approvedAds??[]),names=new Set<string>();
     for(const ad of item.ads){const filename=ad.relativePath.split(/[\\/]/).at(-1)??ad.relativePath,row=rows.get(filename)??{filename,type:filename.split('.').at(-1)?.toUpperCase()??'附件',directories:0,files:0,selected:0,automatic:false};row.files++;if(!names.has(filename))row.directories++;row.selected+=Number(approved.has(ad.relativePath));row.automatic ||=ad.automatic===true;names.add(filename);rows.set(filename,row);}
   }
   return [...rows.values()].sort((a,b)=>a.filename.localeCompare(b.filename,'zh-CN'));
 }
 export function selectAdmissionAds(entries:AdmissionEntry[],selected:boolean,filename?:string){
-  for(const {item,action} of entries.filter(entry=>isAdmissionSelected(entry.action))){const approved=new Set(action.approvedAds??[]);for(const ad of item.ads)if(!filename||(ad.relativePath.split(/[\\/]/).at(-1)??ad.relativePath)===filename){if(selected)approved.add(ad.relativePath);else approved.delete(ad.relativePath);}action.approvedAds=[...approved];rememberAdmissionAdCancellations(item,action);}
+  for(const {item,action} of entries.filter(entry=>!isAdmissionCompletedLater(entry.item)&&isAdmissionSelected(entry.action))){const approved=new Set(action.approvedAds??[]);for(const ad of item.ads)if(!filename||(ad.relativePath.split(/[\\/]/).at(-1)??ad.relativePath)===filename){if(selected)approved.add(ad.relativePath);else approved.delete(ad.relativePath);}action.approvedAds=[...approved];rememberAdmissionAdCancellations(item,action);}
 }

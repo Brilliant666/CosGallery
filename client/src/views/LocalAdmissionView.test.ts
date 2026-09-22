@@ -5,13 +5,14 @@ import LocalAdmissionView from './LocalAdmissionView.vue';
 import * as api from '../api/local-admission';
 import { RequestError } from '../api/http';
 import * as evidence from '../api/source-evidence';
-import type { AdmissionBatch, AdmissionDirectories, AdmissionItem, AdmissionWork } from '../types/local-admission';
+import type { AdmissionBatch, AdmissionCurrentDisposition, AdmissionDirectories, AdmissionItem, AdmissionWork } from '../types/local-admission';
 vi.mock('../api/local-admission');
 vi.mock('../api/source-evidence',()=>({fetchSourceEvidence:vi.fn()}));
 const dir=(parent:string|null=null):AdmissionDirectories=>({root:'R:/等待区',parent,creator:{id:17,name:'测试博主'},items:parent?[{name:'001 中文 & 空格',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'002 第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'bad-link',selectable:false,reason:'目录链接不可用',matchedCreatorIds:[],matchesSelectedCreator:false}]:[{name:'别名目录',selectable:true,matchedCreatorIds:[17],matchesSelectedCreator:true}]});
 const item=(key='first',group:AdmissionItem['group']='A'):AdmissionItem=>({key,sourceRelativePath:key==='first'?'001 中文 & 空格':key,targetPath:`R:/正式/测试博主/${key}`,displayTitle:key,group,summary:{images:12,videos:1,other:1,bytes:12345},candidates:[],conflicts:[],ads:[],state:'planned'});
 const batch=(state:AdmissionBatch['state']='draft'):AdmissionBatch=>({id:'batch-synthetic',planId:state==='draft'?null:'original-plan',creatorId:17,creatorName:'测试博主',state,createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z',inputRoot:'R:/等待区/别名目录',totals:{total:3,selected:0,completed:0,skipped:0,deferred:3}});
 const work:AdmissionWork={workId:91,title:'已有具体作品',catalogNo:23,images:24,videos:0,thumbnailUrl:null,primaryLocalWorkId:122,localState:'available',originalDirectories:['原始目录'],sources:[{sourceWorkId:71,title:'来源声明',sourceOrder:'030',mediaSummary:'23P',taskIds:[63]}]};
+const completedLater:AdmissionCurrentDisposition={status:'completed_later',batchId:'later-batch',collectionId:null,planId:'later-batch',itemKey:'later-item',workId:201,localWorkId:301,postId:401,completedAt:null,completionTimeBasis:'unavailable',evidence:'exact_directory_scope'};
 const button=(wrapper:Pick<ReturnType<typeof mount>,'findAll'>,text:string)=>wrapper.findAll('button').find(b=>b.text()===text)!;
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>resolve=done);return {promise,resolve};}
 async function render(query=''){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-admission/:creatorId',name:'local-admission',component:LocalAdmissionView},{path:'/local-admission',name:'local-admission-workspace',component:{template:'<p>全部博主入库</p>'}},{path:'/archive-catalog',component:{template:'<p>库</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}}]});await router.push(`/local-admission/17${query}`);const wrapper=mount(LocalAdmissionView,{global:{plugins:[router]}});await flushPromises();return {wrapper,router};}
@@ -19,6 +20,21 @@ describe('web local admission without CLI or raw identity inputs',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchAdmissionSettings).mockResolvedValue({waitingRoot:'R:/等待区',galleryRoot:'R:/正式',archiveInboxRoot:'R:/压缩包'});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(_id,parent)=>dir(parent??null));vi.mocked(api.fetchAdmissionBatches).mockResolvedValue({items:[],total:0,page:1,pageSize:20});vi.mocked(api.fetchAdmissionBatch).mockResolvedValue(batch());vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[item(),item('skip'),item('defer')],total:3,page:1,pageSize:100});vi.mocked(api.createAdmissionPreview).mockResolvedValue(batch());vi.mocked(api.executeAdmission).mockResolvedValue(batch('queued'));vi.mocked(api.fetchAdmissionWorks).mockResolvedValue({items:[work],total:1,page:1,pageSize:20});vi.mocked(evidence.fetchSourceEvidence).mockResolvedValue({items:[],total:0,page:1,limit:20});});
   afterEach(()=>{vi.useRealTimers();});
+  it('keeps original failure history but prevents completed-later items from resume or repreview',async()=>{
+    vi.mocked(api.fetchAdmissionBatch).mockResolvedValue({...batch('needs_review'),error:'原锁错误',currentTotals:{completedLater:1,pending:1,unresolved:1}});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item(),currentDisposition:completedLater,nextAction:'prepare_preview',lastError:'原文件阶段错误'},{...item('unknown','D'),currentDisposition:{status:'unresolved'},nextAction:'prepare_preview'}],total:2,page:1,pageSize:100});
+    const {wrapper}=await render('?batch=batch-synthetic');expect(wrapper.get('[aria-label=批次状态]').text()).toContain('待审核');expect(wrapper.text()).toContain('原锁错误');expect(wrapper.text()).toContain('原文件阶段错误');expect(wrapper.text()).toContain('后续部分覆盖');
+    expect(wrapper.get('[data-test=completed-later]').findAll('a').map(link=>link.attributes('href'))).toEqual(['/local-admission/17?batch=later-batch','/library/17/works/401']);expect(wrapper.text()).toContain('完成时间未单独记录');
+    const rows=wrapper.findAll('[aria-label=执行结果] tbody tr');expect(rows[0]!.find('input').exists()).toBe(false);expect(rows[1]!.get('input').attributes('value')).toBe('unknown');expect(wrapper.findAll('button').some(button=>button.text()==='核对后继续原计划')).toBe(false);
+    expect(api.resumeAdmission).not.toHaveBeenCalled();expect(api.repreviewAdmission).not.toHaveBeenCalled();
+  });
+  it('locks completed-later single-creator draft choices and excludes their previous ad selections',async()=>{
+    vi.mocked(api.fetchAdmissionBatch).mockResolvedValue({...batch(),currentTotals:{completedLater:1,pending:0,unresolved:0}});
+    const record={...item(),currentDisposition:completedLater,ads:[{relativePath:'广告.txt',size:8}],suggestedAction:{key:'first',action:'new' as const,approvedAds:['广告.txt']}};
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[record],total:1,page:1,pageSize:100});const {wrapper}=await render('?batch=batch-synthetic');
+    expect(wrapper.text()).toContain('预览草稿 · 未执行');expect(wrapper.text()).toContain('0 接纳 · 0 跳过 · 0 暂缓');expect(wrapper.get('[data-test=admission-item-first]').find('fieldset').exists()).toBe(false);
+    await button(wrapper,'A 组全部选择新独立作品').trigger('click');expect(wrapper.find('[data-ad-filename]').exists()).toBe(false);expect(button(wrapper,'核对本批并确认执行').attributes('disabled')).toBeDefined();expect(api.executeAdmission).not.toHaveBeenCalled();expect(record.suggestedAction.approvedAds).toEqual(['广告.txt']);
+  });
   it('bulk-selects only undecided A items and preserves manual choices and edited new-work fields',async()=>{
     const records=[{...item('existing'),candidates:[work]},item('skip'),{...item('edited'),ads:[{relativePath:'492.jpg',size:12,automatic:true},{relativePath:'指定广告.txt',size:8}],suggestedAction:{key:'edited',action:'new' as const,displayTitle:'上次名称',primary:true,approvedAds:['492.jpg']}},item('copy'),item('undecided'),item('candidate','B'),item('complex','D')];
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:records.length,page:1,pageSize:100});const {wrapper}=await render('?batch=batch-synthetic');

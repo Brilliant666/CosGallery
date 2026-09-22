@@ -623,6 +623,63 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     expect(service.collectionScope(next.id).scopes[0].directories).toEqual([titles[2]]);
     expect(db.prepare('SELECT * FROM archive_catalog_local_works ORDER BY id').all()).toEqual(facts);
   });
+  it('preserves failed planned history while linking later completion and preparing only untouched uncovered planned items',async()=>{
+    const db=manager.connection,titles=['closure 已有后续完成','closure 尚未移动'];
+    for(const title of titles)await make(0,title);
+    const old=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:titles}]}),oldBatch=old.batches[0].id;
+    vi.spyOn(Admission.prototype,'apply').mockRejectedValueOnce(new Error('synthetic dispatch interruption before moving'));
+    await service.executeCollection(old.id,request(old));await service.waitForIdle();vi.restoreAllMocks();
+    const payload=String(db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(oldBatch)!.confirmed_json),plan=JSON.parse(payload);
+    db.prepare('INSERT INTO archive_local_admission_plans(plan_id,content_hash,payload_json) VALUES(?,?,?)').run(oldBatch,'synthetic-checkpoint',payload);
+    for(const item of plan.items)db.prepare("INSERT INTO archive_local_admission_items(plan_id,item_key,state,manifest_json) VALUES(?,?,'planned',?)").run(oldBatch,item.key,JSON.stringify(item.manifest));
+    const snapshot=()=>({batch:db.prepare('SELECT * FROM local_admission_web_batches WHERE id=?').get(oldBatch),items:db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? ORDER BY item_key').all(oldBatch),
+      plan:db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(oldBatch)}),before=snapshot();
+    const next=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:[titles[0]]}]});
+    await service.executeCollection(next.id,request(next));await service.waitForIdle();
+    const items=service.items(oldBatch).items;
+    expect(items[0]).toMatchObject({state:'planned',executionState:'planned',nextAction:'none',currentDisposition:{status:'completed_later',batchId:next.batches[0].id,collectionId:next.id}});
+    expect(items[1].currentDisposition).toEqual({status:'unresolved'});
+    expect(service.collection(old.id)).toMatchObject({state:'partial',totals:{completed:0},currentTotals:{completedLater:1,pending:1,unresolved:1},remainingCount:1});
+    expect(()=>service.resumeCollection(old.id,{requestKey:randomUUID(),confirmed:true})).toThrow('后续批次完成');
+    await expect(new Admission(db,gallery).apply(plan)).rejects.toThrow('后续批次完成');
+    const remaining=await service.remainingCollection(old.id);
+    expect((await service.remainingCollection(old.id)).id).toBe(remaining.id);
+    expect(service.collectionScope(remaining.id).scopes[0].directories).toEqual([titles[1]]);
+    expect(snapshot()).toEqual(before);
+    await service.executeCollection(remaining.id,request(remaining));await service.waitForIdle();
+    expect(service.collection(old.id)).toMatchObject({state:'partial',totals:{completed:0},currentTotals:{completedLater:2,pending:0,unresolved:0},remainingCount:0});
+    expect(snapshot()).toEqual(before);
+  });
+  it('rejects stale draft selection and linked repreview after exact later completion without changing old draft',async()=>{
+    const db=manager.connection,title='closure 旧草稿后完成';await make(0,title);
+    const old=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:[title]}]});
+    const snapshot=()=>({batch:db.prepare('SELECT * FROM local_admission_web_batches WHERE id=?').get(old.batches[0].id),items:db.prepare('SELECT * FROM local_admission_web_items WHERE batch_id=?').all(old.batches[0].id)}),before=snapshot();
+    const next=await service.repreviewCollection(old.id,{});await service.executeCollection(next.id,request(next));await service.waitForIdle();
+    expect(service.items(old.batches[0].id).items[0]).toMatchObject({state:'preview',currentDisposition:{status:'completed_later',collectionId:next.id}});
+    await expect(service.executeCollection(old.id,request(old))).rejects.toThrow('后续批次完成');
+    await expect(service.repreviewCollection(old.id,{})).rejects.toThrow('后续批次完成');
+    expect(snapshot()).toEqual(before);
+    // A normal independent new preview is still allowed; its occupied target is
+    // an ordinary conflict, not a global ban based on an old historical path.
+    await make(0,title);
+    const independent=await service.previewCollection({scopes:[{creatorId:creators[0],parent:names[0],directories:[title]}]});
+    expect(service.items(independent.batches[0].id).items[0].currentDisposition).toBeUndefined();
+    expect(service.items(independent.batches[0].id).items[0].conflicts).toContain('target exists');
+  });
+  it('rereads only uncovered creators when a later completed creator parent is no longer present',async()=>{
+    const parents=['closure 已完成父目录','closure 仍待整理父目录'],title='同名但不同博主';
+    await makeWithin(parents[0],title);await makeWithin(parents[1],title);
+    const scopes=parents.map((parent,index)=>({creatorId:creators[index],parent,directories:[title]}));
+    const old=await service.previewCollection({scopes});
+    const next=await service.previewCollection({scopes:[scopes[0]]});await service.executeCollection(next.id,request(next));await service.waitForIdle();
+    // Synthetic fixture only: the normal platform recycle adapter may be disabled
+    // in tests. The completed parent's absence must not prevent another creator's review.
+    await fs.rm(path.join(waiting,parents[0]),{recursive:true,force:true});
+    const reread=await service.repreviewCollection(old.id,{refreshDirectories:true});
+    expect(reread.batches).toHaveLength(1);expect(reread.batches[0].creatorId).toBe(creators[1]);
+    expect(reread.directoryRefresh?.warnings).toContain(`${parents[0]}：原范围已在后续批次完成，未重新读取或加入本次核对。`);
+    expect(service.collection(old.id).currentTotals).toEqual({completedLater:1,pending:1,unresolved:0});
+  });
   it('requires explicit write intent to create a remaining draft and never creates one through GET',async()=>{
     const original=await preview('034 暂缓续接接口'),input=request(original);
     input.batches=input.batches.map(batch=>({...batch,actions:batch.actions.map(item=>({...item,action:'defer'}))})) as typeof input.batches;

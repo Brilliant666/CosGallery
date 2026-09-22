@@ -6,7 +6,7 @@ import * as api from '../api/local-admission';
 import { RequestError } from '../api/http';
 import { saveAdmissionDraft } from '../utils/admission-navigation';
 import { admissionScopeReviewReason } from '../utils/admission-ui';
-import type { AdmissionBatch,AdmissionCollection,AdmissionItem,AdmissionWorkspace } from '../types/local-admission';
+import type { AdmissionBatch,AdmissionCollection,AdmissionCurrentDisposition,AdmissionItem,AdmissionWorkspace } from '../types/local-admission';
 vi.mock('../api/local-admission');
 vi.mock('../api/source-evidence',()=>({fetchSourceEvidence:vi.fn()}));
 const workspace:AdmissionWorkspace={waitingRoot:'R:/待入库',galleryRoot:'R:/图库',archiveInboxRoot:'R:/压缩包',items:[
@@ -17,6 +17,7 @@ const workspace:AdmissionWorkspace={waitingRoot:'R:/待入库',galleryRoot:'R:/�
 const batch=(id='a',creatorId=17):AdmissionBatch&{parent:string}=>({id,planId:id,collectionId:'collection-one',creatorId,creatorName:creatorId===17?'博主甲':'博主乙',parent:creatorId===17?'甲别名':'博主乙',inputRoot:'R:/待入库',state:'draft',createdAt:'2026-09-21T01:00:00Z',updatedAt:'2026-09-21T01:00:00Z',totals:{total:2,selected:0,completed:0,skipped:0,deferred:2}});
 const collection=(state:AdmissionCollection['state']='draft'):AdmissionCollection=>({id:'collection-one',state,createdAt:'2026-09-21T01:00:00Z',updatedAt:'2026-09-21T01:00:00Z',error:null,totals:{creators:2,total:4,selected:0,completed:0,skipped:0,deferred:4,failedCreators:0},batches:[batch(),batch('b',88)]});
 const item=(key:string,group:AdmissionItem['group']='A'):AdmissionItem=>({key,displayTitle:key,sourceRelativePath:key,targetPath:`R:/图库/${key}`,group,state:'planned',summary:{images:2,videos:0,other:1,bytes:3000},candidates:[],conflicts:[],ads:[{relativePath:'附件/推广.txt',size:20},{relativePath:'492.jpg',size:20,automatic:true}]});
+const completedLater:AdmissionCurrentDisposition={status:'completed_later',batchId:'later-batch',collectionId:'later-collection',planId:'later-batch',itemKey:'later-item',workId:201,localWorkId:301,postId:401,completedAt:'2026-09-22T08:35:00Z',completionTimeBasis:'batch_completed',evidence:'exact_directory_scope'};
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(button=>button.text()===text)!;
 async function render(query='',showAll=true){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-admission',name:'local-admission-workspace',component:LocalAdmissionWorkspace},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}}]});await router.push(`/local-admission${query}`);const wrapper=mount(LocalAdmissionWorkspace,{global:{plugins:[router]}});await flushPromises();if(showAll)await showAllReview(wrapper);return {wrapper,router};}
 async function showAllReview(wrapper:ReturnType<typeof mount>){if(wrapper.find('[data-test=review-filter]').exists()){await wrapper.get('[data-test=review-filter]').setValue('all');await wrapper.findAll('[role=tab]')[1]?.trigger('click');}}
@@ -24,6 +25,30 @@ describe('independent multi-creator admission workspace',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();sessionStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
   afterEach(()=>vi.useRealTimers());
+  it('shows all 77 later-completed draft scopes without counting or editing them or replaying the old plan',async()=>{
+    const records=Array.from({length:77},(_,index):AdmissionItem=>({...item(`old-${index}`),currentDisposition:completedLater,suggestedAction:{key:`old-${index}`,action:'new',approvedAds:['492.jpg']}}));
+    const currentTotals={completedLater:77,pending:0,unresolved:0};
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),currentTotals,batches:[{...batch(),currentTotals}]});vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:77,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.get('.overview').text()).toContain('预览草稿 · 未执行');expect(wrapper.get('.overview').text()).toContain('后续已完成 77 项 · 当前仍需核对 0 项');expect(wrapper.findAll('.creator-tabs button')[1]!.text()).toContain('0 待处理');
+    expect(wrapper.text()).toContain('0 接纳 · 0 跳过 · 0 暂缓');expect(wrapper.get('[data-test=collection-confirm]').attributes('disabled')).toBeDefined();expect(wrapper.find('[data-ad-filename]').exists()).toBe(false);
+    await wrapper.get('[data-test=view-later-completed]').trigger('click');expect(wrapper.findAll('[data-test=completed-later]')).toHaveLength(20);expect(wrapper.find('.item-card fieldset').exists()).toBe(false);
+    const evidence=wrapper.get('[data-test=completed-later]');expect(evidence.text()).toContain('Work #201 · LocalWork #301');expect(evidence.text()).toContain('后续批次完成时间');expect(evidence.findAll('a').map(link=>link.attributes('href'))).toEqual(['/local-admission?collection=later-collection','/library/17/works/401']);
+    await wrapper.get('[data-test=collection-confirm]').trigger('click');expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();expect(api.refreshAdmissionCollectionDirectories).not.toHaveBeenCalled();
+  });
+  it('separates partial later coverage from unresolved historical containers and keeps the failure history',async()=>{
+    const currentTotals={completedLater:1,pending:1,unresolved:1};
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),currentTotals,remainingCount:1,error:'历史锁错误',batches:[{...batch(),state:'needs_review',currentTotals,error:'历史锁错误'}]});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('old-completed'),currentDisposition:completedLater,nextAction:'resume_plan',lastError:'旧项失败'},{...item('old-container','D'),currentDisposition:{status:'unresolved'},nextAction:'prepare_preview'}],total:2,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one');expect(wrapper.text()).toContain('后续部分覆盖');expect(wrapper.text()).toContain('历史锁错误');expect(wrapper.text()).toContain('旧项失败');expect(wrapper.get('[data-test=completion-unresolved]').text()).toContain('不按历史容器条数推算剩余作品');expect(wrapper.find('[data-test=completed-later]').exists()).toBe(true);
+    expect(wrapper.findAll('button').some(button=>button.text()==='核对后继续本批'||button.text()==='核对后继续原批次')).toBe(false);expect(wrapper.get('[data-test=collection-remaining]').text()).toContain('剩余 1 项');expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('does not claim unknown container coverage is complete or invent a completion timestamp',async()=>{
+    const currentTotals={completedLater:1,pending:3,unresolved:3};
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),currentTotals,batches:[{...batch(),state:'needs_review',currentTotals}]});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('known'),currentDisposition:{...completedLater,status:'completed_later',completedAt:null,completionTimeBasis:'unavailable'}},...['container-1','container-2','container-3'].map(key=>({...item(key,'D'),currentDisposition:{status:'unresolved' as const}}))],total:4,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one');expect(wrapper.get('[data-test=completed-later]').text()).toContain('完成时间未单独记录');expect(wrapper.findAll('[data-test=completion-unresolved]')).toHaveLength(3);expect(wrapper.text()).not.toContain('后续批次完成时间');expect(wrapper.text()).toContain('不代表这些历史目录各自仍是一套待入库作品');
+  });
   it('lets an already deferred scope item explicitly stay manual-deferred before the bulk scope confirmation',async()=>{
     const rows=['one','two'].map(key=>({...item(key),scopeReviewRequired:true as const,suggestedAction:{key,action:'defer' as const,reason:admissionScopeReviewReason}}));
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});

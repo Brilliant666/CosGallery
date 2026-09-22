@@ -12,6 +12,7 @@ import { extractWorkDisplayTitle } from '../utils/work-title.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { recycleBinAdapter, type RecycleBinAdapter } from './recycle-bin-adapter.js';
+import { assertNoLaterAdmissionCompletion } from './local-admission-later-completion.js';
 
 const leaf = z.string().min(1).refine(v => !/[\\/:\x00]/.test(v) && v!=='.' && v!=='..', 'A direct child directory name is required');
 const entrySchema = z.object({ relativePath:z.string().min(1), kind:z.enum(['directory','image','video','other']), size:z.number().int().nonnegative(), dev:z.string(), ino:z.string(), mtimeNs:z.string() }).strict();
@@ -517,6 +518,7 @@ export class LocalFolderAdmissionService {
 
   private async applyConfirmed(raw:unknown,options:{stopAfterMove?:boolean}) {
     const plan=this.validate(raw);this.idle();
+    assertNoLaterAdmissionCompletion(this.db,plan.planId,plan.items.map(item=>item.key));
     const {databaseManager}=await import('../db/database.js');const {appConfig}=await import('../config/env.js');
     if(this.db!==databaseManager.connection||cmp(path.resolve(this.galleryRoot))!==cmp(path.resolve(appConfig.galleryRoot)))throw Error('Admission database/gallery must match the scoped scanner configuration');
     await regularDirectory(plan.inputRoot);await regularDirectory(plan.galleryRoot);

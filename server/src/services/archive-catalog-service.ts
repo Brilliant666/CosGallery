@@ -200,13 +200,17 @@ function asNumber(value: number | bigint): number {
 }
 
 function withTransaction<T>(database: DatabaseSync, operation: () => T): T {
-  database.exec('SAVEPOINT archive_catalog_import');
+  // Both callers run synchronous catalog mutations after filesystem preparation.
+  // Reserve the top-level writer before reading identity: a deferred read snapshot
+  // cannot upgrade while the independent catalog publisher owns the writer.
+  const ownWriteTransaction = !database.isTransaction;
+  database.exec(ownWriteTransaction ? 'BEGIN IMMEDIATE' : 'SAVEPOINT archive_catalog_import');
   try {
     const result = operation();
-    database.exec('RELEASE archive_catalog_import');
+    database.exec(ownWriteTransaction ? 'COMMIT' : 'RELEASE archive_catalog_import');
     return result;
   } catch (error) {
-    database.exec('ROLLBACK TO archive_catalog_import; RELEASE archive_catalog_import');
+    database.exec(ownWriteTransaction ? 'ROLLBACK' : 'ROLLBACK TO archive_catalog_import; RELEASE archive_catalog_import');
     throw error;
   }
 }

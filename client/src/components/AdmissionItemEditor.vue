@@ -3,7 +3,8 @@
     <div class="item-heading"><div><small>{{ item.group }} · {{ admissionGroups[item.group] }}</small><h3>{{ item.displayTitle }}</h3><p class="path">{{ item.sourceRelativePath }}</p></div><span>{{ item.summary.images }} 图 · {{ item.summary.videos }} 视频<small>{{ mediaSize(item.summary.bytes) }} · {{ item.summary.other }} 附件 / 其他</small></span></div>
     <p v-for="warning in item.conflicts" :key="warning" class="warning">{{ warning }}</p>
     <div v-if="item.structureWarnings?.length" class="warning"><strong>目录边界提示</strong><p v-for="warning in item.structureWarnings" :key="warning">{{ warning }}</p><small>先核对是否属于一套；若确认保留整组，可明确选择新独立作品。本页不自动拆合。</small></div>
-    <fieldset :disabled="locked">
+    <AdmissionCurrentDisposition :disposition="item.currentDisposition" :creator-id="creatorId" />
+    <fieldset v-if="!isAdmissionCompletedLater(item)" :disabled="locked">
       <label>本次处理<select :value="model.action" @change="changeKind"><option value="defer">暂缓，保留等待区文件</option><option value="new">接纳为新独立作品</option><option value="existing">对应已有作品</option><option value="same-as">与本批另一目录同套</option><option value="skip">跳过本次导入，保留等待区文件</option></select></label>
       <button v-if="model.selectionOrigin==='scope-review'&&model.action==='defer'" type="button" data-test="scope-review-keep-deferred" @click="keepDeferred">本项保留暂缓</button>
       <template v-if="model.action==='new'"><label>展示名称<input v-model="model.displayTitle" maxlength="500" @input="markManual" /></label><p class="hint">保留原目录名与内部结构；允许以后可靠来源关联，不自动建立来源对应。</p></template>
@@ -15,16 +16,17 @@
         <label class="check"><input v-model="model.primary" type="checkbox" />本目录作为主副本（不选则保留已有主副本）</label>
         <div v-if="acceptExistingVersion&&selectedWork?.sources.length"><p>本次明确以本地副本满足以下来源的获取需求（仅限勾选项，不证明内容完整或相同）：</p><label v-for="source in selectedWork.sources" :key="source.sourceWorkId" class="check"><input v-model="model.acceptSourceIds" type="checkbox" :value="source.sourceWorkId" />{{ source.sourceOrder }} {{ source.title }} · {{ source.mediaSummary||'来源数量未声明' }}</label></div>
       </template>
-      <template v-if="model.action==='same-as'"><label>同套的本博主目录<select v-model="model.sameAsKey"><option :value="undefined">选择目录，不以同名自动确认</option><option v-for="peer in peers.filter(peer=>peer.item.key!==item.key&&['new','existing'].includes(peer.action.action))" :key="peer.item.key" :value="peer.item.key">{{ peer.item.sourceRelativePath }}</option></select></label><label class="check"><input v-model="model.primary" type="checkbox" />使用本目录作为这一套的主副本，另一份保留</label></template>
+      <template v-if="model.action==='same-as'"><label>同套的本博主目录<select v-model="model.sameAsKey"><option :value="undefined">选择目录，不以同名自动确认</option><option v-for="peer in peers.filter(peer=>!isAdmissionCompletedLater(peer.item)&&peer.item.key!==item.key&&['new','existing'].includes(peer.action.action))" :key="peer.item.key" :value="peer.item.key">{{ peer.item.sourceRelativePath }}</option></select></label><label class="check"><input v-model="model.primary" type="checkbox" />使用本目录作为这一套的主副本，另一份保留</label></template>
       <details v-if="!['new','defer'].includes(model.action)"><summary>选择依据 / 备注</summary><label>备注<input v-model="model.reason" maxlength="2000" placeholder="记录本次依据，不默认声称逐字节相同" /></label></details>
       <details class="item-ads" v-if="item.ads.length&&isAdmissionSelected(model)"><summary>附件候选 · {{ item.ads.length }} 项（已选 {{ model.approvedAds?.length||0 }} 项）</summary><p class="hint">首次选择接纳时默认勾选全部候选；需要保留的文件请取消，重新核对后仍保留取消选择。最终确认后，勾选的具体文件{{ recycleAds?'完成索引后送入Windows回收站':'按原确认方式移至可恢复附件区' }}，不永久删除，不打开链接。</p><label v-for="ad in item.ads" :key="ad.relativePath" class="check"><input v-model="model.approvedAds" type="checkbox" :value="ad.relativePath" @change="changeAds" />{{ ad.relativePath }} · {{ mediaSize(ad.size) }}<small v-if="ad.automatic">全局已确认广告（可取消）</small></label></details>
-    </fieldset><p v-if="isAdmissionSelected(model)" class="path">实际目标：{{ item.targetPath }}</p>
+    </fieldset><p v-if="!isAdmissionCompletedLater(item)&&isAdmissionSelected(model)" class="path">实际目标：{{ item.targetPath }}</p>
   </article>
 </template>
 <script setup lang="ts">
 import { ref } from 'vue';
 import AdmissionWorkPicker from './AdmissionWorkPicker.vue';
-import { admissionAction,admissionGroups,admissionScopeReviewReason,isAdmissionSelected,mediaSize,rememberAdmissionAdCancellations,type AdmissionEntry } from '../utils/admission-ui';
+import AdmissionCurrentDisposition from './AdmissionCurrentDisposition.vue';
+import { admissionAction,admissionGroups,admissionScopeReviewReason,isAdmissionCompletedLater,isAdmissionSelected,mediaSize,rememberAdmissionAdCancellations,type AdmissionEntry } from '../utils/admission-ui';
 import type { AdmissionAction,AdmissionActionKind,AdmissionItem,AdmissionWork } from '../types/local-admission';
 const props=defineProps<{item:AdmissionItem;creatorId:number;peers:AdmissionEntry[];locked:boolean;acceptExistingVersion:boolean;selectedWork?:AdmissionWork;recycleAds?:boolean}>();
 const model=defineModel<AdmissionAction>({required:true}),emit=defineEmits<{'select-work':[work:AdmissionWork];change:[]}>(),showPicker=ref(false);

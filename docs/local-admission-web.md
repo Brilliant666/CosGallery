@@ -356,10 +356,10 @@ No filesystem operation is wrapped in a blanket SQLite retry. The historical pau
 batch's error is retained; its exact former lock-owning connection was not observed.
 
 Previously completed real jobs must not be replayed. Preview data is never copied to
-production. A 4141 candidate update requires paired client/server/CLI artifacts, a
-current backup and the normal PyCharm maintenance window. PR38 stays Draft; Script
-PR13 and the installed plugin remain unchanged. Passing tests or installing a candidate
-does not mean the user has accepted the product for merge.
+production. A runtime update requires paired client/server/CLI artifacts, a current
+backup and the authorized maintenance window. Candidate installation alone is not
+merge approval. The user has now explicitly authorized PR38 closure after the priority
+checks; Script PR13 and the installed plugin remain outside that release.
 
 ### Parents containing only internal residual directories
 
@@ -407,3 +407,35 @@ Both actions require management authorization and write intent, reject active ow
 and preserve activity/claim protection. No migration or automatic remaining-job execution
 is introduced. Rapid-iteration runtime management may be performed by Codex when the
 user explicitly authorizes it, using the same production entry and configuration.
+
+### Historical state and later completion
+
+History retains its original status, error, attempt and confirmation. A separate
+read-only `currentDisposition` can identify an exact directory scope completed by a
+later confirmed web batch, with its Work/LocalWork and result links. The projection
+requires the same creator, input scope and target, a completed execution checkpoint,
+and matching authoritative Work/LocalWork ownership. Names or source numbers alone
+are not evidence. Ambiguous matches remain unresolved; a split historical container
+is not interpreted as one missing work. Completion time is labeled as the later
+batch's completion time; when that time is unavailable, no item timestamp is invented.
+
+`currentTotals` is distinct from historical totals. Reliably covered items are not
+counted again as currently pending or selected for advertisement handling. Old
+confirm/resume and the underlying admission executor reject replay of covered items,
+including CLI use of the old plan. Partially covered history can create a linked,
+unconfirmed review of eligible remaining scope, without editing the original plan;
+moved/indexed checkpoints must still use their original recovery path. A separate
+new scope can admit a legitimate extra copy and is not blocked by an earlier batch.
+
+Lookup starts at the requested batches and uses the existing creator index for later
+execution records. SQL count does not grow with the number of items; it neither reads
+media nor scans or hashes files. No migration, persistent replacement state machine,
+automatic historical cleanup or production replay is introduced.
+
+The final synthetic browser admission exposed one remaining deferred-writer edge
+in `ArchiveCatalogService` reconciliation after media indexing. A separate SQLite
+writer regression reproduces failure at the first local-folder upsert in the old
+transaction. The synchronous catalog transaction now reserves its top-level writer
+before identity reads; nested calls keep their caller's SAVEPOINT/rollback ownership.
+Writer timeout still fails with no partial catalog commit. This is not a retry of
+filesystem operations, an admission-history rewrite, or a global lock redesign.
