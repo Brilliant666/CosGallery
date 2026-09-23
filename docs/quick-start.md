@@ -1,226 +1,70 @@
 ---
-title: Quick Start
-description: Get Foldergram running locally with a real gallery structure and verified defaults.
+title: 快速开始
+description: 启动后从图库账本与博主入库进入日常使用，选择合适的资源收录路径。
 ---
 
-# Quick Start
+# 快速开始
 
-Docker Compose is the recommended way to run Foldergram.
+CosGallery 以规范博主、独立作品和本地媒体为核心。先按[安装与启动](/installation)完成源码安装和路径配置，再进行下面的操作；不需要 agent、命令行或手写 JSON 才能完成普通网页入库。
 
-It gives you the quickest path to a working install and includes the media
-tooling needed for video support and animated AVIF processing, so you do not
-need to set up Node.js, `pnpm`, or `ffmpeg` on the host first.
+## 1. 认识两个入口
 
-## Preferred: Docker Compose
-
-## 1. Create your local data layout
-
-```text
-data/
-  gallery/
-  db/
-  thumbnails/
-  previews/
-```
-
-## 2. Put media into folders under `data/gallery`
-
-Foldergram does not index loose files placed directly in the gallery root.
-
-```text
-data/
-  gallery/
-    trips/
-      oslo/
-        IMG_0001.jpg
-        clip-01.mp4
-    family/
-      summer-2024/
-        porch.webp
-```
-
-The important rule is simple:
-
-- A non-hidden folder becomes an indexed album when it directly contains supported media.
-- In reserved carousel mode, it can instead qualify when `carousels/` has an immediate child containing supported media directly; carousel-only albums do not need a placeholder file.
-- Nested folders become separate albums if they directly contain media.
-
-Optional: add folder stories and highlights with a reserved `stories/` folder:
-
-```text
-data/
-  gallery/
-    AnimalPlanet/
-      post-1.jpg
-      stories/
-        story-1.mp4
-        story-2.jpg
-        Lions/
-          clip-1.mp4
-          nested-1/
-            clip-2.jpg
-```
-
-In the default mode:
-
-- direct media inside `AppFolder/stories` powers the folder avatar story
-- each direct child folder under `stories/` becomes one highlight circle
-- nested folders stay inside that same highlight capsule
-
-If you need folders literally named `stories` to behave like normal app
-folders, open `Settings -> General Settings`, enable `Treat stories folders as
-normal app folders`, then run a rescan from `Settings -> Scan & Library`.
-
-## 3. Start the container
-
-```bash
-docker compose up -d
-```
-
-The included compose file:
-
-- uses the GHCR image by default
-- maps host port `4141` by default
-- mounts `./data/gallery`, `./data/db`, `./data/thumbnails`, and `./data/previews`
-- runs the app in production mode
-- uses internal container paths under `/app/data`
-- relies on the image's bundled `ffmpeg` and `ffprobe`
-
-Container startup also runs pending SQLite migrations automatically before the
-app opens the persistent database.
-
-For the default Docker Compose setup, the container uses the image's built-in
-production defaults plus the mounted `./data/...` volumes. The source-install
-`.env` file is not read directly inside the container.
-
-The shipped Compose file sets `IMAGE_DETAIL_SOURCE=preview` and
-`DERIVATIVE_MODE=eager`.
-
-If you want Docker to skip specific source folders from the start, also add
-`GALLERY_EXCLUDED_FOLDERS` in `docker-compose.yml`, for example:
-
-```yaml
-GALLERY_EXCLUDED_FOLDERS: "@eaDir,thumbnails,Archive/cache"
-```
-
-For an optional read-only public demo in Docker, add
-`PUBLIC_DEMO_MODE="1"` under the Compose `environment:` block. If the
-browser-visible origin differs from the upstream Node host, also set
-`CSRF_TRUSTED_ORIGINS` to that public origin.
-
-If you cloned the repo and want to build locally instead, use:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
-```
-
-## 4. Open the app
-
-- `http://localhost:4141` for the app
-- `http://localhost:4141/api/health` for a quick backend check
-
-On first run, the server performs a startup scan because there is no existing
-index. Existing libraries keep using the current index on startup; run
-`Scan Library` from Settings whenever you want to refresh the library after
-changes.
-
-On later upgrades, startup automatically applies pending SQLite migrations
-before the app reuses the existing database.
-
-If you want the lowest upfront derivative work for a large library in Docker,
-edit `docker-compose.yml` before startup:
-
-```bash
-IMAGE_DETAIL_SOURCE=original
-DERIVATIVE_MODE=lazy
-```
-
-That combination keeps image detail pages on originals and generates missing
-thumbnails or previews only when they are first requested.
-
-If you plan to expose Foldergram on a homelab or LAN, open Settings after the
-first load and enable the admin password. From there, you can keep admin-only
-access, add a separate viewer password, or switch to public browse mode.
-
-Admins can also share one folder at a time from a folder page. Open a folder,
-choose the Share button next to `Edit App Folder`, then create an expiring link,
-an unlimited revocable link, or a reusable folder password. Shared visitors use
-`/share/:slug` and stay limited to that folder.
-
-Inside Settings:
-
-- `General Settings` contains stories and carousel folder modes, nested folder title format, excluded folders, Home/Reels defaults, and the default folder photo order
-- `Places` contains offline place-data preparation and place-assignment rebuilds for GPS-tagged photos
-- `Scan & Library` contains manual scan plus rebuild actions
-
-If a scan finishes with skipped corrupt or unreadable supported media, the
-admin scan panel shows the full report path for that run. Foldergram writes
-those per-run reports under `<DATA_ROOT>/scan-errors/` and marks the run
-`completed_with_errors`.
-
-Until you enable password protection, Foldergram starts without an auth gate,
-so Settings and the library-maintenance controls are available immediately to
-whoever can reach the app.
-
-## Optional: run from source for development
-
-Foldergram is a `pnpm` workspace monorepo with three workspaces:
-
-- `server`
-- `client`
-- `docs`
-
-Use the source workflow when you want to develop or modify the app itself.
-
-### Prerequisites
-
-| Requirement | Notes |
+| 入口 | 用途 |
 | --- | --- |
-| Node.js 22 | The repo is configured for Node 22. |
-| `pnpm` | Matches the workspace scripts and lockfile. |
-| FFmpeg and FFprobe | Required on the host if you run the app outside Docker and want video support. |
+| 图库账本 → 博主库 | 管理规范博主资料、了解本地和来源概况。 |
+| 图库账本 → 资源目录 | 浏览单博主或全库目录，搜索作品，查看稳定 Work 身份与派生 NO，导出当前版本。 |
+| 博主入库 → 本地入库 | 接纳已经解压、已经人工确定作品边界的本地目录。 |
+| 博主入库 → Costuan | 按明确来源范围完成检查、网盘暂存、人工下载后的解压入库。 |
 
-### Development startup
+日常使用 `/archive-catalog` 和 `/creator-admission`。旧链接保留兼容，并不代表仍有多套互不相干的入库系统。完整页面说明见[入口与导航](/creator-admission-navigation)。
 
-```bash
-pnpm install
-cp .env.example .env
-pnpm dev
+## 2. 已经有解压图集：走本地入库
+
+将等待区整理为“博主父目录 → 独立作品目录 → 媒体”。例如：
+
+```text
+已解压等待区/
+  示例博主/
+    作品甲/
+      001.jpg
+      002.webp
+    作品乙/
+      001.jpg
+      视频.mp4
 ```
 
-`pnpm dev` includes the same automatic migration step before the server opens
-the database.
+不要为导入而把所有图片扁平合并，也不要仅为编号统一更改原目录名。一个大容器中混有多套、年份合集、工作文件等，先人工整理作品边界；系统不会自动拆分任意合集。
 
-This runs:
+1. 打开 **博主入库 → 本地入库 → 选择图集**，保存已解压等待区，选择规范博主及作品目录。可以一次选择多位博主；未匹配身份时先核对，不按文件夹名静默新建身份。
+2. 进入 **检查并确认**，查看目录数量、目标和冲突。无冲突作品与需要人工判断的作品分开处理；可以选择新作品、可靠对应的已有 Work、同批同套、跳过或暂缓。来源资料可留空。
+3. 核对最终范围和具体文件处理，确认后开始后台入库。预览成功不等于已经移动文件或写入完成记录。
+4. 在 **入库结果** 查看完成、未完成与后续去向，打开图库/Viewer 确认收录。离开页面不会主动取消已提交任务；从入库记录回到原批次，不用重新执行已完成作品。
 
-- the Vite client on `http://localhost:4141`, with automatic fallback through `4144`
-- the Express server on `http://localhost:4140`
-- the VitePress docs site on `http://localhost:4145`, with automatic fallback to the next free port
+修改了等待区文件、拆分或新增作品目录后，使用“重新读取并核对”查看范围变化并重新确认。刷新进度只读取后台状态，不代替文件重读。未提交选择也不能当作跨设备永久保存的决定。
 
-## Useful commands
+具体操作、异常审核和恢复见[本地入库网页指南](/local-admission-web)。历史批次未完成但后来已由其他批次完成的项目，应查看后续结果，不重跑旧项。
 
-```bash
-docker compose up -d
-docker compose down
-pnpm migrate
-pnpm rescan
-pnpm test
-pnpm build
-pnpm start
-pnpm build:docs
-```
+## 3. 需要 Costuan 补充资源：走 Costuan 路径
 
-## What to expect after startup
+顺序为：**来源检查 → 网盘暂存 → 人工下载 → Costuan入库**。
 
-- Feed, folder pages, likes, explore, and moments read from SQLite, not directly from disk.
-- Thumbnails are generated under `data/thumbnails`.
-- Previews are generated under `data/previews`.
-- In the default unprotected state, Settings is available immediately.
-- After access protection is enabled, only admin sessions can open Settings or run scan and rebuild actions. Viewer and public sessions stay browse-only.
-- Folder share links and folder passwords are read-only and scoped to one folder; they do not grant Settings, Home feed, Reels, Places, Likes, Collections, Trash, or original-file downloads.
+- 网页提供范围、账本和本机入库任务；[配套插件](https://github.com/Brilliant666/Script/tree/main/CostuanArchiveManager)操作受支持的来源检查和网盘暂存。
+- 百度客户端由用户将文件下载到配置的压缩包等待区。网盘已暂存不是已下载，更不是已入库。
+- 在 **Costuan入库** 的“入库设置与环境工具”中配置 7-Zip、路径与解压密码，确认允许处理的名单；扫描待入库后按任务状态运行可处理项。
+- 来源格式、身份、文件稳定性或媒体处理无法可靠确认时会暂停，先看具体原因，不通过重复点击继续或忽略全部错误强行通过。
 
-If nothing appears, start with [Troubleshooting](/troubleshooting).
+“来源套数 − 本地套数”不能直接代表独立缺失作品。是否仍需获取依赖明确映射及有效本地版本判断；外部 NO 不是 CosGallery Work ID。资料可先留存，但留存本身不会创建已确认作品或自动取得暂存资格。见[来源资料与本地接纳](/source-evidence-local-admission)及[本地已收录与来源复用](/local-first-source-reuse)。
 
-## Create a carousel post
+## 4. 入库后看什么
 
-Create `AppFolder/carousels/Trip/`, add `01-arrival.jpg`, `02-clip.mp4`, and `03-sunset.jpg`, then run a scan. The child becomes one swipeable post in filename order. See [Carousel Posts](/carousel-posts) for limits and edge cases.
+先从博主页打开图集及 Viewer；资源目录由后台 Worker 根据数据库事实更新，可能短暂显示待更新。目录每个 Work 一行，主副本与额外副本不应重复计数；目录 NO 按每位博主的生效排序时间编排，不会自动改文件名。
+
+只有 Health 成功不能证明文件处理完成。以具体批次/Job 的结果、图集可读性及目录状态区分“服务正常”“已入库”“尚待审核”。
+
+## 下一步文档
+
+- [配置与数据路径](/configuration)
+- [本地入库网页指南](/local-admission-web)
+- [资源目录](/own-resource-catalog)
+- [安全与备份](/security)
+- [常见问题](/faq)与[故障处理](/troubleshooting)

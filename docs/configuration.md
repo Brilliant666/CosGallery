@@ -1,386 +1,108 @@
 ---
-title: Configuration
-description: Environment variables, excluded-folder rules, path behavior, and scan controls in Foldergram.
+title: 配置与数据路径
+description: 当前环境变量、网页配置、启动行为及数据保护边界。
 ---
 
-# Configuration
+# 配置与数据路径
 
-For source installs, Foldergram reads `.env` from the repository root and
-validates it in `server/src/config/env.ts`.
+源码运行会读取仓库根目录的 `.env`。已有进程环境变量优先于 dotenv 文件；路径和类型校验以 `server/src/config/env.ts` 为准。不要把其他机器的私人路径、密码或临时预览配置原样复制到自己的实例。
 
-In the default Docker Compose setup, the container uses the image's built-in
-production defaults plus the mounted `./data/...` volumes. The source-install
-`.env` file is not read directly inside the container unless you wire that in
-yourself.
+## 启动环境变量
 
-## Environment variables
+以下是**代码默认值**；`.env.example` 可能显式覆盖它们，尤其是 `COS_GALLERY_MODE=1`。
 
-| Variable | Default | Notes |
+| 变量 | 默认值 | 作用 |
 | --- | --- | --- |
-| `NODE_ENV` | `development` | Must be `development`, `test`, or `production`. |
-| `SERVER_PORT` | `4141` | Production Express port. Used by Docker and `pnpm start`. |
-| `DEV_SERVER_PORT` | `4140` | Express server port during `pnpm dev`. |
-| `DEV_CLIENT_PORT` | `4141` | Base Vite dev server port during `pnpm dev`. The client may fall forward through `4144`. The same range is allowed for non-production local-origin mutation checks. |
-| `DATA_ROOT` | `./data` | Base directory for app-managed storage. Other storage paths default under it unless overridden. |
-| `DATA_DIR` | unset | Optional alias that falls back into `DATA_ROOT` resolution when `DATA_ROOT` is absent. |
-| `GALLERY_ROOT` | `./data/gallery` | Source media root. Foldergram scans below this path. |
-| `GALLERY_EXCLUDED_FOLDERS` | unset | Comma-separated folder exclusion rules. Names match anywhere in the gallery tree; values with a slash match one exact relative path below `GALLERY_ROOT`. |
-| `DB_DIR` | `./data/db` | SQLite directory. Database file is `gallery.sqlite`, and startup Dbmate migrations run against it automatically when the directory is available. |
-| `THUMBNAILS_DIR` | `./data/thumbnails` | Generated thumbnail output root. |
-| `PREVIEWS_DIR` | `./data/previews` | Generated preview output root. |
-| `FFMPEG_PATH` | `ffmpeg` | FFmpeg executable name or absolute path for video thumbnails and previews. |
-| `FFPROBE_PATH` | `ffprobe` | FFprobe executable name or absolute path for video metadata. |
-| `FFMPEG_VIDEO_ENCODER` | `libx264` | H.264 encoder for generated video previews. `h264_nvenc` uses NVIDIA NVENC with matching preset and quality arguments. |
-| `IMAGE_DETAIL_SOURCE` | `preview` | For image detail pages, use generated previews or stream originals. Videos ignore this flag. |
-| `DERIVATIVE_MODE` | `eager` | Generate derivatives during scans or lazily on the first protected derivative request. |
-| `LOG_VERBOSE` | `0` | Truthy values are `1`, `true`, `yes`, and `on`. |
-| `SCAN_MEDIA_ERROR_MODE` | `skip` | `skip` reports supported-media scan failures and continues. `fail` aborts on the first such error. |
-| `SCAN_DISCOVERY_CONCURRENCY` | `4` | Discovery concurrency, validated from `1` to `32`. |
-| `SCAN_DERIVATIVE_CONCURRENCY` | `4` | Derivative concurrency, validated from `1` to `32`. |
-| `PUBLIC_DEMO_MODE` | `0` | When enabled, mutating API routes return `403` for read-only demo deployments. |
-| `CSRF_TRUSTED_ORIGINS` | unset | Comma-separated extra browser origins allowed for mutating API requests. Useful behind reverse proxies or HTTPS terminators. |
+| `NODE_ENV` | `development` | `development`、`test` 或 `production`；根 `pnpm start` 显式使用 production。 |
+| `SERVER_HOST` | `127.0.0.1` | Express 监听地址。需要其他设备访问时另行配置访问保护及网络边界。 |
+| `SERVER_PORT` | `4141` | production 后端及配套前端端口。 |
+| `DEV_SERVER_PORT` | `4140` | 开发后端端口。 |
+| `DEV_CLIENT_PORT` | `4141` | 开发前端起始端口，在它及随后三个端口中找空闲端口。 |
+| `COS_GALLERY_MODE` | 关闭 | 规范博主/作品图库模式。`.env.example` 已设为 `1`，本指南按启用后的界面说明。 |
+| `DATA_ROOT` | `./data` | 管理数据的默认父目录。 |
+| `GALLERY_ROOT` | `<DATA_ROOT>/gallery` | 正式图库原媒体。不是下载或解压等待区。 |
+| `DB_DIR` | `<DATA_ROOT>/db` | 数据库目录，文件名 `gallery.sqlite`。 |
+| `THUMBNAILS_DIR` | `<DATA_ROOT>/thumbnails` | 缩略图派生缓存。 |
+| `PREVIEWS_DIR` | `<DATA_ROOT>/previews` | 预览派生缓存。 |
+| `GALLERY_EXCLUDED_FOLDERS` | 空 | 逗号分隔排除规则：名称匹配任意层级，带斜线的规则匹配图库内精确相对路径。 |
+| `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe` | 媒体工具可执行文件名称或路径。 |
+| `FFMPEG_VIDEO_ENCODER` | `libx264` | 可选 `h264_nvenc`，必须与本机 FFmpeg 和硬件匹配。 |
+| `IMAGE_DETAIL_SOURCE` | `preview` | 图片详情读取 `preview` 或 `original`；不改变视频默认处理。 |
+| `DERIVATIVE_MODE` | `eager` | `eager` 扫描时生成；`lazy` 按需生成后复用缓存。 |
+| `SCAN_MEDIA_ERROR_MODE` | `skip` | 全库扫描遇到支持格式的读取错误时，`skip` 记录报告继续，`fail` 中止；不是本地接纳审核的“忽略错误”开关。 |
+| `SCAN_DISCOVERY_CONCURRENCY` | `4` | 扫描发现并发，1～32。 |
+| `SCAN_DERIVATIVE_CONCURRENCY` | `4` | 派生任务并发，1～32。 |
+| `LOCAL_INGEST_STARTUP_SCAN` | `true` | Stage3 启动补偿扫描，接受 `true/false/1/0`。 |
+| `LOG_VERBOSE` | 关闭 | 详细日志。 |
+| `PUBLIC_DEMO_MODE` | 关闭 | 只读演示模式，限制修改操作；不等于完整账户系统。 |
+| `CSRF_TRUSTED_ORIGINS` | 空 | 额外允许提交修改请求的浏览器 origin，逗号分隔 HTTP/HTTPS origin；不是免认证配置。 |
 
-## Database migrations
+除单独说明的枚举外，布尔标记以 `1/true/yes/on` 为真。历史 `DATA_DIR` 字段仍在解析器中，但当前 `DATA_ROOT` 默认值会先取得值，**不应依赖 `DATA_DIR` 作为有效替代**；请明确设置 `DATA_ROOT`。
 
-Foldergram stores the app database at `<DB_DIR>/gallery.sqlite`.
+## 路径设置
 
-When `DB_DIR` is available, startup automatically runs pending Dbmate
-migrations before the server opens that database. This happens for:
+相对路径以仓库根目录解析，绝对路径按配置使用。没有单独覆盖时，图库、数据库与缓存路径从 `DATA_ROOT` 派生；但复制后的 `.env.example` 已逐项写入 `./data/...`。如果修改 `DATA_ROOT`，也要同步这些显式值，或删除对应覆盖项后使用默认派生值。
 
-- Docker container startup
-- `pnpm dev`
-- `pnpm start`
-- `pnpm rescan`
+以下只是同一磁盘下的示例，不要求使用特定盘符：
 
-Fresh installs create the database from the baseline migration. Existing
-supported installs are baselined once on upgrade, so later releases can apply
-ordered schema changes automatically.
+```text
+D:/CosGalleryData/
+  gallery/          正式图库
+  db/               SQLite 与可能的日志文件
+  thumbnails/       缩略图缓存
+  previews/         预览缓存
+  private/          本地配置的加密 key
+  unpacked-inbox/   已解压作品等待区（网页配置）
+  archive-inbox/    Costuan 压缩包等待区（网页配置）
+  processing/       Costuan 解压处理中目录（网页配置）
+```
 
-Startup also validates the schema behind recorded folder-sharing and posts
-migrations. If an earlier startup recorded one of those migrations before its
-schema work began, Foldergram safely clears that incomplete marker and resumes
-the ordered migration. If a schema is only partially transformed or contains
-new data that cannot be rolled back safely, startup stops instead of guessing.
+- 两个缓存目录必须互不包含，也不得包含图库根目录；扫描错误报告 `<DATA_ROOT>/scan-errors` 与可对外服务的缓存目录不能重叠。
+- 代码会排除位于图库内的已知数据库、缓存和扫描报告路径，但建议分开存放，不依赖排除机制组织入库。
+- 本地入库等待区和 Costuan 的等待区是不同概念，不能把压缩包目录作为已解压作品范围。
+- Costuan 的 `libraryRoot` 由启动时的 `GALLERY_ROOT` 决定，不能在网页另设另一套正式图库。图库、压缩包等待区、处理中目录要求绝对路径、不重叠、可读写且同卷。
+- 本地接纳也有范围、不重叠和同卷检查，不能靠符号链接或 junction 绕过。
+- 路径设置必须与服务实际运行的机器一致；远程浏览器不能直接授予服务器读取客户端磁盘的能力。
 
-For source installs, use `pnpm migrate` if you want to apply pending
-migrations without starting the rest of the app.
+## 网页保存的配置
 
-## Access protection configuration
+这些设置写入 SQLite，不是每次都修改 `.env`：
 
-Shared-password protection is **not** configured in `.env`.
-
-Instead:
-
-- enable it from the Settings page
-- Foldergram stores the password hash and session metadata in SQLite `app_settings`
-- deleting or replacing the SQLite database resets the configured password protection state
-
-The built-in auth model is a small role-based password gate for one app
-instance, not a multi-user account system.
-
-## Stories folders mode
-
-Reserved stories behavior is **not** configured in `.env`.
-
-Instead:
-
-- Foldergram stores the current stories-folders mode in SQLite `app_settings`
-- the Settings page exposes the toggle `Treat stories folders as normal app folders`
-- the default mode is reserved stories, where `AppFolder/stories` powers avatar stories and highlight capsules
-- turning the toggle on enables legacy behavior, where folders literally named `stories` remain ordinary app folders
-- changing this setting requires a rescan because the indexed folder structure changes
-- if the existing library already contains candidate `stories/` folders, Settings can show a migration decision card until you choose a mode
-
-## Folder photo order default
-
-The default app-folder photo order is **not** configured in `.env`.
-
-Instead:
-
-- Foldergram stores the current default order in SQLite `app_settings`
-- `Settings -> General Settings` exposes `Newest First` and `Oldest First`
-- the default is `Newest First`
-- this setting changes app-folder grids and previous/next navigation inside the post viewer when browsing within a folder
-
-## Nested folder title format
-
-Nested folder title format is **not** configured in `.env`.
-
-Instead:
-
-- Foldergram stores the current nested-folder title preference in SQLite `app_settings`
-- `Settings -> General Settings` exposes `Nested folder title format`
-- available options are `Folder name only` and `Parent + folder name`
-- the default is `Folder name only`
-- this setting changes presentation only for nested app-folder titles
-- renamed parent folders use their saved app title as the prefix when available
-- it does not change scans, slugs, folder paths, or saved folder metadata
-
-## Places setup
-
-Offline places support is **not** configured in `.env`.
-
-Instead:
-
-- `Settings -> Places` can prepare the offline GeoNames dataset on demand
-- `Settings -> Places` can rebuild place assignments for already indexed photos
-- only photos with GPS EXIF metadata participate in place assignment
-- the Places directory and place detail pages read from SQLite after that preparation work completes
-
-## Excluded folders
-
-Folder exclusions can come from two places:
-
-- `GALLERY_EXCLUDED_FOLDERS` in `.env` or Docker Compose
-- custom rules saved from `Settings -> General Settings`
-
-Behavior:
-
-- rules without a slash match folder names anywhere in the gallery tree, such as `@eaDir` or `thumbnails`
-- rules with a slash match one exact relative folder path under `GALLERY_ROOT`, such as `Archive/cache`
-- env-backed rules appear read-only in `General Settings`
-- custom rules are stored in SQLite `app_settings` and can be changed at runtime
-- after changing custom rules, run a full scan from `Settings -> Scan & Library` so already-indexed matches are soft-removed from the library
-
-## Settings sections
-
-The Settings sidebar is split into:
-
-- `Scan & Library` for manual scans, thumbnail rebuilds, and library-index rebuilds
-- `General Settings` for Home/Reels defaults, default folder order, nested folder title format, stories and carousel folder modes, excluded folders, and save-and-scan notices tied to those app-wide rules
-- `Places` for offline GeoNames preparation status and place-assignment rebuilds
-- `Security & Access` for admin, viewer, and public-mode controls
-- `System Status` for storage, index, and last-scan details
-
-## Path resolution rules
-
-- `DATA_ROOT` is the common fallback parent for the app's storage directories.
-- If you set only `DATA_ROOT=/mnt/foldergram`, the default paths become `/mnt/foldergram/gallery`, `/mnt/foldergram/db`, `/mnt/foldergram/thumbnails`, and `/mnt/foldergram/previews`.
-- Setting `GALLERY_ROOT`, `DB_DIR`, `THUMBNAILS_DIR`, or `PREVIEWS_DIR` overrides only that specific path.
-- `DATA_DIR` is a legacy alias. It is used only when `DATA_ROOT` is unset.
-- Relative paths are resolved from the repository root.
-- Absolute paths are used as-is.
-- Foldergram reserves `<DATA_ROOT>/scan-errors` for per-run full scan error reports.
-- `THUMBNAILS_DIR` and `PREVIEWS_DIR` must be separate, non-overlapping directories.
-- The scan-error report directory must not overlap `THUMBNAILS_DIR` or `PREVIEWS_DIR`.
-- `THUMBNAILS_DIR` cannot contain `GALLERY_ROOT`.
-- `PREVIEWS_DIR` cannot contain `GALLERY_ROOT`.
-- `GALLERY_ROOT` only needs read access for scans and originals.
-- `DB_DIR`, `THUMBNAILS_DIR`, and `PREVIEWS_DIR` must be writable.
-- `<DATA_ROOT>/scan-errors` is created on demand and must be writable when skip mode produces scan reports.
-
-When `DB_DIR` cannot be created or written, Foldergram logs the reason, skips
-Dbmate for that process, and falls back to an in-memory SQLite database.
-
-Foldergram normalizes path separators so the same rules work with POSIX-style and
-Windows-style paths.
-
-## Detail source and derivative timing
-
-### `IMAGE_DETAIL_SOURCE`
-
-Accepted values:
-
-- `preview`
-- `original`
-
-Behavior:
-
-- applies to image detail pages only
-- `preview` keeps `/image/:id` on generated preview assets
-- `original` makes image detail pages use `/api/originals/:id`
-- does not change feed cards, folder grids, avatars, or other list surfaces
-- does not change video default playback behavior
-
-### `DERIVATIVE_MODE`
-
-Accepted values:
-
-- `eager`
-- `lazy`
-
-Behavior:
-
-- `eager` generates thumbnails and previews during scans
-- `lazy` still indexes metadata during scans, but missing files are generated on the first request to `/thumbnails/...` or `/previews/...` and then cached on disk
-- lazy mode applies to thumbnails and previews
-- lazy mode keeps derivative URLs deterministic because the stored asset-key derivative paths are still persisted in SQLite
-
-### Recommended combinations
-
-| Goal | Suggested config |
+| 设置 | 当前入口与边界 |
 | --- | --- |
-| Current behavior | `IMAGE_DETAIL_SOURCE=preview`, `DERIVATIVE_MODE=eager` |
-| Lowest upfront processing for large libraries | `IMAGE_DETAIL_SOURCE=original`, `DERIVATIVE_MODE=lazy` |
+| 已解压等待区 | 博主入库 → 本地入库 → 选择图集。保存路径只配置范围，不自动接纳全部目录。 |
+| Costuan 等待区、处理区、7-Zip、稳定文件等待、解压密码 | Costuan入库 → 入库设置与环境工具。配置、验证环境与运行任务是不同动作。 |
+| Costuan 允许处理名单 | 名单的“追加到当前名单 / 替换当前名单”单独保存名单，不顺带保存未提交的路径或密码草稿。 |
+| 访问保护 | 设置中的安全入口。管理员/只读访问与单文件夹分享权限不同。 |
+| 排序、排除目录、stories/carousels 模式 | 设置中的对应选项；某些索引结构设置改变后需明确扫描才能应用，不能理解为立即改写已入库历史。 |
 
-### `SCAN_MEDIA_ERROR_MODE`
+Costuan 默认等待区名称由图库的同级目录派生，默认稳定时间为 5 秒、嵌套解压深度为 2、入库后回收选项默认开启。默认 7-Zip 路径带有历史 Windows 环境值，新安装应在设置中改为实际工具，不依赖它自动发现。
 
-Accepted values:
+解压密码支持网页编辑；没有本地决定时可读取 `LOCAL_INGEST_ARCHIVE_PASSWORD` 环境值。本地替换优先，明确清空会同时禁止环境回退；仅打开或未修改保存不会改写有效密码。完整规则见[密码设置](/local-ingest-password-settings)。
 
-- `skip`
-- `fail`
+## 启动时的四种不同工作
 
-Behavior:
+| 工作 | 实际含义 |
+| --- | --- |
+| 数据库迁移与完整校验 | 应用未执行迁移，并检查必要结构、关系、外键与 integrity。失败不能当作正常启动；升级前后可能均需检查。 |
+| 图库启动扫描 | 没有已索引文件夹时安排首次扫描；已有索引正常启动复用索引。图库位置变化可能触发位置核验或要求重建。当前没有独立的“禁止所有图库首次扫描”环境变量。 |
+| Stage3 启动补偿扫描 | 由 `LOCAL_INGEST_STARTUP_SCAN` 控制；设为 false 只跳过自动发现等待区，不取消中断 Job 状态恢复、已保存名单或手工操作。 |
+| 资源目录 Worker | 对数据库中待初始化/待更新的目录生成派生结果，不遍历磁盘或生成图片。它不由 Stage3 扫描开关控制。 |
 
-- `skip` is the default
-- `skip` reports supported-media failures during stat, metadata, derivative generation, and derivative-migration repair work, then continues scanning the rest of the library
-- scans with skipped media finish as `completed_with_errors` instead of `completed`
-- admin-facing scan details keep a short sample in SQLite and point to the full per-run report under `<DATA_ROOT>/scan-errors/`
-- `fail` preserves fail-fast behavior for those same scan-time media errors
-- this applies to supported media that actually reaches the scanner, including supported images and videos
-- unsupported extensions, hidden or excluded paths, and files placed directly in `GALLERY_ROOT` are still ignored earlier and do not produce scan error reports
+“图库扫描跳过”和“Stage3 扫描跳过”是两个不同结果。Worker 可在 HTTP 就绪后继续编目；页面应按初始化/更新状态解释数据，不把 HTTP 可用当作全库编目完成。
 
-### Settings actions and lazy mode
+代码默认端口与所需检查不等于固定启动耗时。另需注意：根 `pnpm start` 的迁移脚本和服务进程是两个进程，服务连接仍执行自己的校验；不要把单进程日志中的 `validationRuns=1` 扩大为整个命令只检查一次。当前直接编译入口 `node server/dist/index.js` 也会检查迁移，但使用它时须自行提供 `NODE_ENV=production` 等完整配置。
 
-- `Scan Library` always refreshes index metadata.
-- `Rebuild Library Index` resets and rebuilds the SQLite-backed index. Existing sharded derivatives remain reusable when the same indexed rows survive the upgrade path.
-- In `DERIVATIVE_MODE=lazy`, neither a normal scan nor `Rebuild Library Index` pre-generates missing thumbnails or previews.
-- `Regenerate Thumbnails` remains a manual thumbnail and video-poster rebuild only. It does not rebuild previews.
-- When `SCAN_MEDIA_ERROR_MODE=skip` records media failures, the admin Settings view shows the full report path for that scan.
-- Runtime-only app-wide controls such as stories mode, carousel mode, and excluded folders live under `Settings -> General Settings`, while scan and rebuild actions live under `Settings -> Scan & Library`.
+## 存储不可用与保护
 
-## Derivative layout upgrade
+当前存储层在数据库目录无法准备时仍有回退到内存 SQLite 的行为。此时不是持久数据库已经恢复，不能继续把页面写入当作可靠保存；先检查日志、实际数据库路径和系统状态。图库或缓存不可用也应先解决路径/权限问题，不通过改成另一空目录掩盖。
 
-Recent versions store derivatives under sharded asset-key paths instead of
-mirroring the gallery tree. Existing libraries migrate on the next full scan:
+更改 `GALLERY_ROOT` 不是普通显示设置。系统会检查已索引文件与新路径是否一致；不符合时可阻止扫描并要求处理图库位置问题。不要直接重建或删除索引来绕过身份与入库历史。
 
-- current derivative paths use a single shard segment based on the first two hex characters of `asset_key`, such as `thumbnails/ab/<asset_key>.webp` and `previews/ab/<asset_key>.webp`
-- old mirrored rows keep working until the migration runs
-- the migration backfills `asset_key` and moves derivative files in place
-- stored derivative paths are updated only when the destination file already exists
-- if a legacy derivative still exists but the stored path is broken, the next full scan repairs it before falling back to regeneration
-- after migration, full rescans can preserve the same indexed media identity across safe folder moves
-- stale derivatives from soft-deleted files are cleaned up after the retention window on later successful full scans
+备份必须区分：
 
-## Live scan progress
+- **主数据**：一致性 SQLite 备份、原始媒体、保留原件和所需配置。
+- **本地密码恢复材料**：数据库中的加密值与 `DATA_ROOT/private/local-ingest-archive-password.key` 配对保护，不打印 key 或提交 Git。
+- **可重建数据**：派生目录表和媒体缓存；它们不是原件的备份。
 
-Foldergram exposes live scan state in three places:
-
-- `GET /api/status` includes the current viewer-safe `scan` snapshot alongside broader shell status
-- `GET /api/scan-progress` returns the same viewer-safe scan payload on its own for lighter polling
-- `GET /api/admin/scan-progress` returns the admin-detailed scan payload, including current file and folder detail when available
-
-Scan phases behave as follows:
-
-- `migration` is determinate and reports checked rows, moved files, repaired files, missing files, and asset-key backfills
-- `discovery` reports discovered and processed folders and posts, but remains open-ended while the scanner is still finding additional folders
-- `derivatives` is determinate and reports queued-versus-completed jobs plus generated thumbnails and previews
-- completed runs can finish as `completed_with_errors` when `SCAN_MEDIA_ERROR_MODE=skip` records supported-media failures
-
-## Managed path ignores
-
-If your configured database, thumbnails, or previews directories live inside the
-gallery tree, Foldergram computes their relative paths and excludes them from
-discovery. The same ignore protection applies to `<DATA_ROOT>/scan-errors`.
-That prevents generated files and scan reports from being re-indexed as source
-media.
-
-## Recommended local `.env`
-
-`.env.example` groups the main runtime settings in the same order shown above.
-Production runtimes still use `SERVER_PORT`, which defaults to `4141` unless
-you override it in Docker Compose or at process start.
-
-```bash
-NODE_ENV=development
-SERVER_PORT=4141
-DEV_SERVER_PORT=4140
-DEV_CLIENT_PORT=4141
-DATA_ROOT=./data
-GALLERY_ROOT=./data/gallery
-GALLERY_EXCLUDED_FOLDERS=
-DB_DIR=./data/db
-THUMBNAILS_DIR=./data/thumbnails
-PREVIEWS_DIR=./data/previews
-IMAGE_DETAIL_SOURCE=preview
-DERIVATIVE_MODE=eager
-LOG_VERBOSE=0
-SCAN_MEDIA_ERROR_MODE=skip
-SCAN_DISCOVERY_CONCURRENCY=4
-SCAN_DERIVATIVE_CONCURRENCY=4
-PUBLIC_DEMO_MODE=0
-CSRF_TRUSTED_ORIGINS=
-```
-
-## Concurrency tuning
-
-`SCAN_DISCOVERY_CONCURRENCY` affects filesystem stat and metadata discovery work.
-`SCAN_DERIVATIVE_CONCURRENCY` affects Sharp and FFmpeg jobs.
-
-Practical guidance:
-
-- Keep the defaults on smaller machines.
-- Increase discovery concurrency only when storage is fast enough to benefit.
-- Increase derivative concurrency only when CPU, RAM, and disk bandwidth can handle it.
-
-## Gallery structure expectations
-
-Foldergram ignores files placed directly in `GALLERY_ROOT`.
-
-It indexes ordinary folders that directly contain supported media. In the
-default reserved-carousel mode, an App Folder can also qualify when its
-`carousels/` directory has an immediate child containing supported media
-directly, so carousel-only App Folders do not need a placeholder file:
-
-```text
-gallery/
-  loose-file.jpg         # ignored
-  trips/
-    oslo/
-      IMG_0001.jpg       # indexed folder
-    berlin/
-      notes.txt          # not indexed
-```
-
-In the default reserved-stories mode, Foldergram also treats
-`AppFolder/stories` specially:
-
-```text
-gallery/
-  AnimalPlanet/
-    post-1.jpg          # indexed owner folder media
-    stories/
-      story-1.mp4       # avatar story set
-      Lions/
-        clip-1.mp4      # highlight capsule
-        nested-1/
-          clip-2.jpg    # still part of Lions
-```
-
-If you want folders literally named `stories` to remain ordinary app folders,
-enable `Treat stories folders as normal app folders` in Settings and rescan the
-library.
-
-## Gallery root changes
-
-Foldergram stores the last successful gallery root in `app_settings`.
-
-When the configured gallery root changes and there is already indexed content,
-Foldergram first validates whether the new root still matches the same indexed
-library.
-
-If every indexed file still exists under the new root with the same relative
-path, size, rounded `mtime`, and extension:
-
-- startup keeps using the existing index
-- stored absolute source paths are refreshed to the current root
-- originals, lazy derivatives, and later rescans use the new gallery root
-
-If that validation fails, Foldergram marks the library as requiring a rebuild.
-Until that rebuild happens:
-
-- startup scanning is deferred
-- manual rescans return `409`
-- thumbnail rebuilds return `409`
-
-Viewer-safe shell status comes from `GET /api/status`, with dedicated live scan
-polling available from `GET /api/scan-progress`.
-
-The current and previous gallery roots remain exposed only in
-`GET /api/admin/stats`. Admin-only live scan file and folder detail is available
-from `GET /api/admin/scan-progress` and from the `scan` field in
-`GET /api/admin/stats`.
-
-## Carousel-folder mode
-
-The SQLite setting `library.treat_carousels_as_folders` controls folders named `carousels`. Its default `false` value reserves `AppFolder/carousels/<post>/` for multi-item posts. Enable **Treat carousels folders as normal app folders** from **Settings → General Settings** to index those paths as ordinary folders instead. When no indexed path conflicts with the reserved name, Settings can show a dismissible Carousel Posts introduction with an expandable folder example. Existing path collisions produce a migration decision card that remains available until a mode is saved. Settings shows a pending update until a successful full scan has applied the saved mode. Use **Scan Library** under normal conditions, or **Rebuild Library Index** when the gallery location requires a new index. There is no `.env` equivalent.
+复制正在使用的单个 SQLite 文件不天然构成一致备份；采用适合运行状态的 SQLite 一致性备份，或在所有相关进程关闭、数据库完整状态得到确认后备份。不要把 down、删除迁移表、恢复旧整库当成通用排错步骤。更多说明见[安全说明](/security)与[故障处理](/troubleshooting)。

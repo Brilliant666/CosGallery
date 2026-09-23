@@ -5,6 +5,8 @@ description: Create, order, scan, view, and manage carousel posts in Foldergram.
 
 # Posts with Multiple Photos or Videos
 
+> 上游技术参考：此页的 `carousels/` 保留目录及 2–20 媒体限制属于 Foldergram Carousel Post，不是 CosGallery 一套 Work 图集的媒体上限。日常收录使用[本地入库](local-admission-web.md)，无需按此页改造每套作品。
+
 A carousel is one swipeable post containing 2–20 supported images, animated images, videos, or a mixture of them. It has one caption and one set of like, save, collection, trash, delete, and sharing actions.
 
 ## Folder structure

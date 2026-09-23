@@ -1,5 +1,7 @@
 # Resource catalog read-model validation
 
+> 历史资料：阶段隔离测量记录，以下数量和耗时不是当前全库常量；使用说明见[资源目录](own-resource-catalog.md)。
+
 ## Environment and boundaries
 
 Measured on Windows with Node 24.19.0 and production-built server/client in an

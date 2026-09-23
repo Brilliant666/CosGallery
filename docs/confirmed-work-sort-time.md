@@ -1,5 +1,7 @@
 # Confirmed work-level sort time
 
+日常规则见[资源目录](own-resource-catalog.md)。本页是固定排序决定的维护契约，不是全库自动改时间工具。来源顺序估算须明确标记“估算”，不是恢复真实发布日期；既有创建时间试案不应作为批量默认方案。
+
 Migration 000023 adds a minimal confirmation table, not data corrections.
 No creator, work or private file identity is embedded in the migration.
 Fresh databases use the identical schema fragment.
@@ -34,10 +36,13 @@ node server/dist/scripts/confirmed-work-sort-time.js apply <existing-database.sq
 
 The command does not load .env, initialize/migrate a database, start any service,
 scan media or accept versions. It refuses a missing database. The caller is
-responsible for choosing the authorized database; this task applies only to the
-isolated preview database.
+responsible for choosing the authorized database. Validate new maintenance plans
+against an isolated copy first; this reference does not authorize applying them
+to a live library or replaying previously abandoned decisions.
 
-Plan structure (synthetic illustration, never production IDs):
+Historical plan structure (synthetic illustration, never production IDs).
+The birthtime evidence below records the early preview shape, **not the current
+recommended estimate rule**; source-order evidence is described below:
 
 ```json
 {
@@ -68,15 +73,15 @@ trying to replace an active confirmation with another key. No generic force
 option bypasses these checks. A future correction requires explicit revocation
 and a fresh evidence decision, not editing the original evidence in place.
 
-Filesystem birthtime is a sorting fact, not proof of a shoot/publication date.
-Capture every eligible original media member at its original location first;
-do not substitute copied-file creation time or silently fall back to mtime.
-Private paths and per-file evidence belong in local ignored reports only.
+Filesystem birthtime is not proof of a shoot/publication date. The early
+birthtime observations remain historical evidence, not a fallback when source
+anchors are missing. Private paths and per-file evidence belong in local ignored
+reports only.
 
-## Source-order estimates (current preview rule)
+## Source-order estimates
 
 The initial filesystem-creation candidates are retained as evidence but are no
-longer the adopted rule for this preview. Explicitly revoked decisions remain
+longer the adopted estimate rule. Explicitly revoked decisions remain
 stored. Missing source evidence leaves the original value unchanged.
 
 An estimate uses an already identified Costuan collection and reliable original
@@ -96,7 +101,7 @@ saved once, not recalculated during refresh or reads.
 Published rows carry only the whitelisted `sortEstimate` fields. The list marks
 the time as estimated; details and TXT/CSV exports carry its reference basis and
 the warning that it is not a release or shooting date. Raw private evidence is
-never serialized. This uses the existing Draft's 000023 table, not a new migration.
+never serialized. This uses the existing 000023 table.
 
 The existing numbering tie-break and independent display directions remain:
 number the full creator collection oldest first, then filter/page/reverse.

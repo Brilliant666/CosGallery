@@ -1,5 +1,7 @@
 # Catalog reads and startup validation
 
+> 历史资料：阶段查询与启动校验记录，不是当前机器的计时承诺；当前启动方式见[安装](installation.md)与[排错](troubleshooting.md)。
+
 This change optimizes reads, not ingestion, matching, or version acceptance. It
 preserves the derivative indexes and 24-work summary/detail separation introduced
 by the preceding gallery performance change.

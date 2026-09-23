@@ -1,5 +1,7 @@
 # Catalog entry and confirmed sort time: draft preview
 
+> 历史资料：资源目录和排序的早期 Draft 迭代记录。创建时间试案、当时待核对数量和折叠布局不是现行指南；见[资源目录](own-resource-catalog.md)与[确认排序时间](confirmed-work-sort-time.md)。
+
 This is an iterative preview, not a deployment or final acceptance.
 
 ## Entry scopes

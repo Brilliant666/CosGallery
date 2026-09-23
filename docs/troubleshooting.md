@@ -1,255 +1,100 @@
 ---
-title: Troubleshooting
-description: Common Foldergram issues and the exact implementation details behind them.
+title: 排错与恢复入口
+description: 按实际阶段定位 CosGallery 的存储、启动、目录、接纳和媒体问题。
 ---
 
-# Troubleshooting
+# 排错与恢复入口
 
-## The app says the library storage is unavailable
+先区分问题发生在哪一层：页面读取、来源检查、网盘暂存、本地下载、接纳/解压、索引，还是派生图片生成。保留具体错误和原计划/Job；不要用扫描、重建、清缓存或重复执行所有历史任务代替定位。
 
-Foldergram checks the configured:
+## 存储不可用或数据重启后消失
 
-- gallery directory
-- thumbnails directory
-- previews directory
+核对实际运行环境中的 `GALLERY_ROOT`、`DB_DIR`、`THUMBNAILS_DIR`、`PREVIEWS_DIR` 及等待/解压目录，确认路径存在、运行账号有对应权限。扫描报告还需要 `DATA_ROOT/scan-errors` 可写。
 
-If any of those are unavailable, the UI reports the reason exposed by the
-backend.
+数据库目录不可用时，当前实现会记录 `using in-memory SQLite` 并使用内存库；其数据随进程退出消失。这不是正常持久模式，应先修复目录，不继续真实入库。图库浏览与新接纳的权限需求不同：接纳、回收和文件恢复需要真实文件操作权限，不能只按“图库只读”配置。
 
-Check:
+不要因页面看似空白就初始化新库、删除旧库或覆盖数据路径。
 
-- the configured paths in `.env`
-- whether those paths exist
-- whether `DB_DIR`, `THUMBNAILS_DIR`, and `PREVIEWS_DIR` are writable by the current process
-- whether `<DATA_ROOT>/scan-errors` is writable if you use `SCAN_MEDIA_ERROR_MODE=skip`
+## 启动慢、升级失败或校验失败
 
-`GALLERY_ROOT` is scanned read-only. It does not need write access unless you
-use delete actions that remove originals from the gallery.
+查看启动日志的具体阶段：
 
-## The database keeps resetting
+- `Startup migration phase`：是否实际应用迁移、状态和耗时。
+- `structure`、`relationships`、`foreign_keys`、`integrity`：完整校验结果。
+- `validationRuns`：单个服务进程无迁移/修复通常一次；升级前后可能两次，不能仅因次数更多就判为异常。当前 `pnpm start` 还会先运行独立迁移脚本，不能把两段进程日志合并当作一个服务进程的校验次数。
+- `HTTP server listening`：开始监听，不等于首次派生目录已经全部完成。
 
-If `DB_DIR` is unavailable, Foldergram falls back to an in-memory SQLite
-database. That means indexed state disappears when the process stops.
+诊断输出写到 stderr 并不自动表示失败，应该看 `status` 和真实异常。完整性检查会读取数据库，耗时受数据量、磁盘和其他读写影响，不是图集点击耗时，也没有固定秒数保证。
 
-Fix the configured database directory first.
+正常启动已包含迁移，不要在服务启动同时再运行独立迁移进程。失败时核对数据库路径、空间、权限和版本，保留现有数据库及日志。已支持的历史不完整迁移标记可由正常入口修复；未知结构异常需要具体诊断。
 
-## Startup stops after an upgrade
+**不要把恢复旧整库、删除迁移记录或执行 down 当作通用排错。** 旧备份可能丢失后来入库、来源资料、审核决定和密码配置。必要恢复先保护现有数据并核对兼容性，见[备份与恢复](./how-it-works.md#备份与恢复)。
 
-Foldergram now runs pending SQLite migrations before it serves requests. If the
-app stops during startup, check the server or container logs first.
+## `database is locked` 或操作繁忙
 
-Check:
+记录具体接口、阶段和错误时间，查看是否有另一服务实例、CLI、迁移或正在执行的接纳/索引操作。数据库连接已有有限等待，并不保证任何并发写入都成功。
 
-- whether `DB_DIR` still exists and is writable
-- whether the database volume or bind mount still points to the intended location
-- whether the filesystem has enough free space for the SQLite update
+不要删除锁记录、抢占活动 claim、忽略错误或重复提交执行请求。持久计划与文件回执用于判断实际做到哪一步；确认原进程是否仍存在后，再沿对应恢复入口处理。不要把一次锁错误直接解释为数据库损坏。
 
-For source installs, you can rerun the migration step directly with:
+## 本地入库暂缓、需处理或目录边界不清
 
-```bash
-pnpm migrate
-```
+在“博主入库 → 本地入库 → 检查并确认”查看具体目录的边界和处理选择。确认独立作品、已有 Work 或同套副本时，需要可靠对应；名称相似和文件数量相同不够。
 
-Foldergram can automatically resume known migrations that were recorded before
-their schema work began. If the log instead reports a partially present schema,
-do not delete the database; restore a known-good `gallery.sqlite` backup and
-retry the upgrade.
+若一个大容器包含多套作品，先在等待区人工整理作品边界，再使用“重新读取并核对”检查当前范围。新增、消失或改名目录需要重新查看确认，不能靠刷新状态自动批准。不要在正在执行的目录上整理文件，也不要直接改图库内已完成作品来绕过身份关系。
 
-## Nothing is being indexed
+## 离开页面后找不到结果，或服务中断
 
-Start with the gallery structure rules:
+从“入库记录”打开对应批次。已提交任务在后台运行，离开页面不主动取消；服务中断则需要根据保存的计划、检查点和审核状态明确继续，而不是页面打开就自动重放。
 
-- files directly inside `GALLERY_ROOT` are ignored
-- hidden folders are ignored
-- a folder is indexed when it directly contains supported media
-- in reserved carousel mode, a folder is also indexed when `carousels/` has an immediate child containing supported media directly
+先看当前结果和后续完成提示。历史未完成但已由后续批次明确覆盖的项不应重新执行。对应不明时保留不明状态，不把旧批次数字当作当前缺失套数。未提交选择的浏览器恢复不等于跨设备永久保存。
 
-This will not be indexed:
+## 入库失败涉及图片或附件
 
-```text
-gallery/
-  loose-file.jpg
-  trips/
-    oslo/
-      notes.txt
-```
+按具体错误打开对应本地接纳项或 Stage3 原 Job 的“查看并处理”/审核入口：
 
-This will be indexed:
+- 超过既有解码上限的 JPEG：依据诊断精确确认是否保留原件，不降低安全限制。
+- PDF：按附件规则保留，不伪装成普通图片或默认广告。
+- WebP：有效文件按正常媒体处理；失败需区分解码、路径、锁占用和文件变化。
+- 已确认广告/坏文件：核对具体文件、证据和去向后处理；审核回执不等于文件已实际移动，也不等于原 Job 已恢复完成。
 
-```text
-gallery/
-  trips/
-    oslo/
-      IMG_0001.jpg
-```
+没有“忽略全部错误”入口。精确审核和恢复能力见[本地入库与审核](./local-admission-web.md)。历史广告专项清理等维护不应通过重跑原入库计划完成。
 
-## Rescan returns a rebuild-required message
+## Costuan 暂停或反复显示待核查
 
-This happens when the configured gallery root no longer validates against the
-existing indexed library.
+先看来源身份/目录检查、原分享定位、暂存、下载稳定性还是解压/媒体审核哪一段失败。来源检查失败保留原来源，不因此规划该博主的暂存；部分资料可以单独留存，但不代表严格检查通过。
 
-If you moved the same library to a new location and every indexed file still
-exists at the same relative path with the same size, mtime, and extension,
-Foldergram refreshes stored source paths automatically at startup and keeps the
-existing index.
+网盘暂存后仍需用户完成本地下载；仅点击刷新不能替代下载与稳定性检查。若作品其实已经通过另一批次入库，先核对可靠 Work 对应与本地满足，不再次解压重复目录，不用来源数减本地数猜缺失。
 
-Use Settings or `POST /api/admin/rebuild-index` only when the new root is a
-different or incomplete library, or when relocation validation already failed.
+插件更新后按[插件说明](https://github.com/Brilliant666/Script/tree/main/CostuanArchiveManager)核对加载目录和显示版本，不自动继续历史队列，也不要将网页登录密码误当 bridge 连接令牌。
 
-## Places do not appear
+## 解压密码显示未配置或无法解密
 
-Places are opt-in and only work for photos that already have GPS metadata.
+进入“Costuan入库 → 入库设置与环境工具”核对有效配置，而不是只看旧环境变量。名单追加/替换只保存名单，不保存未提交的其他配置草稿。
 
-Check:
+本地密文依赖数据库和 `DATA_ROOT/private/local-ingest-archive-password.key`。缺失/损坏时会明确失败，不静默回退到环境密码；不要为排错打印 key 或覆盖旧 key。保存、明确清空和环境回退的规则见[密码设置](./local-ingest-password-settings.md)。修改密码本身不会执行扫描或解压。
 
-- `Settings -> Places` has prepared the offline GeoNames dataset
-- `Settings -> Places` has run `Rebuild place assignments`
-- the source photos actually contain GPS EXIF coordinates
+## 资源目录未初始化、正在更新或导出版本冲突
 
-Videos and photos without GPS metadata do not appear in Places.
+检查目录状态与 Worker 日志。已有完成结果可继续读取；首次未完成的全库不能导出为“完整全库”。导出或翻页发现版本变化时按提示刷新，避免混用编号。
 
-## I moved files into different folders and expected them to stay the same post
+普通读取不应让发布代次不断增长。若持续 pending/error，保留具体错误和状态，核对配套 Worker 编译产物与数据库版本，不手工塞目录行、删标记或重扫媒体来凑完成。
 
-After the derivative-layout upgrade migration has completed, full rescans can
-preserve the same indexed row, likes, and derivative paths for safe file moves.
+目录 NO 与来源 NO 不必相等。排序、补入作品与不可用记录会影响目录展示，先核对 Work、主副本和有效排序依据，不为使编号一致改文件名。
 
-Check:
+## 图集、缩略图或视频不显示
 
-- that a full scan has already completed since the upgrade
-- that the moved file kept the same size and modification time
-- that the old source path is genuinely gone, not duplicated
+分开看详情接口与具体媒体请求。缓存缺失时 lazy 派生会正常读取原件并生成缩略图/预览；首次生成时间不等于目录查询慢。检查原文件可用性、格式/像素限制、缓存目录权限和具体响应，避免全库预热或清缓存。
 
-If a move is ambiguous, Foldergram falls back to the older delete-and-new
-behavior to avoid matching the wrong file.
+视频及动画 AVIF 路径需可用的 `ffmpeg`、`ffprobe`；静态图片按对应图片处理路径执行。保留原件不是已解码图片，不能为了显示它降低限制或伪造缓存。兼容视频可能直接使用原文件播放，详见[媒体处理](./media-processing.md)。
 
-## Old thumbnails or previews are still on disk after files disappeared
+## 图库根改变或扫描要求重建
 
-Missing originals are soft-deleted first. Stale derivatives are cleaned up only
-after the retention window on a later successful full scan.
+已有索引的根路径改变时，启动会核对新根是否仍为同一图库；成功才更新已存路径，失败则提示重建需求。先核对是否挂载丢失、盘符错误或只迁移了部分文件，不立即清空索引。
 
-That is intentional so temporary share outages or accidental moves do not
-immediately delete cached derivatives.
+图库扫描、索引重建与缩略图重建影响不同；重建索引可能重置喜欢等索引关联数据，不能作为日常入库后的必做步骤。继承的 `stories/`、`carousels/` 和隐藏/排除目录规则也会影响旧 Folder 扫描，见[轮播规则](./carousel-posts.md)。
 
-## A scan failed or completed with errors on a corrupt or unreadable media file
+## 文档或开发页面未更新
 
-Foldergram can now handle this in two different ways, depending on
-`SCAN_MEDIA_ERROR_MODE`.
+文档构建入口为 `pnpm build:docs`。失败先检查相对链接、章节锚点、frontmatter 和 `docs/.vitepress/config.ts`，不要通过关闭死链检测掩盖问题。
 
-Default behavior:
-
-- `SCAN_MEDIA_ERROR_MODE=skip` reports supported-media failures and continues scanning the rest of the library
-- the completed run is marked `completed_with_errors`
-- `Settings -> Scan & Library` shows the admin-only report path for that run
-- the full per-run report is written under `<DATA_ROOT>/scan-errors/`
-
-Strict behavior:
-
-- `SCAN_MEDIA_ERROR_MODE=fail` stops on the first supported-media failure and marks the scan as failed
-
-This applies to supported media that reaches scan processing, including
-supported images and videos. Unsupported extensions, excluded folders, hidden
-paths, and files placed directly in `GALLERY_ROOT` are still ignored before
-this stage.
-
-## Moments are missing and highlights appear instead
-
-That is expected when the library does not have enough EXIF-backed timestamps.
-
-Foldergram switches to Highlights unless it has:
-
-- at least `24` indexed posts
-- at least `18` EXIF-backed posts
-- at least `30%` EXIF coverage
-
-## A folder named `stories` stopped appearing as a normal album
-
-That is expected when Foldergram is using the default reserved-stories mode.
-
-In that mode, `AppFolder/stories` is reinterpreted as folder-story data instead
-of a standalone app folder.
-
-If you want folders literally named `stories` to remain ordinary app folders:
-
-1. open `Settings -> General Settings`
-2. enable `Treat stories folders as normal app folders`
-3. save the change
-4. run a scan from `Settings -> Scan & Library`
-
-## A folder is still showing up after I excluded it
-
-Folder exclusions can come from:
-
-- `GALLERY_EXCLUDED_FOLDERS` in `.env` or Docker Compose
-- custom rules in `Settings -> General Settings`
-
-Check:
-
-- rules without a slash match folder names anywhere in the gallery tree
-- rules with a slash match one exact relative path below `GALLERY_ROOT`
-- env-backed rules require a restart to change
-- custom rules require `Save changes`, then a full scan from `Settings -> Scan & Library`
-
-If the folder was already indexed before the rule existed, it will stay visible
-until that scan finishes and soft-removes it from the index.
-
-## Videos or animated AVIF files fail to index or generate previews
-
-Check that both tools are installed and available on `PATH`:
-
-- `ffprobe`
-- `ffmpeg`
-
-Foldergram uses them directly for supported video files and animated AVIF
-image-sequence processing. Static AVIF files use the normal image path and do
-not require these tools.
-
-## A video opens from the original file instead of a generated preview
-
-That is a normal optimization. Foldergram streams the original file directly
-when the video is already suitable for browser playback under the current size
-and codec rules.
-
-See [Media Processing](/media-processing) for the exact conditions.
-
-## The development watcher is not reacting
-
-The watcher is not a permanent always-on background process for every startup
-path. It is development-only and is started by the scan and rebuild flows.
-
-If needed:
-
-1. run a manual scan from Settings
-2. make your filesystem change again
-
-## Likes disappeared after a rebuild
-
-That is expected for `Rebuild Library Index`. The rebuild resets the indexed
-library tables, including `likes`.
-
-Thumbnail-only rebuilds do not clear likes.
-
-## Docs build fails
-
-Use the root command:
-
-```bash
-pnpm build:docs
-```
-
-If it fails, check for:
-
-- broken internal links
-- invalid frontmatter
-- mistakes in `docs/.vitepress/config.ts`
-
-## The app still behaves oddly in development after frontend changes
-
-The client actively unregisters previously installed service workers in
-development. Reload once after startup if you previously visited a production
-build from the same origin and the browser still has stale cached assets.
-
-## Carousel scan warnings and reconciliation recovery
-
-Structural carousel warnings appear in **Settings → Scan & Library** without turning a successful scan into a processing failure. Move media placed directly in `carousels/` into a child folder; move nested media directly into that post child; split posts above 20 items; and expect a one-item child to become a normal post with a warning. If carousel children appear as ordinary folders, disable **Treat carousels folders as normal app folders**, save, then run **Scan Library**.
-
-After changing the carousel folder setting, follow the pending update message in **Settings → Scan & Library**. Run **Scan Library** to apply the saved mode, or use **Rebuild Library Index** when Settings reports that a rebuild is required. The reminder remains visible until the index reflects the selected mode.
+开发前端与 production 构建是不同入口。前端改变后先核对当前端口提供的是哪份产物，再刷新；不要把旧浏览器页面与另一版本后端混在一起作为验证依据。详见[开发说明](./development.md)。

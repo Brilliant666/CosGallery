@@ -1,285 +1,91 @@
 ---
-title: Installation
-description: Installation details, runtime expectations, and production build commands for Foldergram.
+title: 安装与启动
+description: 从 CosGallery 源码安装本机服务，区分运行环境、媒体工具与平台边界。
 ---
 
-# Installation
+# 安装与启动
 
-## Recommended: Docker Compose
+当前推荐使用 **CosGallery 源码 + 本机 Node.js + pnpm**。本机后端直接读取配置的本地目录；浏览器不需要上传整套媒体。IDE 可以作为启动工具，但不是必装依赖。
 
-For most people, Docker Compose is the best way to install Foldergram.
+## 准备运行环境
 
-It uses the pre-built container image and already includes the media tooling
-needed for video support.
-
-### 1. Create a working folder
-
-Create a folder for Foldergram and move into it:
-
-```bash
-mkdir foldergram
-cd foldergram
-```
-
-### 2. Create `docker-compose.yml`
-
-Download the Compose file:
-
-```bash
-wget -O docker-compose.yml https://raw.githubusercontent.com/foldergram/foldergram/main/docker-compose.yml
-```
-
-### 3. Create your first gallery folder
-
-Create a starter folder for your first indexed App Folder:
-
-```bash
-mkdir -p data/gallery/example-album
-```
-
-The layout should look like this:
-
-```text
-foldergram/
-  docker-compose.yml
-  data/
-    gallery/
-      example-album/
-```
-
-### 4. Add your media
-
-Place photos and videos inside `data/gallery/example-album` or another folder
-under `data/gallery`.
-
-Foldergram ignores loose files placed directly in the gallery root, so use a
-structure like this:
-
-```text
-data/
-  gallery/
-    trips/
-      oslo/
-        IMG_0001.jpg
-        clip-01.mp4
-    family/
-      summer-2024/
-        porch.webp
-```
-
-### 5. Start Foldergram
-
-Run:
-
-```bash
-docker compose up -d
-```
-
-Container startup runs pending SQLite migrations automatically before the app
-opens the library database.
-
-### 6. Open the app
-
-Open:
-
-- `http://localhost:4141`
-
-For a quick backend check, you can also open:
-
-- `http://localhost:4141/api/health`
-
-The default Compose file uses the GHCR image and exposes `4141:4141`. If you
-need a different host port, edit the left side of that mapping in
-`docker-compose.yml`.
-
-In the default Docker Compose setup, the container uses the image's built-in
-production defaults plus the mounted `./data/...` volumes. The source-install
-`.env` file is not read directly inside the container.
-
-The shipped Compose file includes `IMAGE_DETAIL_SOURCE: preview` and
-`DERIVATIVE_MODE: eager`.
-
-If you want lazy derivatives or original-backed image detail pages, edit those
-values in `docker-compose.yml` before starting the container.
-
-To skip specific source folders from the first scan in Docker, add
-`GALLERY_EXCLUDED_FOLDERS` under the Compose `environment:` block. For example:
-
-```yaml
-GALLERY_EXCLUDED_FOLDERS: "@eaDir,thumbnails,Archive/cache"
-```
-
-For an optional read-only public demo in Docker, add `PUBLIC_DEMO_MODE: "1"`
-under the Compose `environment:` block. If the browser-visible origin differs
-from the upstream Node host, also set `CSRF_TRUSTED_ORIGINS` to that public
-origin.
-
-If the app will be reachable from other devices on your network, enable the
-admin password from the Settings page after first startup. You can then keep
-the app admin-only, add a separate viewer password, or switch to public browse
-mode with admin unlock.
-
-The Settings sidebar separates app-wide preferences from maintenance actions:
-
-- `General Settings` contains app language, stories and carousel folder modes, nested folder title format, excluded folders, Home/Reels defaults, and the default folder photo order
-- `Places` contains offline place-data preparation and place-assignment rebuilds for GPS-tagged photos
-- `Scan & Library` contains manual scan plus rebuild actions
-
-## If you already cloned this repository
-
-This repository includes:
-
-- `docker-compose.yml` for the GHCR image
-- `docker-compose.local.yml` as a local-build override
-
-From the repo root, run:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
-```
-
-This command uses the normal runtime settings, but builds the image locally
-from the repository `Dockerfile`.
-
-## Source install for development
-
-Use the source install when you want to develop Foldergram itself.
-
-```bash
-pnpm install
-cp .env.example .env
-pnpm dev
-```
-
-`pnpm dev` and `pnpm start` both run pending SQLite migrations automatically
-before the server opens the persistent database. Use `pnpm migrate` when you
-want to apply pending migrations without starting the rest of the app.
-
-The shipped `.env.example` keeps the development ports aligned like this:
-
-- `DEV_CLIENT_PORT=4141` with client fallback through `4144`
-- `DEV_SERVER_PORT=4140`
-
-## Runtime requirements for source installs
-
-| Requirement | Why it matters |
+| 项目 | 当前要求与验证范围 |
 | --- | --- |
-| Node.js 22 | Used across the workspace and CI configuration. |
-| `pnpm` | Matches the workspace scripts and lockfile. |
-| Writable local storage | Foldergram creates and maintains the gallery, database, thumbnails, and previews directories. |
-| FFmpeg and FFprobe | Needed only when you run the app outside Docker and want supported video processing or animated AVIF image-sequence processing. The backend calls `ffprobe` for metadata and `ffmpeg` for video thumbnails, video previews, and animated AVIF derivatives. |
+| Git | 用于取得本仓库及记录版本。 |
+| Node.js | 推荐 Node 24，当前 Windows 本地入库与发布验证使用该版本。仓库使用 `node:sqlite`；现有 GitHub Verify 使用 Node 22。根及工作区 `package.json` 未声明统一的 `engines` 约束，不能据此承诺所有旧版本可用，也不能说只有 Node 24 能运行。 |
+| pnpm | 使用根 `package.json` 指定的 `10.28.0`，依赖由 `pnpm-lock.yaml` 锁定。本文不将 npm 安装视为等价验证路径。 |
+| FFmpeg / FFprobe | 视频元数据、缩略图、预览及动画 AVIF 处理需要；通过 PATH 或配置中的完整路径提供。 |
+| 7-Zip | Costuan 压缩包入库需要，在网页“入库设置与环境工具”中配置可执行文件。已解压图集的本地入库不需要先重新压缩。 |
+| 本地存储 | 数据库、图库及派生目录需有适当权限和空间；入库会移动所选目录，不能把图库仅挂为只读再期待完成入库。 |
 
-## Supported media
+安装 Node 后确认 `node --version`。安装或启用 pnpm 10.28.0 后确认 `pnpm --version`；若已使用统一的本机工具管理方式，沿用它，不必为了本文另装一套。
 
-### Images
+## 从源码运行
 
-- `.jpg`
-- `.jpeg`
-- `.png`
-- `.webp`
-- `.gif`
-- `.avif`
+以下为 Windows PowerShell 示例，工作目录是新克隆的仓库根目录：
 
-### Videos
+```powershell
+git clone https://github.com/Brilliant666/CosGallery.git
+cd CosGallery
+pnpm install --frozen-lockfile
+Copy-Item .env.example .env
+```
 
-- `.mp4`
-- `.mov`
-- `.m4v`
-- `.webm`
-- `.mkv`
+`Copy-Item` 仅用于第一次创建配置；已有 `.env` 时保留原配置，不覆盖。启动前打开 `.env`，按[配置说明](/configuration)设置实际路径。保留 `COS_GALLERY_MODE=1`，以使用本指南描述的博主与作品图库模式。
 
-## Default local paths and scan rules
+如果先准备环境、之后再手工选择 Costuan 待入库范围，可设：
 
-The shipped `.env.example` points at:
+```dotenv
+LOCAL_INGEST_STARTUP_SCAN=false
+```
 
-| Variable | Default |
-| --- | --- |
-| `DATA_ROOT` | `./data` |
-| `GALLERY_ROOT` | `./data/gallery` |
-| `GALLERY_EXCLUDED_FOLDERS` | empty |
-| `DB_DIR` | `./data/db` |
-| `THUMBNAILS_DIR` | `./data/thumbnails` |
-| `PREVIEWS_DIR` | `./data/previews` |
-| `SCAN_MEDIA_ERROR_MODE` | `skip` |
+这只关闭 Stage3 的启动等待区补偿扫描，不是关闭数据库迁移、完整校验或资源目录 Worker。全新的空索引仍可能触发首次图库扫描，因此第一次启动前应确认 `GALLERY_ROOT` 指向预期图库，而不是混乱的下载等待区。
 
-`DATA_ROOT` is the base path for this layout. If you change only `DATA_ROOT`,
-Foldergram will look for `gallery`, `db`, `thumbnails`, and `previews`
-under that directory unless you override those paths individually.
-Full scan error reports are written under `<DATA_ROOT>/scan-errors/` when skip
-mode records supported-media failures.
+完成配置后：
 
-`GALLERY_EXCLUDED_FOLDERS` accepts comma-separated folder rules. Names match
-any folder with that name anywhere in the gallery tree; values with a slash
-match one exact relative path below `GALLERY_ROOT`.
-
-Foldergram resolves relative paths from the repository root.
-
-## Production behavior
-
-### Docker
-
-The Docker Compose install already runs the app in production mode.
-The app inside the container listens on `4141` by default.
-
-### Source
-
-The production app build is split from the docs build:
-
-```bash
+```powershell
 pnpm build
 pnpm start
 ```
 
-`pnpm build` builds:
+`pnpm build` 编译配套的 `server/dist` 和 `client/dist`，不构建文档站。`pnpm start` 使用 production 模式：服务端工作区先执行迁移入口，再启动编译后的服务；数据库连接初始化也保留迁移检查和完整性校验。不要为了日常启动再手工额外运行一次迁移命令。
 
-- `server`
-- `client`
+默认访问 [http://127.0.0.1:4141](http://127.0.0.1:4141)，健康接口为 `GET /api/health`。实际端口由 `SERVER_PORT` 决定，默认只监听 `127.0.0.1`。迁移或完整性检查期间尚未就绪是正常启动阶段，不承诺固定秒数。
 
-It does **not** build the docs site.
+首次运行后，按[快速开始](/quick-start)选择本地入库或 Costuan 路径。空图库没有作品不等于安装失败；没有配置访问保护时，可访问服务的人能直接使用管理功能。开放局域网或反向代理前先阅读[安全说明](/security)。
 
-### How production serving works
+## 目录与平台边界
 
-When `NODE_ENV=production`, the Express app serves `client/dist` if it exists.
-Requests that do not start with `/api`, `/thumbnails`, or `/previews` fall back
-to the SPA entry point.
+推荐将数据库、正式图库、已解压等待区、压缩包等待区及处理区分开。示例结构见[配置说明](/configuration)，盘符与文件夹名称不是项目硬编码要求。
 
-## Docs build
+- 本地目录接纳使用受检查的同卷移动；Costuan 的图库、压缩包等待区、处理中目录也有同卷及不重叠约束。
+- Windows 回收站适配器用于相应广告、空父目录及压缩包清理；其他系统上该适配器明确报不可用，不是自动永久删除的替代实现。
+- 不支持把链接、junction 或任意外部路径当作已经批准的导入范围。
+- 远程访问网页不会让远程服务器获得你电脑的盘符。服务运行在哪台机器，目录选择与执行就发生在哪台机器。
+- 7-Zip 默认值仍带有历史 Windows 工具路径。不要假设它在新机器上存在，应在环境工具中选定自己的 `7z.exe` 并验证。
 
-The VitePress site is built separately:
+Windows 本机路径是当前重点验证环境。Linux、NAS、云端或网络共享的浏览能力，不能代替 Windows 入库/回收闭环兼容性验证。
 
-```bash
+## 升级现有实例
+
+先保留当前一致性数据库备份、原始媒体及配置；本地加密解压密码还依赖独立 key 文件，见[密码配置](/local-ingest-password-settings)。不要把一份旧数据库恢复到已有新入库事实的目录上来“清理状态”。
+
+准备新版本的独立构建，确认业务空闲后停止旧服务，再切换配套前端、后端及维护 CLI，随后按正常入口启动。不要在旧后端仍运行时先覆盖新前端，也不要让新 CLI 指向另一版本的数据库结构。
+
+正常启动按序应用待执行迁移。当前文档基线包含至 `000026` 的迁移；后续版本以仓库实际迁移文件为准。已应用版本不应反复升级或执行 down，不能删除迁移记录绕过异常。发生失败时保留真实错误与恢复材料，见[故障处理](/troubleshooting)。
+
+## Docker 与上游参考
+
+仓库保留 `Dockerfile`、`docker-compose.yml` 和 `docker-compose.local.yml`。其中默认 Compose 使用 `ghcr.io/foldergram/foldergram:latest`，是 **Foldergram 上游镜像**，不能用它代表当前 CosGallery 功能。
+
+本地 Docker 构建文件可供开发者研究，但本文不把它列为已经完整验证的 CosGallery Windows 入库、7-Zip、回收站或本地密码恢复方案。没有发布可验证的 CosGallery 镜像或在线演示时，不以虚构地址替代。
+
+## 开发与文档站
+
+需要热更新或修改代码时见[开发说明](/development)，不要把开发端口与 production 的 4141 混用。文档站单独构建：
+
+```powershell
 pnpm build:docs
 ```
 
-The deploy workflow publishes `./docs/.vitepress/dist`.
-
-## Optional developer entry points
-
-```bash
-pnpm dev:server
-pnpm dev:client
-pnpm dev:docs
-```
-
-## Startup and upgrade behavior
-
-On startup, the server checks storage availability and then decides whether to:
-
-- apply pending SQLite migrations before opening the persistent app database
-- queue a startup scan for first-run indexing
-- keep using the existing index for already-initialized libraries
-- validate a relocated gallery root and refresh stored source paths when it still matches the indexed library
-- block scanning until a library rebuild happens only when the new gallery root does not validate against the current index
-
-Fresh installs create `gallery.sqlite` from the baseline migration. Existing
-supported installs are baselined automatically on the first upgraded start, so
-later releases can apply ordered schema changes without a manual export or
-rebuild step.
-
-When a full library task runs, the UI reports discovery separately from later
-media-processing phases so long-running maintenance work stays understandable.
-
-If the configured database directory is unavailable, Foldergram falls back to an
-in-memory SQLite database. If the gallery, thumbnails, or previews directories
-are unavailable, the library is reported as unavailable instead of serving stale
-filesystem assumptions.
+输出为 `docs/.vitepress/dist`，不需要为文档构建启动图库服务。

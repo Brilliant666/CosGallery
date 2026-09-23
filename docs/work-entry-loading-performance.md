@@ -1,5 +1,7 @@
 # Work entry loading and targeted creator reads
 
+> 历史资料：阶段图集加载验证，保留原测量条件；当前用户行为见[功能](features.md)，不据此宣称跨路由零请求。
+
 Baseline: `e076a2bd2b9b8ffae937346fb3d8a796bf4953ac`.
 
 ## Scope

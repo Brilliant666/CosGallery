@@ -5,7 +5,23 @@ description: Backend endpoints, parameters, response shapes, and mutation rules 
 
 # API
 
-All documented routes come from `server/src/routes/api.ts`.
+## CosGallery 接口入口
+
+本文保留继承的媒体 API 参考，不是全部 CosGallery 接口的完整规范。当前路由组合见 `server/src/routes/api.ts` 与 `server/src/app.ts`，业务接口分布如下：
+
+| 基础路径 | 路由文件 / 职责 |
+| --- | --- |
+| `/api/admin/local-admission` | `local-admission-web-routes.ts`：等待区、草稿、集合、确认与执行结果 |
+| `/api/admin/local-review` | `local-review-routes.ts`：原计划 / Job 精确文件审核 |
+| `/api/admin/archive-catalog/source-evidence` | `source-evidence-routes.ts`：资料、归属、出处与映射 |
+| `/api/admin/archive-catalog/resource-catalog` | `resource-catalog-routes.ts`：已发布目录、详情、版本与导出 |
+| `/api/admin/archive-catalog` | `api.ts` 与 `creator-sync-read-routes.ts`：博主管理和来源 / 任务读取 |
+| `/api/admin/local-ingest` | `api.ts`：Costuan 入库、配置与名单 |
+| `/api/archive-bridge` | `archive-bridge.ts`：独立的本地插件令牌协议 |
+
+普通使用请走[网页入库](local-admission-web.md)，不要用孤立的接口成功响应代替完成文件、索引与账本的确认。字段、确认 token、请求键和错误边界以对应路由 schema 与测试为准；已有服务能力不等于全部有通用网页维护入口。
+
+插件 bridge 使用独立 loopback 与 token 检查，不沿用浏览器角色 cookie 作为授权。下文普通 `/api` 的鉴权 / 变更请求说明不应套到 bridge；详见[安全](security.md)。
 
 ## Base paths
 
