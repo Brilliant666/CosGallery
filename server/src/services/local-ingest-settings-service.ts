@@ -15,6 +15,7 @@ import {
   normalizeAbsoluteLocalIngestPath
 } from '../utils/local-ingest-paths.js';
 import { runProcessWithTimeout } from '../utils/run-process.js';
+import { LocalIngestPasswordStore, LOCAL_INGEST_PASSWORD_SETTING_KEY } from './local-ingest-password-store.js';
 
 const localIngestSettingsSchema = z.object({
   libraryRoot: z.string().trim().min(1),
@@ -33,6 +34,7 @@ export type LocalIngestSettings = z.infer<typeof localIngestSettingsSchema>;
 export type LocalIngestSettingsView = LocalIngestSettings & {
   allowlist: string[];
   archivePasswordConfigured: boolean;
+  archivePasswordSource?: 'environment' | 'local' | 'none';
 };
 
 export type LocalIngestPathCheck = {
@@ -182,40 +184,76 @@ async function inspectPath(directoryPath: string, createIfMissing: boolean): Pro
 export class LocalIngestSettingsService {
   constructor(
     private readonly expectedGalleryRoot = appConfig.galleryRoot,
-    private readonly repository: LocalIngestSettingsRepository = appSettingsRepository
+    private readonly repository: LocalIngestSettingsRepository = appSettingsRepository,
+    private readonly passwordStore = new LocalIngestPasswordStore(path.join(appConfig.dataRoot, 'private'))
   ) {}
 
+  private passwordState(): { password: string | null; source: 'environment' | 'local' | 'none' } {
+    const stored = this.repository.get(LOCAL_INGEST_PASSWORD_SETTING_KEY);
+    if (stored !== null) {
+      const password = this.passwordStore.decrypt(stored);
+      return { password, source: password ? 'local' : 'none' };
+    }
+    const password = configuredArchivePassword();
+    return { password, source: password ? 'environment' : 'none' };
+  }
+
   get(): LocalIngestSettingsView {
+    const password = this.passwordState();
     return {
       ...parseStoredSettings(this.repository.get(LOCAL_INGEST_SETTINGS_SETTING_KEY), this.expectedGalleryRoot),
       allowlist: parseStoredAllowlist(this.repository.get(LOCAL_INGEST_ALLOWLIST_SETTING_KEY)),
-      archivePasswordConfigured: configuredArchivePassword() !== null
+      archivePasswordConfigured: password.password !== null,
+      archivePasswordSource: password.source
     };
   }
 
   getArchivePassword(): string {
-    const password = configuredArchivePassword();
+    const { password } = this.passwordState();
     if (!password) {
-      throw new Error('LOCAL_INGEST_ARCHIVE_PASSWORD is not configured');
+      throw new Error('Archive password is not configured');
     }
     return password;
   }
 
-  save(input: LocalIngestSettings & { allowlist?: string[]; quarantineRoot?: string }): LocalIngestSettingsView {
+  // Explicit management editor read; keep ordinary settings/list responses small.
+  getEditableArchivePassword(): string {
+    return this.passwordState().password ?? '';
+  }
+
+  save(input: LocalIngestSettings & { allowlist?: string[]; quarantineRoot?: string; archivePassword?: string; clearArchivePassword?: boolean }): LocalIngestSettingsView {
     const settings = normalizeSettings(localIngestSettingsSchema.parse(input), this.expectedGalleryRoot);
-    const allowlist = [...new Set(allowlistSchema.parse(input.allowlist ?? this.get().allowlist))];
+    const allowlist = [...new Set(allowlistSchema.parse(input.allowlist ?? parseStoredAllowlist(this.repository.get(LOCAL_INGEST_ALLOWLIST_SETTING_KEY))))];
     const legacyQuarantineRoot = input.quarantineRoot
       ?? parseLegacyQuarantineRoot(this.repository.get(LOCAL_INGEST_SETTINGS_SETTING_KEY));
     const persistedSettings = legacyQuarantineRoot
       ? { ...settings, quarantineRoot: legacyQuarantineRoot }
       : settings;
+    const password = input.archivePassword;
+    if ((password !== undefined && (typeof password !== 'string' || password.length > 1024 || /[\r\n\0]/.test(password)))
+      || (input.clearArchivePassword !== undefined && typeof input.clearArchivePassword !== 'boolean')
+      || (input.clearArchivePassword && password)) throw new Error('Invalid archive password settings');
+    const secretChanges = input.clearArchivePassword
+      ? [{ key: LOCAL_INGEST_PASSWORD_SETTING_KEY, value: JSON.stringify({ version: 1, disabled: true }) }]
+      : password ? [{ key: LOCAL_INGEST_PASSWORD_SETTING_KEY, value: this.passwordStore.encrypt(password) }] : [];
+    if (secretChanges.length === 0) this.passwordState();
     this.repository.setMany([
       // V1 neither exposes nor validates quarantineRoot, but retaining a legacy
       // value avoids silently rewriting the user's stored configuration.
       { key: LOCAL_INGEST_SETTINGS_SETTING_KEY, value: JSON.stringify(persistedSettings) },
-      { key: LOCAL_INGEST_ALLOWLIST_SETTING_KEY, value: JSON.stringify(allowlist) }
+      { key: LOCAL_INGEST_ALLOWLIST_SETTING_KEY, value: JSON.stringify(allowlist) },
+      ...secretChanges
     ]);
-    return { ...settings, allowlist, archivePasswordConfigured: configuredArchivePassword() !== null };
+    return this.get();
+  }
+
+  saveAllowlist(input: string[]): LocalIngestSettingsView {
+    const allowlist = [...new Set(allowlistSchema.parse(input))];
+    // Validate the effective view before committing anything; this endpoint
+    // deliberately cannot overwrite paths, tools, password, or other settings.
+    const current = this.get();
+    this.repository.setMany([{ key: LOCAL_INGEST_ALLOWLIST_SETTING_KEY, value: JSON.stringify(allowlist) }]);
+    return { ...current, allowlist };
   }
 
   async validate(input?: LocalIngestSettings): Promise<LocalIngestSettingsValidation> {
@@ -242,10 +280,11 @@ export class LocalIngestSettingsService {
     }
     if (!sameVolume) errors.push('Configured roots are not on the same volume');
     if (!sevenZip.valid) errors.push('7-Zip validation failed');
-    if (!configuredArchivePassword()) errors.push('Archive password secret is not configured');
+    const passwordConfigured = this.passwordState().password !== null;
+    if (!passwordConfigured) errors.push('Archive password secret is not configured');
     return {
       valid: errors.length === 0,
-      passwordConfigured: configuredArchivePassword() !== null,
+      passwordConfigured,
       sevenZip,
       paths,
       sameVolume,

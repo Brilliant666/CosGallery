@@ -8,6 +8,7 @@ import { databaseManager } from '../db/database.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogQueryService } from './archive-catalog-query-service.js';
 import { normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
+import { inspectCreatorDeletion } from './managed-creator-deletion.js';
 
 const name = z.string().transform(value => value.normalize('NFKC').trim()).pipe(z.string().min(1).max(255))
   .refine(value => normalizeCreatorIdentity(value).length > 0, '名称必须包含有效字符');
@@ -24,6 +25,9 @@ export const patchManagedCreatorSchema = z.object({
   '至少修改一个字段');
 export const managedAliasSchema = z.object({ alias: name, confirmDistinct: z.boolean().default(false) }).strict();
 export const managedConfirmationSchema = z.object({ confirm: z.literal(true) }).strict();
+export const deleteManagedCreatorSchema = z.object({
+  confirm: z.literal(true), confirmationToken: z.string().regex(/^[a-f0-9]{64}$/u)
+}).strict();
 export const managedFolderLinkSchema = z.object({ creatorId: z.number().int().positive() }).strict();
 export const managedFolderRatingSchema = z.object({ contentRating: rating }).strict();
 
@@ -156,6 +160,36 @@ export class ManagedCreatorService {
         .run(active ? 1 : 0, active ? null : timestamp, timestamp, id);
       return this.requireCreator(id);
     });
+  }
+
+  deletionPreview(id: number) {
+    return this.transaction(() => {
+      const preview = inspectCreatorDeletion(this.database, id);
+      if (!preview) throw new ManagedCreatorError(404, 'CREATOR_NOT_FOUND', '博主不存在');
+      return preview;
+    });
+  }
+
+  deleteUnusedManualCreator(id: number, input: unknown) {
+    const data = deleteManagedCreatorSchema.parse(input);
+    return this.transaction(() => {
+      const preview = inspectCreatorDeletion(this.database, id);
+      if (!preview) throw new ManagedCreatorError(404, 'CREATOR_NOT_FOUND', '博主不存在');
+      if (!preview.eligible) throw new ManagedCreatorError(409, 'CREATOR_DELETE_BLOCKED',
+        `不能删除：${preview.blockers.map(item => `${item.label}（${item.count}）`).join('；')}`);
+      if (preview.confirmationToken !== data.confirmationToken) throw new ManagedCreatorError(409,
+        'CREATOR_DELETE_PREVIEW_CHANGED', '博主资料已变化，请重新检查并确认删除');
+      // The full audit holds the reserved writer. No historical/business rows may
+      // cascade or become NULL; only the explicit own metadata whitelist is removed.
+      this.database.prepare('DELETE FROM archive_catalog_creator_aliases WHERE creator_id=?').run(id);
+      this.database.prepare('DELETE FROM archive_catalog_creators WHERE id=?').run(id);
+      // Creator/alias delete triggers dirty the catalog: clean AFTER those triggers,
+      // atomically invalidate revisions, and reject any stale prepared worker result.
+      this.database.prepare('DELETE FROM resource_catalog_rows WHERE creator_id=?').run(id);
+      this.database.prepare('DELETE FROM resource_catalog_state WHERE creator_id=?').run(id);
+      this.database.prepare('UPDATE resource_catalog_meta SET publication=publication+1 WHERE id=1').run();
+      return { deleted: true as const, creatorId: id };
+    }, true);
   }
 
   /** folderId always means the gallery folders.id, never a name or catalog row ID. */

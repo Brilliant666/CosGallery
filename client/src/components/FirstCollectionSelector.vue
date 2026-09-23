@@ -49,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import CreatorSourceStatus from './CreatorSourceStatus.vue';
 import { planFirstCollection, sourceStateLabel } from '../api/first-collection';
 import type { FirstCollectionResult } from '../api/first-collection';
@@ -57,7 +57,7 @@ import { fetchCreatorSyncRoster, fetchCreatorSyncStats } from '../api/creator-sy
 import type { CreatorSyncFilters, CreatorSyncRow, CreatorSyncStats, SyncPage } from '../api/creator-sync';
 import type { ArchiveCatalogCreator } from '../types/api';
 import { RequestError } from '../api/http';
-const props = defineProps<{ creator?: Pick<ArchiveCatalogCreator, 'id' | 'name' | 'isActive' | 'localWorks' | 'preference' | 'rating'>; disabled?: boolean }>();
+const props = withDefaults(defineProps<{ creator?: Pick<ArchiveCatalogCreator, 'id' | 'name' | 'isActive' | 'localWorks' | 'preference' | 'rating'>; disabled?: boolean; active?: boolean }>(), { active: true });
 const emit = defineEmits<{ planned: [creatorIds: number[]] }>();
 const dialog = ref<HTMLDialogElement | null>(null), busy = ref(false), loading = ref(false), error = ref(''), copyNotice = ref('');
 const payload = ref<SyncPage<CreatorSyncRow> | null>(null), stats = ref<CreatorSyncStats | null>(null), page = ref(1), result = ref<FirstCollectionResult | null>(null);
@@ -90,6 +90,7 @@ const handoff = computed(() => {
   return { version: 1, type: 'costuan-stage1-scope', taskIds: items.map(item => item.task!.id), creatorIds: items.map(item => item.creatorId), names: items.map(item => item.creatorName), rounds: items.filter(item => item.task?.checkRoundId).map(item => ({ taskId: item.task!.id, checkRoundId: item.task!.checkRoundId! })) };
 });
 async function load() {
+  if (!props.active) return;
   const request = ++generation; loading.value = true;
   try {
     const snapshot = { ...filters };
@@ -141,6 +142,7 @@ async function copyHandoff() {
   try { await navigator.clipboard.writeText(JSON.stringify(handoff.value)); copyNotice.value = '已复制固定任务范围；尚未执行采集或转存。'; }
   catch { copyNotice.value = '剪贴板不可用，请手动复制上方任务范围。'; }
 }
+watch(() => props.active, active => { if (!active) { ++generation; loading.value = false; } });
 onBeforeUnmount(() => { ++generation; });
 </script>
 

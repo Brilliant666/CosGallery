@@ -5,6 +5,11 @@ const root = '/api/admin/archive-catalog';
 export type ManagedCreatorInput = {
   name:string; preference:'liked'|'kept'|null; rating:'R15'|'R18'|null; confirmDistinct:boolean;
 };
+export type ManagedCreatorDeletionPreview = {
+  creatorId:number; name:string; eligible:boolean;
+  blockers:Array<{code:string;label:string;count:number}>;
+  confirmationToken:string; removableAliases:number;
+};
 function mutate<T>(path:string, method:string, body?:unknown) {
   return requestJson<T>(root+path, {method, headers:{'content-type':'application/json'}, body:body===undefined?undefined:JSON.stringify(body)});
 }
@@ -13,6 +18,8 @@ export const updateManagedCreator=(id:number,body:ManagedCreatorInput)=>mutate<A
 export const addManagedAlias=(id:number,alias:string,confirmDistinct:boolean)=>mutate<ArchiveCatalogCreatorDetail>(`/creators/${id}/aliases`,'POST',{alias,confirmDistinct});
 export const deleteManagedAlias=(id:number,aliasId:string)=>mutate<ArchiveCatalogCreatorDetail>(`/creators/${id}/aliases/${encodeURIComponent(aliasId)}`,'DELETE');
 export const setManagedCreatorActive=(id:number,active:boolean)=>mutate<ArchiveCatalogCreatorDetail>(`/creators/${id}/${active?'restore':'deactivate'}`,'POST',{confirm:true});
+export const previewManagedCreatorDeletion=(id:number)=>requestJson<ManagedCreatorDeletionPreview>(`${root}/creators/${id}/deletion-preview`);
+export const deleteUnusedManagedCreator=(id:number,confirmationToken:string)=>mutate<{deleted:true;creatorId:number}>(`/creators/${id}`,'DELETE',{confirm:true,confirmationToken});
 export const linkManagedFolder=(folderId:number,creatorId:number)=>mutate<ArchiveCatalogCreatorDetail>(`/local-creator-folders/${folderId}/link`,'POST',{creatorId});
 export const unlinkManagedFolder=(folderId:number)=>mutate<{folderId:number;creatorId:null}>(`/local-creator-folders/${folderId}/unlink`,'POST',{confirm:true});
 export const fetchIngestDestination=(creatorId:number)=>requestJson<LocalIngestDestinationPreference>(`${root}/creators/${creatorId}/ingest-destination`);

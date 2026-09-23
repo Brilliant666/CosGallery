@@ -25,6 +25,9 @@ import ArchiveCatalogView from '../views/ArchiveCatalogView.vue';
 import LocalAdmissionView from '../views/LocalAdmissionView.vue';
 import LocalAdmissionWorkspace from '../views/LocalAdmissionWorkspace.vue';
 import LocalReviewView from '../views/LocalReviewView.vue';
+import CreatorAdmissionView from '../views/CreatorAdmissionView.vue';
+import CostuanWorkspace from '../views/CostuanWorkspace.vue';
+import { admissionDefaultDestination, legacyCatalogDestination } from '../utils/creator-admission-navigation';
 import type { AuthCapabilities } from '../types/api';
 
 type RouteCapability = keyof AuthCapabilities;
@@ -130,22 +133,32 @@ export const router = createRouter({
       }
     },
     {
+      path: '/creator-admission',
+      name: 'creator-admission',
+      component: CreatorAdmissionView,
+      redirect: admissionDefaultDestination,
+      meta: { requiredCapability: 'canAccessSettings', admission: true },
+      children: [
+        { path: 'local', name: 'local-admission-workspace', component: LocalAdmissionWorkspace },
+        { path: 'local/:creatorId', name: 'local-admission', component: LocalAdmissionView },
+        { path: 'costuan', name: 'costuan-admission', component: CostuanWorkspace },
+        { path: 'review', name: 'local-review', component: LocalReviewView }
+      ]
+    },
+    {
       path: '/local-admission',
-      name: 'local-admission-workspace',
-      component: LocalAdmissionWorkspace,
-      meta: { requiredCapability: 'canAccessSettings' }
+      meta: { requiredCapability: 'canAccessSettings' },
+      redirect: to => ({ name: 'local-admission-workspace', query: to.query, hash: to.hash })
     },
     {
       path: '/local-admission/:creatorId',
-      name: 'local-admission',
-      component: LocalAdmissionView,
-      meta: { requiredCapability: 'canAccessSettings' }
+      meta: { requiredCapability: 'canAccessSettings' },
+      redirect: to => ({ name: 'local-admission', params: to.params, query: to.query, hash: to.hash })
     },
     {
       path: '/local-review',
-      name: 'local-review',
-      component: LocalReviewView,
-      meta: { requiredCapability: 'canAccessSettings' }
+      meta: { requiredCapability: 'canAccessSettings' },
+      redirect: to => ({ name: 'local-review', query: to.query, hash: to.hash })
     },
     {
       path: '/moments/:id',
@@ -286,6 +299,10 @@ export function canAccessRoute(route: Pick<RouteLocationNormalized, 'meta'>): bo
 }
 
 router.beforeEach((to) => {
+  if (to.name === 'archive-catalog') {
+    const destination = legacyCatalogDestination(to);
+    if (destination) return destination;
+  }
   const authStore = useAuthStore(pinia);
   if (!authStore.ready) {
     return true;

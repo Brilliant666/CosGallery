@@ -32,7 +32,7 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
 });
 
-it('refreshes the real roster after Stage3 while retaining its page, filters and unsaved draft', async () => {
+it('refreshes the real roster from changed backend facts while retaining its page, filters and unsaved draft, without mounting Costuan', async () => {
   let completed = false;
   const creator: ArchiveCatalogCreatorDetail = { id: 1, name: 'Alpha', isActive: true, preference: 'liked', rating: 'R18',
     seedSource: 'manual', seedSourceCreatorId: '1', createdAt: '2026-09-01', updatedAt: '2026-09-01',
@@ -52,8 +52,6 @@ it('refreshes the real roster after Stage3 while retaining its page, filters and
     total: 60, page: params?.page ?? 1, limit: params?.limit ?? 50, hasMore: params?.page !== 2
   }));
   vi.mocked(gallery.fetchArchiveCatalogCreator).mockResolvedValue(creator);
-  let finish!: (value: Awaited<ReturnType<typeof gallery.runLocalIngestBatch>>) => void;
-  vi.mocked(gallery.runLocalIngestBatch).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
 
   const wrapper = mount(ArchiveCatalogView);
   await flushPromises();
@@ -63,18 +61,14 @@ it('refreshes the real roster after Stage3 while retaining its page, filters and
   await roster.findAll('button').find(button => button.text() === '下一页')!.trigger('click');
   await flushPromises();
   expect(roster.get('.creator-card').text()).toContain('尚未入库');
-  await wrapper.get('[data-test="workspace-ingest"]').trigger('click');
-  await wrapper.get('[data-test="run-local-ingest-batch"]').trigger('click');
-  await flushPromises();
-
-  // Another workspace may be edited while the long-running request completes.
-  await wrapper.get('[data-test="workspace-roster"]').trigger('click');
+  // Costuan now has a separate route. The roster still supports scoped refresh
+  // of changed backend facts without replacing the edit model or running jobs.
+  expect(wrapper.find('[data-test="workspace-ingest"]').exists()).toBe(false);
   await roster.get('button[aria-label="管理 Alpha"]').trigger('click');
   await flushPromises();
   await roster.get('.roster-edit input').setValue('Unsaved name');
   completed = true;
-  finish({ total: 2, examined: 2, settled: 2, ingested: 2, failed: 0, awaitingReview: 0,
-    reconciling: 0, claimUnavailable: 0, unchanged: 0 });
+  await roster.vm.refresh();
   await flushPromises();
 
   expect(wrapper.getComponent(ManagedCreatorRoster).element).toBe(roster.element);
@@ -89,4 +83,7 @@ it('refreshes the real roster after Stage3 while retaining its page, filters and
   expect(managed.updateManagedCreator).not.toHaveBeenCalled();
   expect(gallery.scanLocalIngestInbox).not.toHaveBeenCalled();
   expect(gallery.planArchiveDownloadTasks).not.toHaveBeenCalled();
+  expect(gallery.runLocalIngestBatch).not.toHaveBeenCalled();
+  expect(gallery.fetchLocalIngestJobs).not.toHaveBeenCalled();
+  expect(gallery.fetchLocalIngestOperation).not.toHaveBeenCalled();
 });

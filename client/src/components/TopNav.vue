@@ -166,7 +166,7 @@
               </a>
             </RouterLink>
 
-            <RouterLink v-if="authStore.canAccessSettings" class="mobile-nav__menu-item" :to="{name:'local-admission-workspace'}" @click="closeMoreMenu"><span class="mobile-nav__menu-icon i-fluent-folder-add-20-regular" aria-hidden="true" /><span>本地入库</span></RouterLink>
+            <RouterLink v-if="authStore.canAccessSettings" class="mobile-nav__menu-item" :class="route.meta.admission ? menuItemActiveClass : ''" :aria-current="route.meta.admission ? 'page' : undefined" :to="{name:'creator-admission'}" @click="closeMoreMenu"><span class="mobile-nav__menu-icon i-fluent-folder-add-20-regular" aria-hidden="true" /><span>博主入库</span></RouterLink>
 
             <RouterLink v-if="authStore.canAccessSettings" custom :to="{ name: 'settings' }" v-slot="{ href, navigate, isActive }">
               <a
@@ -257,7 +257,7 @@ const showPlacesNav = computed(() => placesStore.items.length > 0 && placesStore
 const isPlacesRoute = computed(() => route.name === 'places' || route.name === 'place');
 const isLikesRoute = computed(() => route.name === 'likes');
 const isCollectionsRoute = computed(() => route.name === 'collections' || route.name === 'collection');
-const isStaticMoreRoute = computed(() => route.name === 'trash' || route.name === 'settings' || route.name === 'archive-catalog' || route.name === 'local-admission-workspace' || route.name === 'local-admission' || route.name === 'local-review' || isCollectionsRoute.value);
+const isStaticMoreRoute = computed(() => route.name === 'trash' || route.name === 'settings' || route.name === 'archive-catalog' || route.meta.admission === true || isCollectionsRoute.value);
 const mobileNavActiveClass = 'mobile-nav__item--active';
 const menuItemActiveClass = 'mobile-nav__menu-item--active';
 const moreButtonClasses = computed(() => ({

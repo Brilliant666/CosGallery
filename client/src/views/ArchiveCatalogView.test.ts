@@ -1,11 +1,19 @@
-vi.mock('../components/ManagedCreatorRoster.vue', () => ({default:{template:'<div data-test="managed-roster-slot" />'}}));
+vi.mock('../components/ManagedCreatorRoster.vue', () => ({default:{name:'ManagedCreatorRoster',template:'<div data-test="managed-roster-slot" />'}}));
 vi.mock('../components/FirstCollectionSelector.vue', () => ({default:{template:'<button data-test="first-collection-slot" @click="$emit(\'planned\', [123])">从博主库选择</button>',emits:['planned']}}));
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
+import { defineComponent } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 enableAutoUnmount(afterEach);
 
 import ArchiveCatalogView from './ArchiveCatalogView.vue';
+import CostuanWorkspace from './CostuanWorkspace.vue';
+async function mountCostuan(workspace: 'source' | 'staging' | 'ingest' = 'ingest') {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/creator-admission/costuan', name: 'costuan-admission', component: CostuanWorkspace }] });
+  await router.push({ name: 'costuan-admission', query: { workspace } });
+  await router.isReady();
+  return mount(CostuanWorkspace, { global: { plugins: [router] } });
+}
 import { fetchDownloadCreators, fetchDownloadTaskPage, fetchMetadataCreators } from '../api/creator-sync';
 import type { CreatorSyncRow, MetadataCreatorPage } from '../api/creator-sync';
 vi.mock('../api/creator-sync', () => ({ fetchDownloadCreators: vi.fn(), fetchDownloadTaskPage: vi.fn(), fetchMetadataCreators: vi.fn() }));
@@ -20,6 +28,7 @@ import {
   fetchLocalIngestJobs,
   fetchLocalIngestOperation,
   fetchLocalIngestSettings,
+  fetchLocalIngestArchivePassword,
   planArchiveDownloadTasks,
   planArchiveMetadataTasks,
   retryLocalIngestCleanup,
@@ -27,6 +36,7 @@ import {
   runLocalIngestBatch,
   runLocalIngestJob,
   saveLocalIngestSettings,
+  saveLocalIngestAllowlist,
   scanLocalIngestInbox,
   smokeTestLocalIngestRecycleBin,
   validateLocalIngestSettings
@@ -44,10 +54,12 @@ vi.mock('../api/gallery', () => ({
   fetchLocalIngestJobs: vi.fn(),
   fetchLocalIngestOperation: vi.fn(),
   fetchLocalIngestSettings: vi.fn(),
+  fetchLocalIngestArchivePassword: vi.fn(),
   retryLocalIngestCleanup: vi.fn(),
   runLocalIngestBatch: vi.fn(),
   runLocalIngestJob: vi.fn(),
   saveLocalIngestSettings: vi.fn(),
+  saveLocalIngestAllowlist: vi.fn(),
   scanLocalIngestInbox: vi.fn(),
   smokeTestLocalIngestRecycleBin: vi.fn(),
   validateLocalIngestSettings: vi.fn()
@@ -255,10 +267,13 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(fetchLocalIngestJobs).mockReset();
     vi.mocked(fetchLocalIngestOperation).mockReset();
     vi.mocked(fetchLocalIngestSettings).mockReset();
+    vi.mocked(fetchLocalIngestArchivePassword).mockReset();
     vi.mocked(retryLocalIngestCleanup).mockReset();
     vi.mocked(runLocalIngestBatch).mockReset();
     vi.mocked(runLocalIngestJob).mockReset();
     vi.mocked(saveLocalIngestSettings).mockReset();
+    vi.mocked(saveLocalIngestAllowlist).mockReset();
+    vi.mocked(saveLocalIngestAllowlist).mockImplementation(async allowlist => ({ ...localIngestSettings, allowlist }));
     vi.mocked(scanLocalIngestInbox).mockReset();
     vi.mocked(smokeTestLocalIngestRecycleBin).mockReset();
     vi.mocked(validateLocalIngestSettings).mockReset();
@@ -349,6 +364,7 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(fetchArchiveBridgeStatus).mockResolvedValue({ configured: false });
     vi.mocked(fetchLocalIngestInboxCreators).mockResolvedValue(inboxCreatorsResult);
     vi.mocked(fetchLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, allowlist: [...localIngestSettings.allowlist] });
+    vi.mocked(fetchLocalIngestArchivePassword).mockResolvedValue({ archivePassword: 'fixture-password' });
     vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard());
     vi.mocked(fetchLocalIngestOperation).mockResolvedValue(idleLocalIngestOperation);
     vi.mocked(saveLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, allowlist: [...localIngestSettings.allowlist] });
@@ -443,18 +459,20 @@ describe('ArchiveCatalogView', () => {
     });
   });
 
-  it('keeps one roster and switches workspaces without business writes', async () => {
+  it('keeps the ledger limited to its roster and resource workspaces without Costuan initialization', async () => {
     const wrapper=mount(ArchiveCatalogView); await flushPromises();
     expect(wrapper.find('[aria-label="账本工作区"] a[href="/local-admission"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="catalog-creator"]').exists()).toBe(false);
     expect(wrapper.findAll('[data-test="managed-roster-slot"]')).toHaveLength(1);
-    expect(wrapper.get('[aria-label="本地入库"]').isVisible()).toBe(false);
-    for(const name of ['source','staging','ingest','roster']) await wrapper.get('[data-test="workspace-'+name+'"]').trigger('click');
-    expect(wrapper.get('[aria-label="本地入库"]').isVisible()).toBe(false);
+    for(const name of ['source','staging','ingest']) expect(wrapper.find('[data-test="workspace-'+name+'"]').exists()).toBe(false);
+    expect(fetchMetadataCreators).not.toHaveBeenCalled();
+    expect(fetchDownloadCreators).not.toHaveBeenCalled();
+    expect(fetchLocalIngestOperation).not.toHaveBeenCalled();
+    expect(fetchLocalIngestSettings).not.toHaveBeenCalled();
     expect(planArchiveDownloadTasks).not.toHaveBeenCalled();
     expect(scanLocalIngestInbox).not.toHaveBeenCalled();
     expect(runLocalIngestBatch).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-test="ingest-settings"]').attributes('open')).toBeUndefined();
+    expect(wrapper.find('[data-test="ingest-settings"]').exists()).toBe(false);
   });
 
   it('shares resource entry with durable query navigation and keeps the roster instance on return', async () => {
@@ -514,7 +532,7 @@ describe('ArchiveCatalogView', () => {
   });
 
   it('generates per-creator download tasks under the isolated inbox root', async () => {
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('staging');
     await flushPromises();
 
     await wrapper.get('[data-test="plan-downloads"]').trigger('click');
@@ -528,8 +546,8 @@ describe('ArchiveCatalogView', () => {
   });
 
   it('retires the unscoped metadata planner while retaining the explicit selector and read-only refresh', async () => {
-    const wrapper = mount(ArchiveCatalogView); await flushPromises();
-    expect(wrapper.text()).toContain('来源检查记录');
+    const wrapper = await mountCostuan('source'); await flushPromises();
+    expect(wrapper.text()).toContain('来源检查');
     expect(wrapper.find('[data-test="plan-metadata"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="first-collection-slot"]').exists()).toBe(true);
     await wrapper.get('[data-test="refresh-stage1"]').trigger('click'); await flushPromises();
@@ -545,7 +563,7 @@ describe('ArchiveCatalogView', () => {
         sourceState: { metadataAccepted: false, deliveryReady: false, deliveryEvidence: 'missing', missing: [] }, metadataTask: task }),
       metadataRow({ creatorId: 117, creatorName: 'Source and failed task', metadataTask: { ...task, id: 43, status: 'failed', lastError: 'fixture source check failed' } })
     ]));
-    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const wrapper = await mountCostuan('source'); await flushPromises();
     const rows = wrapper.get('[data-test="metadata-creators"]').findAll('tbody tr');
     expect(rows).toHaveLength(3);
     expect(rows[0]!.text()).toContain('已记录 Costuan 来源');
@@ -572,7 +590,7 @@ describe('ArchiveCatalogView', () => {
       metadataTask: { id: 32, status: 'completed', attemptCount: 1, claimedBy: null, claimedAt: null, completedAt: null, lastError: null, updatedAt: '2026-09-08T12:00:00.000Z' },
       sourceState: { metadataAccepted: true, deliveryReady: true, deliveryEvidence: 'verified', missing: [] }
     })]));
-    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const wrapper = await mountCostuan('source'); await flushPromises();
     const row = wrapper.get('[data-test="metadata-creators"] tbody tr');
     expect(row.text()).toContain('检查已完成');
     expect(row.text()).toContain('网盘来源已核验');
@@ -585,7 +603,7 @@ describe('ArchiveCatalogView', () => {
   it('fetches Stage 1 page two from the server and retains all enabled states', async () => {
     vi.mocked(fetchMetadataCreators).mockResolvedValueOnce(metadataPage([metadataRow()], { total: 21, hasMore: true }))
       .mockResolvedValueOnce(metadataPage([metadataRow({ creatorId: 116, creatorName: 'Page two', isActive: false })], { total: 21, page: 2 }));
-    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const wrapper = await mountCostuan('source'); await flushPromises();
     expect(wrapper.get('[data-test="metadata-next"]').attributes('disabled')).toBeUndefined();
     await wrapper.get('[data-test="metadata-next"]').trigger('click'); await flushPromises();
     expect(fetchMetadataCreators).toHaveBeenLastCalledWith({ page: 2, limit: 20, enabled: 'all' });
@@ -598,7 +616,7 @@ describe('ArchiveCatalogView', () => {
 
   it('shows a Stage 1 read error instead of an empty successful result', async () => {
     vi.mocked(fetchMetadataCreators).mockRejectedValueOnce(new Error('来源账本读取失败'));
-    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const wrapper = await mountCostuan('source'); await flushPromises();
     const stage1 = wrapper.get('[aria-label="博主元数据采集队列"]');
     expect(stage1.get('[role="alert"]').text()).toContain('来源账本读取失败');
     expect(stage1.text()).not.toContain('暂无有效 Costuan 来源或来源检查任务');
@@ -615,7 +633,7 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(fetchMetadataCreators).mockResolvedValueOnce(metadataPage([metadataRow()], { total: 21, hasMore: true }))
       .mockImplementationOnce(() => new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }))
       .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve; }));
-    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const wrapper = await mountCostuan('source'); await flushPromises();
     await wrapper.get('[data-test="metadata-next"]').trigger('click');
     await wrapper.get('[data-test="refresh-stage1"]').trigger('click');
     expect(fetchMetadataCreators).toHaveBeenLastCalledWith({ page: 1, limit: 20, enabled: 'all' });
@@ -638,15 +656,17 @@ describe('ArchiveCatalogView', () => {
   });
 
   it('shows a redacted full ingest preview and can run the allowlisted batch', async () => {
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
 
-    expect(wrapper.text()).toContain('本地入库闭环');
+    expect(wrapper.text()).toContain('Costuan入库');
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
     expect(wrapper.text()).toContain('解压密码：已配置');
     expect(wrapper.text()).toContain('V1 正式图库根目录由 GALLERY_ROOT 启动配置决定');
     expect(wrapper.text()).not.toContain('隔离目录');
     const libraryInput = wrapper.findAll('input').find((input) => input.element.value === localIngestSettings.libraryRoot);
     expect(libraryInput?.attributes()).toHaveProperty('readonly');
+    await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
     await flushPromises();
     expect(wrapper.text()).toContain('007.7zz');
@@ -681,7 +701,7 @@ describe('ArchiveCatalogView', () => {
       claimUnavailable: 0,
       unchanged: 0
     });
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
 
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
@@ -712,7 +732,7 @@ describe('ArchiveCatalogView', () => {
       }
     };
     vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard(reviewJob));
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
 
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
@@ -731,7 +751,7 @@ describe('ArchiveCatalogView', () => {
       summary: { ...localIngestJob.summary, retainedOriginalCount: 2,
         retainedOriginalDirectory: 'G:/gallery/work/_未支持格式原件' } };
     vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard(job));
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
     await flushPromises();
@@ -741,8 +761,8 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.text()).toContain('图片 24');
   });
 
-  it('reads inbox creators without saving and appends unique canonical names to the draft', async () => {
-    const wrapper = mount(ArchiveCatalogView);
+  it('reads inbox creators without saving and explicitly appends and saves unique canonical names', async () => {
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     const allowlist = wrapper.get('[data-test="local-ingest-allowlist"]');
     const original = (allowlist.element as HTMLTextAreaElement).value;
@@ -757,27 +777,216 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.get('[data-test="inbox-creators-result"]').text()).toContain('未知目录');
 
     await wrapper.get('[data-test="append-inbox-creators"]').trigger('click');
+    await flushPromises();
 
     expect((allowlist.element as HTMLTextAreaElement).value).toBe('火龙果羊\n女主K\n新博主');
+    expect(saveLocalIngestAllowlist).toHaveBeenCalledExactlyOnceWith(['火龙果羊', '女主K', '新博主']);
     expect(saveLocalIngestSettings).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-test="scan-local-ingest"]').attributes()).toHaveProperty('disabled');
-    expect(wrapper.text()).toContain('请确认后点击“保存配置”');
+    expect(wrapper.get('[data-test="scan-local-ingest"]').attributes()).not.toHaveProperty('disabled');
+    expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('名单已保存');
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
   });
 
-  it('replaces only the unsaved allowlist draft after explicit confirmation', async () => {
-    const wrapper = mount(ArchiveCatalogView);
+  it('replaces only the allowlist, not discarded settings edits, without running tasks', async () => {
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="local-ingest-stable-seconds"]').setValue(60);
+    await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
 
     await wrapper.get('[data-test="discover-inbox-creators"]').trigger('click');
     await flushPromises();
     await wrapper.get('[data-test="replace-inbox-creators"]').trigger('click');
+    await flushPromises();
 
-    expect((wrapper.get('[data-test="local-ingest-allowlist"]').element as HTMLTextAreaElement).value)
-      .toBe('女主K\n新博主');
+    expect((wrapper.get('[data-test="local-ingest-allowlist"]').element as HTMLTextAreaElement).value).toBe('女主K\n新博主');
+    expect(saveLocalIngestAllowlist).toHaveBeenCalledExactlyOnceWith(['女主K', '新博主']);
     expect(saveLocalIngestSettings).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    expect((wrapper.get('[data-test="local-ingest-stable-seconds"]').element as HTMLInputElement).value).toBe(String(localIngestSettings.fileStableSeconds));
+    await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
 
     await wrapper.get('[data-test="cancel-inbox-creators"]').trigger('click');
     expect(wrapper.find('[data-test="inbox-creators-result"]').exists()).toBe(false);
+  });
+
+  it('locks append and replace during saving and keeps a failed list draft available for retry', async () => {
+    let rejectSave!: (reason: Error) => void;
+    vi.mocked(saveLocalIngestAllowlist).mockReturnValueOnce(new Promise((_, reject) => { rejectSave = reject; }));
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    await wrapper.get('[data-test="discover-inbox-creators"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="append-inbox-creators"]').trigger('click');
+    for (const action of ['append-inbox-creators', 'replace-inbox-creators', 'discover-inbox-creators', 'local-ingest-allowlist', 'scan-local-ingest']) {
+      expect(wrapper.get(`[data-test="${action}"]`).attributes()).toHaveProperty('disabled');
+    }
+    await wrapper.get('[data-test="append-inbox-creators"]').trigger('click');
+    expect(saveLocalIngestAllowlist).toHaveBeenCalledTimes(1);
+    rejectSave(new Error('配置未保存，请重试'));
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('配置未保存，请重试');
+    expect(wrapper.get('[data-test="save-ingest-allowlist"]').attributes()).not.toHaveProperty('disabled');
+    expect(wrapper.get('[data-test="scan-local-ingest"]').attributes()).toHaveProperty('disabled');
+    expect(wrapper.get('[data-test="run-local-ingest-batch"]').attributes()).toHaveProperty('disabled');
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="save-ingest-allowlist"]').trigger('click');
+    await flushPromises();
+    expect(saveLocalIngestAllowlist).toHaveBeenLastCalledWith(['火龙果羊', '女主K', '新博主']);
+    expect(wrapper.find('[data-test="save-ingest-allowlist"]').exists()).toBe(false);
+  });
+
+  it('edits the list inline with save and cancel only when dirty and persists only names', async () => {
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    expect(wrapper.find('[data-test="save-local-ingest"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="save-ingest-allowlist"]').exists()).toBe(false);
+    await wrapper.get('[data-test="local-ingest-allowlist"]').setValue('不保存');
+    await wrapper.get('[data-test="cancel-ingest-allowlist"]').trigger('click');
+    expect(saveLocalIngestAllowlist).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="cancel-ingest-allowlist"]').exists()).toBe(false);
+    expect((wrapper.get('[data-test="local-ingest-allowlist"]').element as HTMLTextAreaElement).value).toBe(localIngestSettings.allowlist.join('\n'));
+    await wrapper.get('[data-test="local-ingest-allowlist"]').setValue('新博主\n新博主\n另一位');
+    await wrapper.get('[data-test="save-ingest-allowlist"]').trigger('click');
+    await flushPromises();
+    expect(saveLocalIngestAllowlist).toHaveBeenCalledExactlyOnceWith(['新博主', '另一位']);
+    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="ingest-allowlist-dialog"]').exists()).toBe(false);
+  });
+
+  it('keeps settings drafts isolated and clears secret input on cancel and stage exit', async () => {
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="local-ingest-inbox-root"]').setValue('D:/draft');
+    await wrapper.get('[data-test="local-ingest-password"]').setValue('unsaved-secret');
+    expect(wrapper.get('[data-test="local-ingest-password"]').attributes('type')).toBe('text');
+    await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
+    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    expect((wrapper.get('[data-test="local-ingest-inbox-root"]').element as HTMLInputElement).value).toBe(localIngestSettings.inboxRoot);
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+    await wrapper.get('[data-test="local-ingest-password"]').setValue('another-secret');
+    await wrapper.get('[data-test="workspace-source"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="ingest-settings-dialog"]').exists()).toBe(false);
+    await wrapper.get('[data-test="workspace-ingest"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+  });
+
+  it('reads the current password only when settings open and ignores responses for a closed dialog', async () => {
+    let resolveOld!: (value: { archivePassword: string }) => void;
+    vi.mocked(fetchLocalIngestArchivePassword).mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    expect(fetchLocalIngestArchivePassword).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).toHaveProperty('disabled');
+    expect(wrapper.get('[data-test="local-ingest-password"]').attributes()).toHaveProperty('disabled');
+    await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await flushPromises();
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+    resolveOld({ archivePassword: 'stale-value' });
+    await flushPromises();
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+    expect(wrapper.get('[data-test="ingest-password-status"]').text()).toBe('解压密码：已配置');
+    expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).not.toHaveProperty('disabled');
+  });
+
+  it('keeps save disabled after a password read failure and allows retry without clearing the saved password', async () => {
+    vi.mocked(fetchLocalIngestArchivePassword).mockRejectedValueOnce(new Error('private failure detail'));
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).toHaveProperty('disabled');
+    expect(wrapper.get('[role="alert"]').text()).toContain('当前解压密码读取失败');
+    expect(wrapper.text()).not.toContain('private failure detail');
+    await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
+    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="retry-ingest-password"]').trigger('click');
+    await flushPromises();
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+    expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).not.toHaveProperty('disabled');
+  });
+
+  it('omits untouched passwords and only explicitly sends replacement or clear decisions', async () => {
+    const { allowlist: _allowlist, archivePasswordConfigured: _configured, ...editableSettings } = localIngestSettings;
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
+    await flushPromises();
+    expect(saveLocalIngestSettings).toHaveBeenLastCalledWith(editableSettings);
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="local-ingest-password"]').setValue('test-new-password');
+    await wrapper.get('[data-test="validate-local-ingest"]').trigger('click');
+    await flushPromises();
+    expect(validateLocalIngestSettings).toHaveBeenLastCalledWith(editableSettings);
+    await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
+    await flushPromises();
+    expect(saveLocalIngestSettings).toHaveBeenLastCalledWith({ ...editableSettings, archivePassword: 'test-new-password' });
+    expect(wrapper.text()).not.toContain('test-new-password');
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="local-ingest-password"]').setValue('');
+    await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
+    await flushPromises();
+    expect(saveLocalIngestSettings).toHaveBeenLastCalledWith({ ...editableSettings, clearArchivePassword: true });
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('reloads saved settings after leaving during a pending save (return before completion: %s)', async returnEarly => {
+    let resolveSave!: (value: typeof localIngestSettings) => void;
+    vi.mocked(saveLocalIngestSettings).mockReturnValueOnce(new Promise(resolve => { resolveSave = resolve; }));
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="local-ingest-inbox-root"]').setValue('D:/saved');
+    await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
+    await wrapper.get('[data-test="workspace-source"]').trigger('click');
+    await flushPromises();
+    if (returnEarly) {
+      await wrapper.get('[data-test="workspace-ingest"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.get('[data-test="open-ingest-settings"]').attributes()).toHaveProperty('disabled');
+    }
+    vi.mocked(fetchLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, inboxRoot: 'D:/saved', archivePasswordConfigured: false, allowlist: ['服务端最新名单'] });
+    vi.mocked(fetchLocalIngestArchivePassword).mockResolvedValue({ archivePassword: '' });
+    resolveSave({ ...localIngestSettings, inboxRoot: 'D:/saved' });
+    await flushPromises();
+    if (!returnEarly) {
+      await wrapper.get('[data-test="workspace-ingest"]').trigger('click');
+      await flushPromises();
+    }
+    expect((wrapper.get('[data-test="local-ingest-allowlist"]').element as HTMLTextAreaElement).value).toBe('服务端最新名单');
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    expect((wrapper.get('[data-test="local-ingest-inbox-root"]').element as HTMLInputElement).value).toBe('D:/saved');
+    expect(wrapper.get('[data-test="ingest-settings-dialog"]').text()).toContain('解压密码：未配置');
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('');
+  });
+
+  it('does not expose a password echoed by a settings save failure', async () => {
+    vi.mocked(saveLocalIngestSettings).mockRejectedValueOnce(new Error('failure echoed test-private-password'));
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="local-ingest-password"]').setValue('test-private-password');
+    await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('test-private-password');
+    expect(wrapper.get('[data-test="ingest-settings-dialog"]').text()).toContain('无法保存入库设置');
+    await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
   });
 
   it('labels a stale recovered job as resumable', async () => {
@@ -788,7 +997,7 @@ describe('ArchiveCatalogView', () => {
       errorCode: 'INTERRUPTED_PROCESS',
       errorDetail: 'internal English fallback'
     }));
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
 
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
@@ -844,11 +1053,12 @@ describe('ArchiveCatalogView', () => {
       startedAt: '2026-09-03T00:00:00.000Z',
       updatedAt: '2026-09-03T00:00:01.000Z'
     });
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
 
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
     await flushPromises();
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
     for (const selector of [
       '[data-test="local-ingest-inbox-root"]',
       '[data-test="local-ingest-processing-root"]',
@@ -886,7 +1096,7 @@ describe('ArchiveCatalogView', () => {
       409,
       { code: 'LOCAL_INGEST_OPERATION_ACTIVE', message: 'Stage 3 当前已有操作正在执行', operation: activeOperation }
     ));
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     await wrapper.get('[data-test="discover-inbox-creators"]').trigger('click');
     await flushPromises();
@@ -898,7 +1108,7 @@ describe('ArchiveCatalogView', () => {
     wrapper.unmount();
   });
 
-  it('keeps scanning explicit, does not save a draft, and refreshes Stage 2 only after scan completion', async () => {
+  it('keeps scanning explicit and defers hidden Stage 2 refresh until entry', async () => {
     vi.mocked(scanLocalIngestInbox).mockResolvedValueOnce({
       discoveredCreators: 2,
       discoveredArchives: 7,
@@ -909,7 +1119,7 @@ describe('ArchiveCatalogView', () => {
       reconciledDownloadedTasks: 6,
       ignoredFiles: 3
     });
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     const stage1Reads = vi.mocked(fetchMetadataCreators).mock.calls.length;
     const stage2Reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
@@ -919,14 +1129,14 @@ describe('ArchiveCatalogView', () => {
 
     expect(scanLocalIngestInbox).toHaveBeenCalledWith();
     expect(saveLocalIngestSettings).not.toHaveBeenCalled();
-    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads + 1);
+    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads);
     expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads);
     expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('已确认 6 个本地下载');
     wrapper.unmount();
   });
 
   it('refreshes only Stage 2 when its manual refresh button is clicked', async () => {
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('staging');
     await flushPromises();
     const stage2Reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
     const stage1Reads = vi.mocked(fetchMetadataCreators).mock.calls.length;
@@ -941,6 +1151,9 @@ describe('ArchiveCatalogView', () => {
     expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(stage3Reads);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads);
     expect(wrapper.get('[data-test="download-notice"]').text()).toContain('未执行任务规划或本地扫描');
+    expect(wrapper.get('[data-test="staging-refresh-tools"]').find('[data-test="refresh-stage2"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="staging-refresh-tools"]').find('[data-test="download-notice"][role="status"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain('百度客户端完成下载 →');
     wrapper.unmount();
   });
 
@@ -968,7 +1181,7 @@ describe('ArchiveCatalogView', () => {
       total: 3
     });
 
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('staging');
     await flushPromises();
     const stage2 = wrapper.get('[aria-label="缺失作品下载队列"]');
 
@@ -987,7 +1200,7 @@ describe('ArchiveCatalogView', () => {
     vi.useFakeTimers();
     let resolveScan!: (value: Awaited<ReturnType<typeof scanLocalIngestInbox>>) => void;
     vi.mocked(scanLocalIngestInbox).mockReturnValueOnce(new Promise((resolve) => { resolveScan = resolve; }));
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     const operationReads = vi.mocked(fetchLocalIngestOperation).mock.calls.length;
     const jobReads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
@@ -1016,12 +1229,12 @@ describe('ArchiveCatalogView', () => {
     await flushPromises();
     await flushPromises();
 
-    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads + 1);
+    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads);
     wrapper.unmount();
   });
 
-  it('polls only lightweight Stage 3 state every ten seconds, pauses while hidden, and refreshes dependent views immediately on completion', async () => {
+  it('polls only lightweight Stage 3 state every ten seconds, pauses while hidden, and refreshes only the visible ingest view on completion', async () => {
     vi.useFakeTimers();
     const runningOperation = {
       ...idleLocalIngestOperation,
@@ -1058,7 +1271,7 @@ describe('ArchiveCatalogView', () => {
           summary: { total: 10 }
         }
       });
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     const stage1Reads = vi.mocked(fetchMetadataCreators).mock.calls.length;
     const stage2Reads = vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
@@ -1082,9 +1295,9 @@ describe('ArchiveCatalogView', () => {
     await vi.advanceTimersByTimeAsync(0);
     await flushPromises();
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(initialOperationReads + 2);
-    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads + 2);
-    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads + 1);
-    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads + 1);
+    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads);
+    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalogReads);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads);
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(initialOperationReads + 2);
@@ -1104,7 +1317,7 @@ describe('ArchiveCatalogView', () => {
       items: options.creatorId ? [job] : [],
       total: options.creatorId ? 1 : 0
     }));
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
     await flushPromises();
@@ -1140,7 +1353,7 @@ describe('ArchiveCatalogView', () => {
   });
 
   it('initially reads Stage 3 summaries without selecting a creator or exposing job rows', async () => {
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(1);
     expect(fetchLocalIngestJobs).toHaveBeenCalledWith({ page: 1, limit: 50 });
@@ -1157,7 +1370,7 @@ describe('ArchiveCatalogView', () => {
     const original = { ...localIngestDashboard(), creators: [...localIngestDashboard().creators, ...localIngestDashboard(remainingJob).creators] };
     vi.mocked(fetchLocalIngestJobs).mockResolvedValueOnce(original).mockResolvedValueOnce(original)
       .mockResolvedValueOnce(localIngestDashboard(remainingJob));
-    const wrapper = mount(ArchiveCatalogView); await flushPromises();
+    const wrapper = await mountCostuan('ingest'); await flushPromises();
     await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click'); await flushPromises();
     expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('true');
     const reads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
@@ -1183,7 +1396,7 @@ describe('ArchiveCatalogView', () => {
       if (options.creatorId === firstJob.creatorId) return new Promise(resolve => { resolveFirst = resolve; });
       return dashboard(secondJob);
     });
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     const toggles = () => wrapper.findAll('[data-test="local-ingest-creators"] button[aria-expanded]');
     await toggles()[0]!.trigger('click');
@@ -1203,7 +1416,7 @@ describe('ArchiveCatalogView', () => {
 
   it('does not poll while idle', async () => {
     vi.useFakeTimers();
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
     const reads = vi.mocked(fetchLocalIngestOperation).mock.calls.length;
     const jobReads = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
@@ -1213,15 +1426,15 @@ describe('ArchiveCatalogView', () => {
     wrapper.unmount();
   });
 
-  it('refreshes only Stage 1/2 on selected submission, visible return and confirmed plugin state events without automation or polling',async()=>{
+  it('refreshes only visible Stage 1 on selected submission, visible return and confirmed plugin state events without automation or polling',async()=>{
     vi.useFakeTimers();
-    const wrapper=mount(ArchiveCatalogView);await flushPromises();
+    const wrapper=await mountCostuan('source');await flushPromises();
     const stage1=vi.mocked(fetchMetadataCreators).mock.calls.length;
     const stage2=vi.mocked(fetchArchiveDownloadTasks).mock.calls.length;
     const catalog=vi.mocked(fetchArchiveCatalog).mock.calls.length;
     await wrapper.get('[data-test=first-collection-slot]').trigger('click');await flushPromises();
     expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1+1);
-    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2+1);
+    expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2);
     expect(fetchArchiveCatalog).toHaveBeenCalledTimes(catalog);
     window.dispatchEvent(new MessageEvent('message',{source:window,origin:window.location.origin,data:{source:'costuan-archive-manager',type:'cosgallery:archive-state-changed'}}));
     await flushPromises();
@@ -1267,7 +1480,7 @@ describe('ArchiveCatalogView', () => {
       limit: 50,
       hasMore: Boolean(options.creatorId && (options.page ?? 1) < 12)
     }));
-    const wrapper = mount(ArchiveCatalogView);
+    const wrapper = await mountCostuan('ingest');
     await flushPromises();
 
     expect(wrapper.findAll('[data-test="run-local-ingest-job"]')).toHaveLength(0);
@@ -1289,5 +1502,153 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('true');
     expect(wrapper.findAll('[data-test="run-local-ingest-job"]')).toHaveLength(50);
     wrapper.unmount();
+  });
+
+  it('reads only the current Costuan stage and preserves Stage 1 pagination plus Stage 2 expansion across switches', async () => {
+    vi.mocked(fetchMetadataCreators).mockImplementation(async options => metadataPage([metadataRow({ creatorName: `Page ${options?.page ?? 1}` })], { page: options?.page ?? 1, total: 21, hasMore: (options?.page ?? 1) === 1 }));
+    const wrapper = await mountCostuan('source'); await flushPromises();
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(1);
+    expect(fetchDownloadCreators).not.toHaveBeenCalled();
+    expect(fetchLocalIngestOperation).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="metadata-next"]').trigger('click'); await flushPromises();
+    await wrapper.get('[data-test="workspace-staging"]').trigger('click'); await flushPromises();
+    expect(fetchDownloadCreators).toHaveBeenCalledTimes(1);
+    expect(fetchMetadataCreators).toHaveBeenCalledTimes(2);
+    expect(fetchLocalIngestJobs).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="toggle-stage2-creator"]').trigger('click'); await flushPromises();
+    const stage2Element = wrapper.get('[data-test="toggle-stage2-creator"]').element;
+    await wrapper.get('[data-test="workspace-source"]').trigger('click'); await flushPromises();
+    expect(fetchMetadataCreators).toHaveBeenLastCalledWith({ page: 2, limit: 20, enabled: 'all' });
+    expect(wrapper.get('[data-test="metadata-pagination"]').text()).toContain('第 2 / 2 页');
+    await wrapper.get('[data-test="workspace-staging"]').trigger('click'); await flushPromises();
+    expect(wrapper.get('[data-test="toggle-stage2-creator"]').element).toBe(stage2Element);
+    expect(wrapper.get('[data-test="toggle-stage2-creator"]').attributes('aria-expanded')).toBe('true');
+    expect(planArchiveDownloadTasks).not.toHaveBeenCalled();
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+  });
+
+  it('ignores a Stage 1 response that arrives after leaving and returning to the stage', async () => {
+    let resolveOld!: (value: MetadataCreatorPage) => void;
+    vi.mocked(fetchMetadataCreators).mockResolvedValueOnce(metadataPage([metadataRow()], { total: 21, hasMore: true }))
+      .mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(metadataPage([metadataRow({ creatorName: 'Fresh return' })]));
+    const wrapper = await mountCostuan('source'); await flushPromises();
+    await wrapper.get('[data-test="metadata-next"]').trigger('click'); await flushPromises();
+    await wrapper.get('[data-test="workspace-staging"]').trigger('click'); await flushPromises();
+    await wrapper.get('[data-test="workspace-source"]').trigger('click'); await flushPromises();
+    resolveOld(metadataPage([metadataRow({ creatorName: 'Stale return' })], { page: 2, total: 21 })); await flushPromises();
+    expect(wrapper.get('[data-test="metadata-creators"]').text()).toContain('Fresh return');
+    expect(wrapper.get('[data-test="metadata-creators"]').text()).not.toContain('Stale return');
+  });
+
+  it('stops Stage 3 polling and plugin-event reads while kept alive outside Costuan, then restores the selected creator', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchLocalIngestOperation).mockResolvedValue({ ...idleLocalIngestOperation, state: 'running', kind: 'batch' });
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/creator-admission/costuan', component: CostuanWorkspace },
+      { path: '/creator-admission/local', component: { template: '<p>Local module</p>' } }
+    ] });
+    await router.push('/creator-admission/costuan?workspace=ingest'); await router.isReady();
+    const root = mount(defineComponent({ template: '<RouterView v-slot="{ Component }"><KeepAlive><component :is="Component" /></KeepAlive></RouterView>' }), { global: { plugins: [router] } });
+    await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(1);
+    await root.get('[data-test="local-ingest-creators"] button').trigger('click'); await flushPromises();
+    await router.push('/creator-admission/local'); await flushPromises();
+    const reads = vi.mocked(fetchLocalIngestOperation).mock.calls.length;
+    const jobs = vi.mocked(fetchLocalIngestJobs).mock.calls.length;
+    window.dispatchEvent(new MessageEvent('message', { source: window, origin: window.location.origin, data: { source: 'costuan-archive-manager', type: 'cosgallery:archive-state-changed' } }));
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(30_000); await flushPromises();
+    expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(reads);
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(jobs);
+    expect(fetchMetadataCreators).not.toHaveBeenCalled();
+    expect(fetchDownloadCreators).not.toHaveBeenCalled();
+    await router.push('/creator-admission/costuan?workspace=ingest'); await flushPromises();
+    expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(reads + 1);
+    expect(root.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('true');
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+  });
+
+  it('keeps the explicit roster plan operation single and navigates to Stage 2 without replay on navigation', async () => {
+    vi.mocked(fetchLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, inboxRoot: 'X:\\isolated-inbox' });
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/archive-catalog', component: ArchiveCatalogView },
+      { path: '/creator-admission/costuan', name: 'costuan-admission', component: CostuanWorkspace }
+    ] });
+    await router.push('/archive-catalog'); await router.isReady();
+    const root = mount(defineComponent({ template: '<RouterView />' }), { global: { plugins: [router] } }); await flushPromises();
+    const roster = root.findComponent({ name: 'ManagedCreatorRoster' });
+    roster.vm.$emit('plan-downloads', 35); await flushPromises();
+    expect(planArchiveDownloadTasks).toHaveBeenCalledExactlyOnceWith('X:\\isolated-inbox', [35]);
+    expect(router.currentRoute.value.path).toBe('/creator-admission/costuan');
+    expect(router.currentRoute.value.query.workspace).toBe('staging');
+    await router.push('/archive-catalog'); await flushPromises();
+    await router.push('/creator-admission/costuan?workspace=staging'); await flushPromises();
+    expect(planArchiveDownloadTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('locates a review return Job only within its explicit creator and retains that page on subsequent refresh', async () => {
+    vi.mocked(fetchLocalIngestJobs).mockImplementation(async (options = {}) => ({
+      summary: { total: 51, pending: 0, running: 0, ingested: 50, awaitingReview: 1, failed: 0 },
+      creators: [{ creatorId: 192, creatorName: '火龙果羊', total: 51, pending: 0, running: 0, ingested: 50, awaitingReview: 1, failed: 0, progressPercent: 98, isCurrent: false }],
+      items: options.page === 2 ? [{ ...localIngestJob, id: 51, status: 'awaiting_review', phase: 'validating' }] : [{ ...localIngestJob, id: 1 }],
+      total: 51, page: options.page ?? 1, limit: 50, hasMore: options.page !== 2
+    }));
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/creator-admission/costuan', component: CostuanWorkspace }] });
+    await router.push('/creator-admission/costuan?workspace=ingest&creatorId=192&jobId=51#costuan-job-51'); await router.isReady();
+    const wrapper = mount(CostuanWorkspace, { global: { plugins: [router] } }); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(2);
+    for (const [query] of vi.mocked(fetchLocalIngestJobs).mock.calls) expect(query?.creatorId).toBe(192);
+    expect(wrapper.get('[data-job-id="51"]').classes()).toContain('bg-blue-50');
+    expect(wrapper.get('[data-test="local-ingest-creators"] button').attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('[data-test="local-ingest-prev"]').attributes('disabled')).toBeUndefined();
+    await wrapper.get('[data-test="refresh-stage3"]').trigger('click'); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(3);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith(expect.objectContaining({ creatorId: 192, page: 2 }));
+    expect(router.currentRoute.value.query.jobId).toBe('51');
+    expect(router.currentRoute.value.hash).toBe('#costuan-job-51');
+    expect(runLocalIngestJob).not.toHaveBeenCalled();
+  });
+
+  it.each(['source', 'staging'] as const)('reads Stage 3 jobs once when switching from %s using its stage tab', async initial => {
+    const wrapper = await mountCostuan(initial); await flushPromises();
+    expect(fetchLocalIngestJobs).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="workspace-ingest"]').trigger('click'); await flushPromises();
+    expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(1);
+    expect(fetchLocalIngestJobs).toHaveBeenCalledExactlyOnceWith({ page: 1, limit: 50 });
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+  });
+
+  it('coalesces simultaneous workspace and Job context changes but reads a later same-stage creator change', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/creator-admission/costuan', component: CostuanWorkspace }] });
+    await router.push('/creator-admission/costuan?workspace=source'); await router.isReady();
+    const wrapper = mount(CostuanWorkspace, { global: { plugins: [router] } }); await flushPromises();
+    await router.push('/creator-admission/costuan?workspace=ingest&creatorId=192&jobId=1'); await flushPromises();
+    expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(1);
+    expect(fetchLocalIngestJobs).toHaveBeenCalledExactlyOnceWith({ creatorId: 192, status: undefined, page: 1, limit: 50 });
+    expect(wrapper.get('[data-job-id="1"]').classes()).toContain('bg-blue-50');
+    await router.push('/creator-admission/costuan?workspace=ingest&creatorId=193'); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(2);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith({ creatorId: 193, status: undefined, page: 1, limit: 50 });
+    await router.push('/creator-admission/costuan?workspace=source&creatorId=194'); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the explicit Job once when a cached Costuan stage is activated with a new context', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/creator-admission/costuan', component: CostuanWorkspace },
+      { path: '/creator-admission/local', component: { template: '<p>Local module</p>' } }
+    ] });
+    await router.push('/creator-admission/costuan?workspace=ingest'); await router.isReady();
+    const root = mount(defineComponent({ template: '<RouterView v-slot="{ Component }"><KeepAlive><component :is="Component" /></KeepAlive></RouterView>' }), { global: { plugins: [router] } }); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(1);
+    await router.push('/creator-admission/local'); await flushPromises();
+    await router.push('/creator-admission/costuan?workspace=ingest&creatorId=192&jobId=1'); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(2);
+    expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(2);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith({ creatorId: 192, status: undefined, page: 1, limit: 50 });
+    expect(root.get('[data-job-id="1"]').classes()).toContain('bg-blue-50');
   });
 });

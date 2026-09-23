@@ -89,6 +89,7 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
     const requests: Array<Promise<Awaited<ReturnType<typeof requestApp>>>> = [
       requestApp(app, 'GET', '/api/admin/local-ingest/inbox-creators'),
       requestApp(app, 'PUT', '/api/admin/local-ingest/settings', mutationHeaders, settings),
+      requestApp(app, 'PUT', '/api/admin/local-ingest/allowlist', mutationHeaders, { allowlist: ['Creator Alpha'] }),
       requestApp(app, 'POST', '/api/admin/local-ingest/settings/validate', mutationHeaders, {}),
       requestApp(app, 'POST', '/api/admin/local-ingest/recycle-bin-smoke-test', mutationHeaders, {}),
       requestApp(app, 'POST', '/api/admin/local-ingest/scan', mutationHeaders, {}),
@@ -97,7 +98,7 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
       requestApp(app, 'POST', '/api/admin/local-ingest/jobs/1/retry-cleanup', mutationHeaders, {})
     ];
     const responses = await Promise.all(requests);
-    expect(responses).toHaveLength(8);
+    expect(responses).toHaveLength(9);
     for (const response of responses) {
       expect(response.status).toBe(409);
       expect(response.body).toMatchObject({
@@ -171,6 +172,62 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
     );
     scan.mockRestore();
     run.mockRestore();
+  });
+
+  it('saves an encrypted password and a scoped allowlist without returning secret material or overwriting settings', async () => {
+    release();
+    await active;
+    const { databaseManager } = await import('../src/db/database.js');
+    const { localIngestSettingsService } = await import('../src/services/local-ingest-settings-service.js');
+    const headers = { 'x-foldergram-intent': '1' };
+    const settings = localIngestSettingsService.get();
+    const secret = 'route-private-secret';
+    const saved = await requestApp(app, 'PUT', '/api/admin/local-ingest/settings', headers, { ...settings, archivePassword: secret });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ archivePasswordConfigured: true, archivePasswordSource: 'local' });
+    expect(JSON.stringify(saved.body)).not.toContain(secret);
+    const before = databaseManager.connection.prepare("SELECT key,value FROM app_settings WHERE key IN ('local_ingest.settings','local_ingest.archive_password') ORDER BY key").all();
+    expect(JSON.stringify(before)).not.toContain(secret);
+    const allowlist = await requestApp(app, 'PUT', '/api/admin/local-ingest/allowlist', headers, { allowlist: ['Creator Alpha'] });
+    expect(allowlist.status).toBe(200);
+    expect(allowlist.body).toMatchObject({ allowlist: ['Creator Alpha'], archivePasswordSource: 'local' });
+    expect(JSON.stringify(allowlist.body)).not.toContain(secret);
+    expect(databaseManager.connection.prepare("SELECT key,value FROM app_settings WHERE key IN ('local_ingest.settings','local_ingest.archive_password') ORDER BY key").all()).toEqual(before);
+    const read = await requestApp(app, 'GET', '/api/admin/local-ingest/settings');
+    expect(JSON.stringify(read.body)).not.toContain(secret);
+    const malformed = await requestApp(app, 'PUT', '/api/admin/local-ingest/settings', headers, { ...settings, archivePassword: `${secret}\n` });
+    expect(malformed.status).toBe(400);
+    expect(JSON.stringify(malformed.body)).not.toContain(secret);
+    const invalidScope = await requestApp(app, 'PUT', '/api/admin/local-ingest/allowlist', headers, { allowlist: [], inboxRoot: 'other' });
+    expect(invalidScope.status).toBe(400);
+    const noIntent = await requestApp(app, 'PUT', '/api/admin/local-ingest/allowlist', {}, { allowlist: [] });
+    expect(noIntent.status).toBe(403);
+    expect(localIngestSettingsService.get().allowlist).toEqual(['Creator Alpha']);
+  });
+
+  it('reads the effective archive password only for the explicit management editor, including unset and disabled states', async () => {
+    const { localIngestSettingsService } = await import('../src/services/local-ingest-settings-service.js');
+    vi.stubEnv('LOCAL_INGEST_ARCHIVE_PASSWORD', 'synthetic-editor-password');
+    const read = () => requestApp(app, 'GET', '/api/admin/local-ingest/archive-password');
+    const environment = await read();
+    expect(environment.status).toBe(200);
+    expect(environment.headers.get('cache-control')).toContain('no-store');
+    expect(environment.body).toEqual({ archivePassword: 'synthetic-editor-password' });
+    // A read is available during a scan, but does not acquire/change its operation.
+    expect((await requestApp(app, 'GET', '/api/admin/local-ingest/operation')).body.state).toBe('scanning');
+    localIngestSettingsService.save({ ...localIngestSettingsService.get(), archivePassword: 'updated-archive-password' });
+    expect((await read()).body).toEqual({ archivePassword: 'updated-archive-password' });
+    localIngestSettingsService.save({ ...localIngestSettingsService.get(), clearArchivePassword: true });
+    expect((await read()).body).toEqual({ archivePassword: '' });
+
+    const { authService } = await import('../src/services/auth-service.js');
+    authService.setAdminPassword('test-admin-password');
+    authService.setViewerAccess('password', 'test-viewer-password');
+    expect((await read()).status).toBe(401);
+    const login = await requestApp(app, 'POST', '/api/auth/login', { 'x-foldergram-intent': '1' }, { password: 'test-viewer-password' });
+    expect(login.status).toBe(200);
+    const cookie = login.headers.get('set-cookie')!.split(';')[0];
+    expect((await requestApp(app, 'GET', '/api/admin/local-ingest/archive-password', { cookie })).status).toBe(403);
   });
 
   it('rejects empty, invalid, or mixed explicit scopes without falling back to a global batch', async () => {

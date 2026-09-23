@@ -7,7 +7,7 @@ import { RequestError } from '../api/http';
 import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, LocalIngestDestinationPreference } from '../types/api';
 
 vi.mock('../api/gallery',()=>({fetchArchiveCatalog:vi.fn(),fetchArchiveCatalogCreator:vi.fn()}));
-vi.mock('../api/managed-creators',()=>({createManagedCreator:vi.fn(),updateManagedCreator:vi.fn(),addManagedAlias:vi.fn(),deleteManagedAlias:vi.fn(),setManagedCreatorActive:vi.fn(),linkManagedFolder:vi.fn(),unlinkManagedFolder:vi.fn(),fetchIngestDestination:vi.fn(),setIngestDestination:vi.fn()}));
+vi.mock('../api/managed-creators',()=>({createManagedCreator:vi.fn(),updateManagedCreator:vi.fn(),addManagedAlias:vi.fn(),deleteManagedAlias:vi.fn(),setManagedCreatorActive:vi.fn(),previewManagedCreatorDeletion:vi.fn(),deleteUnusedManagedCreator:vi.fn(),linkManagedFolder:vi.fn(),unlinkManagedFolder:vi.fn(),fetchIngestDestination:vi.fn(),setIngestDestination:vi.fn()}));
 const creator:ArchiveCatalogCreatorDetail={id:1,name:'Alpha',isActive:true,seedSource:'hentaiclub',seedSourceCreatorId:'historical',createdAt:'fixed',updatedAt:'2026-09-04',deactivatedAt:null,
   preference:'liked',rating:'R18',aliasCount:1,sourceCount:1,localFolderCount:1,sourceCollections:0,remoteWorks:0,localWorks:1,matchedWorks:1,missingWorks:0,unresolvedLocalWorks:0,latestSourceObservation:null,
   aliases:[{id:'source-alias',alias:'Alpha',source:'hentaiclub',editable:false}],sources:[{source:'hentaiclub',sourceCreatorId:'historical',displayName:'Alpha',url:null,firstSeenAt:'first',lastSeenAt:'last'}],collections:[],missing:[],unresolved:[],
@@ -17,6 +17,8 @@ const creator:ArchiveCatalogCreatorDetail={id:1,name:'Alpha',isActive:true,seedS
 const payload:ArchiveCatalogCreatorsPayload={summary:{creators:593,activeCreators:593,inactiveCreators:0,unsetPreference:0,unclassified:0,creatorsWithoutLocalWorks:560,unlinkedLocalFolders:1,liked:201,kept:392,r15:259,r18:334,creatorsWithSources:35,creatorsWithLocalWorks:33,sourceCollections:35,remoteWorks:2342,localWorks:1836,matchedWorks:1836,missingWorks:1,unresolvedCreatorFolders:0,unresolvedLocalWorks:0},items:[creator],page:1,limit:50,total:593,hasMore:true};
 const destination:LocalIngestDestinationPreference={creatorId:1,creatorName:'Alpha',preferredLocalCreatorFolderId:null,mode:'single-linked',resolvedLocalCreatorFolderId:9,resolvedGalleryFolderId:11,resolvedCreatorDirectory:'G:\\cos图集\\Directory',message:'未显式选择；自动沿用唯一有效的已关联目录',candidates:[{localCreatorFolderId:9,galleryFolderId:11,name:'Directory',folderPath:'Directory',absolutePath:'G:\\cos图集\\Directory',workCount:1,valid:true,unavailableReason:null}]};
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(b=>b.text()===text)!;
+const unusedCreator:ArchiveCatalogCreatorDetail={...creator,isActive:false,seedSource:'manual',seedSourceCreatorId:'manual:1',aliases:[],sources:[],localFolders:[],localFolderCount:0,sourceCount:0,localWorks:0,matchedWorks:0,impact:{sources:0,collections:0,remoteWorks:0,localWorks:0,unfinishedDownloadTasks:0,localFolders:0}};
+const deletionPreview:api.ManagedCreatorDeletionPreview={creatorId:1,name:'Alpha',eligible:true,blockers:[],confirmationToken:'preview-v1',removableAliases:2};
 describe('managed roster UI',()=>{
   enableAutoUnmount(afterEach);
   afterEach(() => { vi.useRealTimers(); });
@@ -30,6 +32,8 @@ describe('managed roster UI',()=>{
     vi.mocked(api.setIngestDestination).mockResolvedValue(structuredClone(destination));
     for(const fn of [api.createManagedCreator,api.updateManagedCreator,api.addManagedAlias,api.deleteManagedAlias,api.setManagedCreatorActive,api.linkManagedFolder]) vi.mocked(fn).mockResolvedValue(structuredClone(creator));
     vi.mocked(api.unlinkManagedFolder).mockResolvedValue({folderId:11,creatorId:null});
+    vi.mocked(api.previewManagedCreatorDeletion).mockResolvedValue(structuredClone(deletionPreview));
+    vi.mocked(api.deleteUnusedManagedCreator).mockResolvedValue({deleted:true,creatorId:1});
   });
   it('opens the ledger without management forms or writes',async()=>{
     const w=mount(ManagedCreatorRoster);await flushPromises();
@@ -271,5 +275,80 @@ describe('managed roster UI',()=>{
     await button(w,'确认变更').trigger('click');await flushPromises();expect(api.setManagedCreatorActive).toHaveBeenCalledWith(1,false);
     await button(w,'恢复').trigger('click');await button(w,'确认变更').trigger('click');await flushPromises();expect(api.setManagedCreatorActive).toHaveBeenLastCalledWith(1,true);
     expect(w.text()).not.toMatch(/上传 JSON|重新导入|硬删除/);
+  });
+  it.each([{seedSource:'manual',isActive:true},{seedSource:'hentaiclub',isActive:false},{seedSource:'costuan',isActive:false}])('does not offer deletion for $seedSource active=$isActive',async state=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...unusedCreator,...state});
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
+    expect(w.find('[data-test=unused-creator-deletion]').exists()).toBe(false);
+    expect(api.previewManagedCreatorDeletion).not.toHaveBeenCalled();expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
+  });
+  it('offers deletion only in inactive manual creator management, previews blockers and never deletes while blocked',async()=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
+    vi.mocked(api.previewManagedCreatorDeletion).mockResolvedValue({...deletionPreview,eligible:false,blockers:[{code:'works',label:'本地作品',count:2},{code:'plans',label:'接纳计划',count:1}]});
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'查看账本').trigger('click');await flushPromises();
+    expect(w.find('[data-test=unused-creator-deletion]').exists()).toBe(false);
+    await button(w,'关闭').trigger('click');await button(w,'管理资料').trigger('click');await flushPromises();
+    expect(api.previewManagedCreatorDeletion).not.toHaveBeenCalled();
+    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
+    expect(api.previewManagedCreatorDeletion).toHaveBeenCalledExactlyOnceWith(1);
+    expect(w.get('[data-test=creator-deletion-preview]').text()).toContain('本地作品 · 2');
+    expect(w.get('[data-test=creator-deletion-preview]').text()).toContain('接纳计划 · 1');
+    expect(w.find('[data-test=confirm-creator-deletion]').exists()).toBe(false);
+    await button(w,'取消删除').trigger('click');expect(w.find('[data-test=creator-deletion-preview]').exists()).toBe(false);
+    expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
+  });
+  it('requires an explicit confirmation after preview and refreshes the same filtered roster after one delete',async()=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
+    let finish!:(value:{deleted:true;creatorId:number})=>void;
+    vi.mocked(api.deleteUnusedManagedCreator).mockReturnValue(new Promise(resolve=>{finish=resolve;}));
+    const w=mount(ManagedCreatorRoster);await flushPromises();await w.get('.roster-filters').findAll('select')[2]!.setValue('inactive');await flushPromises();
+    await button(w,'管理资料').trigger('click');await flushPromises();
+    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
+    expect(w.get('[data-test=unused-creator-deletion]').text()).toContain('停用会保留身份');
+    expect(w.get('[data-test=creator-deletion-preview]').text()).toContain('2 条可删除别名');
+    expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
+    await w.get('[data-test=confirm-creator-deletion]').trigger('click');await w.get('[data-test=confirm-creator-deletion]').trigger('click');
+    expect(api.deleteUnusedManagedCreator).toHaveBeenCalledExactlyOnceWith(1,'preview-v1');
+    vi.mocked(fetchArchiveCatalog).mockResolvedValue({...payload,items:[],total:0,hasMore:false});
+    finish({deleted:true,creatorId:1});await flushPromises();
+    expect(w.get('dialog').element.open).toBe(false);expect(w.find('[data-test=unused-creator-deletion]').exists()).toBe(false);
+    expect(w.findAll('.creator-card')).toHaveLength(0);expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({active:'inactive'}));
+    expect(w.emitted('changed')).toHaveLength(1);expect(w.text()).toContain('未删除文件、作品或任务');
+    expect(api.setManagedCreatorActive).not.toHaveBeenCalled();expect(api.unlinkManagedFolder).not.toHaveBeenCalled();
+  });
+  it('discards a stale or failed deletion preview and requires a fresh explicit check before retry',async()=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
+    vi.mocked(api.deleteUnusedManagedCreator).mockRejectedValueOnce(new RequestError('引用已变化，不能使用旧确认',409));
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
+    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();await w.get('[data-test=confirm-creator-deletion]').trigger('click');await flushPromises();
+    expect(w.get('[role=alert]').text()).toContain('引用已变化');expect(w.get('[role=alert]').text()).toContain('重新检查删除条件');
+    expect(w.get('dialog').element.open).toBe(true);expect(w.find('[data-test=confirm-creator-deletion]').exists()).toBe(false);
+    expect(api.deleteUnusedManagedCreator).toHaveBeenCalledTimes(1);
+    vi.mocked(api.previewManagedCreatorDeletion).mockResolvedValue({...deletionPreview,confirmationToken:'preview-v2'});
+    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
+    expect(api.deleteUnusedManagedCreator).toHaveBeenCalledTimes(1);
+    await w.get('[data-test=confirm-creator-deletion]').trigger('click');await flushPromises();
+    expect(api.deleteUnusedManagedCreator).toHaveBeenLastCalledWith(1,'preview-v2');
+  });
+  it('invalidates deletion preview when creator metadata changes and preserves manual-name conflict handling',async()=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
+    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
+    vi.mocked(api.updateManagedCreator).mockRejectedValueOnce(new RequestError('停用身份仍参与重名检查',409,{candidates:[{id:9,name:'Other'}]}));
+    await w.get('.roster-edit input').setValue('Other');await w.get('.roster-edit').trigger('submit');await flushPromises();
+    expect(w.find('[data-test=creator-deletion-preview]').exists()).toBe(false);expect(w.get('[role=alert]').text()).toContain('停用身份仍参与重名检查');
+    expect(w.text()).toContain('允许同名');expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
+  });
+  it('does not retain a failed preview or publish its late result after closing details',async()=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
+    vi.mocked(api.previewManagedCreatorDeletion).mockRejectedValueOnce(new Error('检查暂不可用'));
+    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
+    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
+    expect(w.get('[role=alert]').text()).toContain('检查暂不可用');expect(w.find('[data-test=confirm-creator-deletion]').exists()).toBe(false);
+    let finish!:(value:api.ManagedCreatorDeletionPreview)=>void;
+    vi.mocked(api.previewManagedCreatorDeletion).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+    await w.get('[data-test=preview-creator-deletion]').trigger('click');await w.get('dialog').trigger('close');
+    finish(deletionPreview);await flushPromises();
+    expect(w.find('[data-test=creator-deletion-preview]').exists()).toBe(false);expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
   });
 });

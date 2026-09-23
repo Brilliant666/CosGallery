@@ -43,7 +43,12 @@ export async function requestTestApp(
           path: urlPath,
           method,
           headers: {
-            ...(serializedBody === undefined ? {} : { 'Content-Type': 'application/json' }),
+            ...(serializedBody === undefined ? {} : {
+              'Content-Type': 'application/json',
+              // Node does not default DELETE to chunked encoding. Explicit framing
+              // makes its JSON body reach Express, just as browser fetch sends it.
+              'Content-Length': String(Buffer.byteLength(serializedBody))
+            }),
             ...headers
           }
         },

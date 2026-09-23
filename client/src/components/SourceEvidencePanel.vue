@@ -53,7 +53,7 @@
         </form>
         <p v-else-if="selected.identityState === 'conflict'" class="error">身份冲突：保留资料，不允许在这里强制改绑或据此接纳。需先核对相冲突的具体页面身份。</p>
         <template v-if="selected.identityState === 'confirmed' && selected.creatorId === creator.id">
-          <div class="actions"><a :href="`/local-admission/${creator.id}?sourceEvidenceId=${selected.id}`">准备本地接纳</a></div>
+          <div class="actions"><a :href="`/creator-admission/local/${creator.id}?sourceEvidenceId=${selected.id}`">准备本地接纳</a></div>
           <p class="hint">进入本地导入页面选择已解压目录、查看预览并集中确认。博主及本份资料自动带入；批次来源不自动满足下载需求。</p>
           <details class="admission-handoff"><summary>高级维护：下载 CLI 预览 scope</summary>
             <p class="hint">正常入库使用上方网页入口；以下保留为已有 CLI 的高级范围导出。</p>

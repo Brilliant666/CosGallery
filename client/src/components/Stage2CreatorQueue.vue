@@ -46,10 +46,11 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, ref } from 'vue';
+import { onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { fetchDownloadCreators, fetchDownloadTaskPage } from '../api/creator-sync';
 import type { DownloadCreatorPage, DownloadTaskPage, DownloadFilters } from '../api/creator-sync';
 import type { ArchiveDownloadTaskStatus } from '../types/api';
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true });
 const statuses: ArchiveDownloadTaskStatus[] = ['pending', 'claimed', 'downloading', 'staged', 'downloaded', 'ingested', 'failed', 'cancelled'];
 const statusLabel = (status: ArchiveDownloadTaskStatus) => ({ pending: '待转存', claimed: '插件处理中', downloading: '下载中', staged: '网盘已暂存，待本地确认', downloaded: '本地已下载，待入库', ingested: '已入库', failed: '失败', cancelled: '已取消' }[status]);
 const payload = ref<DownloadCreatorPage | null>(null), loading = ref(false), error = ref('');
@@ -60,6 +61,7 @@ let filters: DownloadFilters = { enabled: 'all' }, page = 1, generation = 0, ali
 const detailGeneration = new Map<number, number>();
 const pages = (value: { total: number; limit: number }) => Math.max(1, Math.ceil(value.total / value.limit));
 async function loadDetail(creatorId: number, targetPage = details[creatorId]?.page ?? 1) {
+  if (!props.active) return;
   const request = (detailGeneration.get(creatorId) ?? 0) + 1;
   detailGeneration.set(creatorId, request);
   const scope = generation;
@@ -73,6 +75,7 @@ async function loadDetail(creatorId: number, targetPage = details[creatorId]?.pa
   finally { if (scope === generation && detailGeneration.get(creatorId) === request) detailLoading[creatorId] = false; }
 }
 async function refresh() {
+  if (!props.active) return;
   const request = ++generation;
   loading.value = true; error.value = '';
   try {
@@ -92,6 +95,13 @@ async function search() {
   await refresh();
 }
 async function goPage(next: number) { page = next; await refresh(); }
+watch(() => props.active, active => {
+  if (!active) {
+    ++generation;
+    loading.value = false;
+    for (const key of Object.keys(detailLoading)) detailLoading[Number(key)] = false;
+  }
+});
 onBeforeUnmount(() => { alive = false; ++generation; });
 defineExpose({ refresh });
 </script>

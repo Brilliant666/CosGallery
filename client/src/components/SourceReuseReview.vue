@@ -23,19 +23,24 @@
   </details>
 </template>
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onBeforeUnmount, ref, watch } from 'vue';
 import { fetchSourceReuse, type SourceReusePage } from '../api/source-reuse';
 const result = ref<SourceReusePage | null>(null);
 const loading = ref(false);
 const error = ref('');
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true });
+let generation = 0;
 async function load(page: number) {
-  if (loading.value) return;
+  if (!props.active || loading.value) return;
+  const request = ++generation;
   loading.value = true; error.value = '';
-  try { result.value = await fetchSourceReuse(page); }
-  catch { error.value = '关联说明读取失败，请重试；未执行任何关联操作。'; }
-  finally { loading.value = false; }
+  try { const payload = await fetchSourceReuse(page); if (request === generation) result.value = payload; }
+  catch { if (request === generation) error.value = '关联说明读取失败，请重试；未执行任何关联操作。'; }
+  finally { if (request === generation) loading.value = false; }
 }
 function onToggle(event: Event) {
   if ((event.target as HTMLDetailsElement).open && !result.value) void load(1);
 }
+watch(() => props.active, active => { if (!active) { ++generation; loading.value = false; } });
+onBeforeUnmount(() => { ++generation; });
 </script>

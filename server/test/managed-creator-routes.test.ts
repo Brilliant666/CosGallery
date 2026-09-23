@@ -32,7 +32,7 @@ describe.sequential('managed creator admin API', () => {
     expect(result.body).toMatchObject({name:'A',isActive:true,rating:'R18',preference:null});
     expect((await requestTestApp(app,'POST',base+'/creators',headers,{name:'A'})).body).toMatchObject({code:'CREATOR_IDENTITY_AMBIGUOUS',candidates:[{id,name:'A'}]});
     expect((await requestTestApp(app,'PATCH',base+'/creators/9999',headers,{rating:null})).status).toBe(404);
-    expect((await requestTestApp(app,'DELETE',base+`/creators/${id}`,headers)).status).toBe(404);
+    expect((await requestTestApp(app,'DELETE',base+`/creators/${id}`,headers)).status).toBe(400);
   });
   it('uses explicit IDs for legacy rating PATCH, distinguishes unlinked and unclassified, hides inactive',async()=>{
     let response=await requestTestApp(app,'PATCH',`/api/cos-gallery/creators/${folderId}/content-rating`,headers,{contentRating:'R15'});
@@ -88,6 +88,22 @@ describe.sequential('managed creator admin API', () => {
     expect(db.connection.prepare('SELECT COUNT(*) AS count FROM scan_runs').get()).toEqual(beforeScans);
     expect(db.connection.prepare('SELECT COUNT(*) AS count FROM local_ingest_jobs').get()).toEqual(beforeJobs);
   });
+  it('previews and explicitly deletes only an unused inactive manual creator',async()=>{
+    const created=await requestTestApp(app,'POST',base+'/creators',headers,{name:'Unused mistake'});
+    const target=created.body.id;
+    const url=base+`/creators/${target}`;
+    expect((await requestTestApp(app,'GET',url+'/deletion-preview')).body.eligible).toBe(false);
+    await requestTestApp(app,'POST',url+'/deactivate',headers,{confirm:true});
+    const preview=await requestTestApp(app,'GET',url+'/deletion-preview');
+    expect(preview.status).toBe(200);expect(preview.body).toMatchObject({creatorId:target,eligible:true,blockers:[]});
+    const body={confirm:true,confirmationToken:preview.body.confirmationToken};
+    expect((await requestTestApp(app,'DELETE',url,{},body)).status).toBe(403);
+    expect((await requestTestApp(app,'DELETE',url,headers,{...body,confirmationToken:'0'.repeat(64)})).status).toBe(409);
+    expect((await requestTestApp(app,'DELETE',url,headers,body)).body).toEqual({deleted:true,creatorId:target});
+    expect((await requestTestApp(app,'GET',url+'/deletion-preview')).status).toBe(404);
+    expect((await requestTestApp(app,'DELETE',url,headers,body)).status).toBe(404);
+    expect((await requestTestApp(app,'GET',base+`/creators/${id}/deletion-preview`)).body.eligible).toBe(false);
+  });
   it('requires administrator capability even for alias and relationship mutations',async()=>{
     const {authService}=await import('../src/services/auth-service.js');
     authService.setAdminPassword('fixture-admin-password');
@@ -97,9 +113,11 @@ describe.sequential('managed creator admin API', () => {
     for(const [method,url,body] of [
       ['POST',base+'/creators',{name:'Blocked'}],['PATCH',base+`/creators/${id}`,{rating:'R18'}],
       ['POST',base+`/creators/${id}/aliases`,{alias:'Blocked'}],['POST',base+`/creators/${id}/restore`,{confirm:true}],
+      ['DELETE',base+`/creators/${id}`,{confirm:true,confirmationToken:'0'.repeat(64)}],
       ['POST',base+`/local-creator-folders/${folderId}/unlink`,{confirm:true}]
     ] as const) expect((await requestTestApp(app,method,url,{...headers,cookie},body)).status).toBe(403);
     expect((await requestTestApp(app,'GET',base,{cookie})).status).toBe(403);
+    expect((await requestTestApp(app,'GET',base+`/creators/${id}/deletion-preview`,{cookie})).status).toBe(403);
     for(const table of ['local_ingest_jobs','archive_catalog_download_tasks','archive_catalog_metadata_tasks']) expect(db.connection.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({count:0});
   });
 });

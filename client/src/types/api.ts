@@ -831,7 +831,10 @@ export interface LocalIngestSettings {
   maxExtractionDepth: 2;
   allowlist: string[];
   archivePasswordConfigured: boolean;
+  archivePasswordSource?: 'local' | 'environment' | 'none';
 }
+
+export type LocalIngestSettingsInput = Omit<LocalIngestSettings, 'allowlist' | 'archivePasswordConfigured' | 'archivePasswordSource'> & { allowlist?: string[]; archivePassword?: string; clearArchivePassword?: boolean };
 
 export interface LocalIngestSettingsValidation {
   valid: boolean;

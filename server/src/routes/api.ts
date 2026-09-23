@@ -72,6 +72,14 @@ router.use('/admin/archive-catalog', requireCapability('canAccessSettings', 'Adm
 router.post('/admin/archive-catalog/creators', managedAccess, (request, response) => {
   managedResponse(response, () => new ManagedCreatorService().create(request.body), 201);
 });
+router.get('/admin/archive-catalog/creators/:id/deletion-preview', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().deletionPreview(id));
+});
+router.delete('/admin/archive-catalog/creators/:id', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().deleteUnusedManualCreator(id, request.body));
+});
 router.patch('/admin/archive-catalog/creators/:id', managedAccess, (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
   managedResponse(response, () => new ManagedCreatorService().update(id, request.body));
@@ -348,8 +356,13 @@ const localIngestSettingsBodySchema = z.object({
   fileStableSeconds: z.number().int().min(1).max(3600),
   recycleAfterIngest: z.boolean(),
   maxExtractionDepth: z.literal(2),
-  allowlist: z.array(z.string().trim().min(1).max(255)).max(1000).optional()
-});
+  allowlist: z.array(z.string().trim().min(1).max(255)).max(1000).optional(),
+  archivePassword: z.string().max(1024).regex(/^[^\r\n\0]*$/, 'Invalid archive password').optional(),
+  clearArchivePassword: z.boolean().optional()
+}).refine((value) => !(value.clearArchivePassword && value.archivePassword), 'Choose either a new archive password or clear');
+const localIngestAllowlistBodySchema = z.object({
+  allowlist: z.array(z.string().trim().min(1).max(255)).max(1000)
+}).strict();
 const homeFeedDefaultBodySchema = z.object({
   defaultMode: z.enum(['recent', 'rediscover', 'random'])
 });
@@ -1548,6 +1561,15 @@ router.get(
 );
 
 router.get(
+  '/admin/local-ingest/archive-password',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  (_request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ archivePassword: localIngestSettingsService.getEditableArchivePassword() });
+  }
+);
+
+router.get(
   '/admin/local-ingest/operation',
   requireCapability('canAccessSettings', 'Admin access is required.'),
   (_request, response) => {
@@ -1582,6 +1604,20 @@ router.post(
       { state: 'running', kind: 'validation', message: '正在验证 Stage 3 环境' },
       () => localIngestSettingsService.validate(body),
       (result) => ({ valid: result.valid, errorCount: result.errors.length })
+    );
+  }
+);
+
+router.put(
+  '/admin/local-ingest/allowlist',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  async (request, response) => {
+    const body = localIngestAllowlistBodySchema.parse(request.body);
+    await respondWithLocalIngestOperation(
+      response,
+      { state: 'running', kind: 'save-settings', message: '正在保存 Stage 3 博主名单' },
+      () => localIngestSettingsService.saveAllowlist(body.allowlist),
+      (settings) => ({ saved: true, allowlistCount: settings.allowlist.length })
     );
   }
 );
