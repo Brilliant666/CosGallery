@@ -103,6 +103,74 @@ describe.sequential('local-first admission reuses source identity through applic
     expect(catalog.validateCompleteCostuanDirectory(r, creator).requiredFilenames).toEqual([]);
   });
 
+  it.each(['bare-order', 'spaced-creator', 'bracketed-name', 'media-tail'] as const)(
+    'retains %s source facts for review, not duplicate identity or acquisition', async variant => {
+      const formattedName = creatorName.replace('ReuseFixture', 'Reuse Fixture');
+      const titles = {
+        'bare-order': '001 - [Studio] Blue Apron',
+        'spaced-creator': `${formattedName} 001 [Studio] Blue Apron`,
+        'bracketed-name': `${formattedName}(모델) NO.001 [Studio] Blue Apron`,
+        'media-tail': '001 - [Studio] Blue Apron [61P／766MB]',
+      };
+      manager.connection.prepare('INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,?,?,?)')
+        .run(creator, '모델', `fixture-alias-${creator}`, 'test');
+      const local = await admission.apply(await preview(titles[variant]));
+      const r = record(['[Studio] Blue Apron', 'Unrelated New Moon']);
+      const proof = catalog.validateCompleteCostuanDirectory(r, creator);
+      expect(proof.localSourceReuse[0]).toMatchObject({ status: 'review', satisfied: false, candidateWorkIds: [local.items[0].work_id] });
+      expect(proof.requiredFilenames).toEqual(['002.7z']);
+      const before = manager.connection.prepare('SELECT * FROM archive_catalog_local_works WHERE work_id=?').all(local.items[0].work_id);
+      catalog.importCostuanRecord(r, { expectedCreatorId: creator });
+      expect(sources().map(s => s.source_order)).toEqual([2]);
+      expect(works()).toHaveLength(2);
+      expect(downloads.planMissing({ creatorIds: [creator], targetRoot: input }).created).toBe(1);
+      expect(downloads.list({ creatorId: creator }).items.map(t => t.targetFilename)).toEqual(['002.7z']);
+      const collection = manager.connection.prepare('SELECT metadata_json FROM archive_catalog_collections WHERE creator_id=?').get(creator)!;
+      const metadata = JSON.parse(String(collection.metadata_json));
+      expect(metadata.works).toHaveLength(2); // unresolved source fact is retained
+      expect(metadata.localSourceReuse[0].status).toBe('review');
+      const ids = works().map(w => w.id), sourceIds = sources().map(s => s.id);
+      catalog.importCostuanRecord(r, { expectedCreatorId: creator });
+      expect(works().map(w => w.id)).toEqual(ids); expect(sources().map(s => s.id)).toEqual(sourceIds);
+      expect(manager.connection.prepare('SELECT * FROM archive_catalog_local_works WHERE work_id=?').all(local.items[0].work_id)).toEqual(before);
+    });
+
+  it('does not auto-pick an exact name when a different local Work is a formatted candidate', async () => {
+    await admission.apply(await preview('Blue Apron'));
+    await admission.apply(await preview('001 - Blue Apron'));
+    const r = record(['Blue Apron']);
+    expect(catalog.validateCompleteCostuanDirectory(r, creator).localSourceReuse[0]).toMatchObject({ status: 'review', satisfied: false });
+    catalog.importCostuanRecord(r, { expectedCreatorId: creator });
+    expect(works()).toHaveLength(2); expect(sources()).toHaveLength(0);
+  });
+
+  it('holds source-first formatted conflicts while retaining historical task/Work identities and active claims', async () => {
+    const r = record(['[Studio] Blue Apron']); catalog.importCostuanRecord(r, { expectedCreatorId: creator });
+    downloads.planMissing({ creatorIds: [creator], targetRoot: input });
+    const task = downloads.list({ creatorId: creator }).items[0], source = sources()[0];
+    manager.connection.prepare("UPDATE archive_catalog_download_tasks SET status='claimed',claimed_by='active-fixture',attempt_count=1 WHERE id=?").run(task.id);
+    const history = manager.connection.prepare('SELECT * FROM archive_catalog_download_tasks WHERE id=?').get(task.id);
+    await admission.apply(await preview('001 - [Studio] Blue Apron'));
+    const ids = works().map(w => w.id);
+    catalog.importCostuanRecord(r, { expectedCreatorId: creator });
+    expect(downloads.get(task.id)?.acquisitionState).toBe('review_required');
+    expect(manager.connection.prepare('SELECT * FROM archive_catalog_download_tasks WHERE id=?').get(task.id)).toEqual(history);
+    expect(works().map(w => w.id)).toEqual(ids);
+    expect(sources()[0]).toMatchObject({ id: source.id, work_id: source.work_id });
+    expect(() => downloads.claim({ workerId: 'other', seedTaskId: task.id })).toThrow();
+  });
+
+  it('keeps an established exact relationship when another formatted local candidate later appears', async () => {
+    const first = await admission.apply(await preview('Blue Apron'));
+    const r = record(['Blue Apron']); catalog.importCostuanRecord(r, { expectedCreatorId: creator });
+    const source = sources()[0];
+    await admission.apply(await preview('001 - Blue Apron'));
+    catalog.importCostuanRecord(r, { expectedCreatorId: creator });
+    expect(sources()[0]).toMatchObject({ id: source.id, work_id: first.items[0].work_id });
+    expect(catalog.validateCompleteCostuanDirectory(r, creator).localSourceReuse[0]).toMatchObject({ status: 'existing', satisfied: true });
+    expect(works()).toHaveLength(2);
+  });
+
   it.each([{ accepted: false, localOnly: false }, { accepted: true, localOnly: true }])(
     'holds a title candidate without acceptance or with local-only policy: %j', async options => {
       await admission.apply(await preview('Held Set', options));

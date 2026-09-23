@@ -3,12 +3,15 @@ import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { normalizeWorkTitle } from '../utils/work-title.js';
+import { isWorkTitleCandidate } from '../utils/work-title-candidate.js';
 import { ArchiveLocalFulfillmentService, fulfillmentValidSql, localVersionSql } from './archive-local-fulfillment-service.js';
 
+// Decision keys stay stable across suggestion-rule revisions.
 const RULE='unique-work-title-v1';
+const REVIEW_RULE='unique-work-title-v2-review-candidates';
 type SourceInput={sourceOrder:string;label:string};
 export type SourceReuseResult={sourceOrder:string;rawTitle:string;normalizedTitle:string;ruleVersion:string;
- status:'reuse'|'missing'|'review'|'existing';reason:string;workId?:number;localWorkId?:number;satisfied:boolean};
+ status:'reuse'|'missing'|'review'|'existing';reason:string;workId?:number;localWorkId?:number;candidateWorkIds?:number[];satisfied:boolean};
 type Local={id:number;work_id:number;absolute_path:string;post_id:number|null;is_active:number;identity_policy:string;
  provenance_json:string|null;folder_active:number;root_path:string;image_count:number;video_count:number};
 
@@ -22,18 +25,21 @@ export class LocalSourceReuseService {
   const names=[creator.canonical_name,...(this.db.prepare('SELECT alias FROM archive_catalog_creator_aliases WHERE creator_id=?').all(creatorId) as {alias:string}[]).map(x=>x.alias)];
   const normalized=inputs.map(i=>normalizeWorkTitle(i.label,names));
   const counts=new Map<string,number>();for(const n of normalized)counts.set(n,(counts.get(n)??0)+1);
-  const works=this.db.prepare('SELECT id,display_title,primary_local_work_id FROM archive_catalog_works WHERE creator_id=?').all(creatorId) as {id:number;display_title:string;primary_local_work_id:number|null}[];
+  const works=this.db.prepare(`SELECT w.id,w.display_title,w.primary_local_work_id,
+   EXISTS(SELECT 1 FROM archive_catalog_local_works l WHERE l.work_id=w.id) AS has_local
+   FROM archive_catalog_works w WHERE w.creator_id=?`).all(creatorId) as {id:number;display_title:string;primary_local_work_id:number|null;has_local:number}[];
   const collection=this.db.prepare("SELECT id FROM archive_catalog_collections WHERE creator_id=? AND source='costuan' AND source_collection_id=?").get(creatorId,postId) as {id:number}|undefined;
   return inputs.map((i,index)=>{
-   const base:SourceReuseResult={sourceOrder:i.sourceOrder,rawTitle:i.label,normalizedTitle:normalized[index],ruleVersion:RULE,status:'missing',satisfied:false,reason:'未发现可复用的同名本地作品'};
+   const base:SourceReuseResult={sourceOrder:i.sourceOrder,rawTitle:i.label,normalizedTitle:normalized[index],ruleVersion:REVIEW_RULE,status:'missing',satisfied:false,reason:'未发现可复用的同名本地作品'};
+   const localCandidates=works.filter(w=>w.has_local && isWorkTitleCandidate(w.display_title,i.label,names));
    const existing=collection?this.db.prepare(`SELECT s.id,s.work_id,${fulfillmentValidSql('s')} AS satisfied FROM archive_catalog_source_works s WHERE collection_id=? AND source_work_id=?`).get(collection.id,i.sourceOrder) as {id:number;work_id:number;satisfied:number}|undefined:undefined;
    // Existing identity is never replaced by a name rule. A revoked rule is held,
    // not silently recreated, even after restart or a source refresh.
    if(existing){
     const boundLocal=this.db.prepare('SELECT id FROM archive_catalog_local_works WHERE work_id=?').get(existing.work_id);
     const explicit=this.db.prepare("SELECT id FROM archive_catalog_work_decisions WHERE source_work_id=? AND state='active' AND kind IN ('same_work','source_mapping','source_binding') ORDER BY id DESC LIMIT 1").get(existing.id) as {id:number}|undefined;
-    if(!boundLocal && !explicit && works.some(w=>w.id!==existing.work_id&&normalizeWorkTitle(w.display_title,names)===base.normalizedTitle&&this.db.prepare('SELECT id FROM archive_catalog_local_works WHERE work_id=?').get(w.id)))
-     return {...base,status:'review',workId:existing.work_id,reason:'来源与同名本地作品已有不同Work ID；不支持自动合并，待确认'};
+    if(!boundLocal && !explicit && localCandidates.some(w=>w.id!==existing.work_id))
+     return {...base,status:'review',workId:existing.work_id,candidateWorkIds:localCandidates.map(w=>w.id),reason:'来源与本地候选已有不同Work ID；保留来源事实，待确认，不自动合并或重复获取'};
     const revoked=this.db.prepare("SELECT id FROM archive_catalog_work_decisions WHERE source_work_id=? AND kind='unique_name' AND state='revoked' ORDER BY id DESC LIMIT 1").get(existing.id) as {id:number}|undefined;
     const automatic=this.db.prepare("SELECT id,local_work_id FROM archive_catalog_work_decisions WHERE source_work_id=? AND kind='unique_name' AND state='active'").get(existing.id) as {id:number;local_work_id:number}|undefined;
     if(explicit && explicit.id>Math.max(revoked?.id??0,automatic?.id??0))return {...base,status:'existing',workId:existing.work_id,satisfied:!!existing.satisfied,reason:'复用后续人工确认的来源关系及版本决定'};
@@ -46,6 +52,8 @@ export class LocalSourceReuseService {
    const binding=collection?this.db.prepare(`SELECT b.work_id,d.state FROM archive_catalog_source_bindings b JOIN archive_catalog_work_decisions d ON d.id=b.decision_id WHERE b.collection_id=? AND b.source_work_id=?`).get(collection.id,i.sourceOrder) as {work_id:number;state:string}|undefined:undefined;
    if(binding?.state==='revoked')return {...base,status:'review',reason:'明确来源绑定已撤销，禁止自动重新关联'};
    const candidates=binding?works.filter(w=>w.id===binding.work_id):works.filter(w=>normalizeWorkTitle(w.display_title,names)===base.normalizedTitle);
+   if(!binding && localCandidates.some(w=>!candidates.some(exact=>exact.id===w.id)))
+    return {...base,status:'review',candidateWorkIds:localCandidates.map(w=>w.id),reason:'发现格式或前缀不同的本地作品候选；待确认，不代表缺失或内容相同'};
    if(!binding && (counts.get(base.normalizedTitle)!==1 || candidates.length>1))return {...base,status:'review',reason:'同名冲突，完整来源清单或Work集合不唯一，待确认'};
    if(!candidates.length){
     // Suggestions only: never strip meaningful punctuation/numbers for identity.
