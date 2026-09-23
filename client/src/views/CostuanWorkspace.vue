@@ -1,7 +1,7 @@
 <template>
   <section aria-label="Costuan 收录流程">
     <nav aria-label="Costuan 阶段" class="mb-5 flex flex-wrap gap-2">
-      <button v-for="tab in workspaces" :key="tab.id" type="button" :data-test="'workspace-'+tab.id" :aria-pressed="workspace === tab.id" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="workspace === tab.id ? 'bg-accent text-white border-accent' : 'bg-surface border-border'" @click="workspace = tab.id">{{ tab.label }}</button>
+      <button v-for="tab in workspaces" :key="tab.id" type="button" :data-test="'workspace-'+tab.id" :aria-pressed="workspace === tab.id" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="workspace === tab.id ? 'bg-bg text-accent border-accent' : 'bg-surface border-border text-muted'" @click="workspace = tab.id">{{ tab.label }}</button>
     </nav>
     <section v-if="visited.has('source')" class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="博主元数据采集队列" v-show="workspace === 'source'">
       <div class="flex flex-wrap items-start justify-between gap-4">
@@ -9,21 +9,21 @@
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 1</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">来源检查</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            从规范博主库明确选择首次收录或增量检查对象，已有来源也可再次检查。复制固定范围到新版插件，读取 Costuan 与百度原分享，仅为本地缺失作品复用或创建任务；不整份转存至 cos图集。刷新账本只读取，不执行来源检查。
+            选择博主并准备本次任务，再将固定范围复制到插件开始检查。网页不会直接访问资源站或操作网盘。
           </p>
         </div>
-        <div v-if="metadataTasks" class="grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
+        <details v-if="metadataTasks" class="text-sm"><summary class="cursor-pointer text-muted">全部来源与检查记录统计</summary><div class="mt-2 grid grid-cols-3 gap-2 text-center sm:grid-cols-5">
           <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.sourceCreators }}</strong>有来源的博主</span>
           <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.sourceCollections }}</strong>来源合集</span>
           <span class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.taskTotal }}</strong>来源检查任务</span>
           <span v-for="status in metadataStatuses" :key="status" class="rounded-xl bg-bg px-3 py-2 text-xs"><strong class="block text-base">{{ metadataTasks.summary.tasks[status] }}</strong>{{ metadataStatusLabel(status) }}</span>
-        </div>
+        </div></details>
       </div>
 
       <div class="mt-4 flex flex-wrap items-center gap-3">
         <FirstCollectionSelector :active="stageActive('source')" @planned="refreshSourceRegions" />
-        <button type="button" data-test="refresh-stage1" class="h-11 rounded-xl border border-border bg-bg px-4 text-sm disabled:opacity-50" :disabled="sourceRegionsRefreshing" @click="refreshSourceRegions()">刷新账本状态（只读）</button>
-        <p class="m-0 text-sm text-muted">此处列出有来源或检查记录的博主，不是全部博主名单。选择与检查需明确操作。</p>
+        <button type="button" data-test="refresh-stage1" class="h-11 rounded-xl border border-border bg-bg px-4 text-sm disabled:opacity-50" :disabled="sourceRegionsRefreshing" @click="refreshSourceRegions()">查看最新检查结果</button>
+        <p class="m-0 text-sm text-muted">下表是全部已有来源或检查记录，不代表本次已选范围。</p>
       </div>
       <p v-if="metadataNotice" data-test="metadata-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ metadataNotice }}</p>
       <SourceReuseReview :active="stageActive('source')" />
@@ -72,12 +72,20 @@
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 2</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">网盘暂存</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            来源检查后，仅为本地缺失的编号作品规划任务。新版插件从原分享精确保存到“我的网盘/cos待入库/规范博主名”，已存在的目标文件复用，再由你手动下载。历史中转任务仍保留；重新检查该博主可取得原分享方式，cos图集 不再是新流程的必需目录。
+            先由插件精确保存缺失文件到网盘，再用百度客户端下载。网盘已暂存不等于本地已下载；网页在这里展示实际任务回执。
           </p>
         </div>
       </div>
 
-      <details class="mt-4"><summary class="cursor-pointer font-semibold">暂存设置与高级任务操作</summary>
+      <div data-test="stage2-handoff" class="mt-4 rounded-xl border border-border bg-bg p-4 text-sm leading-6">
+        <strong>下一步在外部工具完成</strong>
+        <p class="my-1">待暂存：回到插件处理明确任务。网盘已暂存：使用百度客户端下载到以下本地目录，保留规范博主子目录。</p>
+        <p v-if="stagingInboxRoot" class="my-1 break-all">已保存的本地下载目标：<strong>{{ stagingInboxRoot }}</strong></p>
+        <p v-else class="my-1 text-amber-800">{{ stagingSettingsError || '本地下载目标尚在读取，请勿按猜测路径下载。' }}</p>
+        <button type="button" class="mt-2 rounded-lg border border-border bg-surface px-4 py-2 font-semibold text-accent" @click="workspace = 'ingest'">下载完成后，进入Costuan入库检查文件</button>
+      </div>
+      <details class="mt-4"><summary class="cursor-pointer text-sm font-semibold text-muted">设置与高级任务维护</summary>
+      <p class="text-sm text-amber-800">“生成全部缺失任务”不受下方筛选或分页限制；会按已有来源重新规划缺失任务并对账。重新生成密钥会立即停用旧密钥，不是每批必需步骤。</p>
       <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto_auto]">
         <label class="grid gap-1.5 text-xs font-semibold text-muted">
           本地待入库根目录（账本）
@@ -93,7 +101,7 @@
 
       </details>
       <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
-        <p class="m-0">百度客户端完成下载 → <button type="button" class="text-accent underline" @click="workspace = 'ingest'">Costuan入库</button> → 扫描待入库 → 稳定文件确认后显示“本地已下载，待入库”。</p>
+        <p class="m-0">下载后由“Costuan入库 → 检查压缩包并建立任务”核实本地文件；页面导航不会认定下载完成。</p>
         <button type="button" data-test="refresh-stage2" class="h-9 rounded-xl border border-border bg-bg px-3.5 text-xs font-semibold text-text disabled:opacity-50" :disabled="stage2Refreshing" @click="refreshStage2Only">
           {{ stage2Refreshing ? '刷新中…' : '刷新状态' }}
         </button>
@@ -117,12 +125,18 @@
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 3</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">Costuan入库</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            “扫描待入库”只确认稳定文件并建立任务；“运行可处理任务”只消费已经存在的任务。密码只从服务端本机环境读取。
+            确认已保存范围 → 检查本地压缩包并建立任务 → 明确执行已有任务。检查文件后不会自动入库。
           </p>
         </div>
         <span v-if="localIngestSettings" class="rounded-full px-3 py-1.5 text-xs font-semibold" :class="localIngestSettings.archivePasswordConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
           解压密码：{{ localIngestSettings.archivePasswordConfigured ? '已配置' : '未配置' }}
         </span>
+      </div>
+
+      <div v-if="stage3EnvironmentIssue" role="alert" data-test="stage3-environment-issue" class="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+        <strong>先处理环境问题</strong><p class="my-1">{{ stage3EnvironmentIssue }}</p>
+        <button type="button" class="underline" @click="settingsOpen = true">打开入库设置与环境工具</button>
+        <button v-if="settingsReadError" type="button" data-test="retry-ingest-settings" class="ml-4 underline" @click="loadLocalIngest">重新读取设置</button>
       </div>
 
       <div data-test="stage3-operation-card" class="mt-4 rounded-2xl border p-4" :class="stage3OperationActive ? 'border-blue-200 bg-blue-50' : 'border-border bg-bg'">
@@ -138,7 +152,12 @@
             </button>
           </div>
         </div>
-        <div v-if="localIngestOperation?.run" class="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 lg:grid-cols-11">
+        <div v-if="localIngestOperation?.run" class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+          <span><strong>{{ localIngestOperation.run.ingested }} / {{ localIngestOperation.run.total }}</strong> 本次已入库</span>
+          <span>待核查 {{ localIngestOperation.run.awaitingReview }} · 失败 {{ localIngestOperation.run.failed }}</span>
+          <span class="break-all">{{ localIngestOperation.run.currentJob?.creatorName ?? '等待下一项' }} · {{ localIngestPhaseLabel(localIngestOperation.run.currentJob?.phase) }}</span>
+        </div>
+        <details v-if="localIngestOperation?.run" class="mt-3 text-xs"><summary class="cursor-pointer text-muted">详细执行指标</summary><div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
           <span><strong class="block text-base">{{ localIngestOperation.run.total }}</strong>本批选中</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.examined }}</strong>实际检查</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.settled }}</strong>已有明确结果</span>
@@ -150,11 +169,11 @@
           <span><strong class="block text-base">{{ localIngestOperation.run.unchanged }}</strong>状态未变化</span>
           <span><strong class="block text-base">{{ localIngestOperation.run.remaining }}</strong>剩余</span>
           <span><strong class="block text-sm">{{ localIngestOperation.run.currentJob?.creatorName ?? '—' }}</strong>{{ localIngestOperation.run.currentJob?.archiveName ?? '等待下一项' }} · {{ localIngestPhaseLabel(localIngestOperation.run.currentJob?.phase) }}</span>
-        </div>
+        </div></details>
         <p v-if="localIngestOperationLastChecked" class="mt-2 mb-0 text-[0.68rem] text-muted">状态读取：{{ localIngestOperationLastChecked }}</p>
       </div>
 
-      <details class="mt-4" data-test="ingest-settings"><summary class="cursor-pointer font-semibold">入库设置与环境工具</summary>
+      <details class="mt-4" data-test="ingest-settings" :open="settingsOpen" @toggle="settingsOpen = ($event.target as HTMLDetailsElement).open"><summary class="cursor-pointer text-sm font-semibold text-muted">入库设置与环境工具</summary>
       <div v-if="localIngestSettings" class="mt-4 grid gap-3 lg:grid-cols-2">
         <label class="grid gap-1.5 text-xs font-semibold text-muted">正式图库
           <input v-model="localIngestSettings.libraryRoot" readonly aria-readonly="true" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-muted" />
@@ -183,7 +202,11 @@
         <button type="button" data-test="smoke-local-ingest-recycle" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="smokeTestRecycleBin">回收站测试</button>
       </div>
       </details>
-      <div class="mt-4" v-if="localIngestSettings">        <div class="grid gap-2">
+      <div class="mt-4 rounded-xl border border-border p-4" v-if="localIngestSettings">
+        <h3 class="m-0 text-sm font-semibold">1 确认允许处理的范围</h3>
+        <p data-test="saved-ingest-scope" class="my-2 text-sm">已保存 {{ localIngestSettings.allowlist.length }} 位博主：{{ localIngestSettings.allowlist.join('、') || '尚未设置允许处理的博主，请展开调整范围并保存。' }}</p>
+        <p v-if="localIngestAllowlistDirty" data-test="unsaved-ingest-scope" class="my-2 text-sm text-amber-800">名单有尚未保存的修改（草稿 {{ parseLocalIngestAllowlist(localIngestAllowlistText).length }} 位）。检查与执行前请保存；读取目录或追加名单不会自动建立任务。</p>
+        <details><summary class="cursor-pointer text-sm font-semibold text-muted">调整允许处理的博主</summary><div class="mt-3 grid gap-2">
           <label class="grid gap-1.5 text-xs font-semibold text-muted">允许处理的博主（每行一位）
             <textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" :disabled="stage3WriteLocked" :title="stage3LockReason" rows="3" class="rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
           </label>
@@ -200,13 +223,24 @@
             </div>
             <details v-if="localIngestInboxCreators.unmapped.length" class="mt-2"><summary class="cursor-pointer font-semibold">查看详情</summary><ul class="mt-1 mb-0 grid gap-1 pl-5"><li v-for="entry in localIngestInboxCreators.unmapped" :key="entry.folderName">{{ entry.folderName }} · {{ entry.archiveCount }} 个压缩包 · {{ entry.mappingReason }}</li></ul></details>
           </div>
-        </div>
-</div>
-      <div class="mt-4 flex flex-wrap gap-2">
-        <button type="button" data-test="save-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="saveLocalIngestConfig">保存配置</button>
-        <button type="button" data-test="scan-local-ingest" class="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="scanLocalInbox">扫描待入库</button>
-        <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch()">运行可处理任务</button>
+        </div></details>
+        <button type="button" data-test="save-local-ingest" class="mt-3 h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="saveLocalIngestConfig">保存范围与设置</button>
+        <p class="mb-0 text-xs text-muted">范围和设置未修改时，无需每批重新保存或验证环境。</p>
       </div>
+      <div class="mt-4 grid gap-4 lg:grid-cols-2">
+        <div class="rounded-xl border border-border p-4">
+          <h3 class="m-0 text-sm font-semibold">2 检查本地压缩包并建立任务</h3>
+          <p class="text-sm text-muted">从已保存的等待目录读取允许范围内的压缩包，建立或更新任务。检查完成后不会自动执行入库。</p>
+          <p v-if="stagingInboxRoot" class="break-all text-xs text-muted">已保存等待目录：{{ stagingInboxRoot }}</p>
+          <button type="button" data-test="scan-local-ingest" class="min-h-11 rounded-xl border border-accent bg-bg px-4 py-2 text-sm font-semibold text-accent disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="scanLocalInbox">检查压缩包并建立任务</button>
+        </div>
+        <div class="rounded-xl border border-border p-4">
+          <h3 class="m-0 text-sm font-semibold">3 执行已有可处理任务</h3>
+          <p data-test="ingest-execution-scope" class="text-sm text-muted">执行已保存名单内全部已有的排队、失败及待对账任务，排除等待文件稳定的任务。包含历史任务，不限本次检查、当前筛选或当前页；将解压并按任务检查结果入库。</p>
+          <button type="button" data-test="run-local-ingest-batch" class="min-h-11 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch()">执行已保存范围的可处理任务</button>
+        </div>
+      </div>
+      <p v-if="stage3ActionTitle" data-test="stage3-action-reason" class="mt-2 text-sm text-amber-800">{{ stage3ActionTitle }}</p>
       <p v-if="localIngestNotice" data-test="local-ingest-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ localIngestNotice }}</p>
 
       <div v-if="localIngestDashboard" class="mt-4 grid grid-cols-2 gap-2 text-center sm:grid-cols-3 lg:grid-cols-6">
@@ -232,7 +266,8 @@
                     <option value="">全部</option><option value="pending">待处理</option><option value="running">处理中</option><option value="awaiting_review">待核查</option><option value="failed">失败</option><option value="completed">已完成</option>
                   </select>
                 </label>
-                <button v-if="creator.pending + creator.failed > 0" type="button" data-test="run-local-ingest-creator" class="h-9 rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch(creator)">继续该博主待处理（{{ creator.pending + creator.failed }}）</button>
+                <button v-if="creator.pending + creator.failed > 0" type="button" data-test="run-local-ingest-creator" class="h-9 rounded-lg border border-border bg-bg px-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch(creator)">执行该博主可处理任务</button>
+                <span v-if="creator.pending + creator.failed > 0" class="text-xs text-muted">仍受已保存名单限制；不受当前筛选或分页限制。</span>
               </div>
               <span class="text-xs text-muted">共 {{ localIngestDashboard.total }} 条 · 第 {{ localIngestDashboard.page }} / {{ localIngestJobTotalPages }} 页</span>
             </div>
@@ -258,7 +293,7 @@
           </div>
         </article>
       </div>
-      <p v-else class="mt-4 mb-0 rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">尚无Costuan入库任务。请先明确点击“扫描待入库”。</p>
+      <p v-else class="mt-4 mb-0 rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">{{ localIngestDashboard ? '尚无Costuan入库任务。确认下载已完成后，点击“检查压缩包并建立任务”。' : '任务尚未读取成功；请查看当前读取提示并刷新状态，不代表没有任务。' }}</p>
     </section>
 
   </section>
@@ -327,6 +362,13 @@ let metadataLoadGeneration = 0;
 const metadataNotice = ref('');
 const sourceRegionsRefreshing = ref(false);
 const localIngestSettings = ref<LocalIngestSettings | null>(null);
+const stagingInboxRoot = ref('');
+const stagingSettingsError = ref('');
+const settingsReadError = ref('');
+const settingsValidationError = ref('');
+const settingsOpen = ref(false);
+const stage3EnvironmentIssue = computed(() => settingsReadError.value || settingsValidationError.value
+  || (localIngestSettings.value && !localIngestSettings.value.archivePasswordConfigured ? '尚未配置服务端解压密码；请在本机配置后再执行需要密码的解压任务。' : ''));
 const localIngestAllowlistText = ref('');
 const localIngestInboxCreators = ref<LocalIngestInboxCreatorsResult | null>(null);
 const localIngestDashboard = ref<LocalIngestJobsDashboard | null>(null);
@@ -375,7 +417,7 @@ const stage3LockReason = computed(() => {
   if (stage3OperationActive.value) return 'Stage 3 当前已有操作，完成后可再次操作。';
   return '';
 });
-const stage3ActionTitle = computed(() => stage3LockReason.value || (localIngestAllowlistDirty.value ? '请先保存博主名单草稿' : undefined));
+const stage3ActionTitle = computed(() => stage3LockReason.value || (!localIngestSettings.value ? '入库设置尚未读取成功；读取失败时可在上方重新读取设置。' : localIngestAllowlistDirty.value ? '请先保存博主名单草稿，再检查或执行。' : undefined));
 const stage3ElapsedMs = computed(() => {
   const operation = localIngestOperation.value;
   if (!operation?.startedAt || operation.state === 'idle') return 0;
@@ -545,10 +587,16 @@ async function loadLocalIngestDashboard() {
 
 async function loadLocalIngest() {
   const generation = lifecycleGeneration;
-  const settings = await fetchLocalIngestSettings();
-  if (!currentRead('ingest', generation)) return;
-  localIngestSettings.value = settings;
-  localIngestAllowlistText.value = settings.allowlist.join('\n');
+  try {
+    const settings = await fetchLocalIngestSettings();
+    if (!currentRead('ingest', generation)) return;
+    localIngestSettings.value = settings;
+    stagingInboxRoot.value = settings.inboxRoot;
+    settingsReadError.value = '';
+    localIngestAllowlistText.value = settings.allowlist.join('\n');
+  } catch (reason) {
+    if (currentRead('ingest', generation)) settingsReadError.value = reason instanceof Error ? reason.message : '无法读取Costuan入库设置';
+  }
 }
 
 function optimisticLocalIngestOperation(
@@ -744,8 +792,8 @@ function applyDiscoveredInboxCreators(mode: 'append' | 'replace') {
   }
   localIngestAllowlistText.value = next.join('\n');
   localIngestNotice.value = mode === 'replace'
-    ? '已用待入库博主替换页面草稿；请确认后点击“保存配置”。'
-    : '已将待入库博主追加到页面草稿；请确认后点击“保存配置”。';
+    ? '已用待入库博主替换页面草稿；请确认后点击“保存范围与设置”。'
+    : '已将待入库博主追加到页面草稿；请确认后点击“保存范围与设置”。';
 }
 
 function cancelInboxCreatorDiscovery() {
@@ -761,6 +809,8 @@ async function saveLocalIngestConfig() {
     const settings = await saveLocalIngestSettings(currentLocalIngestSettings());
     if (!currentRead('ingest', generation)) return;
     localIngestSettings.value = settings;
+    stagingInboxRoot.value = settings.inboxRoot;
+    settingsReadError.value = '';
     localIngestAllowlistText.value = localIngestSettings.value.allowlist.join('\n');
     localIngestNotice.value = 'Costuan入库配置已保存；密码仍只保存在服务端本机环境。';
   } catch (reason) {
@@ -780,6 +830,7 @@ async function validateLocalIngestConfig() {
   try {
     const result = await validateLocalIngestSettings(currentLocalIngestSettings());
     if (!currentRead('ingest', generation)) return;
+    settingsValidationError.value = result.valid ? '' : `环境验证未通过：${result.errors.join('；')}`;
     localIngestNotice.value = result.valid
               ? `环境验证通过：${result.sevenZip.version ?? '7-Zip 可用'}，三个目录位于同一卷。`
       : `环境验证未通过：${result.errors.join('；')}`;
@@ -854,12 +905,11 @@ async function runLocalBatch(creator?: LocalIngestCreatorJobSummary) {
   if (!stageActive('ingest')) return;
   const generation = lifecycleGeneration;
   const creatorId = creator?.creatorId;
-  const expectedCount = creator ? creator.pending + creator.failed : 0;
   localIngestRequestBusy.value = true;
   localIngestOperation.value = optimisticLocalIngestOperation(
     'running',
     'batch',
-    creator ? `正在启动 ${creator.creatorName} 的 ${expectedCount} 项 Stage 3 继续任务` : '正在启动 Stage 3 批次'
+    creator ? `正在启动 ${creator.creatorName} 在已保存名单内的可处理任务` : '正在启动已保存名单内的可处理任务'
   );
   scheduleStage3Poll();
   try {
@@ -1088,15 +1138,13 @@ async function activateStage() {
       fetchArchiveBridgeStatus().then(result => { if (currentRead(stage, generation)) bridgeConfigured.value = result.configured; }).catch(() => undefined),
       // Read the actual configured inbox on first entry; keep an edited draft on later visits.
       !stagingSettingsLoaded ? fetchLocalIngestSettings().then(settings => {
-        if (currentRead(stage, generation)) { inboxRoot.value = settings.inboxRoot; stagingSettingsLoaded = true; }
-      }).catch(() => undefined) : Promise.resolve()
+        if (currentRead(stage, generation)) { inboxRoot.value = settings.inboxRoot; stagingInboxRoot.value = settings.inboxRoot; stagingSettingsError.value = ''; stagingSettingsLoaded = true; }
+      }).catch(reason => { if (currentRead(stage, generation)) stagingSettingsError.value = reason instanceof Error ? reason.message : '未能读取已保存的下载目标，请进入入库设置核对。'; }) : Promise.resolve()
     ]);
   } else {
     applyJobContext();
     await Promise.all([
-      !localIngestSettings.value ? loadLocalIngest().catch(reason => {
-        if (currentRead(stage, generation)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法读取Costuan入库设置';
-      }) : Promise.resolve(),
+      !localIngestSettings.value ? loadLocalIngest() : Promise.resolve(),
       refreshStage3State()
     ]);
   }

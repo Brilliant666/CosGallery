@@ -37,6 +37,17 @@ describe('unified creator source check selector', () => {
     await w.get('[data-test=submit-first-collection]').trigger('click');await flushPromises();
     expect(planFirstCollection).toHaveBeenCalledWith([1,2],expect.any(String));
     expect(JSON.parse((w.get('[data-test=stage1-handoff]').element as HTMLTextAreaElement).value)).toEqual({version:1,type:'costuan-stage1-scope',taskIds:[101,102],creatorIds:[1,2],names:['同名博主','同名博主'],rounds:[{taskId:101,checkRoundId:'round-101'},{taskId:102,checkRoundId:'round-102'}]});
+    expect(w.get('[data-test=creator-selection-panel]').attributes('style')).toContain('display: none');
+    expect(w.get('[data-test=selected-count]').text()).toBe('已选 2 位');
+    expect(w.get('[data-test=copy-stage1-handoff]').classes()).toContain('primary');
+    expect(w.text()).toContain('下一步：到插件开始检查');
+    expect(w.text()).toContain('尚未访问 Costuan');
+    const otherRound = w.findAll('details').find(item => item.text().includes('重新选择 / 准备另一轮'))!;
+    expect(otherRound.attributes('open')).toBeUndefined();
+    (otherRound.element as HTMLDetailsElement).open = true;
+    await otherRound.trigger('toggle');
+    expect(w.get('[data-test=creator-selection-panel]').attributes('style') ?? '').not.toContain('display: none');
+    expect(w.get('[data-test=selected-count]').text()).toBe('已选 2 位');
   });
   it('retries a lost response with the same request ID and a later explicit check starts a new round', async () => {
     const w=await open();await w.get('input[type=checkbox]').setValue(true);
@@ -47,6 +58,31 @@ describe('unified creator source check selector', () => {
     expect(vi.mocked(planFirstCollection).mock.calls[1]).toEqual(first);
     await w.get('[data-test=submit-first-collection]').trigger('click');await flushPromises();
     expect(vi.mocked(planFirstCollection).mock.calls[2]![1]).not.toBe(first[1]);
+  });
+  it('withholds the previous confirmed handoff while a later round has an unknown receipt and retries its fixed scope', async () => {
+    const w=await open();await w.get('input[type=checkbox]').setValue(true);
+    await w.get('[data-test=submit-first-collection]').trigger('click');await flushPromises();
+    const first=vi.mocked(planFirstCollection).mock.calls[0]!;
+    expect(w.find('[data-test=copy-stage1-handoff]').exists()).toBe(true);
+    const otherRound=w.findAll('details').find(item=>item.text().includes('重新选择 / 准备另一轮'))!;
+    (otherRound.element as HTMLDetailsElement).open=true;await otherRound.trigger('toggle');
+    await button(w,'下一页').trigger('click');await flushPromises();await w.get('input[type=checkbox]').setValue(true);
+    vi.mocked(planFirstCollection).mockRejectedValueOnce(new Error('第二轮回执丢失'));
+    await w.get('[data-test=submit-first-collection]').trigger('click');await flushPromises();
+    const second=vi.mocked(planFirstCollection).mock.calls[1]!;
+    expect(second[0]).toEqual([1,2]);expect(second[1]).not.toBe(first[1]);
+    expect(w.get('[data-test=submit-first-collection]').text()).toBe('重试确认原提交');
+    expect(w.find('[data-test=copy-stage1-handoff]').exists()).toBe(false);
+    expect(w.find('[data-test=stage1-handoff]').exists()).toBe(false);
+    expect(w.get('section').attributes('aria-label')).toBe('上次已确认任务结果');
+    expect(w.text()).toContain('上次已确认结果（非当前轮次）');
+    expect(w.text()).toContain('待确认的固定范围：#1、#2');
+    expect(w.get('input[type=checkbox]').attributes('disabled')).toBeDefined();
+    await w.get('[data-test=submit-first-collection]').trigger('click');await flushPromises();
+    expect(vi.mocked(planFirstCollection).mock.calls[2]).toEqual(second);
+    expect(w.find('[data-test=copy-stage1-handoff]').exists()).toBe(true);
+    expect(JSON.parse((w.get('[data-test=stage1-handoff]').element as HTMLTextAreaElement).value).creatorIds).toEqual([1,2]);
+    expect(w.text()).not.toContain('非当前轮次');
   });
   it('does not accept stale roster responses or auto-select newly loaded candidates', async () => {
     const w=await open();let resolve!:(value:Awaited<ReturnType<typeof fetchCreatorSyncRoster>>)=>void;

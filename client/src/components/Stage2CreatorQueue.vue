@@ -3,7 +3,7 @@
     <form class="mb-3 flex flex-wrap gap-3 text-xs" @submit.prevent="search">
       <label>搜索规范名称或别名<input v-model="draft.q" class="ml-2 rounded-lg border border-border bg-bg p-2" type="search" /></label>
       <label>任务状态<select v-model="draft.status" class="ml-2 rounded-lg border border-border bg-bg p-2"><option value="">全部</option><option v-for="status in statuses" :key="status" :value="status">{{ statusLabel(status) }}</option></select></label>
-      <label>博主状态<select v-model="draft.enabled" class="ml-2 rounded-lg border border-border bg-bg p-2"><option value="all">全部</option><option value="enabled">启用</option><option value="disabled">停用</option></select></label>
+      <details><summary class="cursor-pointer p-2">更多筛选</summary><label>博主状态<select v-model="draft.enabled" class="ml-2 rounded-lg border border-border bg-bg p-2"><option value="all">全部</option><option value="enabled">启用</option><option value="disabled">停用</option></select></label></details>
       <button class="rounded-lg border border-border px-3 py-2" :disabled="loading">筛选（只读）</button>
     </form>
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}；保留上次读取结果，不代表零任务。</p>
@@ -13,7 +13,7 @@
         <strong>{{ payload.taskTotal }} 条匹配任务 · {{ payload.total }} 位博主</strong>
         <span v-for="status in statuses" :key="status">{{ statusLabel(status) }} {{ payload.summary[status] }}</span>
       </div>
-      <p data-test="stage2-preview-scope" class="text-xs text-muted">汇总统计完整匹配范围，不受明细分页影响。任务状态保留实际执行历史；本地满足与待复核另列，不计为新入库任务。读取时间：{{ payload.readAt }}</p>
+      <p data-test="stage2-preview-scope" class="text-xs text-muted">以下为当前筛选的查看范围，不是本次执行范围。汇总统计完整匹配范围，不受明细分页影响。任务状态保留实际执行历史；本地满足与待复核另列，不计为新入库任务。读取时间：{{ payload.readAt }}</p>
       <p v-if="!payload.total" class="text-sm text-muted">当前筛选没有匹配的下载任务。</p>
       <div v-if="payload.items.length" data-test="stage2-creators" class="grid gap-2">
         <article v-for="group in payload.items" :key="group.creatorId" :data-creator-id="group.creatorId" class="overflow-hidden rounded-xl border border-border bg-bg">
@@ -32,7 +32,7 @@
               <div class="max-h-[32rem] overflow-auto">
                 <table class="w-full min-w-[46rem] border-collapse text-left text-sm">
                   <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">作品</th><th class="p-3">网盘目录</th><th class="p-3">本地目标</th><th class="p-3">状态</th></tr></thead>
-                  <tbody><tr v-for="task in details[group.creatorId]!.items" :key="task.id" data-test="stage2-task" class="border-t border-border"><td class="p-3"><span class="font-semibold">{{ task.sourceOrderLabel ?? task.targetFilename }}</span><small class="mt-0.5 block text-muted">{{ task.title }}</small></td><td class="p-3 font-mono text-xs">{{ task.destinationPath }}/{{ task.sourceFolderName }}</td><td class="p-3 font-mono text-xs">{{ task.targetRelativeDirectory }}\{{ task.targetFilename }}</td><td class="p-3"><span>{{ statusLabel(task.status) }}</span><small v-if="task.acquisitionState && task.acquisitionState !== 'required'" data-test="stage2-acquisition" class="mt-1 block text-muted">{{ task.acquisitionExplanation || (task.acquisitionState === 'local_satisfied' ? '本地已有资源满足，无需继续获取。' : '接受决定待复核，未计为已满足；不自动重新获取。') }}</small></td></tr></tbody>
+                  <tbody><tr v-for="task in details[group.creatorId]!.items" :key="task.id" data-test="stage2-task" class="border-t border-border"><td class="p-3"><span class="font-semibold">{{ task.sourceOrderLabel ?? task.targetFilename }}</span><small class="mt-0.5 block text-muted">{{ task.title }}</small></td><td class="p-3 font-mono text-xs">{{ task.destinationPath }}/{{ task.sourceFolderName }}</td><td class="p-3 font-mono text-xs">{{ task.targetRelativeDirectory }}\{{ task.targetFilename }}</td><td class="p-3"><span>{{ statusLabel(task.status) }}</span><small v-if="task.acquisitionState && task.acquisitionState !== 'required'" data-test="stage2-acquisition" class="mt-1 block text-muted">{{ task.acquisitionExplanation || (task.acquisitionState === 'local_satisfied' ? '本地已有资源满足，无需继续获取。' : '接受决定待复核，未计为已满足；不自动重新获取。') }}</small><small v-else data-test="stage2-next-action" class="mt-1 block text-muted">{{ taskNextAction(task.status) }}</small></td></tr></tbody>
                 </table>
               </div>
               <div class="mt-3 flex justify-center gap-3 text-xs"><button :disabled="detailLoading[group.creatorId] || details[group.creatorId]!.page <= 1" @click="loadDetail(group.creatorId, details[group.creatorId]!.page - 1)">上一页明细</button><span>第 {{ details[group.creatorId]!.page }} / {{ pages(details[group.creatorId]!) }} 页 · 共 {{ details[group.creatorId]!.total }} 条</span><button :disabled="detailLoading[group.creatorId] || !details[group.creatorId]!.hasMore" @click="loadDetail(group.creatorId, details[group.creatorId]!.page + 1)">下一页明细</button></div>
@@ -53,6 +53,16 @@ import type { ArchiveDownloadTaskStatus } from '../types/api';
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true });
 const statuses: ArchiveDownloadTaskStatus[] = ['pending', 'claimed', 'downloading', 'staged', 'downloaded', 'ingested', 'failed', 'cancelled'];
 const statusLabel = (status: ArchiveDownloadTaskStatus) => ({ pending: '待转存', claimed: '插件处理中', downloading: '下载中', staged: '网盘已暂存，待本地确认', downloaded: '本地已下载，待入库', ingested: '已入库', failed: '失败', cancelled: '已取消' }[status]);
+const taskNextAction = (status: ArchiveDownloadTaskStatus) => ({
+  pending: '下一步在插件：按明确范围领取并暂存。',
+  claimed: '由插件继续处理；可返回刷新状态，不要重复领取。',
+  downloading: '已有下载处理中记录；请核对外部工具的实际进度，再返回刷新。',
+  staged: '下一步在百度客户端：下载到上方已保存的本地目标。网盘暂存不代表本地已下载；下载结束后到 Costuan入库检查文件。',
+  downloaded: '本地已确认。到 Costuan入库查看对应任务，再明确执行入库。',
+  ingested: '历史任务已入库，无需重复执行。',
+  failed: '查看原任务或插件错误后再决定如何处理，不自动重试。',
+  cancelled: '保留已取消的历史记录，不自动继续。'
+}[status]);
 const payload = ref<DownloadCreatorPage | null>(null), loading = ref(false), error = ref('');
 const expanded = reactive(new Set<number>());
 const details = reactive<Record<number, DownloadTaskPage>>({}), detailErrors = reactive<Record<number, string>>({}), detailLoading = reactive<Record<number, boolean>>({});
