@@ -19,7 +19,7 @@ const collection=(state:AdmissionCollection['state']='draft'):AdmissionCollectio
 const item=(key:string,group:AdmissionItem['group']='A'):AdmissionItem=>({key,displayTitle:key,sourceRelativePath:key,targetPath:`R:/图库/${key}`,group,state:'planned',summary:{images:2,videos:0,other:1,bytes:3000},candidates:[],conflicts:[],ads:[{relativePath:'附件/推广.txt',size:20},{relativePath:'492.jpg',size:20,automatic:true}]});
 const completedLater:AdmissionCurrentDisposition={status:'completed_later',batchId:'later-batch',collectionId:'later-collection',planId:'later-batch',itemKey:'later-item',workId:201,localWorkId:301,postId:401,completedAt:'2026-09-22T08:35:00Z',completionTimeBasis:'batch_completed',evidence:'exact_directory_scope'};
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(button=>button.text()===text)!;
-async function render(query='',showAll=true){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-admission',name:'local-admission-workspace',component:LocalAdmissionWorkspace},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}}]});await router.push(`/local-admission${query}`);const wrapper=mount(LocalAdmissionWorkspace,{global:{plugins:[router]}});await flushPromises();if(showAll)await showAllReview(wrapper);return {wrapper,router};}
+async function render(query='',showAll=true){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/library/:creatorId',name:'canonical-creator',component:{template:'<p>博主图库</p>'}},{path:'/local-admission',name:'local-admission-workspace',component:LocalAdmissionWorkspace},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}}]});await router.push(`/local-admission${query}`);const wrapper=mount(LocalAdmissionWorkspace,{global:{plugins:[router]}});await flushPromises();if(showAll)await showAllReview(wrapper);return {wrapper,router};}
 async function showAllReview(wrapper:ReturnType<typeof mount>){if(wrapper.find('[data-test=review-filter]').exists()){await wrapper.get('[data-test=review-filter]').setValue('all');await wrapper.findAll('[role=tab]')[1]?.trigger('click');}}
 async function renderKept(query=''){
   const router=createRouter({history:createMemoryHistory(),routes:[
@@ -189,12 +189,12 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.previewRemainingAdmissionCollection).mockResolvedValue(next);
     vi.mocked(api.fetchAdmissionItems).mockImplementation(async id=>({items:id==='remaining'?[{...item('complex','D'),needsBoundaryReview:true,structureWarnings:['两个含媒体分支'],suggestedAction:{key:'complex',action:'defer',reason:'用户暂缓'}}]:[{...item('done'),state:'completed'}],total:1,page:1,pageSize:100}));
     const {wrapper,router}=await render('?collection=collection-one',false);
-    expect(wrapper.text()).toContain('已入库 3 项 · 待核查 1 项');
+    expect(wrapper.text()).toContain('3 已完成');expect(wrapper.text()).toContain('尚未执行的暂缓目录 1 项');
     expect(wrapper.text()).not.toContain('本批处理完成');
     await wrapper.get('[data-test=collection-remaining]').trigger('click');await flushPromises();
     expect(api.previewRemainingAdmissionCollection).toHaveBeenCalledExactlyOnceWith(done.id);
     expect(router.currentRoute.value.query.collection).toBe(next.id);
-    expect(wrapper.text()).toContain('核对作品身份与文件范围');expect(wrapper.text()).toContain('两个含媒体分支');
+    expect(wrapper.text()).toContain('先处理需要判断的图集，再查看入库确认');expect(wrapper.text()).toContain('两个含媒体分支');
     expect(wrapper.get('.review-row').element.hasAttribute('open')).toBe(true);
     expect(wrapper.get('[data-test=admission-item-complex] select').element.value).toBe('defer');
     expect(button(wrapper,'查看上次预览')).toBeTruthy();
@@ -240,7 +240,7 @@ describe('independent multi-creator admission workspace',()=>{
     const {wrapper}=await render('?collection=collection-one',false);
     expect(wrapper.findAll('.item-card').map(card=>card.attributes('data-test'))).toEqual(['admission-item-a-candidate','admission-item-b-complex']);
     expect(wrapper.find('[data-test=collection-select-safe]').exists()).toBe(false);
-    expect(wrapper.get('[data-test=collection-repreview]').text()).toBe('重新读取并核对');
+    expect(wrapper.get('[data-test=collection-repreview]').text()).toBe('文件有变动？重新检查');
     await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('博主乙');
     expect(wrapper.findAll('.item-card')).toHaveLength(1);
     await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('');
@@ -303,7 +303,7 @@ describe('independent multi-creator admission workspace',()=>{
     expect(links).toHaveLength(1);expect(links[0]!.attributes('href')).toContain('itemKey=moved');
     expect(wrapper.text()).toContain('尚未开始');expect(wrapper.text()).toContain('尚未建立执行记录');
     expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
-    await button(wrapper,'核对后继续原批次').trigger('click');
+    await button(wrapper,'核对后继续本批').trigger('click');
     await button(wrapper,'确认继续原批次').trigger('click');await flushPromises();
     expect(api.resumeAdmissionCollection).toHaveBeenCalledTimes(1);
     expect(wrapper.findAll('a').some(link=>link.text()==='核对文件处置')).toBe(false);
@@ -331,7 +331,7 @@ describe('independent multi-creator admission workspace',()=>{
     expect(directories.map(input=>(input.element as HTMLInputElement).checked)).toEqual([false,false,true]);
     expect(directories[2].attributes('disabled')).toBeUndefined();await directories[2].setValue(false);await directories[0].setValue(true);
     expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeUndefined();
-    await button(wrapper,'取消调整，返回核对').trigger('click');expect(wrapper.text()).toContain('核对作品身份与文件范围');expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();
+    await button(wrapper,'取消调整，返回核对').trigger('click');expect(wrapper.text()).toContain('先处理需要判断的图集，再查看入库确认');expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();
   });
   it('rechecks and updates automatic safe choices while retaining an explicit skip',async()=>{
     let fresh=false;
@@ -405,6 +405,7 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection('completed'));
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('done'),postId:123,state:'completed'}],total:1,page:1,pageSize:100});
     const {wrapper,router}=await render('?collection=collection-one');
+    await button(wrapper,'查看已完成与跳过项目').trigger('click');
     await wrapper.findAll('a').find(link=>link.text()==='查看图集')!.trigger('click');await flushPromises();
     expect(router.currentRoute.value.name).toBe('canonical-work-gallery');wrapper.unmount();
     const returned=await render();expect(returned.router.currentRoute.value.query.collection).toBe('collection-one');
@@ -412,13 +413,13 @@ describe('independent multi-creator admission workspace',()=>{
     const reads=vi.mocked(api.fetchAdmissionWorkspace).mock.calls.length;
     await button(returned.wrapper,'新建批次').trigger('click');await flushPromises();
     expect(api.fetchAdmissionWorkspace).toHaveBeenCalledTimes(reads+1);
-    expect(returned.router.currentRoute.value.query.collection).toBeUndefined();expect(returned.wrapper.text()).toContain('选择这次要收录的范围');
+    expect(returned.router.currentRoute.value.query.collection).toBeUndefined();expect(returned.wrapper.text()).toContain('选择这次要入库的图集');
     returned.wrapper.unmount();const fresh=await render();expect(fresh.router.currentRoute.value.query.collection).toBeUndefined();
   });
   it('discards an unavailable remembered batch without falling back to cached results or looping',async()=>{
     sessionStorage.setItem('cosgallery:admission:last-collection','missing');
     vi.mocked(api.fetchAdmissionCollection).mockRejectedValue(new RequestError('批次不存在',404));
-    const {wrapper}=await render();expect(wrapper.text()).toContain('批次不存在');expect(wrapper.text()).toContain('选择这次要收录的范围');
+    const {wrapper}=await render();expect(wrapper.text()).toContain('批次不存在');expect(wrapper.text()).toContain('选择这次要入库的图集');
     expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(1);expect(sessionStorage.getItem('cosgallery:admission:last-collection')).toBeNull();
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
@@ -555,5 +556,49 @@ describe('independent multi-creator admission workspace',()=>{
     const {wrapper}=await render();await wrapper.get('[data-folder="甲别名"] input[type=checkbox]').setValue(true);await wrapper.get('[data-folder="博主乙"] input[type=checkbox]').setValue(true);await flushPromises();
     const folder=wrapper.get('[data-folder="博主乙"]');await folder.findAll('input[type=checkbox]')[1]!.setValue(false);
     expect(wrapper.text()).toContain('“博主乙”没有选择作品目录');expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeDefined();expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
+  });
+
+  it('separates unread, failed and truly empty waiting/history state without showing empty action tools',async()=>{
+    let finish!:(value:AdmissionWorkspace)=>void;
+    vi.mocked(api.fetchAdmissionWorkspace).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+    vi.mocked(api.fetchAdmissionCollections).mockRejectedValueOnce(new Error('记录暂不可读'));
+    const {wrapper}=await render('',false);
+    expect(wrapper.text()).toContain('尚未读取');expect(wrapper.text()).toContain('记录暂不可读');
+    expect(wrapper.text()).not.toContain('尚无多博主批次');expect(wrapper.text()).not.toContain('等待区目前没有');
+    finish({...workspace,items:[]});await flushPromises();
+    expect(wrapper.text()).toContain('等待区目前没有');expect(wrapper.find('[data-test=collection-preview]').exists()).toBe(false);
+    expect(wrapper.find('[data-test=select-matched-creators]').exists()).toBe(false);
+    vi.mocked(api.fetchAdmissionWorkspace).mockRejectedValueOnce(new Error('无法访问等待区'));
+    await button(wrapper,'重新读取等待区').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('读取失败');expect(wrapper.text()).not.toContain('等待区目前没有');
+    expect(wrapper.text()).toContain('R:/待入库');expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('explains disabled selection inline and does not let an unselected unknown identity block a valid range',async()=>{
+    const {wrapper}=await render('',false);
+    expect(wrapper.get('#collection-preview-reason').text()).toContain('尚未选择');
+    expect(wrapper.findAll('[aria-current=step]').map(step=>step.text())).toEqual(['1 选择图集']);
+    await wrapper.get('[data-folder="甲别名"] input[type=checkbox]').setValue(true);await flushPromises();
+    expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('[data-folder="未明确身份"]').text()).toContain('选择博主后才能加入本批');
+    expect(api.fetchAdmissionDirectories).toHaveBeenCalledTimes(1);
+    await wrapper.get('[data-test=collection-preview]').trigger('click');await flushPromises();
+    expect(api.previewAdmissionCollection).toHaveBeenCalledTimes(1);expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('prioritizes incomplete results while retaining completed-item errors, later evidence and separate cleanup failure',async()=>{
+    const original=collection('partial');
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...original,currentTotals:{pending:1,unresolved:1,completedLater:1},batches:[{...batch(),state:'needs_review',totals:{...batch().totals,completed:2},parentCleanup:{status:'failed',message:'父目录被占用'}}]});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[
+      {...item('ordinary-complete'),state:'completed',postId:101,nextAction:'none'},
+      {...item('cleanup-error'),state:'completed',lastError:'广告回收失败',nextAction:'review_files'},
+      {...item('later-complete'),currentDisposition:completedLater},
+      {...item('unknown-container'),currentDisposition:{status:'unresolved'}}
+    ],total:4,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.findAll('.result li').map(row=>row.get('strong').text())).toEqual(['cleanup-error','later-complete','unknown-container']);
+    expect(wrapper.text()).toContain('广告回收失败');expect(wrapper.text()).toContain('父目录被占用');expect(wrapper.text()).toContain('清理失败不表示已入库作品需要重跑');
+    expect(wrapper.findAll('a').find(link=>link.text()==='查看本博主图库')!.attributes('href')).toBe('/library/17');
+    await button(wrapper,'查看已完成与跳过项目').trigger('click');
+    expect(wrapper.findAll('.result li')).toHaveLength(4);
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.cleanupAdmissionCollectionParents).not.toHaveBeenCalled();
   });
 });

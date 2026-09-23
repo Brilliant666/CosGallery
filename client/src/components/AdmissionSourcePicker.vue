@@ -1,4 +1,4 @@
-<template><details @toggle="toggle"><summary>来源资料（可选）</summary><p>只记本批出处，不等于作品映射或来源已满足。</p><label>当前博主的已确认资料<select v-model="model"><option :value="null">无来源资料，本地先接纳</option><option v-for="source in sources" :key="source.id" :value="source.id">{{ source.pageTitle||source.platform }}</option></select></label><button v-if="more" :disabled="loading" @click="load(page+1)">更多资料</button><p v-if="error">{{ error }}；可继续本地先接纳。</p></details></template>
+<template><details @toggle="toggle"><summary>补充来源（可选）<span v-if="model"> · 已带入 {{ sources.find(source=>source.id===model)?.pageTitle || '来源资料' }}</span></summary><p>只记本批出处，不等于作品映射或来源已满足。</p><label>当前博主的已确认资料<select v-model="model"><option :value="null">无来源资料，本地先接纳</option><option v-for="source in sources" :key="source.id" :value="source.id">{{ source.pageTitle||source.platform }}</option></select></label><button v-if="more" :disabled="loading" @click="load(page+1)">更多资料</button><p v-if="error">{{ error }}；可继续本地先接纳。</p></details></template>
 <script setup lang="ts">
 import { ref,watch,onBeforeUnmount } from 'vue';
 import { fetchSourceEvidence,type SourceEvidenceObservation } from '../api/source-evidence';

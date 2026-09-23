@@ -94,4 +94,18 @@ describe('scoped review UI invokes original task instead of asking for JSON',()=
     const {wrapper}=await render();const result=wrapper.get('[aria-label="实际媒体与保留文件结果"]');
     expect(result.text()).toContain('图库展示：2 张图片 · 1 个视频');expect(result.text()).toContain('1 个未支持原件 · 3 个附件');expect(result.text()).toContain('可恢复移出 1 个明确文件');expect(result.text()).toContain('不计入上述展示媒体');expect(api.executeLocalReview).not.toHaveBeenCalled();
   });
+
+  it('distinguishes an unread failed file list from an empty issue filter and preserves exact choices on reread',async()=>{
+    vi.mocked(api.fetchLocalReviewFiles).mockRejectedValueOnce(new Error('清单读取失败'));
+    const {wrapper}=await render();
+    expect(wrapper.text()).toContain('不能据此认定没有需处理文件');
+    expect(wrapper.get('[data-test=review-confirm]').attributes('disabled')).toBeDefined();
+    expect(wrapper.text()).not.toContain('当前筛选没有需要处理的文件');
+    await button(wrapper,'重新读取文件清单').trigger('click');await flushPromises();
+    await wrapper.findAll('tbody tr')[0]!.get('select').setValue('retain_original');
+    vi.mocked(api.fetchLocalReviewFiles).mockResolvedValueOnce({items:[],total:0,page:1,limit:50});
+    await wrapper.get('.check input').setValue(false);await flushPromises();
+    expect(wrapper.text()).toContain('本项未返回文件记录');expect(wrapper.text()).toContain('本次已选择 1 个文件');
+    expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
 });
