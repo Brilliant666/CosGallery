@@ -220,8 +220,8 @@
 
       <div v-if="localIngestDashboard?.creators.length" data-test="local-ingest-creators" class="mt-4 grid gap-2">
         <article v-for="creator in localIngestDashboard.creators" :key="creator.creatorId" class="overflow-hidden rounded-xl border border-border bg-bg" :data-current="creator.isCurrent ? 'true' : undefined">
-          <button type="button" class="grid w-full grid-cols-[minmax(10rem,1fr)_repeat(5,minmax(4rem,auto))] items-center gap-3 p-3 text-left text-xs" :aria-expanded="localIngestCreatorId === creator.creatorId" @click="toggleLocalIngestCreator(creator.creatorId)">
-            <span><strong class="block text-sm"><span aria-hidden="true">{{ localIngestCreatorId === creator.creatorId ? '▾' : '▸' }}</span> {{ creator.creatorName }} <em v-if="creator.isCurrent" class="not-italic text-blue-700">· 当前处理</em></strong><small class="text-muted">{{ creator.ingested }} / {{ creator.total }} · {{ creator.progressPercent }}%</small></span>
+          <button type="button" class="grid w-full grid-cols-2 items-center gap-3 p-3 text-left text-xs sm:grid-cols-[minmax(10rem,1fr)_repeat(5,minmax(4rem,auto))]" :aria-expanded="localIngestCreatorId === creator.creatorId" @click="toggleLocalIngestCreator(creator.creatorId)">
+            <span class="col-span-2 min-w-0 break-words sm:col-span-1"><strong class="block text-sm"><span aria-hidden="true">{{ localIngestCreatorId === creator.creatorId ? '▾' : '▸' }}</span> {{ creator.creatorName }} <em v-if="creator.isCurrent" class="not-italic text-blue-700">· 当前处理</em></strong><small class="text-muted">{{ creator.ingested }} / {{ creator.total }} · {{ creator.progressPercent }}%</small></span>
             <span><strong class="block">{{ creator.pending }}</strong>待处理</span><span><strong class="block">{{ creator.running }}</strong>处理中</span><span><strong class="block">{{ creator.ingested }}</strong>已入库</span><span><strong class="block">{{ creator.awaitingReview }}</strong>待核查</span><span><strong class="block">{{ creator.failed }}</strong>失败</span>
           </button>
           <div v-if="localIngestCreatorId === creator.creatorId" class="border-t border-border bg-surface p-3">
@@ -1117,8 +1117,10 @@ function applyJobContext() {
   }
 }
 let stagingSettingsLoaded = false;
-watch(() => [route?.query.creatorId, route?.query.jobId], () => {
-  if (!mounted || !stageActive('ingest') || !route?.path?.includes('/costuan')) return;
+// Watch individual values rather than a newly allocated tuple on every query
+// object update. Workspace navigation is already owned by activateStage().
+watch([() => route?.query.creatorId, () => route?.query.jobId], () => {
+  if (!mounted || !stageActive('ingest') || route?.query.workspace !== 'ingest' || !route?.path?.includes('/costuan')) return;
   applyJobContext();
   void loadLocalIngestVisiblePage();
 });

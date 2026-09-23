@@ -1407,4 +1407,45 @@ describe('ArchiveCatalogView', () => {
     expect(router.currentRoute.value.hash).toBe('#costuan-job-51');
     expect(runLocalIngestJob).not.toHaveBeenCalled();
   });
+
+  it.each(['source', 'staging'] as const)('reads Stage 3 jobs once when switching from %s using its stage tab', async initial => {
+    const wrapper = await mountCostuan(initial); await flushPromises();
+    expect(fetchLocalIngestJobs).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="workspace-ingest"]').trigger('click'); await flushPromises();
+    expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(1);
+    expect(fetchLocalIngestJobs).toHaveBeenCalledExactlyOnceWith({ page: 1, limit: 50 });
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
+  });
+
+  it('coalesces simultaneous workspace and Job context changes but reads a later same-stage creator change', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/creator-admission/costuan', component: CostuanWorkspace }] });
+    await router.push('/creator-admission/costuan?workspace=source'); await router.isReady();
+    const wrapper = mount(CostuanWorkspace, { global: { plugins: [router] } }); await flushPromises();
+    await router.push('/creator-admission/costuan?workspace=ingest&creatorId=192&jobId=1'); await flushPromises();
+    expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(1);
+    expect(fetchLocalIngestJobs).toHaveBeenCalledExactlyOnceWith({ creatorId: 192, status: undefined, page: 1, limit: 50 });
+    expect(wrapper.get('[data-job-id="1"]').classes()).toContain('bg-blue-50');
+    await router.push('/creator-admission/costuan?workspace=ingest&creatorId=193'); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(2);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith({ creatorId: 193, status: undefined, page: 1, limit: 50 });
+    await router.push('/creator-admission/costuan?workspace=source&creatorId=194'); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the explicit Job once when a cached Costuan stage is activated with a new context', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/creator-admission/costuan', component: CostuanWorkspace },
+      { path: '/creator-admission/local', component: { template: '<p>Local module</p>' } }
+    ] });
+    await router.push('/creator-admission/costuan?workspace=ingest'); await router.isReady();
+    const root = mount(defineComponent({ template: '<RouterView v-slot="{ Component }"><KeepAlive><component :is="Component" /></KeepAlive></RouterView>' }), { global: { plugins: [router] } }); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(1);
+    await router.push('/creator-admission/local'); await flushPromises();
+    await router.push('/creator-admission/costuan?workspace=ingest&creatorId=192&jobId=1'); await flushPromises();
+    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(2);
+    expect(fetchLocalIngestOperation).toHaveBeenCalledTimes(2);
+    expect(fetchLocalIngestJobs).toHaveBeenLastCalledWith({ creatorId: 192, status: undefined, page: 1, limit: 50 });
+    expect(root.get('[data-job-id="1"]').classes()).toContain('bg-blue-50');
+  });
 });
