@@ -19,7 +19,7 @@
 | 页面 | 路由 | 日常用途 |
 | --- | --- | --- |
 | 图库账本 → 博主库 | `/archive-catalog` 或 `?workspace=roster` | 管理规范身份，打开某位博主的来源资料或资源目录 |
-| 图库账本 → 资源目录 | `/archive-catalog?workspace=resources` | 默认全库浏览，可筛选具体博主；博主库入口自动带入 `creatorId` |
+| 图库账本 → 资源目录 | `/archive-catalog?workspace=resources` | 未指定范围时默认查找、选择单个博主；博主卡片入口带入 `creatorId`，主动点击“查看全部作品”才进入全库 |
 | 博主入库 → 本地入库 | `/creator-admission/local` | 一次选择一位或多位博主的已解压作品 |
 | 带博主的本地入库 | `/creator-admission/local/:creatorId` | 复用明确规范博主；来源资料入口还会带入所选资料 |
 | Costuan → 来源检查 | `/creator-admission/costuan?workspace=source` | 明确本轮检查对象，交给插件读取来源 |
@@ -28,6 +28,8 @@
 | 具体异常审核 | `/creator-admission/review` | 从任务入口带入原计划 / Job 上下文，查看并处理单项异常 |
 
 `/creator-admission` 在没有明确上下文时进入本地入库。旧 `/local-admission`、`/local-review` 和账本的 `source/staging/ingest` 链接保留兼容跳转及 query/hash，收藏的批次链接不用手工改写；新指南使用上述入口。
+
+资源目录链接已有明确 `creatorId` 或 `scope=all` 时恢复相应范围，不重置为选人；同时存在时以 `creatorId` 为准。全库链接为 `/archive-catalog?workspace=resources&scope=all`。详见[资源目录入口与范围](own-resource-catalog.md)。
 
 ## 本地入库：步骤与动作
 

@@ -9,7 +9,7 @@ CosGallery 基于 [Foldergram](https://github.com/foldergram/foldergram)，沿�
 ```text
 图库账本
 ├─ 博主库：规范名称、别名、分类、启用状态及本地目录关系
-└─ 资源目录：个人 / 全库作品、搜索、编号及 TXT / CSV 导出
+└─ 资源目录：无明确范围时先选博主；支持主动切换全库、搜索、编号及 TXT / CSV 导出
 
 博主入库
 ├─ 本地入库：选择图集 → 检查并确认 → 入库结果
