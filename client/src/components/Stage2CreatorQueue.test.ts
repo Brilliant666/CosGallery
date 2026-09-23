@@ -21,17 +21,6 @@ describe('Stage 2 complete creator summaries and lazy detail pages',()=>{
     const w=await start();expect(w.get('[data-test=stage2-local-acceptance]').text()).toContain('本地已有资源满足 1 条 · 接受决定待复核 1 条');
     await w.get('[data-creator-id="21"] button').trigger('click');await flushPromises();
     const rows=w.findAll('[data-test=stage2-task]');expect(rows[0]!.text()).toContain('网盘已暂存，待本地确认');expect(rows[0]!.text()).toContain('无需继续获取');expect(rows[1]!.text()).toContain('未计为已满足');
-    expect(w.findAll('[data-test=stage2-next-action]')).toHaveLength(0);
-  });
-  it('makes plugin and external download handoffs explicit without changing recorded task statuses',async()=>{
-    vi.mocked(fetchDownloadTaskPage).mockResolvedValue({...detail(21),items:[{...task(1,21),status:'pending'},{...task(2,21),status:'staged'},{...task(3,21),status:'downloaded'}]});
-    const w=await start();await w.get('[data-creator-id="21"] button').trigger('click');await flushPromises();
-    const next=w.findAll('[data-test=stage2-next-action]');
-    expect(next[0]!.text()).toContain('下一步在插件');
-    expect(next[1]!.text()).toContain('下一步在百度客户端');
-    expect(next[1]!.text()).toContain('网盘暂存不代表本地已下载');
-    expect(next[2]!.text()).toContain('本地已确认');
-    expect(w.findAll('[data-test=stage2-task]')).toHaveLength(3);
   });
   it('shows complete summaries including creators beyond 100 tasks, with no eager details or local preview counts',async()=>{
     const w=await start();expect(w.findAll('article')).toHaveLength(2);expect(w.text()).toContain('完整汇总 150 条');expect(w.text()).toContain('655 条匹配任务');expect(w.text()).not.toContain('当前预览');

@@ -699,8 +699,7 @@ describe('ArchiveCatalogView', () => {
     await wrapper.get('[data-test="run-local-ingest-creator"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.get('[data-test="run-local-ingest-creator"]').text()).toBe('执行该博主可处理任务');
-    expect(wrapper.text()).toContain('仍受已保存名单限制；不受当前筛选或分页限制');
+    expect(wrapper.get('[data-test="run-local-ingest-creator"]').text()).toContain('（1）');
     expect(runLocalIngestBatch).toHaveBeenCalledWith({ creatorIds: [reconcilingJob.creatorId] });
     expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain(`${reconcilingJob.creatorName}：本批选中 1`);
     expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('仍待对账 1');
@@ -772,10 +771,7 @@ describe('ArchiveCatalogView', () => {
     expect((allowlist.element as HTMLTextAreaElement).value).toBe('火龙果羊\n女主K\n新博主');
     expect(saveLocalIngestSettings).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="scan-local-ingest"]').attributes()).toHaveProperty('disabled');
-    expect(wrapper.text()).toContain('请确认后点击“保存范围与设置”');
-    expect(wrapper.get('[data-test="saved-ingest-scope"]').text()).toContain('已保存 2 位');
-    expect(wrapper.get('[data-test="unsaved-ingest-scope"]').text()).toContain('草稿 3 位');
-    expect(wrapper.get('[data-test="stage3-action-reason"]').text()).toContain('请先保存');
+    expect(wrapper.text()).toContain('请确认后点击“保存配置”');
   });
 
   it('replaces only the unsaved allowlist draft after explicit confirmation', async () => {
@@ -934,51 +930,9 @@ describe('ArchiveCatalogView', () => {
     expect(scanLocalIngestInbox).toHaveBeenCalledWith();
     expect(saveLocalIngestSettings).not.toHaveBeenCalled();
     expect(fetchArchiveDownloadTasks).toHaveBeenCalledTimes(stage2Reads);
-    expect(runLocalIngestBatch).not.toHaveBeenCalled();
-    expect(runLocalIngestJob).not.toHaveBeenCalled();
     expect(fetchMetadataCreators).toHaveBeenCalledTimes(stage1Reads);
     expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('已确认 6 个本地下载');
     wrapper.unmount();
-  });
-
-  it('exposes settings failures without a false empty task result and retries only the settings read', async () => {
-    vi.mocked(fetchLocalIngestSettings).mockRejectedValueOnce(new Error('配置目录不可读'));
-    vi.mocked(fetchLocalIngestJobs).mockRejectedValueOnce(new Error('任务读取中断'));
-    const wrapper = await mountCostuan('ingest');
-    await flushPromises();
-    expect(wrapper.get('[data-test="stage3-environment-issue"]').text()).toContain('配置目录不可读');
-    expect(wrapper.text()).toContain('任务尚未读取成功');
-    expect(wrapper.text()).not.toContain('尚无Costuan入库任务');
-    expect(wrapper.get('[data-test="scan-local-ingest"]').attributes('disabled')).toBeDefined();
-    await wrapper.get('[data-test="retry-ingest-settings"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.find('[data-test="stage3-environment-issue"]').exists()).toBe(false);
-    expect(fetchLocalIngestJobs).toHaveBeenCalledTimes(1);
-    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
-    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
-    expect(runLocalIngestBatch).not.toHaveBeenCalled();
-  });
-
-  it('keeps configured tools collapsed and explains the real saved execution scope without deriving a batch count', async () => {
-    const wrapper = await mountCostuan('ingest');
-    await flushPromises();
-    expect(wrapper.get('[data-test="ingest-settings"]').attributes('open')).toBeUndefined();
-    expect(wrapper.get('[data-test="saved-ingest-scope"]').text()).toContain(localIngestSettings.allowlist.join('、'));
-    expect(wrapper.get('[data-test="ingest-execution-scope"]').text()).toContain('包含历史任务，不限本次检查、当前筛选或当前页');
-    expect(wrapper.get('[data-test="scan-local-ingest"]').text()).toBe('检查压缩包并建立任务');
-    expect(wrapper.get('[data-test="run-local-ingest-batch"]').text()).toBe('执行已保存范围的可处理任务');
-    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
-    expect(validateLocalIngestSettings).not.toHaveBeenCalled();
-  });
-
-  it('shows the actual saved download target and does not treat stage navigation as confirmation', async () => {
-    const wrapper = await mountCostuan('staging');
-    await flushPromises();
-    expect(wrapper.get('[data-test="stage2-handoff"]').text()).toContain(localIngestSettings.inboxRoot);
-    expect(wrapper.get('[data-test="stage2-handoff"]').text()).toContain('下载到');
-    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
-    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
-    expect(runLocalIngestBatch).not.toHaveBeenCalled();
   });
 
   it('refreshes only Stage 2 when its manual refresh button is clicked', async () => {

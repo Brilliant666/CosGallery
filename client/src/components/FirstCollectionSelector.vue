@@ -1,21 +1,19 @@
 <template>
   <div class="first-collection">
-    <button type="button" data-test="open-first-collection" :class="{ primary: !creator }" :disabled="disabled" @click="open">{{ creator ? '准备来源检查' : '选择博主，准备检查任务' }}</button>
-    <dialog ref="dialog" aria-label="准备来源检查任务" @cancel="cancel" @close="onClose">
-      <header><h2>准备来源检查任务</h2><button type="button" :disabled="busy" @click="close">{{ result ? '关闭' : '取消' }}</button></header>
-      <p>选择博主 → 准备任务 → 复制范围到插件。网页只准备任务，实际网站检查由插件完成。</p>
-      <div v-show="!result || preparingAnotherRound" data-test="creator-selection-panel">
+    <button type="button" data-test="open-first-collection" :disabled="disabled" @click="open">{{ creator ? '检查来源与补齐缺失' : '选择博主检查来源' }}</button>
+    <dialog ref="dialog" aria-label="检查来源与补齐缺失" @cancel="cancel" @close="onClose">
+      <header><h2>检查来源与补齐缺失</h2><button type="button" :disabled="busy" @click="close">{{ result ? '关闭' : '取消' }}</button></header>
+      <p>仅提交明确勾选的规范 ID；筛选与翻页不会扩大范围。不创建本地目录，不自动操作网盘。本地数量来自账本有效记录，不表示本次已检查磁盘在线状态。</p>
       <form v-if="!creator" class="filters" @submit.prevent="search">
         <label>搜索规范名称或别名<input v-model="filters.q" type="search" /></label>
-        <label>本地收录<select v-model="filters.local"><option value="all">全部</option><option value="present">已本地收录</option><option value="absent">尚未本地收录</option></select></label>
-        <label>偏好<select v-model="filters.preference"><option value="all">全部</option><option value="liked">喜欢</option><option value="kept">保留</option><option value="unset">未设置</option></select></label>
-        <details class="more-filters"><summary>更多筛选</summary><div class="filters">
         <label>状态<select v-model="filters.enabled"><option value="enabled">启用</option><option value="disabled">停用</option><option value="all">全部状态</option></select></label>
+        <label>本地收录<select v-model="filters.local"><option value="all">全部</option><option value="present">已本地收录</option><option value="absent">尚未本地收录</option></select></label>
         <label>Costuan 来源<select v-model="filters.source"><option value="all">全部来源状态</option><option value="absent">尚无来源</option><option value="present">已有来源</option></select></label>
+        <label>偏好<select v-model="filters.preference"><option value="all">全部</option><option value="liked">喜欢</option><option value="kept">保留</option><option value="unset">未设置</option></select></label>
         <label>分级<select v-model="filters.rating"><option value="all">全部</option><option value="R15">R15</option><option value="R18">R18</option><option value="unclassified">待分类</option></select></label>
-        </div></details>
         <button :disabled="loading || busy">筛选</button>
       </form>
+      <p v-if="error" role="alert">{{ error }}</p>
       <p v-if="payload && !creator">同筛选规范博主 {{ payload.total }} 位；上次读取 {{ payload.readAt }}。已有来源也可明确发起新一轮检查。</p>
       <p v-if="stats && !creator">已本地收录 {{ stats.creators.withLocal }} 位 · 有有效来源 {{ stats.creators.withSource }} 位 · 本地作品 {{ stats.works.local }} 套 · 已知缺失 {{ stats.works.missing }} 套</p>
       <button v-if="!creator" type="button" data-test="refresh-sync-roster" :disabled="loading || busy" @click="load">刷新账本状态（只读）</button>
@@ -33,32 +31,25 @@
       </div>
       <p v-else>#{{ creator.id }} {{ creator.name }} · {{ creator.localWorks }} 套本地作品 · {{ preferenceLabel(creator.preference) }} / {{ creator.rating ?? '待分类' }}</p>
       <footer v-if="!creator" class="paging"><button :disabled="page <= 1 || loading || busy" @click="goPage(page - 1)">上一页</button><span>第 {{ payload?.page ?? page }} 页 / {{ payload ? Math.max(1, Math.ceil(payload.total / payload.limit)) : '—' }} 页 · {{ payload?.total ?? '—' }} 位</span><button :disabled="!payload?.hasMore || loading || busy" @click="goPage(page + 1)">下一页</button></footer>
-      </div>
-      <p v-if="error" role="alert">{{ error }}</p>
       <div class="selection"><strong data-test="selected-count">已选 {{ selected.size }} 位</strong><span>{{ [...selected.values()].map(item => `#${item.id} ${item.name}`).join('、') }}</span></div>
-      <p class="scope-note">仅准备以上已选博主；筛选与翻页不改变已选范围。本地数量来自已有账本，不表示刚检查过磁盘。</p>
       <p v-if="failedRequest">待确认的固定范围：{{ failedRequest.creatorIds.map(id => `#${id}`).join('、') }}。重试只确认这一范围，不使用新的选择。</p>
-      <button v-if="!result || failedRequest" type="button" data-test="submit-first-collection" class="primary" :disabled="(!selected.size && !failedRequest) || busy" @click="submit">{{ busy ? '正在准备…' : failedRequest ? '重试确认原提交' : `准备 ${selected.size} 位博主的检查任务` }}</button>
-      <details v-else :open="preparingAnotherRound" @toggle="preparingAnotherRound = ($event.target as HTMLDetailsElement).open"><summary>重新选择 / 准备另一轮</summary><p>上方可调整选择；准备另一轮会使用新的请求轮次，不会扩大已复制的范围。</p><button type="button" data-test="submit-first-collection" :disabled="!selected.size || busy" @click="submit">{{ busy ? '正在准备…' : '重新准备一轮任务' }}</button></details>
-      <p v-if="!selected.size && !failedRequest && !result" data-test="prepare-disabled-reason" class="scope-note">先勾选至少一位启用的博主，再准备任务。</p>
-      <section v-if="result" :aria-label="failedRequest ? '上次已确认任务结果' : '逐项任务结果'">
-        <p v-if="failedRequest" role="status">下方仅保留上次已确认结果；当前这一轮回执尚未确认，请先重试原提交，不要复制上次范围替代。</p>
-        <template v-if="!failedRequest && handoff.taskIds.length">
-          <h3>下一步：到插件开始检查</h3>
-          <p>{{ handoff.taskIds.length }} 项固定任务已准备。复制后粘贴到插件的固定任务范围导入入口，核对博主后在插件开始检查，再返回本页查看结果。</p>
-          <button ref="copyButton" type="button" class="primary" data-test="copy-stage1-handoff" @click="copyHandoff">复制本次检查范围</button><p v-if="copyNotice" role="status">{{ copyNotice }}</p>
-          <details><summary>查看固定范围与手动复制</summary><textarea data-test="stage1-handoff" aria-label="Stage 1 固定任务范围" readonly :value="JSON.stringify(handoff)" rows="3" /></details>
-        </template>
-        <h3>{{ failedRequest ? '上次已确认结果（非当前轮次）' : '逐项结果' }}</h3>
+      <button type="button" data-test="submit-first-collection" :disabled="(!selected.size && !failedRequest) || busy" @click="submit">{{ busy ? '正在提交…' : failedRequest ? '重试确认本次提交' : result ? '再次检查所选博主（新一轮）' : '检查所选博主' }}</button>
+      <section v-if="result" aria-label="逐项任务结果">
+        <h3>逐项结果</h3>
         <ul><li v-for="item in result.items" :key="item.creatorId">#{{ item.creatorId }} {{ item.creatorName }}：{{ resultLabel(item.result) }}<span v-if="item.task"> · 任务 #{{ item.task.id }} · {{ statusLabel(item.task.status) }}{{ item.task.claimedBy ? ` · ${item.task.claimedBy}` : '' }}</span><small v-if="item.task">{{ sourceStateLabel(item.task.sourceState) }}</small></li></ul>
-        <p>{{ failedRequest ? '上次已确认的轮次' : '本次' }}仅建立或复用明确范围的检查任务，尚未访问 Costuan；此前有效来源继续保留。再次明确准备会创建新轮次，网络重试不会重复创建。旧插件不支持固定范围时需升级，不能改为全名单自动转存。</p>
+        <p>本次仅建立或复用明确范围的检查任务，尚未访问 Costuan；此前有效来源继续保留。再次明确检查会创建新轮次，网络重试不会重复创建。</p>
+        <template v-if="handoff.taskIds.length">
+          <p>以下 {{ handoff.taskIds.length }} 项为本次固定范围。复制后粘贴到新版插件的「Stage 1 指定任务范围」，核对名称后开始；旧插件不支持时请升级，不能改用全名单自动转存。</p>
+          <textarea data-test="stage1-handoff" aria-label="Stage 1 固定任务范围" readonly :value="JSON.stringify(handoff)" rows="3" />
+          <button type="button" data-test="copy-stage1-handoff" @click="copyHandoff">复制本次任务范围</button><p v-if="copyNotice" role="status">{{ copyNotice }}</p>
+        </template>
       </section>
     </dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import CreatorSourceStatus from './CreatorSourceStatus.vue';
 import { planFirstCollection, sourceStateLabel } from '../api/first-collection';
 import type { FirstCollectionResult } from '../api/first-collection';
@@ -69,7 +60,6 @@ import { RequestError } from '../api/http';
 const props = withDefaults(defineProps<{ creator?: Pick<ArchiveCatalogCreator, 'id' | 'name' | 'isActive' | 'localWorks' | 'preference' | 'rating'>; disabled?: boolean; active?: boolean }>(), { active: true });
 const emit = defineEmits<{ planned: [creatorIds: number[]] }>();
 const dialog = ref<HTMLDialogElement | null>(null), busy = ref(false), loading = ref(false), error = ref(''), copyNotice = ref('');
-const preparingAnotherRound = ref(false), copyButton = ref<HTMLButtonElement | null>(null);
 const payload = ref<SyncPage<CreatorSyncRow> | null>(null), stats = ref<CreatorSyncStats | null>(null), page = ref(1), result = ref<FirstCollectionResult | null>(null);
 const defaultFilters = (): CreatorSyncFilters => ({ q: '', enabled: 'enabled', local: 'all', source: 'all', preference: 'all', rating: 'all' });
 const filters = reactive(defaultFilters());
@@ -113,7 +103,6 @@ async function load() {
 async function open() {
   if (props.disabled || busy.value) return;
   selected.value = new Map(); result.value = null; error.value = ''; copyNotice.value = ''; page.value = 1; payload.value = null; stats.value = null;
-  preparingAnotherRound.value = false;
   Object.assign(filters, defaultFilters());
   if (failedRequest.value) { error.value = '上次提交尚未确认，请重试同一范围，不能另建一轮。'; }
   if (props.creator?.isActive) selected.value.set(props.creator.id, { id:props.creator.id, name:props.creator.name });
@@ -137,11 +126,8 @@ async function submit() {
     rememberRequest(request);
     const response = await planFirstCollection(ids, request.id);
     result.value = response;
-    preparingAnotherRound.value = false;
     rememberRequest(null);
     emit('planned', ids);
-    await nextTick();
-    if (props.active && dialog.value?.open) { dialog.value.scrollTop = 0; copyButton.value?.focus({ preventScroll: true }); }
     if (!props.creator) await load();
   } catch (reason) {
     // A rejected request has not created a round; a lost/5xx response remains idempotently retryable.
@@ -162,7 +148,6 @@ onBeforeUnmount(() => { ++generation; });
 
 <style scoped>
 button{border:1px solid var(--border);border-radius:.65rem;padding:.6rem .9rem;background:var(--surface);font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}
-button.primary{background:var(--accent);color:white;border-color:var(--accent);font-weight:600;min-height:2.75rem}.scope-note{font-size:.85rem;color:var(--muted)}summary{cursor:pointer}.more-filters{align-self:center}.more-filters>div{padding-top:.7rem}
-dialog{position:fixed;inset:0;margin:auto;width:min(65rem,94vw);max-height:88vh;overflow:auto;border:1px solid var(--border);border-radius:1rem;padding:1.25rem;background:var(--surface);color:var(--text)}dialog::backdrop{background:#0007}
+dialog{width:min(65rem,94vw);max-height:88vh;overflow:auto;border:1px solid var(--border);border-radius:1rem;padding:1.25rem;background:var(--surface);color:var(--text)}dialog::backdrop{background:#0007}
 header,.filters,.paging,.selection{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}header{justify-content:space-between}h2{margin:0;font-size:1.2rem}p,li{line-height:1.6}label{display:grid;gap:.3rem}input:not([type=checkbox]),select,textarea{border:1px solid var(--border);border-radius:.5rem;padding:.5rem;background:var(--bg);color:var(--text);font:inherit}textarea{box-sizing:border-box;width:100%}.table-scroll{overflow:auto;margin:1rem 0}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.7rem;border-bottom:1px solid var(--border)}small{display:block;color:var(--muted)}.selection{margin:1rem 0}[role=alert]{color:#b91c1c}section{margin-top:1rem}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
