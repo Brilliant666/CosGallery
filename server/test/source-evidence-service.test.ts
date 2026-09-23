@@ -181,6 +181,7 @@ describe('source evidence persists independently from precise catalog and admiss
     expect(service.get(item.id).identityState).toBe('confirmed');
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     expect(db.prepare('PRAGMA quick_check').get()).toEqual({quick_check:'ok'});
-    expect(up.replace('-- migrate:up','').trim()).toBe(sourceEvidenceSchemaSql.trim());
+    // Git may check SQL out as CRLF; JavaScript template literals normalize it to LF.
+    expect(up.replace('-- migrate:up','').replace(/\r\n/g,'\n').trim()).toBe(sourceEvidenceSchemaSql.replace(/\r\n/g,'\n').trim());
   });
 });

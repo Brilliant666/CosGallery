@@ -451,7 +451,7 @@ export function fetchLocalIngestSettings() {
   return requestJson<import('../types/api').LocalIngestSettings>('/api/admin/local-ingest/settings');
 }
 
-export function saveLocalIngestSettings(settings: import('../types/api').LocalIngestSettings) {
+export function saveLocalIngestSettings(settings: import('../types/api').LocalIngestSettingsInput) {
   return requestJson<import('../types/api').LocalIngestSettings>('/api/admin/local-ingest/settings', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -459,7 +459,15 @@ export function saveLocalIngestSettings(settings: import('../types/api').LocalIn
   });
 }
 
-export function validateLocalIngestSettings(settings?: import('../types/api').LocalIngestSettings) {
+export function saveLocalIngestAllowlist(allowlist: string[]) {
+  return requestJson<import('../types/api').LocalIngestSettings>('/api/admin/local-ingest/allowlist', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ allowlist })
+  });
+}
+
+export function validateLocalIngestSettings(settings?: import('../types/api').LocalIngestSettingsInput) {
   return requestJson<import('../types/api').LocalIngestSettingsValidation>('/api/admin/local-ingest/settings/validate', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

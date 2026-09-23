@@ -117,12 +117,10 @@
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 3</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">Costuan入库</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
-            “扫描待入库”只确认稳定文件并建立任务；“运行可处理任务”只消费已经存在的任务。密码只从服务端本机环境读取。
+            “扫描待入库”只确认稳定文件并建立任务；“运行可处理任务”只消费已经存在的任务。目录、解压密码与环境检查可在入库设置中管理。
           </p>
         </div>
-        <span v-if="localIngestSettings" class="rounded-full px-3 py-1.5 text-xs font-semibold" :class="localIngestSettings.archivePasswordConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
-          解压密码：{{ localIngestSettings.archivePasswordConfigured ? '已配置' : '未配置' }}
-        </span>
+        <button type="button" data-test="open-ingest-settings" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="!localIngestSettings || localIngestRequestBusy || settingsNeedRefresh" @click="openIngestSettings">入库设置与环境工具</button>
       </div>
 
       <div data-test="stage3-operation-card" class="mt-4 rounded-2xl border p-4" :class="stage3OperationActive ? 'border-blue-200 bg-blue-50' : 'border-border bg-bg'">
@@ -154,55 +152,66 @@
         <p v-if="localIngestOperationLastChecked" class="mt-2 mb-0 text-[0.68rem] text-muted">状态读取：{{ localIngestOperationLastChecked }}</p>
       </div>
 
-      <details class="mt-4" data-test="ingest-settings"><summary class="cursor-pointer font-semibold">入库设置与环境工具</summary>
-      <div v-if="localIngestSettings" class="mt-4 grid gap-3 lg:grid-cols-2">
+      <div v-if="stageActive('ingest') && settingsDraft" class="ingest-overlay">
+      <section role="dialog" aria-modal="true" aria-labelledby="ingest-settings-title" data-test="ingest-settings-dialog" class="ingest-dialog" v-admission-dialog="{ close: closeIngestSettings, locked: localIngestRequestBusy }">
+      <h2 id="ingest-settings-title" class="m-0 text-lg font-semibold">入库设置与环境工具</h2>
+      <h3 class="mt-5 mb-2 text-sm font-semibold">目录与解压设置</h3>
+      <div class="grid gap-3 lg:grid-cols-2">
         <label class="grid gap-1.5 text-xs font-semibold text-muted">正式图库
-          <input v-model="localIngestSettings.libraryRoot" readonly aria-readonly="true" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-muted" />
+          <input :value="settingsDraft.libraryRoot" readonly aria-readonly="true" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-muted" />
           <small class="font-normal leading-5 text-muted">V1 正式图库根目录由 GALLERY_ROOT 启动配置决定，修改后需要重启服务。</small>
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">本地待入库
-          <input v-model="localIngestSettings.inboxRoot" data-test="local-ingest-inbox-root" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
+          <input v-model="settingsDraft.inboxRoot" data-test="local-ingest-inbox-root" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">处理中目录
-          <input v-model="localIngestSettings.processingRoot" data-test="local-ingest-processing-root" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
+          <input v-model="settingsDraft.processingRoot" data-test="local-ingest-processing-root" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">7-Zip 路径
-          <input v-model="localIngestSettings.sevenZipPath" data-test="local-ingest-sevenzip" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
+          <input v-model="settingsDraft.sevenZipPath" data-test="local-ingest-sevenzip" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">文件稳定秒数
-          <input v-model.number="localIngestSettings.fileStableSeconds" data-test="local-ingest-stable-seconds" :disabled="stage3WriteLocked" :title="stage3LockReason" type="number" min="1" max="3600" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
+          <input v-model.number="settingsDraft.fileStableSeconds" data-test="local-ingest-stable-seconds" :disabled="stage3WriteLocked" :title="stage3LockReason" type="number" min="1" max="3600" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
         </label>
         <div class="flex items-end gap-3 pb-2 text-sm">
-          <label class="flex items-center gap-2"><input v-model="localIngestSettings.recycleAfterIngest" data-test="local-ingest-recycle" :disabled="stage3WriteLocked" :title="stage3LockReason" type="checkbox" />确认入库后移入回收站</label>
+          <label class="flex items-center gap-2"><input v-model="settingsDraft.recycleAfterIngest" data-test="local-ingest-recycle" :disabled="stage3WriteLocked" :title="stage3LockReason" type="checkbox" />确认入库后移入回收站</label>
           <span class="text-muted">最大解压深度固定为 2</span>
         </div>
       </div>
-
+      <div class="mt-4 rounded-xl border border-border bg-bg p-3">
+        <label class="grid gap-2 text-sm font-semibold">解压密码 · {{ localIngestSettings?.archivePasswordConfigured ? '已配置' : '未配置' }}<span class="text-xs font-normal text-muted">{{ passwordSourceLabel }}</span>
+          <input v-model="passwordDraft" data-test="local-ingest-password" type="password" autocomplete="new-password" placeholder="留空保持现有密码" :disabled="stage3WriteLocked || clearPasswordDraft" class="h-11 rounded-xl border border-border bg-surface px-3 text-sm" />
+        </label>
+        <label class="mt-3 flex items-center gap-2 text-sm"><input v-model="clearPasswordDraft" data-test="clear-ingest-password" type="checkbox" :disabled="stage3WriteLocked" @change="passwordDraft = ''" />清除密码并停用环境变量回退</label>
+        <p class="mb-0 text-xs text-muted">已保存密码不会回显。密码保存在服务端本机，关闭弹窗将清除未保存的密码输入。</p>
+      </div>
+      <h3 class="mt-5 mb-2 text-sm font-semibold">环境检查</h3>
       <div class="mt-4 flex flex-wrap gap-2">
         <button type="button" data-test="validate-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="validateLocalIngestConfig">验证环境</button>
         <button type="button" data-test="smoke-local-ingest-recycle" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="smokeTestRecycleBin">回收站测试</button>
       </div>
-      </details>
+      <p class="text-xs text-muted">验证环境检查目录及工具草稿和已保存的密码状态，不发送或验证未保存的密码。回收站测试会按已保存配置创建并回收测试文件，不处理图集。</p>
+      <p v-if="localIngestNotice" role="status" class="text-sm">{{ localIngestNotice }}</p>
+      <div class="ingest-dialog-actions"><button type="button" data-test="cancel-ingest-settings" :disabled="localIngestRequestBusy" @click="closeIngestSettings">取消</button><button type="button" data-test="save-local-ingest" :disabled="stage3WriteLocked" @click="saveLocalIngestConfig">保存设置</button></div>
+      </section></div>
       <div class="mt-4" v-if="localIngestSettings">        <div class="grid gap-2">
-          <label class="grid gap-1.5 text-xs font-semibold text-muted">允许处理的博主（每行一位）
-            <textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" :disabled="stage3WriteLocked" :title="stage3LockReason" rows="3" class="rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
-          </label>
+          <div class="flex items-start justify-between gap-3 rounded-xl border border-border bg-bg p-3"><div><strong class="text-sm">当前允许处理的博主 · {{ localIngestSettings.allowlist.length }} 位</strong><p data-test="local-ingest-allowlist-summary" class="mt-2 mb-0 break-words text-sm text-muted">{{ localIngestSettings.allowlist.join('、') || '尚未设置名单' }}</p></div><button type="button" data-test="edit-ingest-allowlist" :disabled="stage3WriteLocked" @click="showAllowlistEditor = true">编辑名单</button></div>
+          <p v-if="localIngestAllowlistDirty" role="status" class="text-sm text-amber-700">名单尚未保存，扫描和批量运行暂不可用。<button type="button" data-test="retry-ingest-allowlist" :disabled="stage3WriteLocked" @click="saveIngestAllowlist">重试保存名单</button></p>
           <div v-if="localIngestInboxCreators" data-test="inbox-creators-result" class="rounded-xl border border-border bg-bg p-3 text-xs leading-5 text-text">
             <p class="m-0 font-semibold">待入库：{{ localIngestInboxCreators.summary.matchedCreatorCount }} 位博主 / {{ localIngestInboxCreators.summary.archiveCount }} 个压缩包 / {{ inboxExistingJobCount }} 个已有任务</p>
             <p v-if="localIngestInboxCreators.unmapped.length" class="mt-1 mb-0 text-amber-700">{{ localIngestInboxCreators.unmapped.length }} 个目录无法唯一映射，未加入名单。</p>
             <div class="mt-2 flex flex-wrap gap-2">
-              <button type="button" data-test="append-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked || localIngestInboxCreators.detected.length === 0" :title="stage3LockReason" @click="applyDiscoveredInboxCreators('append')">追加并保存配置</button>
-              <button type="button" data-test="replace-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked || localIngestInboxCreators.detected.length === 0" :title="stage3LockReason" @click="applyDiscoveredInboxCreators('replace')">替换并保存配置</button>
+              <button type="button" data-test="append-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked || localIngestInboxCreators.detected.length === 0" :title="stage3LockReason" @click="applyDiscoveredInboxCreators('append')">追加到当前名单</button>
+              <button type="button" data-test="replace-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked || localIngestInboxCreators.detected.length === 0" :title="stage3LockReason" @click="applyDiscoveredInboxCreators('replace')">替换当前名单</button>
               <button type="button" data-test="cancel-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked" :title="stage3LockReason" @click="cancelInboxCreatorDiscovery">关闭读取结果</button>
             </div>
-            <p class="mt-2 mb-0 text-muted">追加或替换后保存当前名单和页面配置，不会自动扫描或运行入库任务。</p>
+            <p class="mt-2 mb-0 text-muted">追加或替换后自动保存名单，不修改其他配置，不会自动扫描或运行入库任务。</p>
             <details v-if="localIngestInboxCreators.unmapped.length" class="mt-2"><summary class="cursor-pointer font-semibold">查看详情</summary><ul class="mt-1 mb-0 grid gap-1 pl-5"><li v-for="entry in localIngestInboxCreators.unmapped" :key="entry.folderName">{{ entry.folderName }} · {{ entry.archiveCount }} 个压缩包 · {{ entry.mappingReason }}</li></ul></details>
           </div>
         </div>
 </div>
       <div class="mt-4 flex flex-wrap gap-2">
         <button type="button" data-test="discover-inbox-creators" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="discoverLocalIngestInboxCreators">读取待入库博主</button>
-        <button type="button" data-test="save-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="saveLocalIngestConfig">保存配置</button>
         <button type="button" data-test="scan-local-ingest" class="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="scanLocalInbox">扫描待入库</button>
         <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch()">运行可处理任务</button>
       </div>
@@ -260,6 +269,7 @@
       <p v-else class="mt-4 mb-0 rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">尚无Costuan入库任务。请先明确点击“扫描待入库”。</p>
     </section>
 
+    <div v-if="stageActive('ingest') && showAllowlistEditor" class="ingest-overlay"><section role="dialog" aria-modal="true" aria-labelledby="ingest-allowlist-title" data-test="ingest-allowlist-dialog" class="ingest-dialog ingest-list-dialog" v-admission-dialog="{ close: closeAllowlistEditor, locked: localIngestRequestBusy }"><h2 id="ingest-allowlist-title" class="mt-0 text-lg font-semibold">编辑允许处理的博主</h2><label class="grid gap-2 text-sm">每行一位博主<textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" :disabled="stage3WriteLocked" rows="8" class="rounded-xl border border-border bg-bg p-3" /></label><p class="text-xs text-muted">保存名单不会扫描或运行任务，也不会修改目录、工具或密码设置。</p><p v-if="localIngestNotice" role="status" class="text-sm">{{ localIngestNotice }}</p><div class="ingest-dialog-actions"><button type="button" data-test="cancel-ingest-allowlist" :disabled="localIngestRequestBusy" @click="closeAllowlistEditor">取消</button><button type="button" data-test="save-ingest-allowlist" :disabled="stage3WriteLocked" @click="saveIngestAllowlist">保存名单</button></div></section></div>
   </section>
 </template>
 <script setup lang="ts">
@@ -281,6 +291,7 @@ import {
   runLocalIngestBatch,
   runLocalIngestJob,
   saveLocalIngestSettings,
+  saveLocalIngestAllowlist,
   scanLocalIngestInbox,
   smokeTestLocalIngestRecycleBin,
   validateLocalIngestSettings
@@ -293,9 +304,11 @@ import type {
   LocalIngestJobFilter,
   LocalIngestJobsDashboard,
   LocalIngestOperation,
-  LocalIngestSettings
+  LocalIngestSettings,
+  LocalIngestSettingsInput
 } from '../types/api';
 import { RequestError } from '../api/http';
+import { vAdmissionDialog } from '../utils/admission-dialog';
 import { fetchMetadataCreators, type MetadataCreatorPage } from '../api/creator-sync';
 
 
@@ -325,7 +338,30 @@ let metadataLoadGeneration = 0;
 const metadataNotice = ref('');
 const sourceRegionsRefreshing = ref(false);
 const localIngestSettings = ref<LocalIngestSettings | null>(null);
+const settingsNeedRefresh = ref(false);
 const localIngestAllowlistText = ref('');
+const settingsDraft = ref<LocalIngestSettings | null>(null);
+const passwordDraft = ref('');
+const clearPasswordDraft = ref(false);
+const showAllowlistEditor = ref(false);
+const passwordSourceLabel = computed(() => localIngestSettings.value?.archivePasswordSource === 'local' ? '当前来源：本机保存的密码' : localIngestSettings.value?.archivePasswordSource === 'environment' ? '当前来源：服务端环境配置' : localIngestSettings.value?.archivePasswordConfigured ? '当前来源：服务端配置' : '当前未配置密码');
+
+function openIngestSettings() {
+  if (!localIngestSettings.value || localIngestRequestBusy.value || settingsNeedRefresh.value) return;
+  settingsDraft.value = { ...localIngestSettings.value, allowlist: [...localIngestSettings.value.allowlist] };
+  passwordDraft.value = '';
+  clearPasswordDraft.value = false;
+  localIngestNotice.value = '';
+}
+function closeIngestSettings() {
+  settingsDraft.value = null;
+  passwordDraft.value = '';
+  clearPasswordDraft.value = false;
+}
+function closeAllowlistEditor() {
+  showAllowlistEditor.value = false;
+  localIngestAllowlistText.value = localIngestSettings.value?.allowlist.join('\n') ?? '';
+}
 const localIngestInboxCreators = ref<LocalIngestInboxCreatorsResult | null>(null);
 const localIngestDashboard = ref<LocalIngestJobsDashboard | null>(null);
 const localIngestCreatorId = ref<number | null>(null);
@@ -365,8 +401,9 @@ const localIngestAllowlistDirty = computed(() => {
 
 const localIngestJobs = computed(() => localIngestDashboard.value?.items ?? []);
 const stage3OperationActive = computed(() => localIngestOperation.value?.state !== undefined && localIngestOperation.value.state !== 'idle');
-const stage3WriteLocked = computed(() => localIngestRequestBusy.value || stage3OperationActive.value);
+const stage3WriteLocked = computed(() => localIngestRequestBusy.value || stage3OperationActive.value || settingsNeedRefresh.value);
 const stage3LockReason = computed(() => {
+  if (settingsNeedRefresh.value && !localIngestRequestBusy.value) return '设置变更回执待核对，请刷新状态后继续。';
   if (localIngestRequestBusy.value && !stage3OperationActive.value) return '正在向服务端发起 Stage 3 操作，当前任务完成后可再次操作。';
   if (localIngestOperation.value?.state === 'scanning') return 'Stage 3 正在扫描，其他操作暂不可用。';
   if (localIngestOperation.value?.kind === 'batch') return 'Stage 3 正在运行批次，当前批次完成后可再次操作。';
@@ -547,6 +584,15 @@ async function loadLocalIngest() {
   if (!currentRead('ingest', generation)) return;
   localIngestSettings.value = settings;
   localIngestAllowlistText.value = settings.allowlist.join('\n');
+  settingsNeedRefresh.value = false;
+}
+
+async function reloadChangedSettings() {
+  if (!stageActive('ingest') || localIngestRequestBusy.value || !settingsNeedRefresh.value) return;
+  const generation = lifecycleGeneration;
+  try { await loadLocalIngest(); }
+  catch { if (currentRead('ingest', generation)) localIngestNotice.value = '设置回执待核对，请刷新状态后继续。'; }
+  if (currentRead('ingest', generation)) await refreshStage3State();
 }
 
 function optimisticLocalIngestOperation(
@@ -654,6 +700,8 @@ async function refreshStage3State() {
   const generation = lifecycleGeneration;
   refreshingStage3State.value = true;
   try {
+    if (settingsNeedRefresh.value && !localIngestRequestBusy.value) await loadLocalIngest();
+    if (!currentRead('ingest', generation)) return;
     const previousKind = localIngestOperation.value?.state === 'idle'
       ? lastActiveOperationKind
       : localIngestOperation.value?.kind ?? lastActiveOperationKind;
@@ -698,12 +746,13 @@ async function settleStage3Request(kind: LocalIngestOperation['kind'], refresh: 
   lastActiveOperationKind = stage3OperationActive.value ? localIngestOperation.value?.kind ?? kind : null;
 }
 
-function currentLocalIngestSettings(): LocalIngestSettings {
-  if (!localIngestSettings.value) throw new Error('Costuan入库配置尚未加载');
+function currentLocalIngestSettings(): LocalIngestSettingsInput {
+  if (!settingsDraft.value || !localIngestSettings.value) throw new Error('Costuan入库配置尚未加载');
+  const { allowlist: _allowlist, archivePasswordConfigured: _configured, archivePasswordSource: _source, ...editableSettings } = settingsDraft.value;
   return {
-    ...localIngestSettings.value,
-    allowlist: parseLocalIngestAllowlist(localIngestAllowlistText.value),
-    maxExtractionDepth: 2
+    ...editableSettings,
+    maxExtractionDepth: 2 as const,
+    ...(clearPasswordDraft.value ? { clearArchivePassword: true } : passwordDraft.value ? { archivePassword: passwordDraft.value } : {})
   };
 }
 
@@ -741,7 +790,32 @@ async function applyDiscoveredInboxCreators(mode: 'append' | 'replace') {
     next.push(name);
   }
   localIngestAllowlistText.value = next.join('\n');
-  await saveLocalIngestConfig();
+  await saveIngestAllowlist();
+}
+
+async function saveIngestAllowlist() {
+  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value) return;
+  const generation = lifecycleGeneration;
+  localIngestRequestBusy.value = true;
+  settingsNeedRefresh.value = true;
+  localIngestOperation.value = optimisticLocalIngestOperation('running', 'save-settings', '正在保存博主名单');
+  try {
+    const settings = await saveLocalIngestAllowlist(parseLocalIngestAllowlist(localIngestAllowlistText.value));
+    if (!currentRead('ingest', generation)) return;
+    localIngestSettings.value = settings;
+    settingsNeedRefresh.value = false;
+    localIngestAllowlistText.value = settings.allowlist.join('\n');
+    showAllowlistEditor.value = false;
+    localIngestNotice.value = '名单已保存；其他配置未修改，没有执行扫描或入库。';
+  } catch (reason) {
+    if (!currentRead('ingest', generation)) return;
+    settingsNeedRefresh.value = false;
+    if (!adoptOperationConflict(reason)) localIngestNotice.value = reason instanceof Error ? reason.message : '名单保存失败，草稿已保留，请重试。';
+  } finally {
+    localIngestRequestBusy.value = false;
+    if (!currentRead('ingest', generation) && stageActive('ingest')) await reloadChangedSettings();
+    if (currentRead('ingest', generation) && (!stage3OperationActive.value || localIngestOperation.value?.kind === 'save-settings')) await settleStage3Request('save-settings', false);
+  }
 }
 
 function cancelInboxCreatorDiscovery() {
@@ -749,39 +823,44 @@ function cancelInboxCreatorDiscovery() {
 }
 
 async function saveLocalIngestConfig() {
-  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value) return;
+  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value || !settingsDraft.value) return;
   const generation = lifecycleGeneration;
   localIngestRequestBusy.value = true;
+  settingsNeedRefresh.value = true;
   localIngestOperation.value = optimisticLocalIngestOperation('running', 'save-settings', '正在保存 Stage 3 配置');
   try {
     const settings = await saveLocalIngestSettings(currentLocalIngestSettings());
     if (!currentRead('ingest', generation)) return;
     localIngestSettings.value = settings;
-    localIngestAllowlistText.value = localIngestSettings.value.allowlist.join('\n');
-    localIngestNotice.value = 'Costuan入库配置已保存；密码仍只保存在服务端本机环境。';
+    settingsNeedRefresh.value = false;
+    closeIngestSettings();
+    localIngestNotice.value = '入库设置已保存；没有执行扫描或入库。';
   } catch (reason) {
     if (!currentRead('ingest', generation)) return;
-    if (!adoptOperationConflict(reason)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法保存Costuan入库配置';
+    settingsNeedRefresh.value = false;
+    if (!adoptOperationConflict(reason)) localIngestNotice.value = '无法保存入库设置，请核对配置后重试。';
   } finally {
     localIngestRequestBusy.value = false;
+    if (!currentRead('ingest', generation) && stageActive('ingest')) await reloadChangedSettings();
     if (currentRead('ingest', generation) && (!stage3OperationActive.value || localIngestOperation.value?.kind === 'save-settings')) await settleStage3Request('save-settings', false);
   }
 }
 
 async function validateLocalIngestConfig() {
-  if (!stageActive('ingest')) return;
+  if (!stageActive('ingest') || stage3WriteLocked.value || !settingsDraft.value) return;
   const generation = lifecycleGeneration;
   localIngestRequestBusy.value = true;
   localIngestOperation.value = optimisticLocalIngestOperation('running', 'validation', '正在验证 Stage 3 环境');
   try {
-    const result = await validateLocalIngestSettings(currentLocalIngestSettings());
+    const { archivePassword: _password, clearArchivePassword: _clear, ...environmentDraft } = currentLocalIngestSettings();
+    const result = await validateLocalIngestSettings(environmentDraft);
     if (!currentRead('ingest', generation)) return;
     localIngestNotice.value = result.valid
               ? `环境验证通过：${result.sevenZip.version ?? '7-Zip 可用'}，三个目录位于同一卷。`
       : `环境验证未通过：${result.errors.join('；')}`;
   } catch (reason) {
     if (!currentRead('ingest', generation)) return;
-    if (!adoptOperationConflict(reason)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法验证本地入库环境';
+    if (!adoptOperationConflict(reason)) localIngestNotice.value = '无法验证本地入库环境，请核对配置后重试。';
   } finally {
     localIngestRequestBusy.value = false;
     if (currentRead('ingest', generation) && (!stage3OperationActive.value || localIngestOperation.value?.kind === 'validation')) await settleStage3Request('validation', false);
@@ -1059,6 +1138,8 @@ async function copyBridgeToken() {
 
 let mounted = false;
 function suspendReads() {
+  closeIngestSettings();
+  showAllowlistEditor.value = false;
   ++lifecycleGeneration;
   ++metadataLoadGeneration;
   ++localIngestLoadGeneration;
@@ -1090,7 +1171,7 @@ async function activateStage() {
   } else {
     applyJobContext();
     await Promise.all([
-      !localIngestSettings.value ? loadLocalIngest().catch(reason => {
+      !localIngestSettings.value && !localIngestRequestBusy.value ? loadLocalIngest().catch(reason => {
         if (currentRead(stage, generation)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法读取Costuan入库设置';
       }) : Promise.resolve(),
       refreshStage3State()
@@ -1158,6 +1239,13 @@ onBeforeUnmount(() => {
 
 </script>
 <style scoped>
+.ingest-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 1rem; background: #0006; }
+.ingest-dialog { width: min(52rem, 100%); max-height: calc(100dvh - 2rem); overflow: auto; padding: 1.5rem; border-radius: 1rem; background: var(--surface); color: var(--text); box-shadow: 0 1rem 4rem #0003; }
+.ingest-list-dialog { width: min(36rem, 100%); }
+.ingest-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
+.ingest-dialog-actions button { min-height: 2.5rem; padding: .5rem 1rem; border: 1px solid var(--border); border-radius: .75rem; }
+.ingest-dialog-actions button:last-child { background: var(--accent); color: white; }
+.ingest-dialog button:disabled { opacity: .5; cursor: not-allowed; }
 .metadata-table {
   table-layout: fixed;
 }

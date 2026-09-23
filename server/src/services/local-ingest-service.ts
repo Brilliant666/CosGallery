@@ -3118,7 +3118,8 @@ export class LocalIngestService {
       this.updateJob(id, { status: 'reconciling', phase: 'rescanning', targetPath: summary.plannedTargetPath });
       return await this.reconcile(id, true);
     } catch (error) {
-      const secret = process.env.LOCAL_INGEST_ARCHIVE_PASSWORD ?? '';
+      let secret = '';
+      try { secret = this.settingsService.getArchivePassword(); } catch { /* Configuration errors contain no secret. */ }
       const failure = error instanceof StagingMoveFailure
         ? new LocalIngestFailure(error.code, error.message, true)
         : error instanceof LocalIngestFailure
