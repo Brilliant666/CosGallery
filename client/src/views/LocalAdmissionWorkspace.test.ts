@@ -258,19 +258,48 @@ describe('independent multi-creator admission workspace',()=>{
     expect(wrapper.findAll('.review-row').every(row=>!row.element.hasAttribute('open'))).toBe(true);
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
-  it('keeps an edited inline row until a deliberate filter change so its title can be finished',async()=>{
+  it('immediately moves an admitted row out of pending and keeps it editable under selected',async()=>{
     const {wrapper,router}=await render('?collection=collection-one',false);
     await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('new');
-    expect(wrapper.get('[data-test=admission-item-a-candidate] select').element.value).toBe('new');
-    await wrapper.get('[data-test=admission-item-a-candidate] input[maxlength="500"]').setValue('本次确认名称');
+    expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(false);
+    expect(wrapper.findAll('.review-row')).toHaveLength(1);
     expect(wrapper.get('[data-test=review-status-pending]').text()).toContain('1');
     await wrapper.get('[data-test=review-status-selected]').trigger('click');
     expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(true);
+    await wrapper.get('[data-test=admission-item-a-candidate] input[maxlength="500"]').setValue('本次确认名称');
     expect(wrapper.get('[data-test=admission-item-a-candidate] input[maxlength="500"]').element.value).toBe('本次确认名称');
     await wrapper.get('[data-test=review-status-pending]').trigger('click');
     expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(false);
     await router.push('/local-admission?collection=another');await flushPromises();
     expect(wrapper.find('[data-test=review-item-dialog]').exists()).toBe(false);
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('keeps an incomplete existing-work choice pending until its target is explicitly selected',async()=>{
+    const work={workId:91,title:'已有关联作品',catalogNo:1,images:2,videos:0,thumbnailUrl:null,primaryLocalWorkId:19,localState:'available',originalDirectories:['原目录'],sources:[]};
+    vi.mocked(api.fetchAdmissionItems).mockImplementation(async id=>({items:id==='a'?[item('a-first'),{...item('a-candidate','B'),candidates:[work]}]:[item('b-complex','D')],total:id==='a'?2:1,page:1,pageSize:100}));
+    const {wrapper}=await render('?collection=collection-one',false);
+    await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('existing');
+    expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(true);
+    const editor=wrapper.get('[data-test=admission-item-a-candidate]');
+    await editor.findAll('button').find(entry=>entry.text().startsWith('候选：'))!.trigger('click');
+    expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test=review-status-pending]').text()).toContain('1');
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('keeps a same-work choice pending until its peer is selected, without admitting on a step switch',async()=>{
+    const {wrapper}=await render('?collection=collection-one',false);
+    await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('same-as');
+    expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(true);
+    await wrapper.get('[data-test=admission-item-a-candidate]').findAll('select')[1]!.setValue('a-first');
+    expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(false);
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it.each(['queued','running','completed'] as const)('does not reopen the committed scope from the %s result step',async state=>{
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection(state));
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.get('[data-test=admission-step-select]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test=admission-step-review]').attributes('disabled')).toBeDefined();
+    expect(api.fetchAdmissionCollectionScope).not.toHaveBeenCalled();
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('opens accessible help, ads and batch details without a write and restores focus on Escape',async()=>{
@@ -382,7 +411,8 @@ describe('independent multi-creator admission workspace',()=>{
   it('returns to scope editing with original selections and only includes explicitly selected new directories',async()=>{
     vi.mocked(api.fetchAdmissionCollectionScope).mockResolvedValue({scopes:[{creatorId:17,parent:'甲别名',directories:['第一套'],acceptExistingVersion:true}]});
     const {wrapper}=await render('?collection=collection-one');
-    await wrapper.get('[data-test=collection-edit-scope]').trigger('click');await flushPromises();
+    expect(wrapper.find('[data-test=collection-edit-scope]').exists()).toBe(false);
+    await wrapper.get('[data-test=admission-step-select]').trigger('click');await flushPromises();
     expect(wrapper.text()).toContain('调整本批导入范围');
     const directories=wrapper.findAll('[data-folder="甲别名"] .directory-grid input');
     expect(directories.map(input=>(input.element as HTMLInputElement).checked)).toEqual([true,false]);
@@ -396,13 +426,13 @@ describe('independent multi-creator admission workspace',()=>{
   });
   it('lets users deselect a renamed/missing directory instead of silently dropping or selecting replacements',async()=>{
     vi.mocked(api.fetchAdmissionCollectionScope).mockResolvedValue({scopes:[{creatorId:17,parent:'甲别名',directories:['原目录'],acceptExistingVersion:true}]});
-    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=collection-edit-scope]').trigger('click');await flushPromises();
+    const {wrapper}=await render('?collection=collection-one');await wrapper.get('[data-test=admission-step-select]').trigger('click');await flushPromises();
     expect(wrapper.text()).toContain('原目录已不存在');expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeDefined();
     const directories=wrapper.findAll('[data-folder="甲别名"] .directory-grid input');
     expect(directories.map(input=>(input.element as HTMLInputElement).checked)).toEqual([false,false,true]);
     expect(directories[2].attributes('disabled')).toBeUndefined();await directories[2].setValue(false);await directories[0].setValue(true);
     expect(wrapper.get('[data-test=collection-preview]').attributes('disabled')).toBeUndefined();
-    await button(wrapper,'取消调整，返回核对').trigger('click');expect(wrapper.text()).toContain('核对本批图集');expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();
+    await wrapper.get('[data-test=admission-step-review]').trigger('click');expect(wrapper.text()).toContain('核对本批图集');expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('rechecks and updates automatic safe choices while retaining an explicit skip',async()=>{
     let fresh=false;
