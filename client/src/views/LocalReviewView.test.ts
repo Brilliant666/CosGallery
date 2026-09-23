@@ -57,12 +57,14 @@ describe('scoped review UI invokes original task instead of asking for JSON',()=
   it('restores a late inspect receipt to the review URL on return without starting a second inspection',async()=>{
     let finish!:(value:{sessionId:string;status:LocalReviewSession['status']})=>void;
     vi.mocked(api.createLocalReviewSession).mockReturnValue(new Promise(resolve=>{finish=resolve;}));
-    const {wrapper,router}=await render('');await wrapper.get('[data-test=review-inspect]').trigger('click');
+    const entry='/local-review?kind=stage3&jobId=9&creatorId=17&returnTo=%2Flibrary#review';
+    const {wrapper,router}=await render('',entry);await wrapper.get('[data-test=review-inspect]').trigger('click');
     await router.push('/creator-admission/costuan?workspace=ingest');await flushPromises();
     finish({sessionId:'review-synthetic',status:'ready'});await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe('/creator-admission/costuan?workspace=ingest');
-    await router.push('/local-review?kind=stage3&jobId=9&creatorId=17');await flushPromises();
+    await router.push(entry);await flushPromises();
     expect(router.currentRoute.value.query.session).toBe('review-synthetic');expect(wrapper.text()).toContain('审核预览 · 未执行');
+    expect(router.currentRoute.value.query.returnTo).toBe('/library');expect(router.currentRoute.value.hash).toBe('#review');
     expect(api.createLocalReviewSession).toHaveBeenCalledTimes(1);expect(api.executeLocalReview).not.toHaveBeenCalled();
   });
   it('does not retain a review execution lock after an explicit HTTP 413 rejection',async()=>{

@@ -49,6 +49,15 @@ describe('independent multi-creator admission workspace',()=>{
     expect(api.fetchAdmissionDirectories).toHaveBeenCalledTimes(reads);expect(api.fetchAdmissionWorkspace).toHaveBeenCalledTimes(1);
     expect(api.previewAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
+  it('preserves entry query and hash when loading a saved collection, but drops stale record identity on a different collection',async()=>{
+    vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>({...collection(),id,nextCollectionIds:id==='collection-one'?['collection-next']:[]}));
+    const {wrapper,router}=await renderKept('?collection=collection-one&sourceEvidenceId=72&returnTo=%2Flibrary&session=old-session&jobId=99#review');
+    expect(router.currentRoute.value.query).toEqual({collection:'collection-one',sourceEvidenceId:'72',returnTo:'/library'});
+    expect(router.currentRoute.value.hash).toBe('#review');
+    await button(wrapper,'查看后续预览 · collecti').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({collection:'collection-next',sourceEvidenceId:'72',returnTo:'/library'});
+    expect(router.currentRoute.value.hash).toBe('');expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
   it('keeps manual deferral and draft filters across Costuan and ignores its unrelated batch query',async()=>{
     const {wrapper,router}=await renderKept('?collection=collection-one');await showAllReview(wrapper);
     await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
@@ -84,14 +93,16 @@ describe('independent multi-creator admission workspace',()=>{
   it('publishes a late preview receipt into its local tab URL only on return, without creating it again',async()=>{
     let finish!:(value:AdmissionCollection)=>void;
     vi.mocked(api.previewAdmissionCollection).mockReturnValue(new Promise(resolve=>{finish=resolve;}));
-    const {wrapper,router}=await renderKept();
+    const entry='/creator-admission/local?sourceEvidenceId=72&returnTo=%2Flibrary#scope';
+    const {wrapper,router}=await renderKept('?sourceEvidenceId=72&returnTo=%2Flibrary#scope');
     await wrapper.findAll('.folder')[0]!.get('.check input').setValue(true);await flushPromises();
     await wrapper.get('[data-test=collection-preview]').trigger('click');
     await router.push('/creator-admission/costuan?workspace=source');await flushPromises();
     finish(collection());await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe('/creator-admission/costuan?workspace=source');
-    await router.push('/creator-admission/local');await flushPromises();
+    await router.push(entry);await flushPromises();
     expect(router.currentRoute.value.query.collection).toBe('collection-one');
+    expect(router.currentRoute.value.query.sourceEvidenceId).toBe('72');expect(router.currentRoute.value.query.returnTo).toBe('/library');expect(router.currentRoute.value.hash).toBe('#scope');
     expect(wrapper.text()).toContain('预览草稿');expect(api.previewAdmissionCollection).toHaveBeenCalledTimes(1);
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });

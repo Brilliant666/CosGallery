@@ -85,7 +85,7 @@
 <script setup lang="ts">
 import { computed,onActivated,onDeactivated,onBeforeUnmount,reactive,ref,watch } from 'vue';
 import { RouterLink } from 'vue-router';
-import { useAdmissionRoute } from '../utils/admission-route';
+import { admissionScopeQuery, useAdmissionRoute } from '../utils/admission-route';
 import AdmissionCreatorPicker from '../components/AdmissionCreatorPicker.vue';
 import AdmissionSourcePicker from '../components/AdmissionSourcePicker.vue';
 import AdmissionItemEditor from '../components/AdmissionItemEditor.vue';
@@ -191,7 +191,7 @@ async function openCollection(id:string,previous?:RepreviewEntry[]){
       if(!pending.value)selectSafe(new Set(restored.map(entry=>`${entry.batchId}:${entry.key}`)));
     }else {setPending(null);clearAdmissionDraft(id);}
     rememberAdmissionCollection(id);saveDraft();
-    await router.replace({query:{collection:id}});pollFailures=0;schedulePoll();
+    await router.replace({query:admissionScopeQuery(route.query,{collection:id}),hash:typeof route.query.collection==='string'&&route.query.collection!==id?'':route.hash});pollFailures=0;schedulePoll();
   }catch(cause){
     if(current!==generation||disposed)return;
     collection.value=null;
@@ -268,7 +268,7 @@ async function resume(){if(!collection.value||busy.value||hasLaterCompletion.val
 async function startNew(){
   saveDraft();generation++;stopPoll();rememberAdmissionCollection(null);collection.value=null;editingScope.value=false;pending.value=null;showConfirm.value=false;showResume.value=false;confirmed.value=false;adsConfirmed.value=false;error.value='';startingNew=true;
   for(const key of Object.keys(contexts))delete contexts[key];
-  try {await router.replace({query:{}});await loadWorkspace();}finally{startingNew=false;}
+  try {await router.replace({query:admissionScopeQuery(route.query),hash:''});await loadWorkspace();}finally{startingNew=false;}
 }
 function visible(){if(document.hidden)stopPoll();else schedulePoll();}
 onDeactivated(()=>{pageActive=false;wasDeactivated=true;saveDraft();stopPoll();});
@@ -280,7 +280,7 @@ watch(()=>route.query.collection,async id=>{
   else if(id===undefined){
     if(startingNew)return;
     const remembered=lastAdmissionCollection();
-    if(remembered){if(remembered!==collection.value?.id)await openCollection(remembered);else await router.replace({query:{collection:remembered}});}
+    if(remembered){if(remembered!==collection.value?.id)await openCollection(remembered);else await router.replace({query:admissionScopeQuery(route.query,{collection:remembered}),hash:route.hash});}
     else if(collection.value)await startNew();
     else if(!workspace.value)await loadWorkspace();
   }

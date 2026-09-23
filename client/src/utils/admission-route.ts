@@ -1,5 +1,12 @@
 import { computed, onActivated, shallowReactive, watch } from 'vue';
-import { useRoute, useRouter, type RouteLocationNormalizedLoaded, type RouteLocationRaw } from 'vue-router';
+import { useRoute, useRouter, type LocationQuery, type LocationQueryRaw, type RouteLocationNormalizedLoaded, type RouteLocationRaw } from 'vue-router';
+
+/** Choose one local scope, without carrying a previous plan/review/job identity. */
+export function admissionScopeQuery(query: LocationQuery, scope: { batch?: string; collection?: string } = {}): LocationQueryRaw {
+  const next: LocationQueryRaw = { ...query };
+  for (const key of ['batch', 'collection', 'session', 'planId', 'itemKey', 'jobId', 'kind', 'creatorId']) delete next[key];
+  return { ...next, ...scope };
+}
 
 /** KeepAlive views must not consume another module's global query/params. */
 export function useAdmissionRoute(name: string, identity: (route: RouteLocationNormalizedLoaded) => string = () => '') {

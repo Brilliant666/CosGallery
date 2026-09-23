@@ -43,7 +43,7 @@
                 {{ task.sourceState.metadataAccepted ? '已记录 Costuan 来源' : '尚未取得有效来源' }}
                 <template v-if="task.sourceState.metadataAccepted">
                   <small class="block text-muted">{{ task.sourceCollections }} 个有效 Costuan 合集</small>
-                  <small class="block text-muted">{{ task.sourceState.deliveryMode === 'direct-share' ? '原分享已核验，暂存进度见 Stage2' : task.sourceState.deliveryReady ? (task.sourceState.deliveryEvidence === 'verified' ? (task.pendingSupplementalTitles?.length ? '编号作品网盘来源已核验' : '网盘来源已核验') : '网盘状态待重新核验') : '网盘来源待确认' }}</small>
+                  <small class="block text-muted">{{ task.sourceState.deliveryMode === 'direct-share' ? '原分享已核验，暂存进度见“网盘暂存”' : task.sourceState.deliveryReady ? (task.sourceState.deliveryEvidence === 'verified' ? (task.pendingSupplementalTitles?.length ? '编号作品网盘来源已核验' : '网盘来源已核验') : '网盘状态待重新核验') : '网盘来源待确认' }}</small>
                   <small v-if="task.pendingSupplementalTitles?.length" class="block text-muted">{{ task.pendingSupplementalTitles.join('、') }}：附加内容待人工处理，不参与自动下载/入库</small>
                   <details v-if="task.latestSourceAt" class="metadata-details source-details mt-1 text-xs text-muted"><summary class="cursor-pointer">来源详情</summary><span>来源记录时间：{{ formatSourceTime(task.latestSourceAt) }}</span></details>
                 </template>
@@ -258,7 +258,7 @@
           </div>
         </article>
       </div>
-      <p v-else class="mt-4 mb-0 rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">尚无本地入库任务。请先明确点击“扫描待入库”。</p>
+      <p v-else class="mt-4 mb-0 rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">尚无Costuan入库任务。请先明确点击“扫描待入库”。</p>
     </section>
 
   </section>
@@ -701,7 +701,7 @@ async function settleStage3Request(kind: LocalIngestOperation['kind'], refresh: 
 }
 
 function currentLocalIngestSettings(): LocalIngestSettings {
-  if (!localIngestSettings.value) throw new Error('本地入库配置尚未加载');
+  if (!localIngestSettings.value) throw new Error('Costuan入库配置尚未加载');
   return {
     ...localIngestSettings.value,
     allowlist: parseLocalIngestAllowlist(localIngestAllowlistText.value),
@@ -762,10 +762,10 @@ async function saveLocalIngestConfig() {
     if (!currentRead('ingest', generation)) return;
     localIngestSettings.value = settings;
     localIngestAllowlistText.value = localIngestSettings.value.allowlist.join('\n');
-    localIngestNotice.value = '本地入库配置已保存；密码仍只保存在服务端本机环境。';
+    localIngestNotice.value = 'Costuan入库配置已保存；密码仍只保存在服务端本机环境。';
   } catch (reason) {
     if (!currentRead('ingest', generation)) return;
-    if (!adoptOperationConflict(reason)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法保存本地入库配置';
+    if (!adoptOperationConflict(reason)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法保存Costuan入库配置';
   } finally {
     localIngestRequestBusy.value = false;
     if (currentRead('ingest', generation) && (!stage3OperationActive.value || localIngestOperation.value?.kind === 'save-settings')) await settleStage3Request('save-settings', false);
@@ -872,7 +872,7 @@ async function runLocalBatch(creator?: LocalIngestCreatorJobSummary) {
     await settleStage3Request('batch', true);
   } catch (reason) {
     if (!currentRead('ingest', generation)) return;
-    if (!adoptOperationConflict(reason)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法运行本地入库批处理';
+    if (!adoptOperationConflict(reason)) localIngestNotice.value = reason instanceof Error ? reason.message : '无法运行Costuan入库批处理';
   } finally {
     localIngestRequestBusy.value = false;
     if (currentRead('ingest', generation) && localIngestOperation.value?.kind === 'batch' && localIngestOperation.value.state !== 'idle') await settleStage3Request('batch', false);

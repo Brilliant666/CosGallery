@@ -20,6 +20,19 @@ describe('web local admission without CLI or raw identity inputs',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchAdmissionSettings).mockResolvedValue({waitingRoot:'R:/等待区',galleryRoot:'R:/正式',archiveInboxRoot:'R:/压缩包'});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(_id,parent)=>dir(parent??null));vi.mocked(api.fetchAdmissionBatches).mockResolvedValue({items:[],total:0,page:1,pageSize:20});vi.mocked(api.fetchAdmissionBatch).mockResolvedValue(batch());vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[item(),item('skip'),item('defer')],total:3,page:1,pageSize:100});vi.mocked(api.createAdmissionPreview).mockResolvedValue(batch());vi.mocked(api.executeAdmission).mockResolvedValue(batch('queued'));vi.mocked(api.fetchAdmissionWorks).mockResolvedValue({items:[work],total:1,page:1,pageSize:20});vi.mocked(evidence.fetchSourceEvidence).mockResolvedValue({items:[],total:0,page:1,limit:20});});
   afterEach(()=>{vi.useRealTimers();});
+  it('keeps source and return context plus hash on saved-batch loading and removes the prior scope on explicit new selection',async()=>{
+    const {wrapper,router}=await render('?batch=batch-synthetic&sourceEvidenceId=72&returnTo=%2Flibrary&session=old-session&planId=old-plan#review');
+    expect(router.currentRoute.value.query).toEqual({batch:'batch-synthetic',sourceEvidenceId:'72',returnTo:'/library'});expect(router.currentRoute.value.hash).toBe('#review');
+    await button(wrapper,'选择新一批目录').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({sourceEvidenceId:'72',returnTo:'/library'});expect(router.currentRoute.value.hash).toBe('');
+    expect(api.createAdmissionPreview).not.toHaveBeenCalled();expect(api.executeAdmission).not.toHaveBeenCalled();
+  });
+  it('carries supported query and hash from a single-creator batch link to its multi-creator collection',async()=>{
+    vi.mocked(api.fetchAdmissionBatch).mockResolvedValue({...batch(),collectionId:'collection-parent'});
+    const {router}=await render('?batch=batch-synthetic&sourceEvidenceId=72&returnTo=%2Flibrary&session=old-session#results');
+    expect(router.currentRoute.value.name).toBe('local-admission-workspace');
+    expect(router.currentRoute.value.query).toEqual({collection:'collection-parent',sourceEvidenceId:'72',returnTo:'/library'});expect(router.currentRoute.value.hash).toBe('#results');
+  });
   it('does not bulk-select an unresolved historical A item while retaining its explicit manual choice',async()=>{
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('unknown'),currentDisposition:{status:'unresolved'}},item('ordinary')],total:2,page:1,pageSize:100});
     const {wrapper}=await render('?batch=batch-synthetic');await button(wrapper,'A 组全部选择新独立作品').trigger('click');expect(wrapper.get('[data-test=admission-item-unknown] select').element.value).toBe('defer');expect(wrapper.get('[data-test=admission-item-ordinary] select').element.value).toBe('new');
