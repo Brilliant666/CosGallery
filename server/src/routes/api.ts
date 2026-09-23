@@ -72,6 +72,14 @@ router.use('/admin/archive-catalog', requireCapability('canAccessSettings', 'Adm
 router.post('/admin/archive-catalog/creators', managedAccess, (request, response) => {
   managedResponse(response, () => new ManagedCreatorService().create(request.body), 201);
 });
+router.get('/admin/archive-catalog/creators/:id/deletion-preview', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().deletionPreview(id));
+});
+router.delete('/admin/archive-catalog/creators/:id', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().deleteUnusedManualCreator(id, request.body));
+});
 router.patch('/admin/archive-catalog/creators/:id', managedAccess, (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
   managedResponse(response, () => new ManagedCreatorService().update(id, request.body));

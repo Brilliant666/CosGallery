@@ -2,7 +2,7 @@
   <section class="roster" aria-label="博主库">
     <header class="roster-heading">
       <div><h2>博主库</h2><p>统一维护博主 ID、名称与分类。来源平台只补充作品信息。</p></div>
-      <button type="button" class="primary" @click="openNew">新增博主</button>
+      <button type="button" class="primary" :disabled="busy" @click="openNew">新增博主</button>
     </header>
     <form class="roster-filters" @submit.prevent="search" @change="onFilterChange">
       <label class="search">搜索名称或别名<input :value="filters.query" type="search" placeholder="名称或别名" @input="onQueryInput" @compositionstart="startComposition" @compositionend="endComposition" @keydown.enter="onEnter" /></label>
@@ -36,7 +36,7 @@
       <button :disabled="!payload?.hasMore || loading" @click="goPage(page + 1)">下一页</button>
     </footer>
 
-    <dialog ref="dialog" class="roster-dialog" aria-labelledby="roster-dialog-title" @close="dialogOpen = false" @cancel="cancelDialog">
+    <dialog ref="dialog" class="roster-dialog" aria-labelledby="roster-dialog-title" @close="dialogClosed" @cancel="cancelDialog">
       <div class="roster-heading"><h2 id="roster-dialog-title">{{ detail ? `${dialogMode === 'ledger' ? '账本' : '管理'} ${detail.name}` : '新增博主' }}</h2><button :disabled="busy" @click="closeDialog">关闭</button></div>
       <p v-if="detail" class="hint">稳定 ID #{{ detail.id }} · {{ detail.isActive ? '启用' : '停用' }} · 改名不移动本地目录</p>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
@@ -119,6 +119,18 @@
           <p>{{ pendingAction.kind === 'unlink' ? '确认解除此目录与博主的关联？文件和已有作品关系不会删除。' : `确认${detail.isActive ? '停用' : '恢复'}博主？不会修改既有任务。` }}</p>
           <button class="primary" :disabled="busy" @click="confirmAction">确认变更</button><button :disabled="busy" @click="pendingAction = null">取消</button>
         </aside>
+        <section v-if="canCheckDeletion" class="state-controls" aria-label="删除未使用博主" data-test="unused-creator-deletion">
+          <h3>删除未使用博主</h3>
+          <p class="hint">仅限手工创建、已停用且未被业务记录使用的博主。停用会保留身份；删除会移除该身份及可删除的手工别名，不能通过“恢复博主”找回。不删除文件、作品或任务。</p>
+          <button :disabled="busy" data-test="preview-creator-deletion" @click="previewDeletion">{{ deletionPreview ? '重新检查删除条件' : '检查是否可删除' }}</button>
+          <aside v-if="deletionPreview" class="collision" aria-label="删除条件检查结果" data-test="creator-deletion-preview">
+            <p><strong>#{{ deletionPreview.creatorId }} {{ deletionPreview.name }}</strong></p>
+            <template v-if="deletionPreview.blockers.length"><p>存在以下关联，不能删除。请保持停用；此处不会清理关联记录。</p><ul><li v-for="blocker in deletionPreview.blockers" :key="blocker.code">{{ blocker.label }} · {{ blocker.count }}</li></ul></template>
+            <p v-else-if="!deletionPreview.eligible">当前不符合删除条件，请重新检查。</p>
+            <template v-else><p>当前检查未发现阻断关联。将删除此博主身份及 {{ deletionPreview.removableAliases }} 条可删除别名；提交时服务端会再次核对。</p><button class="danger" :disabled="busy || !deletionPreview.confirmationToken" data-test="confirm-creator-deletion" @click="confirmDeletion">确认删除博主</button></template>
+            <button :disabled="busy" @click="deletionPreview = null">取消删除</button>
+          </aside>
+        </section>
         </template>
       </template>
     </dialog>
@@ -149,6 +161,9 @@ const ingestDestination = ref<LocalIngestDestinationPreference | null>(null);
 const preferredFolderDraft = ref<number | null>(null);
 const candidates = ref<Array<{id:number;name:string}>>([]);
 const pendingAction = ref<{kind:'state'}|{kind:'unlink';folderId:number}|null>(null);
+const deletionPreview = ref<api.ManagedCreatorDeletionPreview | null>(null);
+const canCheckDeletion = computed(() => dialogMode.value === 'manage' && detail.value?.seedSource === 'manual' && !detail.value.isActive);
+let deletionRequest = 0;
 let loadGeneration = 0;
 let queryTimer: ReturnType<typeof setTimeout> | undefined;
 let composing = false;
@@ -237,13 +252,16 @@ async function goPage(value:number) {
 }
 function showDialog() { if (!dialog.value?.open) dialog.value?.showModal(); dialogOpen.value = true; }
 function closeDialog() { if (!busy.value) { dialog.value?.close(); dialogOpen.value = false; } }
+function dialogClosed() { dialogOpen.value = false; deletionPreview.value = null; ++deletionRequest; }
 function cancelDialog(event:Event) { if (busy.value) event.preventDefault(); }
 function setDetail(value:ArchiveCatalogCreatorDetail) {
   detail.value = value;
   Object.assign(draft,{name:value.name,preference:value.preference,rating:value.rating,confirmDistinct:false});
-  candidates.value = []; pendingAction.value = null;
+  candidates.value = []; pendingAction.value = null; deletionPreview.value = null; ++deletionRequest;
 }
 function openNew() {
+  if (busy.value) return;
+  deletionPreview.value = null; ++deletionRequest;
   dialogMode.value = 'manage';
   detail.value = null; ingestDestination.value = null; preferredFolderDraft.value = null; error.value = ''; candidates.value = []; notice.value = '';
   Object.assign(draft,{name:'',preference:null,rating:null,confirmDistinct:false});
@@ -251,7 +269,7 @@ function openNew() {
 }
 async function openCreator(id:number, mode:'ledger'|'manage' = 'manage') {
   if (busy.value) return;
-  error.value = ''; candidates.value = []; pendingAction.value = null; aliasDraft.value = ''; folderDraft.value = null;
+  error.value = ''; candidates.value = []; pendingAction.value = null; aliasDraft.value = ''; folderDraft.value = null; deletionPreview.value = null; ++deletionRequest;
   try {
     const [creator, destination] = await Promise.all([fetchArchiveCatalogCreator(id), api.fetchIngestDestination(id)]);
     dialogMode.value = mode;
@@ -269,7 +287,7 @@ async function refreshIngestDestination() {
 }
 async function mutation(action:()=>Promise<ArchiveCatalogCreatorDetail|void>) {
   if (busy.value) return;
-  busy.value = true; error.value = ''; notice.value = '';
+  busy.value = true; error.value = ''; notice.value = ''; deletionPreview.value = null; ++deletionRequest;
   try {
     const result = await action();
     if (result) setDetail(result);
@@ -285,7 +303,7 @@ async function linkFolder() { if (detail.value && folderDraft.value !== null) aw
 async function saveIngestDestination() {
   if (!detail.value || !ingestDestination.value) return;
   if (busy.value) return;
-  busy.value = true; error.value = ''; notice.value = '';
+  busy.value = true; error.value = ''; notice.value = ''; deletionPreview.value = null; ++deletionRequest;
   try {
     ingestDestination.value = await api.setIngestDestination(
       detail.value.id,
@@ -307,11 +325,45 @@ async function confirmAction() {
     return fetchArchiveCatalogCreator(detail.value!.id);
   });
 }
+async function previewDeletion() {
+  if (busy.value || !canCheckDeletion.value || !detail.value || !dialogOpen.value) return;
+  const creatorId = detail.value.id, request = ++deletionRequest;
+  busy.value = true; error.value = ''; deletionPreview.value = null; pendingAction.value = null;
+  try {
+    const result = await api.previewManagedCreatorDeletion(creatorId);
+    if (disposed || request !== deletionRequest || detail.value?.id !== creatorId || !dialogOpen.value) return;
+    if (result.creatorId !== creatorId) throw new Error('删除条件与当前博主不一致，请重新检查。');
+    deletionPreview.value = result;
+  } catch (reason) { if (!disposed && request === deletionRequest) showError(reason); }
+  finally { if (!disposed) busy.value = false; }
+}
+async function confirmDeletion() {
+  const preview = deletionPreview.value;
+  if (busy.value || !canCheckDeletion.value || !dialogOpen.value || !preview?.eligible || preview.blockers.length || !preview.confirmationToken || detail.value?.id !== preview.creatorId) return;
+  const request = ++deletionRequest;
+  busy.value = true; error.value = ''; notice.value = '';
+  try {
+    const result = await api.deleteUnusedManagedCreator(preview.creatorId, preview.confirmationToken);
+    if (disposed || request !== deletionRequest) return;
+    if (!result.deleted || result.creatorId !== preview.creatorId) throw new Error('删除结果尚未确认，请刷新列表核对。');
+    deletionPreview.value = null; detail.value = null; ingestDestination.value = null; preferredFolderDraft.value = null; pendingAction.value = null;
+    dialog.value?.close(); dialogOpen.value = false;
+    if (payload.value?.items.length === 1 && page.value > 1) page.value--;
+    await load(); if (disposed) return; emit('changed');
+    notice.value = `已删除未使用博主“${preview.name}”；未删除文件、作品或任务。`;
+  } catch (reason) {
+    if (!disposed && request === deletionRequest) {
+      deletionPreview.value = null;
+      showError(reason);
+      error.value += ' 请重新检查删除条件，不会自动重试删除。';
+    }
+  } finally { if (!disposed) busy.value = false; }
+}
 // Refresh only the visible list. Keep its filters/page and any open management
 // draft intact when another workspace finishes an ingest operation.
 defineExpose({ refresh: () => load() });
 onMounted(() => { void load(); });
-onBeforeUnmount(() => { disposed = true; clearQueryTimer(); invalidateLoad(); });
+onBeforeUnmount(() => { disposed = true; ++deletionRequest; clearQueryTimer(); invalidateLoad(); });
 </script>
 
 <style scoped>
