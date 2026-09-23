@@ -223,11 +223,12 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     const {wrapper}=await render('?batch=batch-synthetic');
     expect(wrapper.text()).toContain('正在读取预览摘要');
     expect(button(wrapper,'选择无冲突的新作品').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('[aria-label="本批附件集中选择"] fieldset').attributes('disabled')).toBeDefined();
-    await wrapper.get('[data-test=ads-select-all]').trigger('click');expect(api.executeAdmission).not.toHaveBeenCalled();
+    expect(wrapper.find('[aria-label="本批附件集中选择"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test=ads-select-all]').exists()).toBe(false);expect(api.executeAdmission).not.toHaveBeenCalled();
     delayed.resolve({items:[{...item(),ads:[{relativePath:'广告.txt',size:8}]}],total:1,page:1,pageSize:100});await flushPromises();
-    expect(wrapper.get('[aria-label="本批附件集中选择"] fieldset').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[aria-label="本批附件集中选择"]').exists()).toBe(false);
     await button(wrapper,'选择无冲突的新作品').trigger('click');
+    expect(wrapper.get('[aria-label="本批附件集中选择"] fieldset').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('[data-ad-filename="广告.txt"]').text()).toContain('已选 1');
   });
 

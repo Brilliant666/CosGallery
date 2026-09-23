@@ -1,11 +1,11 @@
 <template>
-  <details class="batch-ads" aria-label="本批附件集中选择">
+  <details v-if="rows.length" class="batch-ads" aria-label="本批附件集中选择">
     <summary>广告附件 · 已勾选 {{ count }} 个具体文件</summary>
     <p>新选择接纳的目录，清单内全部广告候选默认勾选（含 TXT / URL 和已识别的广告图片），可按同名或逐项取消。跨本次全部博主、分页和分组；跳过和暂缓目录不处理。</p>
     <p>手动取消及已有批次的选择不因刷新被重新勾选。{{ recycleAds?'本次新确认将在完成索引后送入Windows回收站，不长期保留专用广告附件区':'历史重试保留原确认方式，具体处置见最终清单' }}，清单外文件和已入库历史文件不处理。</p>
     <fieldset :disabled="locked"><div class="actions"><button data-test="ads-select-all" :disabled="!rows.length" @click="choose(true)">勾选全部候选</button><button data-test="ads-clear-all" :disabled="!count" @click="choose(false)">清空本批勾选</button></div>
       <div v-for="ad in rows" :key="ad.filename" class="ad-summary-row" :data-ad-filename="ad.filename"><label><input type="checkbox" :aria-label="`广告候选：${ad.filename}`" :checked="ad.selected===ad.files" :indeterminate="ad.selected>0&&ad.selected<ad.files" @change="choose(($event.target as HTMLInputElement).checked,ad.filename)" /><span><strong>{{ ad.filename }}</strong><small>{{ ad.type }} · {{ ad.directories }} 个接纳目录 / {{ ad.files }} 个文件 · 已选 {{ ad.selected }}<template v-if="ad.automatic"> · 全局已确认广告</template></small></span></label></div>
-    </fieldset><p v-if="!rows.length">没有匹配附件。勾选和预览均不移动文件，执行前仍需另行确认。</p>
+    </fieldset>
   </details>
 </template>
 <script setup lang="ts">
