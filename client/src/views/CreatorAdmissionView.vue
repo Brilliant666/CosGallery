@@ -1,16 +1,14 @@
 <template>
-  <section class="mx-auto w-full max-w-[92rem] px-1 pb-12 sm:px-4 lg:px-7">
-    <header class="mb-6 flex flex-wrap items-end justify-between gap-3">
+  <section class="admission-shell mx-auto w-full max-w-[92rem] px-1 pb-12 sm:px-4 lg:px-6">
+    <header class="mb-5">
       <div>
-        <p class="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-muted">Creator Admission</p>
         <h1 class="m-0 text-2xl font-semibold sm:text-3xl">博主入库</h1>
-        <p class="mt-2 mb-0 text-sm text-muted">选择资源收录途径；切换模块不会开始执行或取消后台任务。</p>
+        <p class="mt-2 mb-0 text-sm text-muted">本地已有图集直接入库；Costuan 资源按来源、暂存与入库分别处理。</p>
       </div>
-      <RouterLink :to="{ name: 'archive-catalog', query: { workspace: 'roster' } }" class="text-sm text-accent">图库账本</RouterLink>
     </header>
-    <nav aria-label="入库方式" class="mb-6 flex flex-wrap gap-2 border-b border-border pb-4">
-      <RouterLink :to="localLocation" :aria-current="module === 'local' ? 'page' : undefined" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="module === 'local' ? 'border-accent bg-accent text-white' : 'border-border bg-surface'">本地入库</RouterLink>
-      <RouterLink :to="costuanLocation" :aria-current="module === 'costuan' ? 'page' : undefined" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="module === 'costuan' ? 'border-accent bg-accent text-white' : 'border-border bg-surface'">Costuan</RouterLink>
+    <nav aria-label="入库方式" class="mb-5 flex gap-6 border-b border-border">
+      <RouterLink :to="localLocation" :aria-current="module === 'local' ? 'page' : undefined" class="module-link border-b-2 px-1 py-3 text-sm font-semibold" :class="module === 'local' ? 'border-accent text-accent' : 'border-transparent text-muted'">本地入库</RouterLink>
+      <RouterLink :to="costuanLocation" :aria-current="module === 'costuan' ? 'page' : undefined" class="module-link border-b-2 px-1 py-3 text-sm font-semibold" :class="module === 'costuan' ? 'border-accent text-accent' : 'border-transparent text-muted'">Costuan</RouterLink>
     </nav>
     <RouterView v-slot="{ Component, route: childRoute }">
       <KeepAlive :max="8">
@@ -41,3 +39,8 @@ function childKey(child: RouteLocationNormalizedLoaded) {
   return String(child.name);
 }
 </script>
+
+<style scoped>
+.admission-shell { min-width: 0; }
+.module-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+</style>
