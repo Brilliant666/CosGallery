@@ -16,6 +16,7 @@ import { databaseManager } from '../db/database.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogPipelineService } from './archive-catalog-pipeline-service.js';
 import { preserveDownloadStagedAt } from './archive-download-activity.js';
+import { acquisitionHeldSql } from './archive-local-fulfillment-service.js';
 import {
   localIngestSettingsService,
   type LocalIngestSettingsService,
@@ -2945,7 +2946,27 @@ export class LocalIngestService {
       return { job: this.getJob(id), ownership: 'not_required' };
     }
     const operation = job.status === 'ingested' ? 'cleanup' : job.status === 'reconciling' ? 'reconcile' : 'run';
-    return this.runWithClaimOutcome(id, () => this.withPerformance(id, operation, () => this.runClaimedJob(id)));
+    return this.runWithClaimOutcome(id, () => {
+      // Recheck durable source decisions after acquiring our own claim. Discovery
+      // can predate a source refresh; do not extract an old queued archive while
+      // its local identity is now held for review. Leave checkpoint recovery alone.
+      const current = this.getJobRow(id);
+      if (['queued', 'failed'].includes(current.status) && current.attempt_count === 0
+        && current.processing_path === null && current.summary_json === null
+        && current.source_work_id !== null) {
+        const source = this.database.prepare(`SELECT ${acquisitionHeldSql('s')} AS held
+          FROM archive_catalog_source_works s WHERE s.id=?`).get(current.source_work_id) as { held: number } | undefined;
+        if (source?.held) {
+          this.updateJob(id, {
+            status: 'awaiting_review', phase: 'mapping',
+            errorCode: 'SOURCE_ACQUISITION_REVIEW_REQUIRED',
+            errorDetail: 'Source acquisition is held by a local-version decision or pending identity review; no archive processing was started'
+          });
+          return Promise.resolve(this.getJob(id));
+        }
+      }
+      return this.withPerformance(id, operation, () => this.runClaimedJob(id));
+    });
   }
 
   private async runClaimedJob(id: number): Promise<LocalIngestJob> {
