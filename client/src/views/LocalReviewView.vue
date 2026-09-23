@@ -1,6 +1,6 @@
 <template>
   <section class="review-page">
-    <header><p class="eyebrow">LOCAL REVIEW</p><h1>{{ eligibility?.title || session?.title || '具体未完成项' }} · 查看并处理</h1><p>{{ target?.kind === 'stage3' ? '压缩包 Stage3 原任务审核' : '本地目录接纳原计划审核' }}。文件处置先验证并执行，再记录实际结果，最后继续原任务。</p><RouterLink :to="backTo">返回原工作区</RouterLink></header>
+    <header><h2>{{ eligibility?.title || session?.title || '具体未完成项' }} · 查看并处理</h2><p>{{ target?.kind === 'stage3' ? 'Costuan入库原任务审核' : '本地目录接纳原计划审核' }}。文件处置先验证并执行，再记录实际结果，最后继续原任务。</p><RouterLink :to="backTo">返回原工作区</RouterLink></header>
     <p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
     <section v-if="eligibility && !eligibility.eligible && !session" class="panel"><h2>当前不能使用此审核入口</h2><p>{{ eligibility.reason }}</p><p>保留原状态与文件；这里不提供通用放行，也不会转换任务类型。</p></section>
     <section v-if="eligibility?.eligible && !session" class="panel"><h2>读取这项的审核证据</h2><p>仅检查当前未完成项，不扫描整个等待区。大型图集或原包校验需要时间；检查本身不移动、回收或接纳文件。</p><button class="primary" :disabled="busy" data-test="review-inspect" @click="inspect">{{ busy ? '正在提交检查…' : '生成本项审核预览' }}</button></section>
@@ -28,16 +28,22 @@
   </section>
 </template>
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
-import { RouterLink, useRoute, useRouter } from 'vue-router';
+import { computed, onActivated, onDeactivated, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { RouterLink } from 'vue-router';
+import { useAdmissionRoute } from '../utils/admission-route';
 import * as api from '../api/local-review';
 import { RequestError } from '../api/http';
 import type { LocalReviewAction, LocalReviewChoice, LocalReviewEligibility, LocalReviewExecuteInput, LocalReviewFile, LocalReviewFiles, LocalReviewReason, LocalReviewSession, LocalReviewTarget } from '../api/local-review';
-const route=useRoute(),router=useRouter(),creatorId=computed(()=>Number(route.query.creatorId));
+const {route,current:routeCurrent,router}=useAdmissionRoute('local-review', route=>JSON.stringify([route.query.kind,route.query.creatorId,route.query.jobId,route.query.planId,route.query.itemKey]));
+const creatorId=computed(()=>Number(route.query.creatorId));
 const target=computed<LocalReviewTarget|null>(()=>route.query.kind==='stage3'&&Number(route.query.jobId)>0?{kind:'stage3',jobId:Number(route.query.jobId)}:route.query.kind==='admission'&&typeof route.query.planId==='string'&&typeof route.query.itemKey==='string'?{kind:'admission',planId:route.query.planId,itemKey:route.query.itemKey}:null);
-const backTo=computed(()=>target.value?.kind==='admission'?{path:`/local-admission/${creatorId.value}`,query:{batch:target.value.planId}}:{path:'/archive-catalog',query:{workspace:'ingest'}});
+const backTo=computed(()=>target.value?.kind==='admission'
+  ? typeof route.query.collection==='string'
+    ? {name:'local-admission-workspace',query:{collection:route.query.collection}}
+    : {name:'local-admission',params:{creatorId:creatorId.value},query:{batch:target.value.planId}}
+  : {name:'costuan-admission',query:{workspace:'ingest',jobId:route.query.jobId,creatorId:route.query.creatorId}});
 const eligibility=ref<LocalReviewEligibility|null>(null),session=ref<LocalReviewSession|null>(null),files=ref<LocalReviewFiles|null>(null),choices=reactive<Record<string,LocalReviewChoice>>({}),busy=ref(false),filesLoading=ref(false),error=ref(''),notice=ref(''),note=ref(''),issuesOnly=ref(true),showConfirm=ref(false),confirmChecked=ref(false),quarantineChecked=ref(false),showRetry=ref(false),pending=ref<LocalReviewExecuteInput|null>(null);
-let generation=0,timer:ReturnType<typeof setTimeout>|undefined,failures=0,disposed=false;
+let generation=0,timer:ReturnType<typeof setTimeout>|undefined,failures=0,disposed=false,pageActive=true,wasDeactivated=false;
 const active=computed(()=>!!session.value&&['preparing','submitted','running'].includes(session.value.status));
 const quarantineCount=computed(()=>Object.values(choices).filter(choice=>choice.action==='quarantine').length);
 const statusLabel=(status:LocalReviewSession['status'])=>({preparing:'正在检查本项',ready:'审核预览 · 未执行',submitted:'已提交',running:'正在处理并恢复',interrupted:'中断 · 可继续原操作',completed:'原任务处理完成',failed:'处理失败 · 保留现场'}[status]);
@@ -52,7 +58,7 @@ function requestKey(suffix:string){try{const value=localStorage.getItem(key(suff
 function savePending(value:LocalReviewExecuteInput|null){pending.value=value;try{if(value)localStorage.setItem(key('pending'),JSON.stringify(value));else {localStorage.removeItem(key('pending'));localStorage.removeItem(key('execute'));};}catch{notice.value='浏览器不能保留重试凭据，请留在此页确认回执；服务端审核会话仍会保存。';}}
 function restorePending(){try{const value:unknown=JSON.parse(localStorage.getItem(key('pending'))||'null');if(!value||typeof value!=='object'||!('requestKey'in value)||typeof value.requestKey!=='string'||!('choices'in value)||!Array.isArray(value.choices)||!('note'in value)||typeof value.note!=='string')return;const restored:LocalReviewChoice[]=[];for(const choice of value.choices){if(!choice||typeof choice!=='object'||typeof choice.relativePath!=='string'||!['retain_original','retain_attachment','quarantine'].includes(choice.action)||!['pixel_limit','attachment','damaged','advertisement'].includes(choice.reason))return;restored.push(choice as LocalReviewChoice);}pending.value={requestKey:value.requestKey,confirmed:true,note:value.note,choices:restored,quarantineConfirmed:'quarantineConfirmed'in value&&value.quarantineConfirmed===true};for(const choice of restored)choices[choice.relativePath]=choice;note.value=value.note;}catch{/* Invalid local retry data never authorizes an operation. */}}
 function stopPoll(){if(timer)clearTimeout(timer);timer=undefined;}
-function schedule(){stopPoll();if(!active.value||disposed||failures>=3)return;timer=setTimeout(()=>void refresh(true),2500);}
+function schedule(){stopPoll();if(!active.value||disposed||!pageActive||!routeCurrent.value||failures>=3)return;timer=setTimeout(()=>void refresh(true),2500);}
 async function loadFiles(page=1){if(!session.value)return;filesLoading.value=true;const current=generation;try{const result=await api.fetchLocalReviewFiles(session.value.sessionId,page,issuesOnly.value);if(current===generation&&!disposed)files.value=result;}catch(cause){if(current===generation)error.value=cause instanceof Error?cause.message:'文件列表读取失败';}finally{if(current===generation)filesLoading.value=false;}}
 async function setSession(id:string){const current=generation;const result=await api.fetchLocalReviewSession(id);if(current!==generation||disposed)return;if(result.creatorId!==creatorId.value)throw new Error('审核会话不属于当前博主');if(!target.value||JSON.stringify(result.target)!==JSON.stringify(target.value))throw new Error('审核会话不属于当前选择的任务');session.value=result;if(result.confirmed){savePending(null);for(const choice of result.choices)choices[choice.relativePath]=choice;}else restorePending();await router.replace({query:{...route.query,session:id}});if(result.status!=='preparing')await loadFiles();schedule();}
 async function inspect(){
@@ -85,6 +91,8 @@ async function retry(){
   }finally{if(current===generation&&!disposed)busy.value=false;}
 }
 watch(issuesOnly,()=>void loadFiles());
+onDeactivated(()=>{pageActive=false;wasDeactivated=true;stopPoll();});
+onActivated(()=>{pageActive=true;if(wasDeactivated&&routeCurrent.value&&active.value&&!busy.value)void refresh(true);});
 watch(()=>JSON.stringify([route.query.kind,route.query.creatorId,route.query.jobId,route.query.planId,route.query.itemKey]),async()=>{const current=++generation;stopPoll();session.value=null;files.value=null;eligibility.value=null;pending.value=null;busy.value=false;showConfirm.value=false;showRetry.value=false;error.value='';for(const key of Object.keys(choices))delete choices[key];if(!target.value||!Number.isSafeInteger(creatorId.value)||creatorId.value<=0){error.value='请从具体未完成项的“查看并处理”进入，不接受任意文件路径。';return;}try{const result=await api.fetchLocalReviewTarget(target.value,creatorId.value);if(current!==generation||disposed)return;eligibility.value=result;const id=typeof route.query.session==='string'?route.query.session:result.sessionId;if(id)await setSession(id);}catch(cause){if(current===generation)error.value=cause instanceof Error?cause.message:'审核条件读取失败';}},{immediate:true});
 onBeforeUnmount(()=>{disposed=true;generation++;stopPoll();});
 </script>

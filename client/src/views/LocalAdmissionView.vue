@@ -1,6 +1,6 @@
 <template>
   <section class="admission-page">
-    <header><div><p class="eyebrow">LOCAL ADMISSION</p><h1>{{ creatorName || '本地目录' }} · 本地导入</h1><p>选择已分套的本机目录，集中确认后后台执行。无需上传媒体，也无需先登记来源。</p></div><RouterLink to="/local-admission">全部博主入库</RouterLink></header>
+    <header><div><h2>{{ creatorName || '本地目录' }} · 本地导入</h2><p>选择已分套的本机目录，集中确认后后台执行。无需上传媒体，也无需先登记来源。</p></div><RouterLink :to="{name:'local-admission-workspace'}">全部博主入库</RouterLink></header>
     <ol class="steps" aria-label="入库步骤"><li :class="{current:!batch}">1 选择博主与目录</li><li :class="{current:batch?.state==='draft'}">2 集中核对</li><li :class="{current:batch&&batch.state!=='draft'}">3 后台结果</li></ol>
     <p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
     <details class="panel recent"><summary>最近批次与历史记录</summary><div class="section-heading"><h2>当前 / 最近导入批次</h2><button :disabled="busy" @click="loadRecent">刷新批次</button><button :disabled="busy || active" @click="startNew">选择新一批目录</button></div><p v-if="!recent.length">还没有导入批次。</p><ul><li v-for="record in recent" :key="record.id"><button @click="openBatch(record.id)" :disabled="busy" :aria-pressed="batch?.id === record.id">{{ time(record.createdAt) }} · {{ record.totals.total }} 目录 · {{ stateLabel(record.state) }}</button></li></ul></details>
@@ -39,8 +39,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
-import { RouterLink, useRoute, useRouter } from 'vue-router';
+import { computed, onActivated, onDeactivated, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { RouterLink } from 'vue-router';
+import { useAdmissionRoute } from '../utils/admission-route';
 import AdmissionItemEditor from '../components/AdmissionItemEditor.vue';
 import AdmissionAcquisitionPolicy from '../components/AdmissionAcquisitionPolicy.vue';
 import AdmissionAdsPicker from '../components/AdmissionAdsPicker.vue';
@@ -52,7 +53,7 @@ import { fetchSourceEvidence } from '../api/source-evidence';
 import type { SourceEvidenceObservation } from '../api/source-evidence';
 import { RequestError } from '../api/http';
 import type { AdmissionAction, AdmissionActionKind, AdmissionBatch, AdmissionDirectories, AdmissionExecuteInput, AdmissionItem, AdmissionSettings, AdmissionState, AdmissionWork } from '../types/local-admission';
-const route = useRoute(), router = useRouter();
+const { route, current: routeCurrent, router } = useAdmissionRoute('local-admission', route => String(route.params.creatorId));
 const creatorId = computed(() => Number(route.params.creatorId));
 const creatorName = ref(''), settings = ref<AdmissionSettings | null>(null), directories = ref<AdmissionDirectories | null>(null), waitingRoot = ref(''), parent = ref(''), selectedNames = ref<string[]>([]);
 const sources = ref<SourceEvidenceObservation[]>([]), sourceEvidenceId = ref<number | null>(null), sourcePage = ref(1), sourceHasMore = ref(false);
@@ -60,7 +61,7 @@ const batch = ref<AdmissionBatch | null>(null), items = ref<AdmissionItem[]>([])
 const busy = ref(false), directoryLoading = ref(false), itemsLoading = ref(false), error = ref(''), notice = ref(''), group = ref('all'), page = ref(1), pickerKey = ref<string | null>(null), acceptExistingVersion = computed(() => pending.value?.acceptExistingVersion ?? true), showConfirmation = ref(false), confirmChecked = ref(false), adsChecked = ref(false), showResume = ref(false);
 const repreviewKeys = ref<string[]>([]);
 const isUnstarted = (item: AdmissionItem) => !isAdmissionCompletedLater(item)&&item.nextAction==='prepare_preview';
-const pending = ref<AdmissionExecuteInput | null>(null), pollFailures = ref(0); let mutationToken = 0, directoryRequest = 0, generation = 0, timer: ReturnType<typeof setTimeout> | undefined, disposed = false; const pageSize = 20;
+const pending = ref<AdmissionExecuteInput | null>(null), pollFailures = ref(0); let mutationToken = 0, directoryRequest = 0, generation = 0, timer: ReturnType<typeof setTimeout> | undefined, disposed = false, pageActive = true, wasDeactivated = false; const pageSize = 20;
 const groups = { A: '新独立作品候选', B: '已有作品候选，待本次确认', C: '已有同套 / 额外副本待选', D: '冲突 / 需要确认' };
 const actionLabels: Record<AdmissionActionKind,string> = { new: '新独立作品', existing:'复用已有作品', 'same-as':'与本批另一目录同套', skip:'跳过', defer:'暂缓' };
 const stateLabel = (state: AdmissionState) => ({draft:'预览草稿 · 未执行',queued:'已提交',running:'运行中',completed:'已完成',needs_review:'待审核',interrupted:'已中断 · 可核对后继续',failed:'执行失败'}[state]);
@@ -90,7 +91,7 @@ function rememberPending(value: AdmissionExecuteInput | null) { pending.value=va
 function restorePending() { pending.value=null; if(!batch.value) return; try { const raw=localStorage.getItem(storageKey(batch.value.id)); if(!raw) return; const parsed: unknown=JSON.parse(raw); if(!parsed||typeof parsed!=='object'||!('requestKey' in parsed)||typeof parsed.requestKey!=='string'||!('confirmed' in parsed)||parsed.confirmed!==true||!('actions' in parsed)||!Array.isArray(parsed.actions)||!('acceptExistingVersion' in parsed)||typeof parsed.acceptExistingVersion!=='boolean') return; const safeActions: AdmissionAction[]=[]; for(const value of parsed.actions) { if(!value||typeof value!=='object'||typeof value.key!=='string'||!['new','existing','same-as','skip','defer'].includes(value.action)) return; safeActions.push(value as AdmissionAction); } pending.value={requestKey:parsed.requestKey,confirmed:true,actions:safeActions,acceptExistingVersion:parsed.acceptExistingVersion,...('adsConfirmed' in parsed&&parsed.adsConfirmed===true?{adsConfirmed:true}:{}),...('advertisementDisposition' in parsed&&parsed.advertisementDisposition==='recycle_bin'?{advertisementDisposition:'recycle_bin'}:{})}; for(const action of safeActions) actions[action.key]=action; } catch { /* A malformed local retry copy cannot authorize execution. */ } }
 function confirmNewGroup() { if(draftLocked.value)return; for(const item of items.value.filter(item=>!item.currentDisposition&&item.group==='A'&&!item.conflicts.length&&!item.structureWarnings?.length&&actions[item.key]?.action==='defer')) actions[item.key]={key:item.key,action:'new',displayTitle:item.displayTitle,approvedAds:initialAds(item),acceptSourceIds:[],reason:'用户在确认页选择新独立作品'}; adsChecked.value=false; }
 function stopPoll() { if(timer)clearTimeout(timer); timer=undefined; }
-function schedulePoll() { stopPoll(); if(!active.value||disposed||pollFailures.value>=3)return; timer=setTimeout(()=>void refreshBatch(true),2500); }
+function schedulePoll() { stopPoll(); if(!active.value||disposed||!pageActive||!routeCurrent.value||pollFailures.value>=3)return; timer=setTimeout(()=>void refreshBatch(true),2500); }
 async function loadItems(id: string, current = generation) {
   itemsLoading.value=true;
   try {
@@ -176,6 +177,8 @@ async function repreview() {
 }
 async function startNew() { stopPoll();generation++;batch.value=null;items.value=[];pending.value=null;confirmChecked.value=false;adsChecked.value=false;showConfirmation.value=false;await router.replace({query:{...route.query,batch:undefined}});await browse(); }
 watch(group,()=>{page.value=1;});
+onDeactivated(()=>{pageActive=false;wasDeactivated=true;stopPoll();});
+onActivated(()=>{pageActive=true;if(wasDeactivated&&routeCurrent.value&&batch.value?.state!=='draft'&&!busy.value)void refreshBatch(true);});
 watch(()=>route.query.batch,id=>{if(typeof id==='string'&&id!==batch.value?.id){mutationToken++;busy.value=false;void openBatch(id);}else if(id===undefined&&batch.value){mutationToken++;busy.value=false;void startNew();}});
 watch(()=>route.params.creatorId,async()=>{
   const current=++generation;mutationToken++;stopPoll();busy.value=false;showConfirmation.value=false;showResume.value=false;

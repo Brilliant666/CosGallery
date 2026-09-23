@@ -339,8 +339,8 @@
             </a>
           </RouterLink>
 
-          <RouterLink v-if="authStore.canAccessSettings" class="flex items-center gap-[0.95rem] px-[1.2rem] py-[1rem] text-[0.98rem] text-text transition-colors duration-150 hover:bg-surface-hover" :to="{name:'local-admission-workspace'}" @click="closeMoreMenu">
-            <span class="i-fluent-folder-add-20-regular w-[1.18rem] h-[1.18rem] shrink-0" aria-hidden="true" /><span>本地入库</span>
+          <RouterLink v-if="authStore.canAccessSettings" class="flex items-center gap-[0.95rem] px-[1.2rem] py-[1rem] text-[0.98rem] text-text transition-colors duration-150 hover:bg-surface-hover" :class="route.meta.admission ? 'bg-surface-hover font-semibold' : ''" :aria-current="route.meta.admission ? 'page' : undefined" :to="{name:'creator-admission'}" @click="closeMoreMenu">
+            <span class="i-fluent-folder-add-20-regular w-[1.18rem] h-[1.18rem] shrink-0" aria-hidden="true" /><span>博主入库</span>
           </RouterLink>
 
           <RouterLink v-if="authStore.canAccessSettings" custom :to="{ name: 'settings' }" v-slot="{ href, navigate, isActive }">

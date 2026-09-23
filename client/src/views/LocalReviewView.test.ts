@@ -1,6 +1,6 @@
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMemoryHistory, createRouter } from 'vue-router';
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import LocalReviewView from './LocalReviewView.vue';
 import * as api from '../api/local-review';
 import { RequestError } from '../api/http';
@@ -15,11 +15,56 @@ const files:LocalReviewFile[]=[
 ];
 const session=(status:LocalReviewSession['status']='ready'):LocalReviewSession=>({sessionId:'review-synthetic',creatorId:17,target:{kind:'stage3',jobId:9},title:'本项中文作品',status,totalFiles:3050,issueCount:4,error:null,result:null,confirmed:!['ready','preparing'].includes(status),choices:[],phase:status,message:'仅当前项目',completedFileActions:0,fileActionCount:0});
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(b=>b.text()===text)!;
-async function render(query='&session=review-synthetic',entry='/local-review?kind=stage3&jobId=9&creatorId=17'){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-review',name:'local-review',component:LocalReviewView},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/local-admission/:creatorId',component:{template:'<p>接纳</p>'}}]});await router.push(`${entry}${query}`);const wrapper=mount(LocalReviewView,{global:{plugins:[router]}});await flushPromises();return {wrapper,router};}
+async function render(query='&session=review-synthetic',entry='/local-review?kind=stage3&jobId=9&creatorId=17'){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-review',name:'local-review',component:LocalReviewView},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/creator-admission/costuan',name:'costuan-admission',component:{template:'<p>Costuan入库</p>'}},{path:'/local-admission/:creatorId',name:'local-admission',component:{template:'<p>接纳</p>'}},{path:'/creator-admission/local',name:'local-admission-workspace',component:{template:'<p>多博主接纳</p>'}}]});await router.push(`${entry}${query}`);const wrapper=mount({components:{RouterView},template:'<RouterView v-slot="{Component,route}"><KeepAlive><component :is="Component" :key="[route.name,route.query.kind,route.query.creatorId,route.query.jobId,route.query.planId,route.query.itemKey].join()" /></KeepAlive></RouterView>'},{global:{plugins:[router]}});await flushPromises();return {wrapper,router};}
 describe('scoped review UI invokes original task instead of asking for JSON',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchLocalReviewTarget).mockResolvedValue({target:{kind:'stage3',jobId:9},creatorId:17,title:'本项中文作品',eligible:true,reason:'媒体审核暂停',sessionId:null});vi.mocked(api.createLocalReviewSession).mockResolvedValue({sessionId:'review-synthetic',status:'preparing'});vi.mocked(api.fetchLocalReviewSession).mockResolvedValue(session());vi.mocked(api.fetchLocalReviewFiles).mockResolvedValue({items:files,total:104,page:1,limit:50});vi.mocked(api.executeLocalReview).mockResolvedValue(session('submitted'));});
   afterEach(()=>vi.useRealTimers());
+  it('returns a Costuan review to its stage and exact job, without starting that job',async()=>{
+    const {wrapper}=await render();
+    expect(wrapper.get('header a').attributes('href')).toBe('/creator-admission/costuan?workspace=ingest&jobId=9&creatorId=17');
+    expect(api.createLocalReviewSession).not.toHaveBeenCalled();expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
+  it('returns an admission review to its original collection without confusing it with a Costuan job',async()=>{
+    const target={kind:'admission' as const,planId:'original-plan',itemKey:'one'};
+    vi.mocked(api.fetchLocalReviewTarget).mockResolvedValue({target,creatorId:17,title:'本地作品',eligible:true,reason:'待核对',sessionId:null});
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session(),target});
+    const {wrapper}=await render('&session=review-synthetic&collection=original-collection','/local-review?kind=admission&planId=original-plan&itemKey=one&creatorId=17');
+    expect(wrapper.get('header a').attributes('href')).toBe('/creator-admission/local?collection=original-collection');
+    expect(wrapper.text()).toContain('本地目录接纳原计划审核');expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
+  it('preserves unsent review choices when visiting Costuan and does not consume its query',async()=>{
+    const {wrapper,router}=await render();
+    await wrapper.findAll('tbody tr')[0]!.get('select').setValue('retain_original');
+    const reads=vi.mocked(api.fetchLocalReviewTarget).mock.calls.length;
+    await router.push('/creator-admission/costuan?workspace=ingest&jobId=99&creatorId=88');await flushPromises();
+    expect(wrapper.text()).toBe('Costuan入库');expect(api.fetchLocalReviewTarget).toHaveBeenCalledTimes(reads);
+    await router.push('/local-review?kind=stage3&jobId=9&creatorId=17&session=review-synthetic');await flushPromises();
+    expect(wrapper.findAll('tbody tr')[0]!.get('select').element.value).toBe('retain_original');
+    expect(api.fetchLocalReviewTarget).toHaveBeenCalledTimes(reads);expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
+  it('stops review polling offscreen and restores current job progress without repeating a write',async()=>{
+    vi.useFakeTimers();vi.mocked(api.fetchLocalReviewSession).mockResolvedValue(session('running'));
+    const {wrapper,router}=await render();
+    await router.push('/creator-admission/costuan?workspace=ingest');await flushPromises();
+    const reads=vi.mocked(api.fetchLocalReviewSession).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(8000);expect(api.fetchLocalReviewSession).toHaveBeenCalledTimes(reads);
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue(session('completed'));
+    await router.push('/local-review?kind=stage3&jobId=9&creatorId=17&session=review-synthetic');await flushPromises();
+    expect(api.fetchLocalReviewSession).toHaveBeenCalledTimes(reads+1);expect(wrapper.text()).toContain('原任务处理完成');
+    expect(api.executeLocalReview).not.toHaveBeenCalled();expect(api.retryLocalReview).not.toHaveBeenCalled();
+  });
+  it('restores a late inspect receipt to the review URL on return without starting a second inspection',async()=>{
+    let finish!:(value:{sessionId:string;status:LocalReviewSession['status']})=>void;
+    vi.mocked(api.createLocalReviewSession).mockReturnValue(new Promise(resolve=>{finish=resolve;}));
+    const {wrapper,router}=await render('');await wrapper.get('[data-test=review-inspect]').trigger('click');
+    await router.push('/creator-admission/costuan?workspace=ingest');await flushPromises();
+    finish({sessionId:'review-synthetic',status:'ready'});await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe('/creator-admission/costuan?workspace=ingest');
+    await router.push('/local-review?kind=stage3&jobId=9&creatorId=17');await flushPromises();
+    expect(router.currentRoute.value.query.session).toBe('review-synthetic');expect(wrapper.text()).toContain('审核预览 · 未执行');
+    expect(api.createLocalReviewSession).toHaveBeenCalledTimes(1);expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
   it('does not retain a review execution lock after an explicit HTTP 413 rejection',async()=>{
     vi.mocked(api.executeLocalReview).mockRejectedValueOnce(new RequestError('body too large',413));const {wrapper}=await render();await wrapper.findAll('tbody tr')[0]!.get('select').setValue('retain_original');await wrapper.get('[data-test=review-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=review-execute]').trigger('click');await flushPromises();expect(wrapper.text()).toContain('本项确认内容超过上限，服务端未接受');expect(wrapper.text()).not.toContain('提交回执未确认');expect([...Array(localStorage.length)].map((_,index)=>localStorage.key(index)).some(key=>key?.endsWith(':pending'))).toBe(false);expect(wrapper.findAll('tbody tr')[0]!.get('select').attributes('disabled')).toBeUndefined();expect(api.executeLocalReview).toHaveBeenCalledTimes(1);
   });

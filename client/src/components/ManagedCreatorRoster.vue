@@ -26,7 +26,7 @@
         <div class="card-metric"><small>本地作品</small><strong>{{ creator.localWorks }}</strong></div>
         <div class="card-metric"><small>已关联</small><strong>{{ creator.matchedWorks }}</strong></div>
         <div class="card-metric" :class="{missing:creator.missingWorks > 0}"><small>待收录</small><strong>{{ creator.missingWorks }}</strong></div>
-        <div class="card-actions"><button type="button" @click="openCreator(creator.id, 'ledger')">查看账本</button><button type="button" @click="emit('resource-catalog', creator.id)">资源目录</button><a :href="`/local-admission/${creator.id}`" :aria-label="`本地导入 ${creator.name}`">本地导入</a><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理资料</button></div>
+        <div class="card-actions"><button type="button" @click="openCreator(creator.id, 'ledger')">查看账本</button><button type="button" @click="emit('resource-catalog', creator.id)">资源目录</button><a :href="`/creator-admission/local/${creator.id}`" :aria-label="`本地导入 ${creator.name}`">本地导入</a><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理资料</button></div>
       </article>
     </div>
     <p v-if="payload && !payload.items.length">没有符合条件的博主。</p>

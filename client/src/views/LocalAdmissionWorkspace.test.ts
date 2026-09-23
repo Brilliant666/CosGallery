@@ -1,6 +1,6 @@
 import { enableAutoUnmount,flushPromises,mount } from '@vue/test-utils';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
-import { createMemoryHistory,createRouter } from 'vue-router';
+import { createMemoryHistory,createRouter,RouterView } from 'vue-router';
 import LocalAdmissionWorkspace from './LocalAdmissionWorkspace.vue';
 import * as api from '../api/local-admission';
 import { RequestError } from '../api/http';
@@ -21,10 +21,80 @@ const completedLater:AdmissionCurrentDisposition={status:'completed_later',batch
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(button=>button.text()===text)!;
 async function render(query='',showAll=true){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/local-admission',name:'local-admission-workspace',component:LocalAdmissionWorkspace},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}}]});await router.push(`/local-admission${query}`);const wrapper=mount(LocalAdmissionWorkspace,{global:{plugins:[router]}});await flushPromises();if(showAll)await showAllReview(wrapper);return {wrapper,router};}
 async function showAllReview(wrapper:ReturnType<typeof mount>){if(wrapper.find('[data-test=review-filter]').exists()){await wrapper.get('[data-test=review-filter]').setValue('all');await wrapper.findAll('[role=tab]')[1]?.trigger('click');}}
+async function renderKept(query=''){
+  const router=createRouter({history:createMemoryHistory(),routes:[
+    {path:'/creator-admission/local',name:'local-admission-workspace',component:LocalAdmissionWorkspace},
+    {path:'/creator-admission/costuan',name:'costuan-admission',component:{template:'<p>Costuan当前模块</p>'}},
+    {path:'/archive-catalog',component:{template:'<p>账本</p>'}}
+  ]});
+  await router.push(`/creator-admission/local${query}`);
+  const wrapper=mount({components:{RouterView},template:'<RouterView v-slot="{Component,route}"><KeepAlive><component :is="Component" :key="route.name" /></KeepAlive></RouterView>'},{global:{plugins:[router]}});
+  await flushPromises();return {wrapper,router};
+}
 describe('independent multi-creator admission workspace',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();sessionStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
   afterEach(()=>vi.useRealTimers());
+  it('keeps unsubmitted creator and directory choices when changing admission modules without rereading or creating a draft',async()=>{
+    const {wrapper,router}=await renderKept();
+    const first=wrapper.findAll('.folder')[0]!;
+    await first.get('.check input').setValue(true);await flushPromises();
+    await first.findAll('.directory-grid input')[0]!.setValue(false);
+    const reads=vi.mocked(api.fetchAdmissionDirectories).mock.calls.length;
+    await router.push('/creator-admission/costuan?workspace=source&collection=unrelated');await flushPromises();
+    expect(wrapper.text()).toBe('Costuan当前模块');
+    await router.push('/creator-admission/local');await flushPromises();
+    expect(wrapper.findAll('.folder')[0]!.get('.check input').element.checked).toBe(true);
+    expect(wrapper.findAll('.folder')[0]!.findAll('.directory-grid input').map(input=>input.element.checked)).toEqual([false,true]);
+    expect(api.fetchAdmissionDirectories).toHaveBeenCalledTimes(reads);expect(api.fetchAdmissionWorkspace).toHaveBeenCalledTimes(1);
+    expect(api.previewAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('keeps manual deferral and draft filters across Costuan and ignores its unrelated batch query',async()=>{
+    const {wrapper,router}=await renderKept('?collection=collection-one');await showAllReview(wrapper);
+    await wrapper.get('[data-test=admission-item-a-first] select').setValue('defer');
+    await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('a-first');
+    const reads=vi.mocked(api.fetchAdmissionCollection).mock.calls.length;
+    await router.push('/creator-admission/costuan?workspace=ingest&collection=unrelated');await flushPromises();
+    expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(reads);
+    await router.push('/creator-admission/local?collection=collection-one');await flushPromises();
+    expect(wrapper.get('[data-test=admission-item-a-first] select').element.value).toBe('defer');
+    expect(wrapper.get('input[aria-label="搜索本批作品或博主"]').element.value).toBe('a-first');
+    expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(reads);expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('stops hidden result polling and reads current progress on activation without resuming execution',async()=>{
+    vi.useFakeTimers();vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection('running'));
+    const {wrapper,router}=await renderKept('?collection=collection-one');
+    await router.push('/creator-admission/costuan?workspace=staging');await flushPromises();
+    const reads=vi.mocked(api.fetchAdmissionCollection).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(8000);expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(reads);
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection('completed'));
+    await router.push('/creator-admission/local?collection=collection-one');await flushPromises();
+    expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(reads+1);expect(wrapper.text()).toContain('本批执行已结束');
+    expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('does not let a late local collection response redirect the visible Costuan module',async()=>{
+    let finish!:(value:AdmissionCollection)=>void;
+    vi.mocked(api.fetchAdmissionCollection).mockReturnValue(new Promise(resolve=>{finish=resolve;}));
+    const {wrapper,router}=await renderKept('?collection=collection-one');
+    await router.push('/creator-admission/costuan?workspace=source');await flushPromises();
+    finish(collection('running'));await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe('/creator-admission/costuan?workspace=source');
+    expect(wrapper.text()).toBe('Costuan当前模块');expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('publishes a late preview receipt into its local tab URL only on return, without creating it again',async()=>{
+    let finish!:(value:AdmissionCollection)=>void;
+    vi.mocked(api.previewAdmissionCollection).mockReturnValue(new Promise(resolve=>{finish=resolve;}));
+    const {wrapper,router}=await renderKept();
+    await wrapper.findAll('.folder')[0]!.get('.check input').setValue(true);await flushPromises();
+    await wrapper.get('[data-test=collection-preview]').trigger('click');
+    await router.push('/creator-admission/costuan?workspace=source');await flushPromises();
+    finish(collection());await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe('/creator-admission/costuan?workspace=source');
+    await router.push('/creator-admission/local');await flushPromises();
+    expect(router.currentRoute.value.query.collection).toBe('collection-one');
+    expect(wrapper.text()).toContain('预览草稿');expect(api.previewAdmissionCollection).toHaveBeenCalledTimes(1);
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
   it.each(['fresh','previous automatic'] as const)('keeps an unresolved old A directory pending (%s), then preserves an explicit user choice',async mode=>{
     const record={...item('unknown-old'),currentDisposition:{status:'unresolved' as const},reviewFingerprint:'same'};
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),currentTotals:{completedLater:0,pending:1,unresolved:1},batches:[batch()]});vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[record],total:1,page:1,pageSize:100});
