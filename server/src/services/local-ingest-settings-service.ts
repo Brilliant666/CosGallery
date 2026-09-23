@@ -216,6 +216,11 @@ export class LocalIngestSettingsService {
     return password;
   }
 
+  // Explicit management editor read; keep ordinary settings/list responses small.
+  getEditableArchivePassword(): string {
+    return this.passwordState().password ?? '';
+  }
+
   save(input: LocalIngestSettings & { allowlist?: string[]; quarantineRoot?: string; archivePassword?: string; clearArchivePassword?: boolean }): LocalIngestSettingsView {
     const settings = normalizeSettings(localIngestSettingsSchema.parse(input), this.expectedGalleryRoot);
     const allowlist = [...new Set(allowlistSchema.parse(input.allowlist ?? parseStoredAllowlist(this.repository.get(LOCAL_INGEST_ALLOWLIST_SETTING_KEY))))];

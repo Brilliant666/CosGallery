@@ -1553,6 +1553,15 @@ router.get(
 );
 
 router.get(
+  '/admin/local-ingest/archive-password',
+  requireCapability('canManageLibrary', 'Admin access is required.'),
+  (_request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ archivePassword: localIngestSettingsService.getEditableArchivePassword() });
+  }
+);
+
+router.get(
   '/admin/local-ingest/operation',
   requireCapability('canAccessSettings', 'Admin access is required.'),
   (_request, response) => {

@@ -74,6 +74,10 @@
             来源检查后，仅为本地缺失的编号作品规划任务。新版插件从原分享精确保存到“我的网盘/cos待入库/规范博主名”，已存在的目标文件复用，再由你手动下载。历史中转任务仍保留；重新检查该博主可取得原分享方式，cos图集 不再是新流程的必需目录。
           </p>
         </div>
+        <div class="flex max-w-lg flex-col items-end gap-2" data-test="staging-refresh-tools">
+          <button type="button" data-test="refresh-stage2" class="h-9 rounded-xl border border-border bg-bg px-3.5 text-xs font-semibold text-text disabled:opacity-50" :disabled="stage2Refreshing" @click="refreshStage2Only">{{ stage2Refreshing ? '刷新中…' : '刷新状态' }}</button>
+          <p v-if="downloadNotice" data-test="download-notice" :role="downloadNoticeError ? 'alert' : 'status'" class="m-0 text-right text-xs leading-5" :class="downloadNoticeError ? 'text-red-700' : 'text-muted'">{{ downloadNotice }}</p>
+        </div>
       </div>
 
       <section class="mt-4" aria-label="暂存设置与高级任务操作">
@@ -92,14 +96,6 @@
       </div>
 
       </section>
-      <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
-        <p class="m-0">百度客户端完成下载 → <button type="button" class="text-accent underline" @click="workspace = 'ingest'">Costuan入库</button> → 扫描待入库 → 稳定文件确认后显示“本地已下载，待入库”。</p>
-        <button type="button" data-test="refresh-stage2" class="h-9 rounded-xl border border-border bg-bg px-3.5 text-xs font-semibold text-text disabled:opacity-50" :disabled="stage2Refreshing" @click="refreshStage2Only">
-          {{ stage2Refreshing ? '刷新中…' : '刷新状态' }}
-        </button>
-      </div>
-
-      <p v-if="downloadNotice" data-test="download-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ downloadNotice }}</p>
       <div v-if="bridgeToken" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm text-amber-900">
         <strong>请立即复制到 CostuanArchiveManager；页面刷新后不再显示。</strong>
         <div class="mt-2 flex gap-2">
@@ -113,14 +109,14 @@
 
     <section v-if="visited.has('ingest')" class="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-5" aria-label="Costuan入库" v-show="workspace === 'ingest'">
       <div class="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div class="min-w-0 flex-1">
           <p class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-muted">Stage 3</p>
           <h2 class="mt-1 mb-0 text-lg font-semibold">Costuan入库</h2>
           <p class="mt-1.5 mb-0 max-w-3xl text-sm leading-6 text-muted">
             “扫描待入库”只确认稳定文件并建立任务；“运行可处理任务”只消费已经存在的任务。目录、解压密码与环境检查可在入库设置中管理。
           </p>
         </div>
-        <button type="button" data-test="open-ingest-settings" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="!localIngestSettings || localIngestRequestBusy || settingsNeedRefresh" @click="openIngestSettings">入库设置与环境工具</button>
+        <button type="button" data-test="open-ingest-settings" class="ml-auto h-10 shrink-0 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:opacity-50" :disabled="!localIngestSettings || localIngestRequestBusy || settingsNeedRefresh" @click="openIngestSettings">入库设置与环境工具</button>
       </div>
 
       <div data-test="stage3-operation-card" class="mt-4 rounded-2xl border p-4" :class="stage3OperationActive ? 'border-blue-200 bg-blue-50' : 'border-border bg-bg'">
@@ -154,7 +150,7 @@
 
       <div v-if="stageActive('ingest') && settingsDraft" class="ingest-overlay">
       <section role="dialog" aria-modal="true" aria-labelledby="ingest-settings-title" data-test="ingest-settings-dialog" class="ingest-dialog" v-admission-dialog="{ close: closeIngestSettings, locked: localIngestRequestBusy }">
-      <h2 id="ingest-settings-title" class="m-0 text-lg font-semibold">入库设置与环境工具</h2>
+      <div class="flex flex-wrap items-center justify-between gap-3"><h2 id="ingest-settings-title" class="m-0 text-lg font-semibold">入库设置与环境工具</h2><span data-test="ingest-password-status" class="rounded-full px-3 py-1.5 text-xs font-semibold" :class="localIngestSettings?.archivePasswordConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-bg text-muted'">解压密码：{{ localIngestSettings?.archivePasswordConfigured ? '已配置' : '未配置' }}</span></div>
       <h3 class="mt-5 mb-2 text-sm font-semibold">目录与解压设置</h3>
       <div class="grid gap-3 lg:grid-cols-2">
         <label class="grid gap-1.5 text-xs font-semibold text-muted">正式图库
@@ -179,11 +175,12 @@
         </div>
       </div>
       <div class="mt-4 rounded-xl border border-border bg-bg p-3">
-        <label class="grid gap-2 text-sm font-semibold">解压密码 · {{ localIngestSettings?.archivePasswordConfigured ? '已配置' : '未配置' }}<span class="text-xs font-normal text-muted">{{ passwordSourceLabel }}</span>
-          <input v-model="passwordDraft" data-test="local-ingest-password" type="password" autocomplete="new-password" placeholder="留空保持现有密码" :disabled="stage3WriteLocked || clearPasswordDraft" class="h-11 rounded-xl border border-border bg-surface px-3 text-sm" />
+        <label class="grid gap-2 text-sm font-semibold">解压密码<span class="text-xs font-normal text-muted">{{ passwordSourceLabel }}</span>
+          <input v-model="passwordDraft" data-test="local-ingest-password" type="text" autocomplete="off" :disabled="stage3WriteLocked || !passwordLoaded" class="h-11 rounded-xl border border-border bg-surface px-3 text-sm" />
         </label>
-        <label class="mt-3 flex items-center gap-2 text-sm"><input v-model="clearPasswordDraft" data-test="clear-ingest-password" type="checkbox" :disabled="stage3WriteLocked" @change="passwordDraft = ''" />清除密码并停用环境变量回退</label>
-        <p class="mb-0 text-xs text-muted">已保存密码不会回显。密码保存在服务端本机，关闭弹窗将清除未保存的密码输入。</p>
+        <p v-if="passwordLoading" role="status" class="text-xs text-muted">正在读取当前解压密码…</p>
+        <p v-if="passwordError" role="alert" class="text-sm text-red-700">{{ passwordError }} <button type="button" data-test="retry-ingest-password" class="underline" @click="loadIngestPassword">重新读取</button></p>
+        <p class="mb-0 text-xs text-muted">可直接查看和修改当前解压密码；清空后保存即不使用密码。取消不会改变已保存配置。</p>
       </div>
       <h3 class="mt-5 mb-2 text-sm font-semibold">环境检查</h3>
       <div class="mt-4 flex flex-wrap gap-2">
@@ -192,11 +189,10 @@
       </div>
       <p class="text-xs text-muted">验证环境检查目录及工具草稿和已保存的密码状态，不发送或验证未保存的密码。回收站测试会按已保存配置创建并回收测试文件，不处理图集。</p>
       <p v-if="localIngestNotice" role="status" class="text-sm">{{ localIngestNotice }}</p>
-      <div class="ingest-dialog-actions"><button type="button" data-test="cancel-ingest-settings" :disabled="localIngestRequestBusy" @click="closeIngestSettings">取消</button><button type="button" data-test="save-local-ingest" :disabled="stage3WriteLocked" @click="saveLocalIngestConfig">保存设置</button></div>
+      <div class="ingest-dialog-actions"><button type="button" data-test="cancel-ingest-settings" :disabled="localIngestRequestBusy" @click="closeIngestSettings">取消</button><button type="button" data-test="save-local-ingest" :disabled="stage3WriteLocked || !passwordLoaded" @click="saveLocalIngestConfig">保存设置</button></div>
       </section></div>
       <div class="mt-4" v-if="localIngestSettings">        <div class="grid gap-2">
-          <div class="flex items-start justify-between gap-3 rounded-xl border border-border bg-bg p-3"><div><strong class="text-sm">当前允许处理的博主 · {{ localIngestSettings.allowlist.length }} 位</strong><p data-test="local-ingest-allowlist-summary" class="mt-2 mb-0 break-words text-sm text-muted">{{ localIngestSettings.allowlist.join('、') || '尚未设置名单' }}</p></div><button type="button" data-test="edit-ingest-allowlist" :disabled="stage3WriteLocked" @click="showAllowlistEditor = true">编辑名单</button></div>
-          <p v-if="localIngestAllowlistDirty" role="status" class="text-sm text-amber-700">名单尚未保存，扫描和批量运行暂不可用。<button type="button" data-test="retry-ingest-allowlist" :disabled="stage3WriteLocked" @click="saveIngestAllowlist">重试保存名单</button></p>
+          <div class="rounded-xl border border-border bg-bg p-3"><label class="grid gap-2 text-sm font-semibold">当前允许处理的博主 · {{ localIngestSettings.allowlist.length }} 位<textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" :disabled="stage3WriteLocked" rows="3" placeholder="每行一位博主" class="w-full rounded-xl border border-border bg-surface p-3 text-sm font-normal" /></label><div v-if="localIngestAllowlistDirty" class="mt-2 flex flex-wrap items-center gap-3"><p role="status" class="m-0 text-xs text-amber-700">名单尚未保存，扫描和批量运行暂不可用。</p><button type="button" data-test="save-ingest-allowlist" :disabled="stage3WriteLocked" @click="saveIngestAllowlist">保存名单</button><button type="button" data-test="cancel-ingest-allowlist" :disabled="stage3WriteLocked" @click="resetAllowlistDraft">取消修改</button></div></div>
           <div v-if="localIngestInboxCreators" data-test="inbox-creators-result" class="rounded-xl border border-border bg-bg p-3 text-xs leading-5 text-text">
             <p class="m-0 font-semibold">待入库：{{ localIngestInboxCreators.summary.matchedCreatorCount }} 位博主 / {{ localIngestInboxCreators.summary.archiveCount }} 个压缩包 / {{ inboxExistingJobCount }} 个已有任务</p>
             <p v-if="localIngestInboxCreators.unmapped.length" class="mt-1 mb-0 text-amber-700">{{ localIngestInboxCreators.unmapped.length }} 个目录无法唯一映射，未加入名单。</p>
@@ -269,7 +265,6 @@
       <p v-else class="mt-4 mb-0 rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">尚无Costuan入库任务。请先明确点击“扫描待入库”。</p>
     </section>
 
-    <div v-if="stageActive('ingest') && showAllowlistEditor" class="ingest-overlay"><section role="dialog" aria-modal="true" aria-labelledby="ingest-allowlist-title" data-test="ingest-allowlist-dialog" class="ingest-dialog ingest-list-dialog" v-admission-dialog="{ close: closeAllowlistEditor, locked: localIngestRequestBusy }"><h2 id="ingest-allowlist-title" class="mt-0 text-lg font-semibold">编辑允许处理的博主</h2><label class="grid gap-2 text-sm">每行一位博主<textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" :disabled="stage3WriteLocked" rows="8" class="rounded-xl border border-border bg-bg p-3" /></label><p class="text-xs text-muted">保存名单不会扫描或运行任务，也不会修改目录、工具或密码设置。</p><p v-if="localIngestNotice" role="status" class="text-sm">{{ localIngestNotice }}</p><div class="ingest-dialog-actions"><button type="button" data-test="cancel-ingest-allowlist" :disabled="localIngestRequestBusy" @click="closeAllowlistEditor">取消</button><button type="button" data-test="save-ingest-allowlist" :disabled="stage3WriteLocked" @click="saveIngestAllowlist">保存名单</button></div></section></div>
   </section>
 </template>
 <script setup lang="ts">
@@ -287,6 +282,7 @@ import {
   fetchLocalIngestJobs,
   fetchLocalIngestOperation,
   fetchLocalIngestSettings,
+  fetchLocalIngestArchivePassword,
   retryLocalIngestCleanup,
   runLocalIngestBatch,
   runLocalIngestJob,
@@ -327,6 +323,7 @@ const stage2Queue = ref<InstanceType<typeof Stage2CreatorQueue> | null>(null);
 const planningDownloads = ref(false);
 const stage2Refreshing = ref(false);
 const downloadNotice = ref('');
+const downloadNoticeError = ref(false);
 const bridgeConfigured = ref(false);
 const bridgeToken = ref('');
 const rotatingBridgeToken = ref(false);
@@ -342,24 +339,51 @@ const settingsNeedRefresh = ref(false);
 const localIngestAllowlistText = ref('');
 const settingsDraft = ref<LocalIngestSettings | null>(null);
 const passwordDraft = ref('');
-const clearPasswordDraft = ref(false);
-const showAllowlistEditor = ref(false);
+const originalPassword = ref('');
+const passwordLoading = ref(false);
+const passwordLoaded = ref(false);
+const passwordError = ref('');
+let passwordLoadGeneration = 0;
 const passwordSourceLabel = computed(() => localIngestSettings.value?.archivePasswordSource === 'local' ? '当前来源：本机保存的密码' : localIngestSettings.value?.archivePasswordSource === 'environment' ? '当前来源：服务端环境配置' : localIngestSettings.value?.archivePasswordConfigured ? '当前来源：服务端配置' : '当前未配置密码');
 
 function openIngestSettings() {
   if (!localIngestSettings.value || localIngestRequestBusy.value || settingsNeedRefresh.value) return;
   settingsDraft.value = { ...localIngestSettings.value, allowlist: [...localIngestSettings.value.allowlist] };
-  passwordDraft.value = '';
-  clearPasswordDraft.value = false;
   localIngestNotice.value = '';
+  void loadIngestPassword();
+}
+async function loadIngestPassword() {
+  if (!stageActive('ingest') || !settingsDraft.value) return;
+  const generation = ++passwordLoadGeneration;
+  const lifecycle = lifecycleGeneration;
+  passwordDraft.value = '';
+  originalPassword.value = '';
+  passwordLoaded.value = false;
+  passwordLoading.value = true;
+  passwordError.value = '';
+  try {
+    const result = await fetchLocalIngestArchivePassword();
+    if (!currentRead('ingest', lifecycle) || generation !== passwordLoadGeneration || !settingsDraft.value) return;
+    passwordDraft.value = result.archivePassword;
+    originalPassword.value = result.archivePassword;
+    passwordLoaded.value = true;
+  } catch {
+    if (!currentRead('ingest', lifecycle) || generation !== passwordLoadGeneration || !settingsDraft.value) return;
+    passwordError.value = '当前解压密码读取失败，暂不能保存设置。';
+  } finally {
+    if (generation === passwordLoadGeneration) passwordLoading.value = false;
+  }
 }
 function closeIngestSettings() {
+  ++passwordLoadGeneration;
   settingsDraft.value = null;
   passwordDraft.value = '';
-  clearPasswordDraft.value = false;
+  originalPassword.value = '';
+  passwordLoaded.value = false;
+  passwordLoading.value = false;
+  passwordError.value = '';
 }
-function closeAllowlistEditor() {
-  showAllowlistEditor.value = false;
+function resetAllowlistDraft() {
   localIngestAllowlistText.value = localIngestSettings.value?.allowlist.join('\n') ?? '';
 }
 const localIngestInboxCreators = ref<LocalIngestInboxCreatorsResult | null>(null);
@@ -752,7 +776,9 @@ function currentLocalIngestSettings(): LocalIngestSettingsInput {
   return {
     ...editableSettings,
     maxExtractionDepth: 2 as const,
-    ...(clearPasswordDraft.value ? { clearArchivePassword: true } : passwordDraft.value ? { archivePassword: passwordDraft.value } : {})
+    ...(passwordLoaded.value && passwordDraft.value !== originalPassword.value
+      ? passwordDraft.value ? { archivePassword: passwordDraft.value } : { clearArchivePassword: true }
+      : {})
   };
 }
 
@@ -805,7 +831,6 @@ async function saveIngestAllowlist() {
     localIngestSettings.value = settings;
     settingsNeedRefresh.value = false;
     localIngestAllowlistText.value = settings.allowlist.join('\n');
-    showAllowlistEditor.value = false;
     localIngestNotice.value = '名单已保存；其他配置未修改，没有执行扫描或入库。';
   } catch (reason) {
     if (!currentRead('ingest', generation)) return;
@@ -823,7 +848,7 @@ function cancelInboxCreatorDiscovery() {
 }
 
 async function saveLocalIngestConfig() {
-  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value || !settingsDraft.value) return;
+  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value || !settingsDraft.value || !passwordLoaded.value) return;
   const generation = lifecycleGeneration;
   localIngestRequestBusy.value = true;
   settingsNeedRefresh.value = true;
@@ -1082,9 +1107,11 @@ async function refreshStage2Only() {
   try {
     await loadDownloadTasks();
     if (!currentRead('staging', generation)) return;
-    downloadNotice.value = 'Stage 2 状态已刷新；未执行任务规划或本地扫描。';
+    downloadNoticeError.value = false;
+    downloadNotice.value = '状态已刷新，未执行任务规划或本地扫描。';
   } catch (reason) {
     if (!currentRead('staging', generation)) return;
+    downloadNoticeError.value = true;
     downloadNotice.value = reason instanceof Error ? reason.message : '无法刷新 Stage 2 状态';
   } finally {
     stage2Refreshing.value = false;
@@ -1096,6 +1123,7 @@ async function planDownloads(creatorId?: number) {
   const generation = lifecycleGeneration;
   planningDownloads.value = true;
   downloadNotice.value = '';
+  downloadNoticeError.value = false;
   try {
     const result = await planArchiveDownloadTasks(inboxRoot.value, creatorId ? [creatorId] : undefined);
     if (!currentRead('staging', generation)) return;
@@ -1106,6 +1134,7 @@ async function planDownloads(creatorId?: number) {
     if (!currentRead('staging', generation)) return;
   } catch (reason) {
     if (!currentRead('staging', generation)) return;
+    downloadNoticeError.value = true;
     downloadNotice.value = reason instanceof Error ? reason.message : '无法生成下载任务';
   } finally {
     planningDownloads.value = false;
@@ -1117,6 +1146,7 @@ async function rotateBridgeToken() {
   const generation = lifecycleGeneration;
   rotatingBridgeToken.value = true;
   downloadNotice.value = '';
+  downloadNoticeError.value = false;
   try {
     const result = await rotateArchiveBridgeToken();
     if (!currentRead('staging', generation)) return;
@@ -1125,6 +1155,7 @@ async function rotateBridgeToken() {
     downloadNotice.value = '新密钥已生成；旧密钥立即失效。';
   } catch (reason) {
     if (!currentRead('staging', generation)) return;
+    downloadNoticeError.value = true;
     downloadNotice.value = reason instanceof Error ? reason.message : '无法生成插件连接密钥';
   } finally {
     rotatingBridgeToken.value = false;
@@ -1133,13 +1164,13 @@ async function rotateBridgeToken() {
 
 async function copyBridgeToken() {
   await navigator.clipboard.writeText(bridgeToken.value);
+  downloadNoticeError.value = false;
   downloadNotice.value = '插件连接密钥已复制。';
 }
 
 let mounted = false;
 function suspendReads() {
   closeIngestSettings();
-  showAllowlistEditor.value = false;
   ++lifecycleGeneration;
   ++metadataLoadGeneration;
   ++localIngestLoadGeneration;

@@ -8,12 +8,22 @@ replacement cannot be submitted together. Passwords are not trimmed; newline,
 NUL and values over 1,024 characters are rejected.
 
 If no local decision exists, `LOCAL_INGEST_ARCHIVE_PASSWORD` remains the fallback.
-The API exposes only `archivePasswordConfigured` and `archivePasswordSource`
-(`environment`, `local`, `none`), never the password, ciphertext or key. Changing
+Ordinary settings/list APIs expose only `archivePasswordConfigured` and
+`archivePasswordSource` (`environment`, `local`, `none`). The explicit management-only
+`GET /api/admin/local-ingest/archive-password` endpoint returns the effective
+archive password (or an empty string) with `Cache-Control: no-store` when the
+settings editor opens. This is an editable archive configuration, not a masked API
+credential. Ciphertext and encryption keys are never returned. Changing
 the password does not scan, extract, execute a job or rewrite job history.
 Environment validation checks the saved effective password, not an unsaved
 password input. All settings mutations use the existing management capability,
 same-origin mutation protections and Stage 3 operation exclusivity.
+
+The editor displays the current value and only submits a password change when
+edited; opening or saving unchanged environment-backed settings does not create a
+local override. Clearing an existing value explicitly disables the saved password
+and environment fallback. Canceling/closing discards the draft. The value is not
+placed in URLs, ordinary status payloads, logs or exported reports.
 
 The local secret is AES-256-GCM authenticated ciphertext in the existing
 `app_settings` table (`local_ingest.archive_password`), with a versioned envelope.

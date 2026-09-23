@@ -451,6 +451,10 @@ export function fetchLocalIngestSettings() {
   return requestJson<import('../types/api').LocalIngestSettings>('/api/admin/local-ingest/settings');
 }
 
+export function fetchLocalIngestArchivePassword() {
+  return requestJson<{ archivePassword: string }>('/api/admin/local-ingest/archive-password');
+}
+
 export function saveLocalIngestSettings(settings: import('../types/api').LocalIngestSettingsInput) {
   return requestJson<import('../types/api').LocalIngestSettings>('/api/admin/local-ingest/settings', {
     method: 'PUT',

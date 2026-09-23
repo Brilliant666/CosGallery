@@ -20,9 +20,9 @@ const item=(key:string,group:AdmissionItem['group']='A'):AdmissionItem=>({key,di
 const completedLater:AdmissionCurrentDisposition={status:'completed_later',batchId:'later-batch',collectionId:'later-collection',planId:'later-batch',itemKey:'later-item',workId:201,localWorkId:301,postId:401,completedAt:'2026-09-22T08:35:00Z',completionTimeBasis:'batch_completed',evidence:'exact_directory_scope'};
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(button=>button.text()===text)!;
 async function render(query='',showAll=true){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/library/:creatorId',name:'canonical-creator',component:{template:'<p>博主图库</p>'}},{path:'/local-admission',name:'local-admission-workspace',component:LocalAdmissionWorkspace},{path:'/archive-catalog',component:{template:'<p>账本</p>'}},{path:'/library/:creatorId/works/:postId',name:'canonical-work-gallery',component:{template:'<p>图集</p>'}},{path:'/local-review',name:'local-review',component:{template:'<p>审核</p>'}}]});await router.push(`/local-admission${query}`);const wrapper=mount(LocalAdmissionWorkspace,{global:{plugins:[router]}});await flushPromises();if(showAll)await showAllReview(wrapper);return {wrapper,router};}
-async function closeReviewDialog(wrapper:ReturnType<typeof mount>){const dialog=wrapper.find('[data-test=review-item-dialog], [data-test=review-ads-dialog], [data-test=review-help-dialog], [data-test=collection-details-dialog]');if(dialog.exists())await dialog.get('.heading button').trigger('click');}
+async function closeReviewDialog(wrapper:ReturnType<typeof mount>){const dialog=wrapper.find('[data-test=admission-history-dialog], [data-test=review-ads-dialog], [data-test=review-help-dialog], [data-test=collection-details-dialog]');if(dialog.exists())await dialog.get('.heading button').trigger('click');}
 async function showAllReview(wrapper:ReturnType<typeof mount>){if(wrapper.find('[data-test=review-status-all]').exists()){await wrapper.get('[data-test=review-status-all]').trigger('click');await wrapper.get('[data-test=review-creator]').setValue('a');}}
-async function editItem(wrapper:ReturnType<typeof mount>,key:string){const selector=`[data-test="admission-item-${key}"]`;if(wrapper.find(selector).exists())return wrapper.get(selector);await closeReviewDialog(wrapper);let row=wrapper.find(`[data-item-key="${key}"]`);if(!row.exists()){await wrapper.get('[data-test=review-status-all]').trigger('click');await wrapper.get('[data-test=review-creator]').setValue('all');row=wrapper.find(`[data-item-key="${key}"]`);}if(!row.exists()){await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue(key);row=wrapper.find(`[data-item-key="${key}"]`);}await row.get('[data-test=review-item-open]').trigger('click');return wrapper.get(selector);}
+async function editItem(wrapper:ReturnType<typeof mount>,key:string){const selector=`[data-test="admission-item-${key}"]`;if(wrapper.find(selector).exists())return wrapper.get(selector);await closeReviewDialog(wrapper);if(!wrapper.find(selector).exists()){await wrapper.get('[data-test=review-status-all]').trigger('click');await wrapper.get('[data-test=review-creator]').setValue('all');}if(!wrapper.find(selector).exists())await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue(key);return wrapper.get(selector);}
 async function savedStateButton(wrapper:ReturnType<typeof mount>){await closeReviewDialog(wrapper);await wrapper.get('[data-test=collection-details-open]').trigger('click');return button(wrapper,'读取已保存状态');}
 async function openAds(wrapper:ReturnType<typeof mount>){await closeReviewDialog(wrapper);await wrapper.get('[data-test=review-ads-open]').trigger('click');return wrapper.get('[data-test=review-ads-dialog]');}
 async function renderKept(query=''){
@@ -240,11 +240,16 @@ describe('independent multi-creator admission workspace',()=>{
     expect(wrapper.get('[data-ad-filename="新增广告.url"] input').element.checked).toBe(true);
     expect(api.repreviewAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
-  it('starts with pending items across creators, supports search and keeps compact rows until explicitly opened',async()=>{
+  it('starts with pending items across creators and shows their boundary and action controls inline',async()=>{
     const {wrapper}=await render('?collection=collection-one',false);
     expect(wrapper.findAll('.review-row').map(card=>card.attributes('data-item-key'))).toEqual(['a-candidate','b-complex']);
     expect(wrapper.find('[data-test=collection-select-safe]').exists()).toBe(false);
     expect(wrapper.get('[data-test=collection-repreview]').text()).toBe('重新读取并核对');
+    expect(wrapper.get('[data-item-key="b-complex"]').text()).toContain('目录边界提示');
+    expect(wrapper.get('[data-item-key="b-complex"]').text()).toContain('多个含媒体子目录');
+    expect(wrapper.findAll('.review-row .item-card select')).toHaveLength(2);
+    expect(wrapper.find('[data-test=review-item-open]').exists()).toBe(false);
+    expect(wrapper.find('[data-test=review-item-dialog]').exists()).toBe(false);
     await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('博主乙');
     expect(wrapper.findAll('.review-row')).toHaveLength(1);
     await wrapper.get('input[aria-label="搜索本批作品或博主"]').setValue('');
@@ -253,23 +258,25 @@ describe('independent multi-creator admission workspace',()=>{
     expect(wrapper.findAll('.review-row').every(row=>!row.element.hasAttribute('open'))).toBe(true);
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
-  it('keeps the current item editor stable when its choice leaves the filter, then closes on a different collection',async()=>{
+  it('keeps an edited inline row until a deliberate filter change so its title can be finished',async()=>{
     const {wrapper,router}=await render('?collection=collection-one',false);
-    expect(wrapper.find('.item-card').exists()).toBe(false);
-    await wrapper.get('[data-item-key="a-candidate"] [data-test=review-item-open]').trigger('click');
-    await wrapper.get('[data-test=review-item-dialog] select').setValue('new');
-    expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(false);
-    expect(wrapper.get('[data-test=review-item-dialog]').text()).toContain('a-candidate');
-    expect(wrapper.get('[data-test=review-item-dialog] select').element.value).toBe('new');
-    await closeReviewDialog(wrapper);await wrapper.get('[data-test=review-status-selected]').trigger('click');
+    await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('new');
+    expect(wrapper.get('[data-test=admission-item-a-candidate] select').element.value).toBe('new');
+    await wrapper.get('[data-test=admission-item-a-candidate] input[maxlength="500"]').setValue('本次确认名称');
+    expect(wrapper.get('[data-test=review-status-pending]').text()).toContain('1');
+    await wrapper.get('[data-test=review-status-selected]').trigger('click');
     expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(true);
-    await editItem(wrapper,'a-candidate');await router.push('/local-admission?collection=another');await flushPromises();
+    expect(wrapper.get('[data-test=admission-item-a-candidate] input[maxlength="500"]').element.value).toBe('本次确认名称');
+    await wrapper.get('[data-test=review-status-pending]').trigger('click');
+    expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(false);
+    await router.push('/local-admission?collection=another');await flushPromises();
     expect(wrapper.find('[data-test=review-item-dialog]').exists()).toBe(false);
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('opens accessible help, ads and batch details without a write and restores focus on Escape',async()=>{
     const {wrapper}=await render('?collection=collection-one',false),host=wrapper.element;document.body.appendChild(host);
-    for(const [open,dialog] of [['review-help-open','review-help-dialog'],['review-ads-open','review-ads-dialog'],['collection-details-open','collection-details-dialog']]){
+    expect(wrapper.get('.step-tools').findAll('button').map(entry=>entry.text())).toEqual(['入库记录','批次详情','核对说明']);
+    for(const [open,dialog] of [['admission-history-open','admission-history-dialog'],['review-help-open','review-help-dialog'],['review-ads-open','review-ads-dialog'],['collection-details-open','collection-details-dialog']]){
       const trigger=wrapper.get(`[data-test=${open}]`);(trigger.element as HTMLElement).focus();await trigger.trigger('click');await flushPromises();
       expect(wrapper.get(`[data-test=${dialog}]`).attributes('aria-modal')).toBe('true');
       expect(wrapper.get(`[data-test=${dialog}]`).find('details').exists()).toBe(false);
@@ -279,7 +286,7 @@ describe('independent multi-creator admission workspace',()=>{
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.refreshAdmissionCollectionDirectories).not.toHaveBeenCalled();
     wrapper.unmount();host.remove();
   });
-  it('closes the old editor when a reread publishes a new draft without carrying its component identity',async()=>{
+  it('replaces the inline editors when a reread publishes a new draft without carrying old component identity',async()=>{
     const next={...collection(),id:'fresh-draft',batches:[batch('fresh')]};
     vi.mocked(api.refreshAdmissionCollectionDirectories).mockResolvedValue(next);
     vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>id==='fresh-draft'?next:collection());
@@ -316,17 +323,32 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(current);
     vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[current],page:1,pageSize:20,total:1});
     const {wrapper,router}=await render('?collection=collection-one',false);
-    const historyToggle=wrapper.get('button[aria-controls="admission-history"]');
-    expect(historyToggle.attributes('aria-expanded')).toBe('false');
+    const historyToggle=wrapper.get('[data-test=admission-history-open]');
+    expect(historyToggle.attributes('aria-haspopup')).toBe('dialog');
+    expect(wrapper.find('.history').exists()).toBe(false);
     await historyToggle.trigger('click');
-    expect(historyToggle.attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('.history').attributes('role')).toBe('dialog');
     expect(wrapper.get('.history').text()).toContain('博主甲、博主乙');
     expect(wrapper.get('.history').text()).toContain('已有 1 份后续预览');
-    await historyToggle.trigger('click');
-    expect(historyToggle.attributes('aria-expanded')).toBe('false');
+    await closeReviewDialog(wrapper);
+    expect(wrapper.find('.history').exists()).toBe(false);
     await button(wrapper,'查看后续预览 · newer').trigger('click');await flushPromises();
     expect(router.currentRoute.value.query.collection).toBe('newer');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('closes history when opening a saved batch or leaving the module without executing a task',async()=>{
+    vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[{...collection(),id:'history-batch'}],page:1,pageSize:20,total:1});
+    vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>({...collection(),id}));
+    const {wrapper,router}=await renderKept('?collection=collection-one');
+    await wrapper.get('[data-test=admission-history-open]').trigger('click');
+    await wrapper.get('[data-test=admission-history-dialog] li button').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query.collection).toBe('history-batch');
+    expect(wrapper.find('[data-test=admission-history-dialog]').exists()).toBe(false);
+    await wrapper.get('[data-test=admission-history-open]').trigger('click');
+    await router.push('/creator-admission/costuan');await flushPromises();
+    await router.push('/creator-admission/local?collection=history-batch');await flushPromises();
+    expect(wrapper.find('[data-test=admission-history-dialog]').exists()).toBe(false);
+    expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('keeps exact confirmation scope collapsed under per-creator summaries and omits UI provenance from execution',async()=>{
     const {wrapper}=await render('?collection=collection-one',false);
@@ -612,8 +634,9 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.fetchAdmissionWorkspace).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
     vi.mocked(api.fetchAdmissionCollections).mockRejectedValueOnce(new Error('记录暂不可读'));
     const {wrapper}=await render('',false);
-    expect(wrapper.text()).toContain('读取等待区…');expect(wrapper.text()).toContain('记录暂不可读');
+    expect(wrapper.text()).toContain('读取等待区…');await wrapper.get('[data-test=admission-history-open]').trigger('click');expect(wrapper.text()).toContain('记录暂不可读');
     expect(wrapper.text()).not.toContain('尚无多博主批次');expect(wrapper.text()).not.toContain('等待区目前没有');
+    await closeReviewDialog(wrapper);
     finish({...workspace,items:[]});await flushPromises();
     expect(wrapper.text()).toContain('等待区目前没有');expect(wrapper.find('[data-test=collection-preview]').exists()).toBe(false);
     expect(wrapper.find('[data-test=select-matched-creators]').exists()).toBe(false);
