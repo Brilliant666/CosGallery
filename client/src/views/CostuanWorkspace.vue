@@ -26,7 +26,6 @@
         <p class="m-0 text-sm text-muted">此处列出有来源或检查记录的博主，不是全部博主名单。选择与检查需明确操作。</p>
       </div>
       <p v-if="metadataNotice" data-test="metadata-notice" class="mt-3 mb-0 rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text">{{ metadataNotice }}</p>
-      <SourceReuseReview :active="stageActive('source')" />
 
       <p v-if="metadataLoading" role="status" class="mt-3 text-sm text-muted">正在读取来源与检查任务…</p>
       <p v-if="metadataError" role="alert" class="mt-3 text-sm text-red-700">{{ metadataError }}</p>
@@ -77,7 +76,8 @@
         </div>
       </div>
 
-      <details class="mt-4"><summary class="cursor-pointer font-semibold">暂存设置与高级任务操作</summary>
+      <section class="mt-4" aria-label="暂存设置与高级任务操作">
+      <h3 class="m-0 text-sm font-semibold">暂存设置与高级任务操作</h3>
       <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(18rem,1fr)_auto_auto]">
         <label class="grid gap-1.5 text-xs font-semibold text-muted">
           本地待入库根目录（账本）
@@ -91,7 +91,7 @@
         </button>
       </div>
 
-      </details>
+      </section>
       <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
         <p class="m-0">百度客户端完成下载 → <button type="button" class="text-accent underline" @click="workspace = 'ingest'">Costuan入库</button> → 扫描待入库 → 稳定文件确认后显示“本地已下载，待入库”。</p>
         <button type="button" data-test="refresh-stage2" class="h-9 rounded-xl border border-border bg-bg px-3.5 text-xs font-semibold text-text disabled:opacity-50" :disabled="stage2Refreshing" @click="refreshStage2Only">
@@ -187,22 +187,21 @@
           <label class="grid gap-1.5 text-xs font-semibold text-muted">允许处理的博主（每行一位）
             <textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" :disabled="stage3WriteLocked" :title="stage3LockReason" rows="3" class="rounded-xl border border-border bg-bg px-3.5 py-3 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
           </label>
-          <div>
-            <button type="button" data-test="discover-inbox-creators" class="h-9 rounded-xl border border-border bg-bg px-3.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="discoverLocalIngestInboxCreators">读取待入库博主</button>
-          </div>
           <div v-if="localIngestInboxCreators" data-test="inbox-creators-result" class="rounded-xl border border-border bg-bg p-3 text-xs leading-5 text-text">
             <p class="m-0 font-semibold">待入库：{{ localIngestInboxCreators.summary.matchedCreatorCount }} 位博主 / {{ localIngestInboxCreators.summary.archiveCount }} 个压缩包 / {{ inboxExistingJobCount }} 个已有任务</p>
             <p v-if="localIngestInboxCreators.unmapped.length" class="mt-1 mb-0 text-amber-700">{{ localIngestInboxCreators.unmapped.length }} 个目录无法唯一映射，未加入名单。</p>
             <div class="mt-2 flex flex-wrap gap-2">
-              <button type="button" data-test="append-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked || localIngestInboxCreators.detected.length === 0" :title="stage3LockReason" @click="applyDiscoveredInboxCreators('append')">追加到当前名单</button>
-              <button type="button" data-test="replace-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked || localIngestInboxCreators.detected.length === 0" :title="stage3LockReason" @click="applyDiscoveredInboxCreators('replace')">替换当前名单</button>
-              <button type="button" data-test="cancel-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked" :title="stage3LockReason" @click="cancelInboxCreatorDiscovery">取消</button>
+              <button type="button" data-test="append-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked || localIngestInboxCreators.detected.length === 0" :title="stage3LockReason" @click="applyDiscoveredInboxCreators('append')">追加并保存配置</button>
+              <button type="button" data-test="replace-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked || localIngestInboxCreators.detected.length === 0" :title="stage3LockReason" @click="applyDiscoveredInboxCreators('replace')">替换并保存配置</button>
+              <button type="button" data-test="cancel-inbox-creators" class="rounded-lg border border-border bg-surface px-3 py-1.5 font-semibold disabled:opacity-50" :disabled="stage3WriteLocked" :title="stage3LockReason" @click="cancelInboxCreatorDiscovery">关闭读取结果</button>
             </div>
+            <p class="mt-2 mb-0 text-muted">追加或替换后保存当前名单和页面配置，不会自动扫描或运行入库任务。</p>
             <details v-if="localIngestInboxCreators.unmapped.length" class="mt-2"><summary class="cursor-pointer font-semibold">查看详情</summary><ul class="mt-1 mb-0 grid gap-1 pl-5"><li v-for="entry in localIngestInboxCreators.unmapped" :key="entry.folderName">{{ entry.folderName }} · {{ entry.archiveCount }} 个压缩包 · {{ entry.mappingReason }}</li></ul></details>
           </div>
         </div>
 </div>
       <div class="mt-4 flex flex-wrap gap-2">
+        <button type="button" data-test="discover-inbox-creators" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="discoverLocalIngestInboxCreators">读取待入库博主</button>
         <button type="button" data-test="save-local-ingest" class="h-10 rounded-xl border border-border bg-bg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings" :title="stage3LockReason" @click="saveLocalIngestConfig">保存配置</button>
         <button type="button" data-test="scan-local-ingest" class="h-10 rounded-xl bg-accent px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="scanLocalInbox">扫描待入库</button>
         <button type="button" data-test="run-local-ingest-batch" class="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked || !localIngestSettings || localIngestAllowlistDirty" :title="stage3ActionTitle" @click="runLocalBatch()">运行可处理任务</button>
@@ -268,7 +267,6 @@ import { useRoute, useRouter } from 'vue-router';
 import IngestPerformance from '../components/IngestPerformance.vue';
 import FirstCollectionSelector from '../components/FirstCollectionSelector.vue';
 import Stage2CreatorQueue from '../components/Stage2CreatorQueue.vue';
-import SourceReuseReview from '../components/SourceReuseReview.vue';
 import { computed, onActivated, onDeactivated, onBeforeUnmount, onMounted, nextTick, ref, watch } from 'vue';
 
 import {
@@ -710,7 +708,7 @@ function currentLocalIngestSettings(): LocalIngestSettings {
 }
 
 async function discoverLocalIngestInboxCreators() {
-  if (!stageActive('ingest')) return;
+  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value) return;
   const generation = lifecycleGeneration;
   localIngestRequestBusy.value = true;
   localIngestOperation.value = optimisticLocalIngestOperation('running', 'discover-creators', '正在读取待入库博主');
@@ -729,8 +727,8 @@ async function discoverLocalIngestInboxCreators() {
   }
 }
 
-function applyDiscoveredInboxCreators(mode: 'append' | 'replace') {
-  if (!localIngestInboxCreators.value) return;
+async function applyDiscoveredInboxCreators(mode: 'append' | 'replace') {
+  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value || !localIngestInboxCreators.value?.detected.length) return;
   const discovered = localIngestInboxCreators.value.detected
     .map((entry) => entry.canonicalName)
     .filter((name): name is string => Boolean(name));
@@ -743,9 +741,7 @@ function applyDiscoveredInboxCreators(mode: 'append' | 'replace') {
     next.push(name);
   }
   localIngestAllowlistText.value = next.join('\n');
-  localIngestNotice.value = mode === 'replace'
-    ? '已用待入库博主替换页面草稿；请确认后点击“保存配置”。'
-    : '已将待入库博主追加到页面草稿；请确认后点击“保存配置”。';
+  await saveLocalIngestConfig();
 }
 
 function cancelInboxCreatorDiscovery() {
@@ -753,7 +749,7 @@ function cancelInboxCreatorDiscovery() {
 }
 
 async function saveLocalIngestConfig() {
-  if (!stageActive('ingest')) return;
+  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value) return;
   const generation = lifecycleGeneration;
   localIngestRequestBusy.value = true;
   localIngestOperation.value = optimisticLocalIngestOperation('running', 'save-settings', '正在保存 Stage 3 配置');

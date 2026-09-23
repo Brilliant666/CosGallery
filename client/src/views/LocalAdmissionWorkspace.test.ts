@@ -273,8 +273,14 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(current);
     vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[current],page:1,pageSize:20,total:1});
     const {wrapper,router}=await render('?collection=collection-one',false);
+    const historyToggle=wrapper.get('button[aria-controls="admission-history"]');
+    expect(historyToggle.attributes('aria-expanded')).toBe('false');
+    await historyToggle.trigger('click');
+    expect(historyToggle.attributes('aria-expanded')).toBe('true');
     expect(wrapper.get('.history').text()).toContain('博主甲、博主乙');
     expect(wrapper.get('.history').text()).toContain('已有 1 份后续预览');
+    await historyToggle.trigger('click');
+    expect(historyToggle.attributes('aria-expanded')).toBe('false');
     await button(wrapper,'查看后续预览 · newer').trigger('click');await flushPromises();
     expect(router.currentRoute.value.query.collection).toBe('newer');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
@@ -563,7 +569,7 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.fetchAdmissionWorkspace).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
     vi.mocked(api.fetchAdmissionCollections).mockRejectedValueOnce(new Error('记录暂不可读'));
     const {wrapper}=await render('',false);
-    expect(wrapper.text()).toContain('尚未读取');expect(wrapper.text()).toContain('记录暂不可读');
+    expect(wrapper.text()).toContain('读取等待区…');expect(wrapper.text()).toContain('记录暂不可读');
     expect(wrapper.text()).not.toContain('尚无多博主批次');expect(wrapper.text()).not.toContain('等待区目前没有');
     finish({...workspace,items:[]});await flushPromises();
     expect(wrapper.text()).toContain('等待区目前没有');expect(wrapper.find('[data-test=collection-preview]').exists()).toBe(false);
@@ -571,7 +577,7 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.fetchAdmissionWorkspace).mockRejectedValueOnce(new Error('无法访问等待区'));
     await button(wrapper,'重新读取等待区').trigger('click');await flushPromises();
     expect(wrapper.text()).toContain('读取失败');expect(wrapper.text()).not.toContain('等待区目前没有');
-    expect(wrapper.text()).toContain('R:/待入库');expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
+    expect((wrapper.get('.settings input').element as HTMLInputElement).value).toBe('R:/待入库');expect(api.previewAdmissionCollection).not.toHaveBeenCalled();
   });
   it('explains disabled selection inline and does not let an unselected unknown identity block a valid range',async()=>{
     const {wrapper}=await render('',false);

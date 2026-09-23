@@ -751,7 +751,8 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.text()).toContain('图片 24');
   });
 
-  it('reads inbox creators without saving and appends unique canonical names to the draft', async () => {
+  it('reads inbox creators without saving and explicitly appends and saves unique canonical names', async () => {
+    vi.mocked(saveLocalIngestSettings).mockImplementation(async (settings) => ({ ...settings }));
     const wrapper = await mountCostuan('ingest');
     await flushPromises();
     const allowlist = wrapper.get('[data-test="local-ingest-allowlist"]');
@@ -767,27 +768,60 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.get('[data-test="inbox-creators-result"]').text()).toContain('未知目录');
 
     await wrapper.get('[data-test="append-inbox-creators"]').trigger('click');
+    await flushPromises();
 
     expect((allowlist.element as HTMLTextAreaElement).value).toBe('火龙果羊\n女主K\n新博主');
-    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-test="scan-local-ingest"]').attributes()).toHaveProperty('disabled');
-    expect(wrapper.text()).toContain('请确认后点击“保存配置”');
+    expect(saveLocalIngestSettings).toHaveBeenCalledExactlyOnceWith({ ...localIngestSettings, allowlist: ['火龙果羊', '女主K', '新博主'] });
+    expect(wrapper.get('[data-test="scan-local-ingest"]').attributes()).not.toHaveProperty('disabled');
+    expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('配置已保存');
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
   });
 
-  it('replaces only the unsaved allowlist draft after explicit confirmation', async () => {
+  it('explicitly replaces the allowlist and saves the current page settings without running tasks', async () => {
+    vi.mocked(saveLocalIngestSettings).mockImplementation(async (settings) => ({ ...settings }));
     const wrapper = await mountCostuan('ingest');
     await flushPromises();
+    await wrapper.get('[data-test="local-ingest-stable-seconds"]').setValue(60);
 
     await wrapper.get('[data-test="discover-inbox-creators"]').trigger('click');
     await flushPromises();
     await wrapper.get('[data-test="replace-inbox-creators"]').trigger('click');
+    await flushPromises();
 
     expect((wrapper.get('[data-test="local-ingest-allowlist"]').element as HTMLTextAreaElement).value)
       .toBe('女主K\n新博主');
-    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
+    expect(saveLocalIngestSettings).toHaveBeenCalledExactlyOnceWith({ ...localIngestSettings, allowlist: ['女主K', '新博主'], fileStableSeconds: 60 });
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
 
     await wrapper.get('[data-test="cancel-inbox-creators"]').trigger('click');
     expect(wrapper.find('[data-test="inbox-creators-result"]').exists()).toBe(false);
+  });
+
+  it('locks append and replace during saving and keeps a failed list draft available for retry', async () => {
+    let rejectSave!: (reason: Error) => void;
+    vi.mocked(saveLocalIngestSettings).mockReturnValueOnce(new Promise((_, reject) => { rejectSave = reject; }));
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    await wrapper.get('[data-test="discover-inbox-creators"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="append-inbox-creators"]').trigger('click');
+    for (const action of ['append-inbox-creators', 'replace-inbox-creators', 'discover-inbox-creators', 'save-local-ingest', 'scan-local-ingest']) {
+      expect(wrapper.get(`[data-test="${action}"]`).attributes()).toHaveProperty('disabled');
+    }
+    await wrapper.get('[data-test="append-inbox-creators"]').trigger('click');
+    expect(saveLocalIngestSettings).toHaveBeenCalledTimes(1);
+    rejectSave(new Error('配置未保存，请重试'));
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('配置未保存，请重试');
+    expect((wrapper.get('[data-test="local-ingest-allowlist"]').element as HTMLTextAreaElement).value).toBe('火龙果羊\n女主K\n新博主');
+    expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).not.toHaveProperty('disabled');
+    expect(wrapper.get('[data-test="scan-local-ingest"]').attributes()).toHaveProperty('disabled');
+    expect(wrapper.get('[data-test="run-local-ingest-batch"]').attributes()).toHaveProperty('disabled');
+    expect(scanLocalIngestInbox).not.toHaveBeenCalled();
+    expect(runLocalIngestBatch).not.toHaveBeenCalled();
   });
 
   it('labels a stale recovered job as resumable', async () => {
