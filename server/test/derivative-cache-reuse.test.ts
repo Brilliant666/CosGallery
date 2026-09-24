@@ -49,6 +49,9 @@ describe.sequential('derivative cache reuse audit', () => {
         const output = path.join(directory, overrides[field]!);
         await fs.mkdir(path.dirname(output), { recursive: true });
         await fs.writeFile(output, `synthetic derivative ${relative}`);
+        const record = field === 'thumbnailPath' ? repositories.imageRepository.getByThumbnailPath(overrides[field]!) : repositories.imageRepository.getByPreviewPath(overrides[field]!);
+        const { stampDerivative, imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+        await stampDerivative(output, imageDerivativeVersion(record!, field === 'thumbnailPath' ? 'thumbnail' : 'preview'));
       });
     }
   });
@@ -84,6 +87,8 @@ describe.sequential('derivative cache reuse audit', () => {
     for (const dir of [config.thumbnailsDir, config.previewsDir]) {
       await fs.mkdir(path.dirname(path.join(dir, record.thumbnail_path)), { recursive: true });
       await fs.writeFile(path.join(dir, record.thumbnail_path), 'existing');
+      const { stampDerivative, imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+      await stampDerivative(path.join(dir, record.thumbnail_path), imageDerivativeVersion(record, dir === config.thumbnailsDir ? 'thumbnail' : 'preview'));
     }
     let release!: () => void;
     const blocked = lock.runExclusive(() => new Promise<void>((resolve) => { release = resolve; }));
@@ -93,7 +98,8 @@ describe.sequential('derivative cache reuse audit', () => {
         const response = await requestTestApp(app(), 'GET', url);
         expect(response.status).toBe(200);
         expect(response.body).toBe('existing');
-        expect(response.headers.get('cache-control')).toBe('public, max-age=604800, immutable');
+        // Legacy unversioned links are readable but cannot be immutable keys.
+        expect(response.headers.get('cache-control')).toBe('private, no-store');
       }
       expect(thumbnail).not.toHaveBeenCalled();
       expect(preview).not.toHaveBeenCalled();
@@ -113,10 +119,10 @@ describe.sequential('derivative cache reuse audit', () => {
     expect(thumbnail).toHaveBeenCalledOnce();
   });
 
-  it('serializes distinct missing files behind maintenance despite configured concurrency four', async () => {
+  it('generates distinct missing files concurrently at configured concurrency four', async () => {
     const first = image('first.jpg');
     const second = image('second.jpg');
-    const enteredLock = vi.spyOn(lock, 'runExclusive');
+    const enteredLock = vi.spyOn(lock, 'runGeneration');
     const generate = thumbnail.getMockImplementation()!;
     let release!: () => void;
     thumbnail.mockImplementationOnce(async (...args: unknown[]) => {
@@ -128,13 +134,13 @@ describe.sequential('derivative cache reuse audit', () => {
     const next = requestTestApp(app(), 'GET', `/thumbnails/${second.thumbnail_path}`);
     try {
       await vi.waitFor(() => expect(enteredLock).toHaveBeenCalledTimes(2));
-      expect(thumbnail).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(thumbnail).toHaveBeenCalledTimes(2));
     } finally { release(); }
     expect((await Promise.all([pending, next])).every((response) => response.status === 200)).toBe(true);
     expect(thumbnail).toHaveBeenCalledTimes(2);
   });
 
-  it('changes the URL on unrelated completed scan metadata without changing asset paths or regenerating files', async () => {
+  it('keeps media URLs stable across unrelated completed and failed scans without regenerating', async () => {
     const record = image();
     const { galleryService } = await import('../src/services/gallery-service.js');
     const first = galleryService.getImageDetail(record.id)!;
@@ -146,8 +152,11 @@ describe.sequential('derivative cache reuse audit', () => {
     const runId = repositories.scanRunRepository.start();
     repositories.scanRunRepository.finish(runId, { finished_at: '2026-09-01T00:00:00Z', status: 'completed', scanned_files: 0, new_files: 0, updated_files: 0, removed_files: 0, error_text: null, warning_count: 0, warning_text: null });
     const second = galleryService.getImageDetail(record.id)!;
-    expect(second.thumbnailUrl).toBe(`${first.thumbnailUrl}?v=${runId}`);
-    expect(second.previewUrl).toBe(`${first.previewUrl}?v=${runId}`);
+    expect(second.thumbnailUrl).toBe(first.thumbnailUrl);
+    expect(second.previewUrl).toBe(first.previewUrl);
+    const failedRun = repositories.scanRunRepository.start();
+    repositories.scanRunRepository.finish(failedRun, { finished_at: '2026-09-02T00:00:00Z', status: 'failed', scanned_files: 0, new_files: 0, updated_files: 0, removed_files: 0, error_text: 'fixture', warning_count: 0, warning_text: null });
+    expect(galleryService.getImageDetail(record.id)!.thumbnailUrl).toBe(first.thumbnailUrl);
     expect(second.originalUrl).toBe(first.originalUrl);
     expect((await requestTestApp(app(), 'GET', second.thumbnailUrl)).status).toBe(200);
     expect((await requestTestApp(app(), 'GET', second.previewUrl)).status).toBe(200);
@@ -155,5 +164,33 @@ describe.sequential('derivative cache reuse audit', () => {
     expect(repositories.imageRepository.getById(record.id)).toEqual(record);
     expect(thumbnail).toHaveBeenCalledOnce();
     expect(preview).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks source generation after asynchronous hot-cache validation', async () => {
+    const record = image();
+    const { galleryService } = await import('../src/services/gallery-service.js');
+    const url = galleryService.getImageDetail(record.id)!.thumbnailUrl;
+    expect((await requestTestApp(app(), 'GET', url)).status).toBe(200);
+    const versions = await import('../src/utils/derivative-version.js');
+    const check = versions.hasCurrentDerivative;
+    const spy = vi.spyOn(versions, 'hasCurrentDerivative').mockImplementationOnce(async (...args) => {
+      const valid = await check(...args);
+      db.databaseManager.connection.prepare('UPDATE images SET file_size = file_size + 1 WHERE id = ?').run(record.id);
+      return valid;
+    });
+    try {
+      const stale = await requestTestApp(app(), 'GET', url);
+      expect(stale.status).toBe(409);
+      expect(stale.headers.get('cache-control')).toBe('no-store');
+      expect(thumbnail).toHaveBeenCalledOnce();
+    } finally { spy.mockRestore(); }
+  });
+
+  it('does not generate deleted or unindexed retained originals', async () => {
+    const record = image();
+    db.databaseManager.connection.prepare('UPDATE images SET is_deleted = 1 WHERE id = ?').run(record.id);
+    expect((await requestTestApp(app(), 'GET', `/thumbnails/${record.thumbnail_path}`)).status).toBe(404);
+    expect((await requestTestApp(app(), 'GET', '/thumbnails/retained-original.webp')).status).toBe(404);
+    expect(thumbnail).not.toHaveBeenCalled();
   });
 });

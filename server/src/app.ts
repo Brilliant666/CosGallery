@@ -13,7 +13,6 @@ import { apiRouter } from './routes/api.js';
 import { archiveBridgeRouter } from './routes/archive-bridge.js';
 import { authService } from './services/auth-service.js';
 import { lazyThumbnailsRouter, lazyPreviewsRouter } from './routes/lazy-derivatives.js';
-import { createProtectedStaticOptions } from './utils/media-response.js';
 
 export function applyApiNoStoreHeaders(response: Pick<express.Response, 'setHeader'>) {
   authService.setNoStoreHeaders(response as express.Response);
@@ -35,13 +34,9 @@ export function createApp() {
   app.use('/api/archive-bridge/metadata-tasks/:id/source-evidence', express.json({ limit: '1mb' }));
   app.use(express.json());
 
-  if (appConfig.derivativeMode === 'lazy') {
-    app.use('/thumbnails', requireMediaAuthentication, lazyThumbnailsRouter);
-    app.use('/previews', requireMediaAuthentication, lazyPreviewsRouter);
-  } else {
-    app.use('/thumbnails', requireMediaAuthentication, express.static(appConfig.thumbnailsDir, createProtectedStaticOptions()));
-    app.use('/previews', requireMediaAuthentication, express.static(appConfig.previewsDir, createProtectedStaticOptions()));
-  }
+  // Disk provenance is checked in every mode, including eager/background output.
+  app.use('/thumbnails', requireMediaAuthentication, lazyThumbnailsRouter);
+  app.use('/previews', requireMediaAuthentication, lazyPreviewsRouter);
 
   app.use('/api', (_request, response, next) => {
     applyApiNoStoreHeaders(response);

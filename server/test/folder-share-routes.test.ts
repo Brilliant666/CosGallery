@@ -211,6 +211,20 @@ describe.sequential('folder share API routes', () => {
     await fs.writeFile(path.join(tempRoot, 'previews', 'folder-a', 'image-a.webp'), 'dummy-preview-a');
     await fs.writeFile(path.join(tempRoot, 'previews', 'folder-b', 'image-b.webp'), 'dummy-preview-b');
 
+    // Existing cache fixtures carry the same provenance as eager generated files.
+    const { databaseManager } = await import('../src/db/database.js');
+    const { stampDerivative, imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+    for (const suffix of ['a', 'b']) {
+      const relative = `folder-${suffix}/image-${suffix}.jpg`;
+      const stat = await fs.stat(path.join(tempRoot, 'gallery', relative));
+      databaseManager.connection.prepare('UPDATE images SET file_size = ?, mtime_ms = ? WHERE relative_path = ?')
+        .run(stat.size, stat.mtimeMs, relative);
+      const record = imageRepository.getByThumbnailPath(`folder-${suffix}/image-${suffix}.webp`)!;
+      for (const kind of ['thumbnail', 'preview'] as const) {
+        await stampDerivative(path.join(tempRoot, kind === 'thumbnail' ? 'thumbnails' : 'previews', record.thumbnail_path), imageDerivativeVersion(record, kind));
+      }
+    }
+
     app = createApp();
   });
 

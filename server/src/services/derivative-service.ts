@@ -16,13 +16,14 @@ import {
   getPreviewRelativePath,
   getThumbnailRelativePath
 } from '../utils/image-utils.js';
+import { THUMBNAIL_QUALITY, PREVIEW_QUALITY, WEBP_EFFORT, VIDEO_PREVIEW_MAX_LONG_EDGE, VIDEO_PREVIEW_MAX_SHORT_EDGE, VIDEO_PREVIEW_QUALITY, VIDEO_AUDIO_BITRATE } from '../utils/derivative-spec.js';
+export { VIDEO_PREVIEW_MAX_LONG_EDGE, VIDEO_PREVIEW_MAX_SHORT_EDGE } from '../utils/derivative-spec.js';
+import { writeVersionedDerivative } from '../utils/derivative-version.js';
 import { safeJoin } from '../utils/path-utils.js';
 
 const execFileAsync = promisify(execFile);
 const DIRECT_VIDEO_PLAYBACK_ALLOWED_AUDIO_CODECS = new Set(['aac']);
 const DIRECT_VIDEO_PLAYBACK_ALLOWED_PIXEL_FORMATS = new Set(['yuv420p']);
-export const VIDEO_PREVIEW_MAX_LONG_EDGE = 1280;
-export const VIDEO_PREVIEW_MAX_SHORT_EDGE = 720;
 
 interface FfprobeStream {
   codec_type?: string;
@@ -99,15 +100,6 @@ interface ReadMediaMetadataOptions {
 
 async function ensureParentDirectory(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function runBinary(command: string, args: string[]): Promise<void> {
@@ -443,7 +435,7 @@ async function writeImageThumbnail(sourcePath: string, thumbnailAbsolutePath: st
       width: THUMBNAIL_SIZE,
       withoutEnlargement: true
     })
-    .webp({ quality: 82, effort: 4 })
+    .webp({ quality: THUMBNAIL_QUALITY, effort: WEBP_EFFORT })
     .toFile(thumbnailAbsolutePath);
 }
 
@@ -455,7 +447,7 @@ export async function writeImagePreview(sourcePath: string, previewAbsolutePath:
       width: PREVIEW_MAX_WIDTH,
       withoutEnlargement: true
     })
-    .webp({ quality: 86, effort: 4 })
+    .webp({ quality: PREVIEW_QUALITY, effort: WEBP_EFFORT })
     .toFile(previewAbsolutePath);
 }
 
@@ -481,9 +473,9 @@ async function writeAnimatedAvifThumbnail(
     '-c:v',
     'libwebp',
     '-quality',
-    '82',
+    String(THUMBNAIL_QUALITY),
     '-compression_level',
-    '4',
+    String(WEBP_EFFORT),
     thumbnailAbsolutePath
   ]);
 }
@@ -508,9 +500,9 @@ async function writeAnimatedAvifPreview(
     '-c:v',
     'libwebp',
     '-quality',
-    '86',
+    String(PREVIEW_QUALITY),
     '-compression_level',
-    '4',
+    String(WEBP_EFFORT),
     '-loop',
     '0',
     previewAbsolutePath
@@ -537,9 +529,9 @@ async function writeVideoThumbnail(sourcePath: string, thumbnailAbsolutePath: st
       '-c:v',
       'libwebp',
       '-quality',
-      '82',
+      String(THUMBNAIL_QUALITY),
       '-compression_level',
-      '4',
+      String(WEBP_EFFORT),
       thumbnailAbsolutePath
     ]);
   } catch (error) {
@@ -554,7 +546,7 @@ async function writeVideoThumbnail(sourcePath: string, thumbnailAbsolutePath: st
 
     try {
       await runBinary(appConfig.ffmpegPath, [...commonArgs, '-c:v', 'png', framePath]);
-      await sharp(framePath).webp({ quality: 82, effort: 4 }).toFile(thumbnailAbsolutePath);
+      await sharp(framePath).webp({ quality: THUMBNAIL_QUALITY, effort: WEBP_EFFORT }).toFile(thumbnailAbsolutePath);
     } finally {
       await fs.rm(framePath, { force: true }).catch(() => undefined);
     }
@@ -568,10 +560,10 @@ function isMissingLibwebpEncoderError(error: unknown): boolean {
 
 function getVideoPreviewEncoderArgs(): string[] {
   if (appConfig.ffmpegVideoEncoder === 'h264_nvenc') {
-    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '24'];
+    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', String(VIDEO_PREVIEW_QUALITY)];
   }
 
-  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '24'];
+  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(VIDEO_PREVIEW_QUALITY)];
 }
 
 export async function writeVideoPreview(sourcePath: string, previewAbsolutePath: string): Promise<void> {
@@ -603,7 +595,7 @@ export async function writeVideoPreview(sourcePath: string, previewAbsolutePath:
     '-c:a',
     'aac',
     '-b:a',
-    '128k',
+    VIDEO_AUDIO_BITRATE,
     previewAbsolutePath
   ]);
 }
@@ -614,16 +606,9 @@ async function generateImageDerivatives(
   previewAbsolutePath: string,
   force: boolean
 ): Promise<Pick<DerivativeResult, 'generatedThumbnail' | 'generatedPreview'>> {
-  const shouldWriteThumbnail = force || !(await fileExists(thumbnailAbsolutePath));
-  const shouldWritePreview = force || !(await fileExists(previewAbsolutePath));
+  const shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeImageThumbnail(sourcePath, temporary));
 
-  if (shouldWriteThumbnail) {
-    await writeImageThumbnail(sourcePath, thumbnailAbsolutePath);
-  }
-
-  if (shouldWritePreview) {
-    await writeImagePreview(sourcePath, previewAbsolutePath);
-  }
+  const shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeImagePreview(sourcePath, temporary));
 
   return {
     generatedThumbnail: shouldWriteThumbnail,
@@ -638,16 +623,9 @@ async function generateAnimatedAvifDerivatives(
   force: boolean,
   videoStreamIndex: number
 ): Promise<Pick<DerivativeResult, 'generatedThumbnail' | 'generatedPreview'>> {
-  const shouldWriteThumbnail = force || !(await fileExists(thumbnailAbsolutePath));
-  const shouldWritePreview = force || !(await fileExists(previewAbsolutePath));
+  const shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeAnimatedAvifThumbnail(sourcePath, temporary, videoStreamIndex));
 
-  if (shouldWriteThumbnail) {
-    await writeAnimatedAvifThumbnail(sourcePath, thumbnailAbsolutePath, videoStreamIndex);
-  }
-
-  if (shouldWritePreview) {
-    await writeAnimatedAvifPreview(sourcePath, previewAbsolutePath, videoStreamIndex);
-  }
+  const shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeAnimatedAvifPreview(sourcePath, temporary, videoStreamIndex));
 
   return {
     generatedThumbnail: shouldWriteThumbnail,
@@ -669,16 +647,9 @@ async function generateVideoDerivatives(
   previewAbsolutePath: string,
   force: boolean
 ): Promise<Pick<DerivativeResult, 'generatedThumbnail' | 'generatedPreview'>> {
-  const shouldWriteThumbnail = force || !(await fileExists(thumbnailAbsolutePath));
-  const shouldWritePreview = force || !(await fileExists(previewAbsolutePath));
+  const shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'video', force, temporary => writeVideoThumbnail(sourcePath, temporary));
 
-  if (shouldWriteThumbnail) {
-    await writeVideoThumbnail(sourcePath, thumbnailAbsolutePath);
-  }
-
-  if (shouldWritePreview) {
-    await writeVideoPreview(sourcePath, previewAbsolutePath);
-  }
+  const shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'video', force, temporary => writeVideoPreview(sourcePath, temporary));
 
   return {
     generatedThumbnail: shouldWriteThumbnail,
@@ -696,28 +667,22 @@ export async function generateThumbnailDerivative(
   const isAvif = path.extname(relativePath).toLowerCase() === '.avif';
   const thumbnailPath = overrides.thumbnailPath ?? getThumbnailRelativePath(relativePath);
   const thumbnailAbsolutePath = safeJoin(appConfig.thumbnailsDir, thumbnailPath);
-  const shouldWriteThumbnail = force || !(await fileExists(thumbnailAbsolutePath));
+  let shouldWriteThumbnail = false;
 
-  if (shouldWriteThumbnail) {
-    if (mediaType === 'video') {
-      await writeVideoThumbnail(sourcePath, thumbnailAbsolutePath);
-    } else if (isAvif) {
-      const avifSource = await inspectAvifSource(sourcePath, {
-        requireAnimatedVideoStreamIndex: true
-      });
+  if (mediaType === 'video') {
+    shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'video', force, temporary => writeVideoThumbnail(sourcePath, temporary));
+  } else if (isAvif) {
+    const avifSource = await inspectAvifSource(sourcePath, {
+      requireAnimatedVideoStreamIndex: true
+    });
 
-      if (avifSource.metadata.isAnimated) {
-        await writeAnimatedAvifThumbnail(
-          sourcePath,
-          thumbnailAbsolutePath,
-          requireAnimatedAvifVideoStreamIndex(avifSource)
-        );
-      } else {
-        await writeImageThumbnail(sourcePath, thumbnailAbsolutePath);
-      }
+    if (avifSource.metadata.isAnimated) {
+      shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeAnimatedAvifThumbnail(sourcePath, temporary, requireAnimatedAvifVideoStreamIndex(avifSource)));
     } else {
-      await writeImageThumbnail(sourcePath, thumbnailAbsolutePath);
+      shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeImageThumbnail(sourcePath, temporary));
     }
+  } else {
+    shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeImageThumbnail(sourcePath, temporary));
   }
 
   return {
@@ -736,28 +701,22 @@ export async function generatePreviewDerivative(
   const isAvif = path.extname(relativePath).toLowerCase() === '.avif';
   const previewPath = overrides.previewPath ?? getPreviewRelativePath(relativePath, mediaType);
   const previewAbsolutePath = safeJoin(appConfig.previewsDir, previewPath);
-  const shouldWritePreview = force || !(await fileExists(previewAbsolutePath));
+  let shouldWritePreview = false;
 
-  if (shouldWritePreview) {
-    if (mediaType === 'video') {
-      await writeVideoPreview(sourcePath, previewAbsolutePath);
-    } else if (isAvif) {
-      const avifSource = await inspectAvifSource(sourcePath, {
-        requireAnimatedVideoStreamIndex: true
-      });
+  if (mediaType === 'video') {
+    shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'video', force, temporary => writeVideoPreview(sourcePath, temporary));
+  } else if (isAvif) {
+    const avifSource = await inspectAvifSource(sourcePath, {
+      requireAnimatedVideoStreamIndex: true
+    });
 
-      if (avifSource.metadata.isAnimated) {
-        await writeAnimatedAvifPreview(
-          sourcePath,
-          previewAbsolutePath,
-          requireAnimatedAvifVideoStreamIndex(avifSource)
-        );
-      } else {
-        await writeImagePreview(sourcePath, previewAbsolutePath);
-      }
+    if (avifSource.metadata.isAnimated) {
+      shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeAnimatedAvifPreview(sourcePath, temporary, requireAnimatedAvifVideoStreamIndex(avifSource)));
     } else {
-      await writeImagePreview(sourcePath, previewAbsolutePath);
+      shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeImagePreview(sourcePath, temporary));
     }
+  } else {
+    shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeImagePreview(sourcePath, temporary));
   }
 
   return {

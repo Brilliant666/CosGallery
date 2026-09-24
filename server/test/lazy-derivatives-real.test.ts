@@ -113,4 +113,38 @@ describe.sequential('real lazy image derivatives in isolated storage', () => {
       expect(await response.json()).toEqual({ message: 'Derivative not found.' });
     }
   });
+
+  it('changes only changed media URLs and rejects obsolete versions instead of caching new pixels under them', async () => {
+    const previous = repos.imageRepository.getByThumbnailPath('Synthetic/swatch.webp')!;
+    const post = repos.postRepository.findByImageId(previous.id)!;
+    const oldDetail = gallery.getImageDetail(post.id)!;
+    const oldBytes = Buffer.from(await (await fetch(new URL(oldDetail.thumbnailUrl, origin))).arrayBuffer());
+    await sharp({ create: { width: 1010, height: 1510, channels: 3, background: '#ee2211' } }).png().toFile(previous.absolute_path);
+    const stat = await fs.stat(previous.absolute_path);
+    manager.connection.prepare('UPDATE images SET file_size = ?, mtime_ms = ?, checksum_or_fingerprint = ? WHERE id = ?')
+      .run(stat.size, stat.mtimeMs, 'changed-fixture', previous.id);
+    const nextDetail = gallery.getImageDetail(post.id)!;
+    expect(nextDetail.thumbnailUrl).not.toBe(oldDetail.thumbnailUrl);
+    expect(nextDetail.previewUrl).not.toBe(oldDetail.previewUrl);
+    const stale = await fetch(new URL(oldDetail.thumbnailUrl, origin));
+    expect(stale.status).toBe(409);
+    expect(stale.headers.get('cache-control')).toBe('no-store');
+    const current = await fetch(new URL(nextDetail.thumbnailUrl, origin));
+    expect(current.status).toBe(200);
+    const currentBytes = Buffer.from(await current.arrayBuffer());
+    expect(currentBytes).not.toEqual(oldBytes);
+    expect(await sharp(currentBytes).metadata()).toMatchObject({ format: 'webp', width: 640 });
+    manager.connection.prepare('UPDATE images SET caption = ?, sort_timestamp = ? WHERE id = ?').run('display only', 999, previous.id);
+    expect(gallery.getImageDetail(post.id)!.thumbnailUrl).toBe(nextDetail.thumbnailUrl);
+    const output = path.join(config.thumbnailsDir, previous.thumbnail_path);
+    const generatedAt = (await fs.stat(output)).mtimeMs;
+    const retry = await fetch(new URL(nextDetail.thumbnailUrl, origin));
+    expect(retry.status).toBe(200);
+    await retry.arrayBuffer();
+    expect((await fs.stat(output)).mtimeMs).toBe(generatedAt);
+    const legacy = await fetch(new URL(nextDetail.thumbnailUrl.split('?')[0]!, origin));
+    expect(legacy.status).toBe(200);
+    expect(legacy.headers.get('cache-control')).toBe('private, no-store');
+    await legacy.arrayBuffer();
+  });
 });

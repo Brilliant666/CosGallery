@@ -19,6 +19,7 @@ import {
   TREAT_CAROUSELS_AS_FOLDERS_SETTING_KEY,
   TREAT_STORIES_AS_FOLDERS_SETTING_KEY
 } from '../constants/app-setting-keys.js';
+import { derivativeVersion as buildDerivativeVersion, imageDerivativeVersion } from '../utils/derivative-version.js';
 import { appConfig } from '../config/env.js';
 import {
   appSettingsRepository,
@@ -276,9 +277,8 @@ function getCarouselsMigrationStatus() {
   };
 }
 
-function getDerivativeAssetVersion(): string | null {
-  const lastCompletedScanId = scanRunRepository.latestCompleted()?.id ?? null;
-  return lastCompletedScanId === null ? null : String(lastCompletedScanId);
+function mediaVersion(image: { derivativeSourceVersion?: string; mediaType: string }, kind: 'thumbnail' | 'preview'): string | null {
+  return image.derivativeSourceVersion ? buildDerivativeVersion(image.derivativeSourceVersion, kind, image.mediaType) : null;
 }
 
 function toPublicMediaUrl(basePath: '/thumbnails' | '/previews', relativePath: string, version?: string | null): string {
@@ -513,8 +513,8 @@ function getParentFolderDisplayName(folderPath: string): string | null {
   return getLeafPathName(parentFolderPath);
 }
 
-function mapFeedCover(image: IndexedFeedImage, derivativeVersion: string | null): Omit<FeedImage, 'mediaItems'> {
-  const { playbackStrategy, placeId, placeSlug, placeName, placeKind, placeIsApproximate, isSaved, mediaItems, itemCount, ...rest } = image;
+function mapFeedCover(image: IndexedFeedImage): Omit<FeedImage, 'mediaItems'> {
+  const { derivativeSourceVersion, playbackStrategy, placeId, placeSlug, placeName, placeKind, placeIsApproximate, isSaved, mediaItems, itemCount, ...rest } = image;
   return {
     ...rest,
     postType: rest.postType ?? 'single',
@@ -523,20 +523,20 @@ function mapFeedCover(image: IndexedFeedImage, derivativeVersion: string | null)
     isSaved: Boolean(isSaved),
     folderParentName: getParentFolderDisplayName(rest.folderPath),
     folderBreadcrumb: getPathBreadcrumb(rest.folderPath),
-    thumbnailUrl: toPublicMediaUrl('/thumbnails', rest.thumbnailUrl, derivativeVersion),
+    thumbnailUrl: toPublicMediaUrl('/thumbnails', rest.thumbnailUrl, mediaVersion(image, 'thumbnail')),
     previewUrl: buildPreviewUrl({
       id: rest.id,
       mediaType: rest.mediaType,
       previewUrl: rest.previewUrl
-    }, false, derivativeVersion),
+    }, false, mediaVersion(image, 'preview')),
     place: mapPlaceSummaryFromRow({ placeId, placeSlug, placeName, placeKind, placeIsApproximate }),
     itemCount: itemCount ?? (mediaItems ? mediaItems.length : 1)
   };
 }
 
-function mapFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivativeAssetVersion()): FeedImage {
+function mapFeedImage(image: IndexedFeedImage): FeedImage {
   return {
-    ...mapFeedCover(image, derivativeVersion),
+    ...mapFeedCover(image),
     mediaItems: (image.mediaItems ?? []).map((item) => ({
       imageId: item.imageId,
       position: item.position,
@@ -546,12 +546,12 @@ function mapFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivative
       height: item.height,
       durationMs: item.durationMs,
       isAnimated: Boolean(item.isAnimated),
-      thumbnailUrl: toPublicMediaUrl('/thumbnails', item.thumbnailUrl, derivativeVersion),
+      thumbnailUrl: toPublicMediaUrl('/thumbnails', item.thumbnailUrl, mediaVersion(item, 'thumbnail')),
       previewUrl: buildPreviewUrl({
         id: item.imageId,
         mediaType: item.mediaType,
         previewUrl: item.previewUrl
-      }, false, derivativeVersion),
+      }, false, mediaVersion(item, 'preview')),
       originalUrl: buildOriginalUrl(item.imageId),
       playbackStrategy: item.playbackStrategy ?? 'preview',
       mimeType: item.mimeType,
@@ -562,9 +562,9 @@ function mapFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivative
   };
 }
 
-function mapCanonicalWorkSummary(item: CanonicalWorkSummary, derivativeVersion: string | null): CanonicalWorkSummary {
+function mapCanonicalWorkSummary(item: CanonicalWorkSummary): CanonicalWorkSummary {
   return {
-    ...mapFeedCover(item, derivativeVersion),
+    ...mapFeedCover(item),
     representation: 'summary',
     postType: item.postType,
     itemCount: item.itemCount,
@@ -584,7 +584,7 @@ function isCoverPost(postId: number): boolean {
   return postRepository.isExplicitFolderCover(postId);
 }
 
-function mapSharedMediaItem(item: PostMediaItem, derivativeVersion: string | null): PostMediaItem {
+function mapSharedMediaItem(item: PostMediaItem): PostMediaItem {
   return {
     imageId: item.imageId,
     position: item.position,
@@ -594,15 +594,15 @@ function mapSharedMediaItem(item: PostMediaItem, derivativeVersion: string | nul
     height: item.height,
     durationMs: item.durationMs,
     isAnimated: Boolean(item.isAnimated),
-    thumbnailUrl: buildShareThumbnailUrl(item.imageId, derivativeVersion),
-    previewUrl: buildSharePreviewUrl(item.imageId, derivativeVersion),
+    thumbnailUrl: buildShareThumbnailUrl(item.imageId, mediaVersion(item, 'thumbnail')),
+    previewUrl: buildSharePreviewUrl(item.imageId, mediaVersion(item, 'preview')),
     playbackStrategy: item.playbackStrategy ?? 'preview',
     mimeType: item.mimeType,
     fileSize: item.fileSize
   };
 }
 
-function mapSharedFeedImage(image: IndexedFeedImage, derivativeVersion = getDerivativeAssetVersion()): SharedFeedItem {
+function mapSharedFeedImage(image: IndexedFeedImage): SharedFeedItem {
   const mediaItems = image.mediaItems ?? [];
   const representativeImageId = mediaItems[0]?.imageId ?? image.id;
   return {
@@ -618,17 +618,17 @@ function mapSharedFeedImage(image: IndexedFeedImage, derivativeVersion = getDeri
     mediaType: image.mediaType,
     durationMs: image.durationMs,
     isAnimated: Boolean(image.isAnimated),
-    thumbnailUrl: buildShareThumbnailUrl(representativeImageId, derivativeVersion),
-    previewUrl: buildSharePreviewUrl(representativeImageId, derivativeVersion),
+    thumbnailUrl: buildShareThumbnailUrl(representativeImageId, mediaVersion(image, 'thumbnail')),
+    previewUrl: buildSharePreviewUrl(representativeImageId, mediaVersion(image, 'preview')),
     sortTimestamp: image.sortTimestamp,
     postType: image.postType ?? 'single',
     itemCount: image.itemCount ?? (mediaItems.length || 1),
-    mediaItems: mediaItems.map((item) => mapSharedMediaItem(item, derivativeVersion))
+    mediaItems: mediaItems.map((item) => mapSharedMediaItem(item))
   };
 }
 
-function mapImageDetail(image: IndexedImageDetail, derivativeVersion = getDerivativeAssetVersion()): ImageDetail {
-  const { playbackStrategy, exifJson, placeId, placeSlug, placeName, placeKind, placeIsApproximate, isSaved, mediaItems, itemCount, ...rest } = image as any;
+function mapImageDetail(image: IndexedImageDetail): ImageDetail {
+  const { derivativeSourceVersion, playbackStrategy, exifJson, placeId, placeSlug, placeName, placeKind, placeIsApproximate, isSaved, mediaItems, itemCount, ...rest } = image as any;
   const useOriginalForImages = appConfig.imageDetailSource === 'original';
   const representativeImageId = mediaItems?.[0]?.imageId ?? rest.id;
   return {
@@ -640,12 +640,12 @@ function mapImageDetail(image: IndexedImageDetail, derivativeVersion = getDeriva
     exif: deserializeImageExifData(exifJson),
     folderParentName: getParentFolderDisplayName(rest.folderPath),
     folderBreadcrumb: getPathBreadcrumb(rest.folderPath),
-    thumbnailUrl: toPublicMediaUrl('/thumbnails', rest.thumbnailUrl, derivativeVersion),
+    thumbnailUrl: toPublicMediaUrl('/thumbnails', rest.thumbnailUrl, mediaVersion(image, 'thumbnail')),
     previewUrl: buildPreviewUrl({
       id: representativeImageId,
       mediaType: rest.mediaType,
       previewUrl: rest.previewUrl
-    }, useOriginalForImages, derivativeVersion),
+    }, useOriginalForImages, mediaVersion(image, 'preview')),
     originalUrl: buildOriginalUrl(representativeImageId),
     playbackStrategy,
     place: mapPlaceSummaryFromRow({ placeId, placeSlug, placeName, placeKind, placeIsApproximate }),
@@ -658,12 +658,12 @@ function mapImageDetail(image: IndexedImageDetail, derivativeVersion = getDeriva
       height: item.height,
       durationMs: item.durationMs,
       isAnimated: Boolean(item.isAnimated),
-      thumbnailUrl: toPublicMediaUrl('/thumbnails', item.thumbnailUrl, derivativeVersion),
+      thumbnailUrl: toPublicMediaUrl('/thumbnails', item.thumbnailUrl, mediaVersion(item, 'thumbnail')),
       previewUrl: buildPreviewUrl({
         id: item.imageId,
         mediaType: item.mediaType,
         previewUrl: item.previewUrl
-      }, false, derivativeVersion),
+      }, false, mediaVersion(item, 'preview')),
       originalUrl: buildOriginalUrl(item.imageId),
       playbackStrategy: item.playbackStrategy ?? 'preview',
       mimeType: item.mimeType,
@@ -675,7 +675,7 @@ function mapImageDetail(image: IndexedImageDetail, derivativeVersion = getDeriva
   };
 }
 
-function mapSharedImageDetail(image: IndexedImageDetail, derivativeVersion = getDerivativeAssetVersion()): SharedImageDetail {
+function mapSharedImageDetail(image: IndexedImageDetail): SharedImageDetail {
   const mediaItems = image.mediaItems ?? [];
   const representativeImageId = mediaItems[0]?.imageId ?? image.id;
   return {
@@ -692,19 +692,19 @@ function mapSharedImageDetail(image: IndexedImageDetail, derivativeVersion = get
     height: image.height,
     durationMs: image.durationMs,
     isAnimated: Boolean(image.isAnimated),
-    thumbnailUrl: buildShareThumbnailUrl(representativeImageId, derivativeVersion),
-    previewUrl: buildSharePreviewUrl(representativeImageId, derivativeVersion),
+    thumbnailUrl: buildShareThumbnailUrl(representativeImageId, mediaVersion(image, 'thumbnail')),
+    previewUrl: buildSharePreviewUrl(representativeImageId, mediaVersion(image, 'preview')),
     sortTimestamp: image.sortTimestamp,
     nextImageId: image.nextImageId,
     previousImageId: image.previousImageId,
     postType: image.postType ?? 'single',
     itemCount: image.itemCount ?? (mediaItems.length || 1),
-    mediaItems: mediaItems.map((item) => mapSharedMediaItem(item, derivativeVersion))
+    mediaItems: mediaItems.map((item) => mapSharedMediaItem(item))
   };
 }
 
-function mapTrashImage(image: IndexedTrashImage, derivativeVersion = getDerivativeAssetVersion()): TrashImage {
-  const mapped = mapFeedImage(image as IndexedFeedImage, derivativeVersion);
+function mapTrashImage(image: IndexedTrashImage): TrashImage {
+  const mapped = mapFeedImage(image as IndexedFeedImage);
   return {
     ...mapped,
     trashedAt: image.trashedAt
@@ -713,8 +713,7 @@ function mapTrashImage(image: IndexedTrashImage, derivativeVersion = getDerivati
 
 function buildFolderSummary(
   folder: FolderSummaryRecord,
-  preloadedCanonicalCreatorId?: number | null,
-  derivativeVersion = getDerivativeAssetVersion()
+  preloadedCanonicalCreatorId?: number | null
 ) {
   const workNavigationMode = appConfig.cosGalleryMode && folder.role === 'normal' ? 'work-gallery' : 'post';
   const canonicalCreatorId = preloadedCanonicalCreatorId !== undefined
@@ -744,7 +743,7 @@ function buildFolderSummary(
       hasAvatarStory: Boolean(folder.has_avatar_story),
       avatarImageId: folder.summary_avatar_image_id ?? null,
       avatarUrl: folder.summary_avatar_thumbnail_path
-        ? toPublicMediaUrl('/thumbnails', folder.summary_avatar_thumbnail_path, derivativeVersion)
+        ? toPublicMediaUrl('/thumbnails', folder.summary_avatar_thumbnail_path, folder.summary_avatar_source_version ? buildDerivativeVersion(folder.summary_avatar_source_version, 'thumbnail', folder.summary_avatar_media_type) : null)
         : null
     };
   }
@@ -774,12 +773,11 @@ function buildFolderSummary(
     latestImageMtimeMs: folder.latest_image_mtime_ms,
     hasAvatarStory: Boolean(folder.has_avatar_story),
     avatarImageId: avatar?.id ?? null,
-    avatarUrl: avatar ? mapImageDetail(avatar, derivativeVersion).thumbnailUrl : null
+    avatarUrl: avatar ? mapImageDetail(avatar).thumbnailUrl : null
   };
 }
 
 function buildSharedFolderSummary(folder: FolderSummaryRecord): SharedFolderSummary {
-  const derivativeVersion = getDerivativeAssetVersion();
   const summary = buildFolderSummary(folder);
 
   return {
@@ -790,18 +788,17 @@ function buildSharedFolderSummary(folder: FolderSummaryRecord): SharedFolderSumm
     imageCount: summary.imageCount,
     postCount: summary.postCount,
     videoCount: summary.videoCount,
-    avatarThumbnailUrl: summary.avatarImageId ? buildShareThumbnailUrl(summary.avatarImageId, derivativeVersion) : null,
+    avatarThumbnailUrl: summary.avatarImageId ? buildShareThumbnailUrl(summary.avatarImageId, summary.avatarUrl ? new URL(summary.avatarUrl, 'http://localhost').searchParams.get('v') : null) : null,
     sortTimestamp: summary.latestImageMtimeMs ?? 0
   };
 }
 
 function mapFeedImageForOwnerFolder(
   image: IndexedFeedImage,
-  ownerFolder: ReturnType<typeof buildFolderSummary>,
-  derivativeVersion = getDerivativeAssetVersion()
+  ownerFolder: ReturnType<typeof buildFolderSummary>
 ): FeedImage {
   return {
-    ...mapFeedImage(image, derivativeVersion),
+    ...mapFeedImage(image),
     folderId: ownerFolder.id,
     folderSlug: ownerFolder.slug,
     folderName: ownerFolder.name,
@@ -850,11 +847,11 @@ function formatMonthYear(date: Date): string {
   return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(date);
 }
 
-function mapFeedItems(items: IndexedFeedImage[], derivativeVersion = getDerivativeAssetVersion()): FeedImage[] {
-  return items.map((item) => mapFeedImage(item, derivativeVersion));
+function mapFeedItems(items: IndexedFeedImage[]): FeedImage[] {
+  return items.map((item) => mapFeedImage(item));
 }
 
-function mapCollectionSummary(collection: CollectionSummaryRecord, derivativeVersion = getDerivativeAssetVersion()) {
+function mapCollectionSummary(collection: CollectionSummaryRecord) {
   const previewImages = collection.preview_image_ids
     ? collection.preview_image_ids
       .split(',')
@@ -862,7 +859,7 @@ function mapCollectionSummary(collection: CollectionSummaryRecord, derivativeVer
       .filter((value, index, values) => Number.isInteger(value) && value > 0 && values.indexOf(value) === index)
       .map((id) => {
         const previewDetail = imageRepository.getImageDetail(id, undefined, false);
-        return previewDetail ? mapImageDetail(previewDetail, derivativeVersion) : null;
+        return previewDetail ? mapImageDetail(previewDetail) : null;
       })
       .filter((image): image is ImageDetail => image !== null)
     : [];
@@ -870,7 +867,7 @@ function mapCollectionSummary(collection: CollectionSummaryRecord, derivativeVer
     ?? (collection.cover_image_id
       ? (() => {
           const coverDetail = imageRepository.getImageDetail(collection.cover_image_id, undefined, false);
-          return coverDetail ? mapImageDetail(coverDetail, derivativeVersion) : null;
+          return coverDetail ? mapImageDetail(coverDetail) : null;
         })()
       : null);
 
@@ -887,9 +884,9 @@ function mapCollectionSummary(collection: CollectionSummaryRecord, derivativeVer
   };
 }
 
-function mapCollectionMembership(collection: CollectionMembershipRecord, derivativeVersion = getDerivativeAssetVersion()) {
+function mapCollectionMembership(collection: CollectionMembershipRecord) {
   return {
-    ...mapCollectionSummary(collection, derivativeVersion),
+    ...mapCollectionSummary(collection),
     containsImage: collection.contains_image === 1
   };
 }
@@ -968,8 +965,6 @@ function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityIte
     values.push(candidate);
     grouped.set(key, values);
   }
-
-  const derivativeVersion = getDerivativeAssetVersion();
   return [...grouped.entries()].map(([key, values]) => {
     const first = values[0]!;
     const coverSource = chooseCanonicalCreatorCover(values);
@@ -980,7 +975,7 @@ function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityIte
     const linked = canonicalCreatorId !== null;
     const localFolders = [...values].sort((left, right) => left.folderId - right.folderId);
     const coverUrl = cover?.thumbnail_path
-      ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, derivativeVersion)
+      ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, imageDerivativeVersion(cover, 'thumbnail'))
       : null;
     return {
       key,
@@ -1288,7 +1283,6 @@ function buildHighlightRailDefinition(now = new Date()): FeedRailDefinition {
 
 function materializeRailDefinition(definition: FeedRailDefinition) {
   const usedCoverImageIds = new Set<number>();
-  const derivativeVersion = getDerivativeAssetVersion();
 
   return {
     ...definition,
@@ -1314,7 +1308,7 @@ function materializeRailDefinition(definition: FeedRailDefinition) {
           dateContext: capsule.dateContext,
           momentDate: capsule.momentDate,
           imageCount,
-          coverImage: mapFeedImage(coverImage, derivativeVersion)
+          coverImage: mapFeedImage(coverImage)
         };
       })
       .filter((capsule): capsule is NonNullable<typeof capsule> => capsule !== null)
@@ -1341,14 +1335,13 @@ function getSelectedFeedRail(now = new Date()) {
 
 function buildFolderStoryRail(folder: FolderSummaryRecord): StoryRailPayload {
   const ownerFolder = buildFolderSummary(folder);
-  const derivativeVersion = getDerivativeAssetVersion();
   const storyFolders = folderRepository.listOwnedStoryFolders(folder.id);
   const rootStoryFolder = storyFolders.find((entry) => entry.role === 'story_root') ?? null;
   const highlightStoryFolders = storyFolders.filter((entry) => entry.role === 'story_capsule');
 
-  const rootStoryCapsule = rootStoryFolder ? buildStoryRailCapsule(rootStoryFolder, ownerFolder, derivativeVersion) : null;
+  const rootStoryCapsule = rootStoryFolder ? buildStoryRailCapsule(rootStoryFolder, ownerFolder) : null;
   const highlightCapsules = highlightStoryFolders
-    .map((storyFolder) => buildStoryRailCapsule(storyFolder, ownerFolder, derivativeVersion))
+    .map((storyFolder) => buildStoryRailCapsule(storyFolder, ownerFolder))
     .filter((capsule): capsule is StoryRailCapsule => capsule !== null)
     .sort((left, right) => {
       if (left.latestActivityTimestamp !== right.latestActivityTimestamp) {
@@ -1357,7 +1350,7 @@ function buildFolderStoryRail(folder: FolderSummaryRecord): StoryRailPayload {
 
       return left.title.localeCompare(right.title, undefined, { sensitivity: 'base' });
     });
-  const avatarStoryCapsule = rootStoryCapsule ?? buildFallbackAvatarStoryCapsule(ownerFolder, derivativeVersion);
+  const avatarStoryCapsule = rootStoryCapsule ?? buildFallbackAvatarStoryCapsule(ownerFolder);
   const items = avatarStoryCapsule ? [avatarStoryCapsule, ...highlightCapsules] : highlightCapsules;
 
   return {
@@ -1374,8 +1367,7 @@ function buildFolderStoryRail(folder: FolderSummaryRecord): StoryRailPayload {
 
 function buildStoryRailCapsule(
   storyFolder: FolderRecord,
-  ownerFolder: ReturnType<typeof buildFolderSummary>,
-  derivativeVersion: string | null
+  ownerFolder: ReturnType<typeof buildFolderSummary>
 ): StoryRailCapsule | null {
   const imageCount = imageRepository.countStoryMediaByFolder(storyFolder.id);
   if (imageCount === 0) {
@@ -1396,15 +1388,14 @@ function buildStoryRailCapsule(
     subtitle: presentation === 'avatar' ? `${ownerFolder.name} story set` : 'Profile highlight',
     dateContext: formatStoryDateContext(latestActivityTimestamp),
     imageCount,
-    coverImage: mapFeedImageForOwnerFolder(coverImage, ownerFolder, derivativeVersion),
+    coverImage: mapFeedImageForOwnerFolder(coverImage, ownerFolder),
     presentation,
     latestActivityTimestamp
   };
 }
 
 function buildFallbackAvatarStoryCapsule(
-  ownerFolder: ReturnType<typeof buildFolderSummary>,
-  derivativeVersion: string | null
+  ownerFolder: ReturnType<typeof buildFolderSummary>
 ): StoryRailCapsule | null {
   const imageCount = Math.min(imageRepository.countStoryCapsuleMediaByOwnerFolder(ownerFolder.id), FALLBACK_AVATAR_STORY_LIMIT);
   if (imageCount === 0) {
@@ -1424,7 +1415,7 @@ function buildFallbackAvatarStoryCapsule(
     subtitle: 'Latest from highlights',
     dateContext: formatStoryDateContext(latestActivityTimestamp),
     imageCount,
-    coverImage: mapFeedImageForOwnerFolder(coverImage, ownerFolder, derivativeVersion),
+    coverImage: mapFeedImageForOwnerFolder(coverImage, ownerFolder),
     presentation: 'avatar',
     latestActivityTimestamp
   };
@@ -1433,8 +1424,7 @@ function buildFallbackAvatarStoryCapsule(
 function listFallbackAvatarStoryItems(
   ownerFolder: ReturnType<typeof buildFolderSummary>,
   page: number,
-  limit: number,
-  derivativeVersion = getDerivativeAssetVersion()
+  limit: number
 ) {
   const total = Math.min(imageRepository.countStoryCapsuleMediaByOwnerFolder(ownerFolder.id), FALLBACK_AVATAR_STORY_LIMIT);
   const offset = (page - 1) * limit;
@@ -1443,7 +1433,7 @@ function listFallbackAvatarStoryItems(
     remaining > 0
       ? imageRepository
           .listStoryCapsuleImagesByOwnerFolder(ownerFolder.id, page, Math.min(limit, remaining))
-          .map((image) => mapFeedImageForOwnerFolder(image, ownerFolder, derivativeVersion))
+          .map((image) => mapFeedImageForOwnerFolder(image, ownerFolder))
       : [];
 
   return {
@@ -1538,10 +1528,9 @@ export const galleryService = {
       getDefaultFolderImageOrder(),
       mediaType
     );
-    const derivativeVersion = getDerivativeAssetVersion();
     return {
       creator,
-      ...buildPaginatedPayload(items.map(item => mapCanonicalWorkSummary(item, derivativeVersion)), page, limit, total)
+      ...buildPaginatedPayload(items.map(item => mapCanonicalWorkSummary(item)), page, limit, total)
     };
   },
 
@@ -1751,8 +1740,7 @@ export const galleryService = {
     const creatorIds = new Map(appConfig.cosGalleryMode
       ? canonicalCreatorGalleryRepository.listUniqueFolderCreatorIds().map(row => [row.folderId, row.creatorId])
       : []);
-    const derivativeVersion = getDerivativeAssetVersion();
-    return folderRepository.getAllSummaries().map(folder => buildFolderSummary(folder, creatorIds.get(folder.id) ?? null, derivativeVersion));
+    return folderRepository.getAllSummaries().map(folder => buildFolderSummary(folder, creatorIds.get(folder.id) ?? null));
   },
 
   listPlaces() {
@@ -1789,11 +1777,10 @@ export const galleryService = {
     }
 
     const total = placeRepository.countVisibleImages(place.id, mediaType);
-    const derivativeVersion = getDerivativeAssetVersion();
 
     return {
       place: placeResolutionService.placeDetail(place, total),
-      items: imageRepository.listPlaceImages(place.id, page, limit, mediaType).map((image) => mapFeedImage(image, derivativeVersion)),
+      items: imageRepository.listPlaceImages(place.id, page, limit, mediaType).map((image) => mapFeedImage(image)),
       page,
       limit,
       total,
@@ -1860,7 +1847,7 @@ export const galleryService = {
     postRepository.updateCaption(post.id, caption);
 
     const updated = imageRepository.getImageDetail(post.id, undefined, false, defaultFolderImageOrder);
-    return updated ? mapImageDetail(updated, getDerivativeAssetVersion()) : null;
+    return updated ? mapImageDetail(updated) : null;
   },
 
   updatePostContentRating(id: number, contentRating: 'R15' | 'R18') {
@@ -1948,11 +1935,10 @@ export const galleryService = {
       return null;
     }
 
-    const derivativeVersion = getDerivativeAssetVersion();
     const total = imageRepository.countStoryMediaByFolder(storyFolder.id);
     const items = imageRepository
       .listStoryFolderImages(storyFolder.id, page, limit)
-      .map((image) => mapFeedImageForOwnerFolder(image, ownerFolder, derivativeVersion));
+      .map((image) => mapFeedImageForOwnerFolder(image, ownerFolder));
 
     return {
       railKind: 'stories' as const,
@@ -1975,14 +1961,13 @@ export const galleryService = {
     }
 
     const total = imageRepository.countVisibleByFolder(folder.id, mediaType);
-    const derivativeVersion = getDerivativeAssetVersion();
     const defaultFolderImageOrder = getDefaultFolderImageOrder();
 
     return {
       folder: buildFolderSummary(folder),
       items: imageRepository
         .listFolderImages(folder.id, page, limit, mediaType, defaultFolderImageOrder)
-        .map((image) => mapFeedImage(image, derivativeVersion)),
+        .map((image) => mapFeedImage(image)),
       page,
       limit,
       total,
@@ -2001,14 +1986,13 @@ export const galleryService = {
     }
 
     const total = imageRepository.countVisibleByFolder(folder.id, mediaType);
-    const derivativeVersion = getDerivativeAssetVersion();
     const defaultFolderImageOrder = getDefaultFolderImageOrder();
 
     return {
       folder: buildSharedFolderSummary(folder),
       items: imageRepository
         .listFolderImages(folder.id, page, limit, mediaType, defaultFolderImageOrder)
-        .map((image) => mapSharedFeedImage(image, derivativeVersion)),
+        .map((image) => mapSharedFeedImage(image)),
       page,
       limit,
       total,
@@ -2039,7 +2023,7 @@ export const galleryService = {
       return null;
     }
 
-    return mapImageDetail(detail, getDerivativeAssetVersion());
+    return mapImageDetail(detail);
   },
 
   getSharedImageDetail(id: number, mediaType?: MediaType, options: { isLegacyImageAlias?: boolean } = {}) {
@@ -2058,7 +2042,7 @@ export const galleryService = {
       return null;
     }
 
-    return mapSharedImageDetail(detail, getDerivativeAssetVersion());
+    return mapSharedImageDetail(detail);
   },
 
   getShareDerivativeImage(id: number): ImageRecord | null {
@@ -2107,8 +2091,7 @@ export const galleryService = {
     }
 
     const total = imageRepository.countTrashed();
-    const derivativeVersion = getDerivativeAssetVersion();
-    const items = imageRepository.listTrashed(page, limit).map((image) => mapTrashImage(image as IndexedTrashImage, derivativeVersion));
+    const items = imageRepository.listTrashed(page, limit).map((image) => mapTrashImage(image as IndexedTrashImage));
 
     return buildTrashPaginatedPayload(items, page, limit, total);
   },
@@ -2119,10 +2102,8 @@ export const galleryService = {
         items: []
       };
     }
-
-    const derivativeVersion = getDerivativeAssetVersion();
     return {
-      items: collectionRepository.listSummaries().map((collection) => mapCollectionSummary(collection, derivativeVersion))
+      items: collectionRepository.listSummaries().map((collection) => mapCollectionSummary(collection))
     };
   },
 
@@ -2137,7 +2118,6 @@ export const galleryService = {
     }
 
     const total = collectionRepository.countImages(slug);
-    const derivativeVersion = getDerivativeAssetVersion();
 
     return {
       collection: mapCollectionSummary(
@@ -2147,11 +2127,10 @@ export const galleryService = {
           cover_image_id: null,
           cover_thumbnail_path: null,
           preview_image_ids: null
-        },
-        derivativeVersion
+        }
       ),
       ...buildPaginatedPayload(
-        collectionRepository.listImages(slug, page, limit).map((image) => mapFeedImage(image, derivativeVersion)),
+        collectionRepository.listImages(slug, page, limit).map((image) => mapFeedImage(image)),
         page,
         limit,
         total
@@ -2168,12 +2147,10 @@ export const galleryService = {
     if (!post || post.is_deleted || post.is_trashed) {
       return null;
     }
-
-    const derivativeVersion = getDerivativeAssetVersion();
     return {
       imageId: post.id,
       isSaved: collectionRepository.isImageSaved(post.id),
-      items: collectionRepository.listMembershipsForImage(post.id).map((collection) => mapCollectionMembership(collection, derivativeVersion))
+      items: collectionRepository.listMembershipsForImage(post.id).map((collection) => mapCollectionMembership(collection))
     };
   },
 

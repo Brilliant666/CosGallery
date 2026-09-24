@@ -121,6 +121,7 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
       const thumbnailAbsolutePath = path.join(appConfig.thumbnailsDir, thumbnailPath);
       await fs.mkdir(path.dirname(thumbnailAbsolutePath), { recursive: true });
       await fs.writeFile(thumbnailAbsolutePath, `thumbnail:${relativePath}`);
+      await stampFixture(thumbnailAbsolutePath, 'thumbnail');
       return {
         thumbnailPath,
         generatedThumbnail: true
@@ -137,11 +138,21 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
           ? 'animated-avif-preview'
           : 'image-preview';
       await fs.writeFile(previewAbsolutePath, `${suffix}:${path.basename(previewAbsolutePath)}`);
+      await stampFixture(previewAbsolutePath, 'preview');
       return {
         previewPath,
         generatedPreview: true
       };
     });
+  }
+
+  async function stampFixture(output: string, kind: 'thumbnail' | 'preview') {
+    const relative = path.relative(kind === 'thumbnail' ? appConfig.thumbnailsDir : appConfig.previewsDir, output).replaceAll('\\', '/');
+    const record = kind === 'thumbnail' ? imageRepository.getByThumbnailPath(relative) : imageRepository.getByPreviewPath(relative);
+    if (record) {
+      const { stampDerivative, imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+      await stampDerivative(output, imageDerivativeVersion(record, kind));
+    }
   }
 
   async function dispatchRoute(
@@ -245,12 +256,19 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
         url: routePath
       } as unknown as express.Request;
 
+      const kind = router === lazyThumbnailsRouter ? 'thumbnail' : 'preview';
+      const relative = decodeURIComponent(routePath.replace(/^\//, ''));
+      const record = kind === 'thumbnail' ? imageRepository.getByThumbnailPath(relative) : imageRepository.getByPreviewPath(relative);
+      void import('../src/utils/derivative-version.js').then(({ imageDerivativeVersion }) => {
+      Object.assign(request, { query: record ? { v: imageDerivativeVersion(record, kind) } : {} });
+      Object.assign(response, { req: request });
       router.handle(request, response as unknown as express.Response, (error?: unknown) => {
         if (error) {
           fail(error);
           return;
         }
       });
+      }).catch(fail);
     });
   }
 
@@ -460,6 +478,7 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
       const thumbnailAbsolutePath = path.join(appConfig.thumbnailsDir, thumbnailPath);
       await fs.mkdir(path.dirname(thumbnailAbsolutePath), { recursive: true });
       await fs.writeFile(thumbnailAbsolutePath, `thumbnail:${relativePath}`);
+      await stampFixture(thumbnailAbsolutePath, 'thumbnail');
       return { thumbnailPath, generatedThumbnail: true };
     });
 
@@ -594,6 +613,7 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
         });
         await fs.mkdir(path.dirname(previewAbsolutePath), { recursive: true });
         await fs.writeFile(previewAbsolutePath, 'video-preview:clip.mp4');
+    await stampFixture(previewAbsolutePath, 'preview');
       });
     });
 
@@ -639,6 +659,7 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
       const thumbnailAbsolutePath = path.join(appConfig.thumbnailsDir, thumbnailPath);
       await fs.mkdir(path.dirname(thumbnailAbsolutePath), { recursive: true });
       await fs.writeFile(thumbnailAbsolutePath, `thumbnail:${relativePath}`);
+      await stampFixture(thumbnailAbsolutePath, 'thumbnail');
       activeGenerations -= 1;
 
       return {
@@ -704,6 +725,7 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
 
     await fs.mkdir(path.dirname(previewAbsolutePath), { recursive: true });
     await fs.writeFile(previewAbsolutePath, 'video-preview:clip.mp4');
+    await stampFixture(previewAbsolutePath, 'preview');
 
     const response = await dispatchRoute(lazyPreviewsRouter, `/${encodeRelativePath(video.preview_path)}`, {
       sendFile(_filePath, callback, { finish, response: routeResponse }) {

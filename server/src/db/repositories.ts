@@ -260,6 +260,7 @@ const BASE_POST_SELECT_SQL = `
     images.media_type AS mediaType,
     images.duration_ms AS durationMs,
     images.is_animated AS isAnimated,
+    printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
     images.thumbnail_path AS thumbnailUrl,
     images.preview_path AS previewUrl,
     images.playback_strategy AS playbackStrategy,
@@ -351,6 +352,8 @@ const FOLDER_SUMMARY_SELECT_SQL = `
     ) AS latest_image_mtime_ms,
     CASE WHEN ${HAS_AVATAR_STORY_SQL} THEN 1 ELSE 0 END AS has_avatar_story,
     ${FOLDER_SUMMARY_AVATAR_IMAGE_ID_SQL} AS summary_avatar_image_id,
+    (SELECT printf('%lld:%lld', a.file_size, round(a.mtime_ms)) FROM images a WHERE a.id = (${FOLDER_SUMMARY_AVATAR_IMAGE_ID_SQL})) AS summary_avatar_source_version,
+    (SELECT a.media_type FROM images a WHERE a.id = (${FOLDER_SUMMARY_AVATAR_IMAGE_ID_SQL})) AS summary_avatar_media_type,
     ${FOLDER_SUMMARY_AVATAR_THUMBNAIL_PATH_SQL} AS summary_avatar_thumbnail_path
   FROM folders
 `;
@@ -415,6 +418,8 @@ const ALL_FOLDER_SUMMARIES_SQL = `
     media_times.latest_image_mtime_ms,
     CASE WHEN story_owners.folder_id IS NULL THEN 0 ELSE 1 END AS has_avatar_story,
     avatar_ids.image_id AS summary_avatar_image_id,
+    CASE WHEN avatar_image.id IS NOT NULL THEN printf('%lld:%lld', avatar_image.file_size, round(avatar_image.mtime_ms)) END AS summary_avatar_source_version,
+    avatar_image.media_type AS summary_avatar_media_type,
     avatar_image.thumbnail_path AS summary_avatar_thumbnail_path
   FROM folders
   LEFT JOIN post_totals ON post_totals.folder_id=folders.id
@@ -1470,6 +1475,7 @@ export const postRepository = {
           img.media_type AS mediaType,
           img.duration_ms AS durationMs,
           img.is_animated AS isAnimated,
+          printf('%lld:%lld', img.file_size, round(img.mtime_ms)) AS derivativeSourceVersion,
           img.thumbnail_path AS thumbnailUrl,
           img.preview_path AS previewUrl,
           img.relative_path AS relativePath,
@@ -1493,6 +1499,7 @@ export const postRepository = {
         mediaType: MediaType;
         durationMs: number | null;
         isAnimated: number | null;
+        derivativeSourceVersion: string;
         thumbnailUrl: string;
         previewUrl: string;
         relativePath: string;
@@ -1516,6 +1523,7 @@ export const postRepository = {
         mediaType: row.mediaType,
         durationMs: row.durationMs,
         isAnimated: row.isAnimated === 1,
+        derivativeSourceVersion: row.derivativeSourceVersion,
         thumbnailUrl: row.thumbnailUrl,
         previewUrl: row.previewUrl,
         originalUrl: `/api/originals/${row.imageId}`,
@@ -1541,6 +1549,7 @@ export const postRepository = {
         post.mediaType = first.mediaType;
         post.durationMs = first.durationMs;
         post.isAnimated = first.isAnimated;
+        post.derivativeSourceVersion = first.derivativeSourceVersion;
         post.thumbnailUrl = first.thumbnailUrl;
         post.previewUrl = first.previewUrl;
       }
@@ -1783,6 +1792,7 @@ export const postRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -1980,6 +1990,7 @@ export const postRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -2048,6 +2059,7 @@ export const postRepository = {
         images.relative_path AS relativePath,
         images.mime_type AS mimeType,
         images.file_size AS fileSize,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3118,6 +3130,7 @@ export const imageRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3157,6 +3170,7 @@ export const imageRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3523,6 +3537,7 @@ export const likeRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3568,6 +3583,7 @@ export const likeRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3612,6 +3628,7 @@ export const likeRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3980,6 +3997,7 @@ export const collectionRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
