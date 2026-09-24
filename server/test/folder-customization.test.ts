@@ -229,7 +229,7 @@ describe.sequential('folder customization', () => {
       expect(DBFolder?.avatar_source).toBe('manual');
     });
 
-    it('allows a video thumbnail to be used as the folder cover avatar', () => {
+    it('allows a video thumbnail to be used as the folder cover avatar', async () => {
       const folder = folderRepository.upsert({ slug: 'test-folder-video', name: 'Test Video', folderPath: 'test-video' });
       const video = imageRepository.upsert({
         folderId: folder.id,
@@ -266,7 +266,8 @@ describe.sequential('folder customization', () => {
 
       const folderSummary = galleryService.getFolderBySlug('test-folder-video');
       expect(folderSummary?.avatarImageId).toBe(video.id);
-      expect(folderSummary?.avatarUrl).toBe('/thumbnails/t/clip1.webp');
+      const { imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+      expect(folderSummary?.avatarUrl).toBe(`/thumbnails/t/clip1.webp?v=${imageDerivativeVersion(video, 'thumbnail')}`);
     });
 
     it('exposes customized parent folder display names for nested folders', () => {

@@ -82,10 +82,20 @@ describe.sequential('canonical creator work summaries', () => {
       expect(hydrate).not.toHaveBeenCalled();
       expect(prepare).toHaveBeenCalledTimes(2);
       const statements = prepare.mock.calls.map(call => call[0]);
-      expect(statements.every(sql => !sql.includes('exif_json') && !sql.includes('file_size'))).toBe(true);
+      expect(statements.every(sql => !sql.includes('exif_json'))).toBe(true);
+      // Only the representative member supplies cache provenance, not complete
+      // media evidence for every card. The other query remains counts-only.
+      expect(statements[0]).toContain('post_items.position = 1');
+      expect(statements[0]).toContain("printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion");
+      expect(statements[0]!.match(/file_size/g)).toHaveLength(1);
+      expect(statements[1]).not.toContain('file_size');
+      expect(statements[1]).not.toContain('thumbnail_path');
+      expect(statements[1]).not.toContain('preview_path');
+      expect(statements[1]).toContain('GROUP BY pi.post_id');
       for (const item of page) {
         expect(item).toMatchObject({ representation: 'summary', itemCount: 3, imageCount: 2, videoCount: 1 });
         expect(item).not.toHaveProperty('mediaItems');
+        for (const key of ['fileSize', 'relativePath', 'exif', 'exifJson', 'originalUrl']) expect(item).not.toHaveProperty(key);
       }
     } finally { hydrate.mockRestore(); prepare.mockRestore(); }
   });
