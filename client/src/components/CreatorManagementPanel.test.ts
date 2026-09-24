@@ -14,7 +14,7 @@ vi.mock('../api/gallery',()=>({fetchArchiveCatalogCreator:vi.fn()}));
 vi.mock('../api/local-admission',()=>({fetchAdmissionBatches:vi.fn()}));
 vi.mock('../api/managed-creators',()=>({createManagedCreator:vi.fn(),fetchManagedCreatorEditingState:vi.fn(),saveManagedCreatorProfile:vi.fn(),saveManagedCreatorDirectories:vi.fn(),updateManagedCreator:vi.fn(),addManagedAlias:vi.fn(),deleteManagedAlias:vi.fn(),setManagedCreatorActive:vi.fn(),previewManagedCreatorDeletion:vi.fn(),deleteUnusedManagedCreator:vi.fn(),linkManagedFolder:vi.fn(),unlinkManagedFolder:vi.fn(),fetchIngestDestination:vi.fn(),setIngestDestination:vi.fn()}));
 const button=(w:ReturnType<typeof mount>,text:string)=>w.findAll('button').find(item=>item.text()===text)!;
-const panel=(tab:CreatorPanelTab='overview',creatorId:number|null=1)=>mount(CreatorManagementPanel,{props:{creatorId,tab},global:{stubs:{FirstCollectionSelector:{name:'FirstCollectionSelector',props:['active'],template:'<div data-test="source-check" :data-active="active" />'},SourceEvidencePanel:{name:'SourceEvidencePanel',data:()=>({hasUnsavedChanges:false,isBusy:false}),template:'<div data-test="source-evidence" />'}}}});
+const panel=(tab:CreatorPanelTab='overview',creatorId:number|null=1,layoutReady=true)=>mount(CreatorManagementPanel,{props:{creatorId,tab,layoutReady},global:{stubs:{FirstCollectionSelector:{name:'FirstCollectionSelector',props:['active'],template:'<div data-test="source-check" :data-active="active" />'},SourceEvidencePanel:{name:'SourceEvidencePanel',data:()=>({hasUnsavedChanges:false,isBusy:false}),template:'<div data-test="source-evidence" />'}}}});
 const preview:api.ManagedCreatorDeletionPreview={creatorId:1,name:'Alpha',eligible:true,blockers:[],confirmationToken:'preview-v1',removableAliases:2};
 const chooseIdentity=(value:ArchiveCatalogCreatorDetail)=>{vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(value));vi.mocked(api.fetchManagedCreatorEditingState).mockResolvedValue(editingState(value));};
 describe('creator management panel lifecycle and save scopes',()=>{
@@ -48,6 +48,14 @@ describe('creator management panel lifecycle and save scopes',()=>{
     w.getComponent({name:'FirstCollectionSelector'}).vm.$emit('planned',[1]);await flushPromises();
     expect(w.get('h2').text()).toBe('Background saved name');
     await w.setProps({tab:'overview'});await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
+  });
+  it('waits for the initial surrounding layout before positioning, and never repeats after readiness changes',async()=>{
+    const scroll=vi.fn();vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
+    const bounds=vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,0,400,500));
+    const w=panel('overview',1,false);await flushPromises();expect(bounds).not.toHaveBeenCalled();expect(scroll).not.toHaveBeenCalled();
+    bounds.mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));await w.setProps({layoutReady:true});await flushPromises();
+    expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
+    await w.setProps({layoutReady:false});await w.setProps({layoutReady:true,tab:'profile'});await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
   });
   it.each([{narrow:false,low:false},{narrow:true,low:true}])('does not reposition an already visible desktop panel or a narrow modal: $narrow/$low',async({narrow,low})=>{
     const media=window.matchMedia('(max-width:1100px)');vi.spyOn(window,'matchMedia').mockReturnValue({...media,matches:narrow});

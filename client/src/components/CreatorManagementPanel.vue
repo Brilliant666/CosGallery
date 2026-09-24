@@ -71,7 +71,7 @@ import FirstCollectionSelector from './FirstCollectionSelector.vue';
 import SourceEvidencePanel from './SourceEvidencePanel.vue';
 
 export type CreatorPanelTab = 'overview'|'profile'|'directories'|'sources';
-const props=defineProps<{creatorId:number|null;tab:CreatorPanelTab}>();
+const props=withDefaults(defineProps<{creatorId:number|null;tab:CreatorPanelTab;layoutReady?:boolean}>(),{layoutReady:true});
 const emit=defineEmits<{close:[];tab:[value:CreatorPanelTab];changed:[];created:[id:number];deleted:[];catalog:[id:number];'plan-downloads':[id:number];'source-planned':[ids:number[]]}>();
 const tabs=[{id:'overview',label:'概览'},{id:'profile',label:'资料'},{id:'directories',label:'本地目录'},{id:'sources',label:'来源与补齐'}] as const;
 const auth=useAuthStore(pinia), reading=useCreatorReadingStore(pinia), router=useRouter();
@@ -139,10 +139,13 @@ function resolveLeave(value:boolean){const resolve=leaveResolve;leaveResolve=nul
 function returnToSave(){chooseTab(dirtyTabs.value[0]??'profile');resolveLeave(false);}
 function resizeSurface(){const element=surface.value;if(!element)return;const active=document.activeElement as HTMLElement|null;narrow.value=media?.matches??false;if(element.open)element.close();if(narrow.value)element.showModal();else element.show();if(active&&element.contains(active))active.focus({preventScroll:true});}
 function beforeUnload(event:BeforeUnloadEvent){if(dirtyTabs.value.length||busy.value){event.preventDefault();event.returnValue='';}}
+let surfaceMounted=false, initiallyPositioned=false;
+function positionInitialPanel(){if(!surfaceMounted||!props.layoutReady||initiallyPositioned)return;initiallyPositioned=true;if(!narrow.value&&surface.value&&surface.value.getBoundingClientRect().top>window.innerHeight/2)surface.value.scrollIntoView({block:'start',behavior:'auto'});}
+watch(()=>props.layoutReady,async()=>{await nextTick();if(!disposed)positionInitialPanel();});
 watch(dirtyTabs,tabs=>{if(tabs.length)deletion.value=null;});
 watch(()=>props.creatorId,loadIdentity,{immediate:true});watch(()=>props.tab,activateTab);
 watch(()=>auth.capabilities.canAccessSettings,value=>{if(auth.ready&&!value){++generation;busy.value=false;loading.value=false;editingLoading.value=false;profileReady.value=false;directoriesReady.value=false;sourcesVisited.value=false;detail.value=null;editing.value=null;editingPromise=null;manualAliases.value=[];aliasInput.value='';linkedFolderIds.value=[];preferredFolderId.value=null;Object.assign(draft,{name:'',preference:null,rating:null,confirmDistinct:false});resolveLeave(true);emit('close');}});
-onMounted(()=>{media=window.matchMedia?.('(max-width:1100px)')??null;media?.addEventListener('change',resizeSurface);resizeSurface();if(!narrow.value&&surface.value&&surface.value.getBoundingClientRect().top>window.innerHeight/2)surface.value.scrollIntoView({block:'start',behavior:'auto'});window.addEventListener('beforeunload',beforeUnload);});
+onMounted(()=>{media=window.matchMedia?.('(max-width:1100px)')??null;media?.addEventListener('change',resizeSurface);resizeSurface();surfaceMounted=true;positionInitialPanel();window.addEventListener('beforeunload',beforeUnload);});
 onBeforeUnmount(()=>{disposed=true;++generation;resolveLeave(false);media?.removeEventListener('change',resizeSurface);window.removeEventListener('beforeunload',beforeUnload);surface.value?.close();});
 defineExpose({requestLeave,dirtyTabs});
 </script>

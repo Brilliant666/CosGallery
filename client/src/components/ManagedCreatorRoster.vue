@@ -37,7 +37,7 @@
       <button :disabled="!payload?.hasMore || loading" @click="goPage(page + 1)">下一页</button>
     </footer>
 
-    </div><CreatorManagementPanel v-if="panelSelection" :key="panelSelection" ref="panel" :creator-id="panelSelection === 'new' ? null : Number(panelSelection)" :tab="panelTab" @close="closePanel" @tab="changePanelTab" @changed="changed" @created="created" @deleted="deleted" @catalog="id=>emit('resource-catalog',id)" @plan-downloads="id=>emit('plan-downloads',id)" @source-planned="handleSourcePlanned" /></div>
+    </div><CreatorManagementPanel v-if="panelSelection" :key="panelSelection" ref="panel" :layout-ready="layoutReady" :creator-id="panelSelection === 'new' ? null : Number(panelSelection)" :tab="panelTab" @close="closePanel" @tab="changePanelTab" @changed="changed" @created="created" @deleted="deleted" @catalog="id=>emit('resource-catalog',id)" @plan-downloads="id=>emit('plan-downloads',id)" @source-planned="handleSourcePlanned" /></div>
   </section>
 </template>
 
@@ -50,6 +50,7 @@ import { useAuthStore } from '../stores/auth';
 import { pinia } from '../stores/pinia';
 import type { ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ArchiveCatalogState, ContentRating } from '../types/api';
 const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]]; 'plan-downloads': [creatorId: number]; 'resource-catalog': [creatorId: number] }>();
+withDefaults(defineProps<{layoutReady?:boolean}>(),{layoutReady:true});
 const route=useRoute(),router=useRouter(),auth=useAuthStore(pinia);
 const payload=ref<ArchiveCatalogCreatorsPayload|null>(null),listTop=ref<HTMLElement|null>(null);
 const defaults={ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no'|'no-unchecked'|'no-not-found', state:'' as ''|ArchiveCatalogState };
