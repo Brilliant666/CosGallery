@@ -140,8 +140,8 @@ function returnToSave(){chooseTab(dirtyTabs.value[0]??'profile');resolveLeave(fa
 function resizeSurface(){const element=surface.value;if(!element)return;const active=document.activeElement as HTMLElement|null;narrow.value=media?.matches??false;if(element.open)element.close();if(narrow.value)element.showModal();else element.show();if(active&&element.contains(active))active.focus({preventScroll:true});}
 function beforeUnload(event:BeforeUnloadEvent){if(dirtyTabs.value.length||busy.value){event.preventDefault();event.returnValue='';}}
 let surfaceMounted=false, initiallyPositioned=false;
-function positionInitialPanel(){if(!surfaceMounted||!props.layoutReady||initiallyPositioned)return;initiallyPositioned=true;if(!narrow.value&&surface.value&&surface.value.getBoundingClientRect().top>window.innerHeight/2)surface.value.scrollIntoView({block:'start',behavior:'auto'});}
-watch(()=>props.layoutReady,async()=>{await nextTick();if(!disposed)positionInitialPanel();});
+function positionInitialPanel(){if(!surfaceMounted||!props.layoutReady||loading.value||editingLoading.value||historyLoading.value||initiallyPositioned)return;initiallyPositioned=true;if(!narrow.value&&surface.value&&surface.value.getBoundingClientRect().top>window.innerHeight/2)surface.value.scrollIntoView({block:'start',behavior:'auto'});}
+watch([()=>props.layoutReady,loading,editingLoading,historyLoading],async()=>{await nextTick();if(!disposed)positionInitialPanel();});
 watch(dirtyTabs,tabs=>{if(tabs.length)deletion.value=null;});
 watch(()=>props.creatorId,loadIdentity,{immediate:true});watch(()=>props.tab,activateTab);
 watch(()=>auth.capabilities.canAccessSettings,value=>{if(auth.ready&&!value){++generation;busy.value=false;loading.value=false;editingLoading.value=false;profileReady.value=false;directoriesReady.value=false;sourcesVisited.value=false;detail.value=null;editing.value=null;editingPromise=null;manualAliases.value=[];aliasInput.value='';linkedFolderIds.value=[];preferredFolderId.value=null;Object.assign(draft,{name:'',preference:null,rating:null,confirmDistinct:false});resolveLeave(true);emit('close');}});

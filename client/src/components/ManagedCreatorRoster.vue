@@ -37,7 +37,7 @@
       <button :disabled="!payload?.hasMore || loading" @click="goPage(page + 1)">下一页</button>
     </footer>
 
-    </div><CreatorManagementPanel v-if="panelSelection" :key="panelSelection" ref="panel" :layout-ready="layoutReady" :creator-id="panelSelection === 'new' ? null : Number(panelSelection)" :tab="panelTab" @close="closePanel" @tab="changePanelTab" @changed="changed" @created="created" @deleted="deleted" @catalog="id=>emit('resource-catalog',id)" @plan-downloads="id=>emit('plan-downloads',id)" @source-planned="handleSourcePlanned" /></div>
+    </div><CreatorManagementPanel v-if="panelSelection" :key="panelSelection" ref="panel" :layout-ready="layoutReady && initialRosterSettled" :creator-id="panelSelection === 'new' ? null : Number(panelSelection)" :tab="panelTab" @close="closePanel" @tab="changePanelTab" @changed="changed" @created="created" @deleted="deleted" @catalog="id=>emit('resource-catalog',id)" @plan-downloads="id=>emit('plan-downloads',id)" @source-planned="handleSourcePlanned" /></div>
   </section>
 </template>
 
@@ -56,6 +56,7 @@ const payload=ref<ArchiveCatalogCreatorsPayload|null>(null),listTop=ref<HTMLElem
 const defaults={ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no'|'no-unchecked'|'no-not-found', state:'' as ''|ArchiveCatalogState };
 const filters=reactive({...defaults});
 const page=ref(1),loading=ref(false),error=ref(''),notice=ref('');
+const initialRosterSettled=ref(false);
 const panel=ref<InstanceType<typeof CreatorManagementPanel>|null>(null), panelSelection=ref(''),panelTab=ref<CreatorPanelTab>('overview');
 let loadGeneration=0,queryTimer:ReturnType<typeof setTimeout>|undefined,composing=false,disposed=false,requestKey:string|null=null,appliedFilterKey:string|null=null;
 const preferenceLabel=(value:ArchiveCatalogPreference|null)=>value==='liked'?'喜欢':value==='kept'?'保留':'未设置';
@@ -75,7 +76,7 @@ async function load(force = true) {
     const result = await fetchArchiveCatalog(params);
     if (generation === loadGeneration) { payload.value = result; appliedFilterKey = filterKey; return generation; }
   } catch (reason) { if (generation === loadGeneration) { requestKey = null; showError(reason); } }
-  finally { if (generation === loadGeneration) loading.value = false; }
+  finally { if (generation === loadGeneration) { loading.value = false; initialRosterSettled.value = true; } }
 }
 function clearQueryTimer() { clearTimeout(queryTimer); queryTimer = undefined; }
 function onFilterChange(event: Event) {

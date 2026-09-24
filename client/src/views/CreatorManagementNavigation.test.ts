@@ -32,16 +32,22 @@ describe('management panel real router context and draft guards',()=>{
     expect(w.find('.creator-panel').exists()).toBe(false);expect(router.currentRoute.value.query).toMatchObject({rosterPage:'2',rosterPreference:'liked'});expect(router.currentRoute.value.query.manageCreator).toBeUndefined();expect(router.currentRoute.value.query.manageTab).toBeUndefined();
     router.back();await flushPromises();expect(w.get('.creator-panel h2').text()).toBe('Alpha');expect(w.get('#creator-tab-profile').attributes('aria-selected')).toBe('true');
   });
-  it('passes delayed summary readiness through the real roster and positions the deep-linked panel only after layout settles',async()=>{
-    const summary=deferred<typeof payload>();vi.mocked(fetchArchiveCatalog).mockImplementation(params=>params?.limit===1?summary.promise:Promise.resolve({...payload,items:[creator]}));
+  it.each(['summary-first','roster-first','roster-failure'] as const)('waits for summary and initial roster settlement before positioning the deep-linked panel: %s',async(order)=>{
+    const summary=deferred<typeof payload>(),roster=deferred<typeof payload>();vi.mocked(fetchArchiveCatalog).mockImplementation(params=>params?.limit===1?summary.promise:roster.promise);
     const scroll=vi.fn();vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
     const bounds=vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,0,400,500));
     const {w,router}=await setup();const management=w.getComponent(CreatorManagementPanel);
     expect(management.props('layoutReady')).toBe(false);expect(w.get('.creator-panel h2').text()).toBe('Alpha');expect(scroll).not.toHaveBeenCalled();
-    bounds.mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));summary.resolve(payload);await flushPromises();
+    if(order==='roster-first')roster.resolve(payload);else summary.resolve(payload);
+    await flushPromises();expect(management.props('layoutReady')).toBe(false);expect(scroll).not.toHaveBeenCalled();
+    bounds.mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));
+    if(order==='roster-first')summary.resolve(payload);else if(order==='roster-failure')roster.reject(new Error('Roster unavailable'));else roster.resolve(payload);
+    await flushPromises();
     expect(management.props('layoutReady')).toBe(true);expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
     await router.push({query:{...router.currentRoute.value.query,manageTab:'directories'}});await flushPromises();
+    const refresh=deferred<typeof payload>();vi.mocked(fetchArchiveCatalog).mockImplementation(params=>params?.limit===1?Promise.resolve(payload):refresh.promise);
     management.vm.$emit('changed');await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);expect(management.props('layoutReady')).toBe(true);
+    refresh.resolve(payload);await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
   });
   it('cancels changing workspace without hiding the dirty panel, then discards only by explicit choice',async()=>{
     const {w,router}=await setup();await w.get('.profile-form input').setValue('Uncommitted name');await w.get('[data-test=workspace-resources]').trigger('click');await flushPromises();expect(w.get('.leave-dialog').element.open).toBe(true);expect(w.find('[data-test=resource-catalog]').exists()).toBe(false);await button(w,'取消跳转').trigger('click');await flushPromises();expect(w.get('.creator-panel').isVisible()).toBe(true);expect(w.get('.profile-form input').element.value).toBe('Uncommitted name');expect(router.currentRoute.value.query.workspace).toBeUndefined();

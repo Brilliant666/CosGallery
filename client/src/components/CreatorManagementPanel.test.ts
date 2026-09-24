@@ -57,6 +57,25 @@ describe('creator management panel lifecycle and save scopes',()=>{
     expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
     await w.setProps({layoutReady:false});await w.setProps({layoutReady:true,tab:'profile'});await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
   });
+  it('waits for its initial editing and history content before the single desktop positioning',async()=>{
+    const edit=deferred<api.ManagedCreatorEditingState>(),history=deferred<Awaited<ReturnType<typeof fetchAdmissionBatches>>>();
+    vi.mocked(api.fetchManagedCreatorEditingState).mockReturnValue(edit.promise);vi.mocked(fetchAdmissionBatches).mockReturnValue(history.promise);
+    const scroll=vi.fn();vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
+    vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));
+    const w=panel('profile');await flushPromises();expect(scroll).not.toHaveBeenCalled();
+    edit.resolve(editingState());await flushPromises();expect(w.find('.profile-form').exists()).toBe(true);expect(scroll).not.toHaveBeenCalled();
+    history.reject(new Error('History unavailable'));await flushPromises();expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
+    await w.setProps({tab:'directories'});await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
+  });
+  it('does not position for stale identity responses or after the panel closes',async()=>{
+    const a=deferred<ArchiveCatalogCreatorDetail>(),b=deferred<ArchiveCatalogCreatorDetail>(),history=deferred<Awaited<ReturnType<typeof fetchAdmissionBatches>>>();
+    vi.mocked(fetchArchiveCatalogCreator).mockImplementation(id=>id===1?a.promise:b.promise);vi.mocked(fetchAdmissionBatches).mockReturnValue(history.promise);
+    const scroll=vi.fn();vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
+    vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));
+    const w=panel();await w.setProps({creatorId:2});a.resolve(creator);await flushPromises();expect(scroll).not.toHaveBeenCalled();expect(fetchAdmissionBatches).not.toHaveBeenCalled();
+    b.resolve({...creator,id:2,name:'Beta'});await flushPromises();expect(scroll).not.toHaveBeenCalled();w.unmount();
+    history.resolve({items:[],total:0,page:1,pageSize:20,hasMore:false});await flushPromises();expect(scroll).not.toHaveBeenCalled();
+  });
   it.each([{narrow:false,low:false},{narrow:true,low:true}])('does not reposition an already visible desktop panel or a narrow modal: $narrow/$low',async({narrow,low})=>{
     const media=window.matchMedia('(max-width:1100px)');vi.spyOn(window,'matchMedia').mockReturnValue({...media,matches:narrow});
     const scroll=vi.fn();
