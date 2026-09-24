@@ -1052,20 +1052,11 @@ router.delete(
 );
 
 router.delete('/folders/:slug', requireCapability('canDeleteMedia', 'Admin access is required.'), async (request, response) => {
-  const params = slugSchema.parse(request.params);
-  const query = deleteFolderQuerySchema.parse(request.query);
-  const deleted = await galleryService.deleteFolder(params.slug, {
-    deleteSourceFolder: query.deleteSourceFolder
-  });
-
-  if (!deleted) {
-    response.status(404).json({ message: 'Folder not found' });
-    return;
-  }
-
-  response.json({
-    ok: true,
-    ...deleted
+  slugSchema.parse(request.params);
+  deleteFolderQuerySchema.parse(request.query);
+  response.status(410).json({
+    code: 'LEGACY_FOLDER_DELETE_RETIRED',
+    message: 'Legacy permanent folder deletion has been retired. No files or records were changed.'
   });
 });
 

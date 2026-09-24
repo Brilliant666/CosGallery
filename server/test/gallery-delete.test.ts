@@ -1,275 +1,133 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-
+import { createHash } from 'node:crypto';
+import type { Server } from 'node:http';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-
-import {
-  createFingerprint,
-  getMediaTypeFromExtension,
-  getMimeTypeFromExtension,
-  getPreviewRelativePath,
-  getThumbnailRelativePath
-} from '../src/utils/image-utils.js';
+import { createFingerprint, getMediaTypeFromExtension, getMimeTypeFromExtension, getPreviewRelativePath, getThumbnailRelativePath } from '../src/utils/image-utils.js';
 
 type AppConfigModule = typeof import('../src/config/env.js');
-type GalleryServiceModule = typeof import('../src/services/gallery-service.js');
 type RepositoriesModule = typeof import('../src/db/repositories.js');
-type ModelsModule = typeof import('../src/types/models.js');
+type FolderRecord = import('../src/types/models.js').FolderRecord;
+type ImageRecord = import('../src/types/models.js').ImageRecord;
 
-type FolderRecord = ModelsModule['FolderRecord'];
-type ImageRecord = ModelsModule['ImageRecord'];
-
-describe.sequential('gallery folder deletion', () => {
+describe.sequential('retired legacy folder deletion', () => {
   let tempRoot = '';
   let appConfig: AppConfigModule['appConfig'];
-  let galleryService: GalleryServiceModule['galleryService'];
   let folderRepository: RepositoriesModule['folderRepository'];
   let imageRepository: RepositoriesModule['imageRepository'];
   let postRepository: RepositoriesModule['postRepository'];
   let folderScanStateRepository: RepositoriesModule['folderScanStateRepository'];
-  let maintenanceRepository: RepositoriesModule['maintenanceRepository'];
+  let server: Server;
+  let origin = '';
 
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'insta-gallery-delete-'));
-
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'gallery-retired-delete-'));
     vi.stubEnv('NODE_ENV', 'test');
-    vi.stubEnv('DATA_ROOT', path.join(tempRoot, 'data'));
-    vi.stubEnv('GALLERY_ROOT', path.join(tempRoot, 'gallery'));
-    vi.stubEnv('DB_DIR', path.join(tempRoot, 'db'));
-    vi.stubEnv('THUMBNAILS_DIR', path.join(tempRoot, 'thumbnails'));
-    vi.stubEnv('PREVIEWS_DIR', path.join(tempRoot, 'previews'));
-
+    for (const [key, child] of Object.entries({ DATA_ROOT: 'data', GALLERY_ROOT: 'gallery', DB_DIR: 'db', THUMBNAILS_DIR: 'thumbnails', PREVIEWS_DIR: 'previews', BACKUP_ROOT: 'backups' })) vi.stubEnv(key, path.join(tempRoot, child));
     vi.resetModules();
-
     ({ appConfig } = await import('../src/config/env.js'));
-    ({ galleryService } = await import('../src/services/gallery-service.js'));
-
-    ({
-      folderRepository,
-      imageRepository,
-      postRepository,
-      folderScanStateRepository,
-      maintenanceRepository
-    } = await import('../src/db/repositories.js'));
+    ({ folderRepository, imageRepository, postRepository, folderScanStateRepository } = await import('../src/db/repositories.js'));
+    const { createApp } = await import('../src/app.js');
+    server = createApp().listen(0, '127.0.0.1');
+    await new Promise<void>(resolve => server.once('listening', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected isolated TCP listener');
+    origin = 'http://127.0.0.1:' + address.port;
   });
-
   afterAll(async () => {
+    if (server) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    const { databaseManager } = await import('../src/db/database.js');
+    databaseManager.close();
     vi.unstubAllEnvs();
     vi.resetModules();
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
-
   beforeEach(async () => {
-    maintenanceRepository.resetLibraryIndex();
-    await Promise.all([
-      fs.rm(appConfig.galleryRoot, { recursive: true, force: true }),
-      fs.rm(appConfig.thumbnailsDir, { recursive: true, force: true }),
-      fs.rm(appConfig.previewsDir, { recursive: true, force: true })
-    ]);
-    await Promise.all([
-      fs.mkdir(appConfig.galleryRoot, { recursive: true }),
-      fs.mkdir(appConfig.thumbnailsDir, { recursive: true }),
-      fs.mkdir(appConfig.previewsDir, { recursive: true })
-    ]);
+    const { databaseManager } = await import('../src/db/database.js');
+    databaseManager.connection.exec('PRAGMA foreign_keys=ON');
+    expect(databaseManager.connection.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
   });
-
-  it('deletes a direct-image folder cleanly and removes its empty directories', async () => {
-    await createIndexedFolder('parent', ['photo-1.jpg']);
-
-    const result = await galleryService.deleteFolder('parent');
-
-    expect(result).toEqual({
-      slug: 'parent',
-      deletedImageCount: 1,
-      deletedFolderCount: 1,
-      deletedSourceFolder: false
-    });
-    expect(folderRepository.getBySlug('parent')).toBeUndefined();
-    expect(imageRepository.getByRelativePath('parent/photo-1.jpg')).toBeUndefined();
-    expect(folderScanStateRepository.getAll()).toEqual([]);
-    await expectPathMissing(path.join(appConfig.galleryRoot, 'parent'));
-    await expectPathMissing(path.join(appConfig.thumbnailsDir, 'parent'));
-    await expectPathMissing(path.join(appConfig.previewsDir, 'parent'));
-  });
-
-  it('deletes indexed videos and their generated preview mp4 files', async () => {
-    await createIndexedFolder('clips', ['clip-1.mp4']);
-
-    const result = await galleryService.deleteFolder('clips');
-
-    expect(result).toEqual({
-      slug: 'clips',
-      deletedImageCount: 1,
-      deletedFolderCount: 1,
-      deletedSourceFolder: false
-    });
-    await expectPathMissing(path.join(appConfig.galleryRoot, 'clips'));
-    await expectPathMissing(path.join(appConfig.thumbnailsDir, 'clips'));
-    await expectPathMissing(path.join(appConfig.previewsDir, 'clips'));
-  });
-
-  it('keeps child source folders on disk and in the database when only direct images are deleted', async () => {
-    await createIndexedFolder('parent', ['photo-1.jpg']);
-    await createIndexedFolder('parent/child-a', ['photo-2.jpg']);
-
-    const result = await galleryService.deleteFolder('parent');
-
-    expect(result).toEqual({
-      slug: 'parent',
-      deletedImageCount: 1,
-      deletedFolderCount: 1,
-      deletedSourceFolder: false
-    });
-    expect(folderRepository.getBySlug('parent')).toBeUndefined();
-    expect(folderRepository.getBySlug('parent-child-a')).toBeDefined();
-    expect(imageRepository.getByRelativePath('parent/photo-1.jpg')).toBeUndefined();
-    expect(imageRepository.getByRelativePath('parent/child-a/photo-2.jpg')).toBeDefined();
-    expect(folderScanStateRepository.getAll().map((entry) => entry.folder_path)).toEqual(['parent/child-a']);
-    await expectPathMissing(path.join(appConfig.galleryRoot, 'parent', 'photo-1.jpg'));
-    await expectPathPresent(path.join(appConfig.galleryRoot, 'parent'));
-    await expectPathPresent(path.join(appConfig.galleryRoot, 'parent', 'child-a'));
-    await expectPathPresent(path.join(appConfig.galleryRoot, 'parent', 'child-a', 'photo-2.jpg'));
-    await expectPathPresent(path.join(appConfig.thumbnailsDir, 'parent', 'child-a'));
-    await expectPathPresent(path.join(appConfig.previewsDir, 'parent', 'child-a'));
-  });
-
-  it('removes the full source subtree when subtree deletion is requested', async () => {
-    await createIndexedFolder('parent', ['photo-1.jpg']);
-    await createIndexedFolder('parent/child-a', ['photo-2.jpg']);
-    await fs.writeFile(path.join(appConfig.galleryRoot, 'parent', 'notes.txt'), 'keep me only in direct-delete mode');
-    await fs.writeFile(path.join(appConfig.galleryRoot, 'parent', 'child-a', 'clip.mp4'), 'also deleted in subtree mode');
-
-    const result = await galleryService.deleteFolder('parent', {
-      deleteSourceFolder: true
-    });
-
-    expect(result).toEqual({
-      slug: 'parent',
-      deletedImageCount: 2,
-      deletedFolderCount: 2,
-      deletedSourceFolder: true
-    });
-    expect(folderRepository.getBySlug('parent')).toBeUndefined();
-    expect(folderRepository.getBySlug('parent-child-a')).toBeUndefined();
-    expect(imageRepository.getByRelativePath('parent/photo-1.jpg')).toBeUndefined();
-    expect(imageRepository.getByRelativePath('parent/child-a/photo-2.jpg')).toBeUndefined();
-    expect(folderScanStateRepository.getAll()).toEqual([]);
-    await expectPathMissing(path.join(appConfig.galleryRoot, 'parent'));
-    await expectPathMissing(path.join(appConfig.thumbnailsDir, 'parent'));
-    await expectPathMissing(path.join(appConfig.previewsDir, 'parent'));
-  });
-
-  it('deletes owned carousel originals, derivatives, source folders, and database rows in default mode', async () => {
-    const owner = await createIndexedFolder('album', ['normal.jpg']);
-    const firstCarousel = await createIndexedFolder('album/carousels/first', ['01.jpg', '02.jpg'], {
-      role: 'carousel_source',
-      carouselOwnerFolderId: owner.folder.id
-    });
-    const secondCarousel = await createIndexedFolder('album/carousels/second', ['01.jpg', '02.jpg'], {
-      role: 'carousel_source',
-      carouselOwnerFolderId: owner.folder.id
-    });
-    for (const carousel of [firstCarousel, secondCarousel]) {
-      postRepository.upsertPostWithItems({
-        folderId: owner.folder.id,
-        sourcePath: carousel.folder.folder_path,
-        postType: 'carousel',
-        sortTimestamp: carousel.images[0].sort_timestamp,
-        isDeleted: 0,
-        isTrashed: 0
-      }, carousel.images.map((image, index) => ({ imageId: image.id, position: index + 1 })));
+  async function seedFixture() {
+    const { databaseManager } = await import('../src/db/database.js');
+    const db = databaseManager.connection;
+    const owner = await createIndexedFolder('retired', ['parent.jpg']);
+    await createIndexedFolder('retired/ordinary', ['ordinary.jpg']);
+    await createIndexedFolder('retired/owned', ['owned.mp4'], { role: 'carousel_source', carouselOwnerFolderId: owner.folder.id });
+    await fs.writeFile(path.join(appConfig.galleryRoot, 'retired', 'notes.txt'), 'synthetic attachment');
+    const post = postRepository.upsertPostWithItems({ folderId: owner.folder.id, sourcePath: 'retired/parent.jpg', postType: 'single', sortTimestamp: 1700000000000, isDeleted: 0, isTrashed: 0 }, [{ imageId: owner.images[0].id, position: 1 }]);
+    if (!db.prepare('SELECT id FROM archive_catalog_local_works LIMIT 1').get()) {
+      const local = db.prepare("INSERT INTO archive_catalog_local_creator_folders(root_path,relative_path,absolute_path,folder_name,match_status,scanned_at,gallery_folder_id) VALUES(?,?,?,?, 'unmatched',CURRENT_TIMESTAMP,?)").run(appConfig.galleryRoot,'retired',path.join(appConfig.galleryRoot,'retired'),'retired',owner.folder.id);
+      db.prepare("INSERT INTO archive_catalog_local_works(local_creator_folder_id,post_id,relative_path,absolute_path,folder_name,match_status,scanned_at) VALUES(?,?,?,?,?,'unmatched',CURRENT_TIMESTAMP)").run(Number(local.lastInsertRowid),post.id,'parent.jpg',owner.images[0].absolute_path,'parent.jpg');
     }
-
-    const result = await galleryService.deleteFolder('album');
-    expect(result).toEqual({
-      slug: 'album',
-      deletedImageCount: 5,
-      deletedFolderCount: 1,
-      deletedSourceFolder: false
-    });
-    expect(folderRepository.getBySlug('album')).toBeUndefined();
-    expect(folderRepository.getByFolderPath('album/carousels/first')).toBeUndefined();
-    expect(folderRepository.getByFolderPath('album/carousels/second')).toBeUndefined();
-    expect(postRepository.countAll()).toBe(0);
-    for (const image of [...owner.images, ...firstCarousel.images, ...secondCarousel.images]) {
-      expect(imageRepository.getById(image.id)).toBeUndefined();
+  }
+  async function snapshot() {
+    const { databaseManager } = await import('../src/db/database.js');
+    const db = databaseManager.connection;
+    const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name").all() as { name: string }[];
+    const rows = tables.map(({ name }) => [name, db.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all()]);
+    const files: Record<string, string> = {};
+    for (const root of [appConfig.galleryRoot, appConfig.thumbnailsDir, appConfig.previewsDir]) {
+      const walk = async (dir: string): Promise<void> => {
+        for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+          const target = path.join(dir, entry.name);
+          if (entry.isDirectory()) await walk(target);
+          else files[target] = createHash('sha256').update(await fs.readFile(target)).digest('hex');
+        }
+      };
+      await walk(root);
     }
-    await expectPathMissing(path.join(appConfig.galleryRoot, 'album'));
-    await expectPathMissing(path.join(appConfig.thumbnailsDir, 'album'));
-    await expectPathMissing(path.join(appConfig.previewsDir, 'album'));
+    return { rows, files };
+  }
+  it('removes the internal destructive method without changing single-post deletion', async () => {
+    const { galleryService } = await import('../src/services/gallery-service.js');
+    expect('deleteFolder' in galleryService).toBe(false);
+    expect(typeof galleryService.deleteImage).toBe('function');
   });
-
-  it('includes owned carousel sources in full source-subtree deletion counts', async () => {
-    const owner = await createIndexedFolder('album', ['normal.jpg']);
-    const firstCarousel = await createIndexedFolder('album/carousels/first', ['01.jpg', '02.jpg'], {
-      role: 'carousel_source',
-      carouselOwnerFolderId: owner.folder.id
-    });
-    const secondCarousel = await createIndexedFolder('album/carousels/second', ['01.jpg', '02.jpg'], {
-      role: 'carousel_source',
-      carouselOwnerFolderId: owner.folder.id
-    });
-    await fs.writeFile(path.join(appConfig.galleryRoot, 'album', 'notes.txt'), 'also removed');
-
-    const result = await galleryService.deleteFolder('album', { deleteSourceFolder: true });
-    expect(result).toEqual({
-      slug: 'album',
-      deletedImageCount: 5,
-      deletedFolderCount: 3,
-      deletedSourceFolder: true
-    });
-    expect(folderRepository.getBySlug('album')).toBeUndefined();
-    expect(folderRepository.getByFolderPath(firstCarousel.folder.folder_path)).toBeUndefined();
-    expect(folderRepository.getByFolderPath(secondCarousel.folder.folder_path)).toBeUndefined();
-    await expectPathMissing(path.join(appConfig.galleryRoot, 'album'));
-    await expectPathMissing(path.join(appConfig.thumbnailsDir, 'album'));
-    await expectPathMissing(path.join(appConfig.previewsDir, 'album'));
-  });
-
-  it.each([
-    { mode: 'default', deleteSourceFolder: false, deletedFolderCount: 1 },
-    { mode: 'full subtree', deleteSourceFolder: true, deletedFolderCount: 2 }
-  ])('removes soft-deleted and trashed carousel derivatives during $mode deletion', async ({
-    deleteSourceFolder,
-    deletedFolderCount
-  }) => {
-    const owner = await createIndexedFolder('album', ['normal.jpg']);
-    const carousel = await createIndexedFolder('album/carousels/video-post', ['cover.jpg', 'clip.mp4'], {
-      role: 'carousel_source',
-      carouselOwnerFolderId: owner.folder.id
-    });
-    const post = postRepository.upsertPostWithItems({
-      folderId: owner.folder.id,
-      sourcePath: carousel.folder.folder_path,
-      postType: 'carousel',
-      sortTimestamp: carousel.images[0].sort_timestamp,
-      isDeleted: 0,
-      isTrashed: 0
-    }, carousel.images.map((image, index) => ({ imageId: image.id, position: index + 1 })));
-
-    expect(postRepository.trashPost(post.id)).toBe(true);
-    const softDeletedVideo = carousel.images.find((image) => image.media_type === 'video')!;
-    imageRepository.markDeleted(softDeletedVideo.relative_path);
-    await fs.rm(softDeletedVideo.absolute_path);
-    expect(softDeletedVideo.preview_path).toMatch(/\.mp4$/);
-    await expectPathPresent(path.join(appConfig.thumbnailsDir, softDeletedVideo.thumbnail_path));
-    await expectPathPresent(path.join(appConfig.previewsDir, softDeletedVideo.preview_path));
-
-    const result = await galleryService.deleteFolder('album', { deleteSourceFolder });
-    expect(result).toEqual({
-      slug: 'album',
-      deletedImageCount: 3,
-      deletedFolderCount,
-      deletedSourceFolder: deleteSourceFolder
-    });
-
-    for (const image of [...owner.images, ...carousel.images]) {
-      expect(imageRepository.getById(image.id)).toBeUndefined();
-      await expectPathMissing(path.join(appConfig.galleryRoot, image.relative_path));
-      await expectPathMissing(path.join(appConfig.thumbnailsDir, image.thumbnail_path));
-      await expectPathMissing(path.join(appConfig.previewsDir, image.preview_path));
+  it.each(['', '?deleteSourceFolder=true', '?deleteSourceFolder=false'])('returns stable 410 without file or database mutations, including repeats (%s)', async suffix => {
+    await seedFixture();
+    const before = await snapshot();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await fetch(origin + '/api/folders/retired' + suffix, { method: 'DELETE', headers: { 'x-foldergram-intent': '1' } });
+      expect(response.status).toBe(410);
+      expect(await response.json()).toMatchObject({ code: 'LEGACY_FOLDER_DELETE_RETIRED' });
+      expect(await snapshot()).toEqual(before);
     }
+  });
+  it('returns retirement even for a missing folder, without a new lookup path', async () => {
+    const response = await fetch(origin + '/api/folders/not-present?deleteSourceFolder=true', { method: 'DELETE', headers: { 'x-foldergram-intent': '1' } });
+    expect(response.status).toBe(410);
+  });
+  it('also protects legacy folders without any LocalWork reference', async () => {
+    await createIndexedFolder('unreferenced', ['legacy.jpg']);
+    const before = await snapshot();
+    for (const suffix of ['', '?deleteSourceFolder=true']) {
+      const response = await fetch(origin + '/api/folders/unreferenced' + suffix, { method: 'DELETE', headers: { 'x-foldergram-intent': '1' } });
+      expect(response.status).toBe(410);
+      expect(await snapshot()).toEqual(before);
+    }
+  });
+  it('retains mutation intent and parameter validation', async () => {
+    expect((await fetch(origin + '/api/folders/retired', { method: 'DELETE' })).status).toBe(403);
+    expect((await fetch(origin + '/api/folders/retired?deleteSourceFolder=invalid', { method: 'DELETE', headers: { 'x-foldergram-intent': '1' } })).status).toBe(400);
+  });
+  it('retains authentication and viewer prohibition, while admins receive 410 with protection enabled', async () => {
+    await seedFixture();
+    const { authService } = await import('../src/services/auth-service.js');
+    authService.setAdminPassword('isolated-admin-only');
+    authService.setViewerAccess('password', 'isolated-viewer-only');
+    const before = await snapshot();
+    const headers: Record<string, string> = { 'x-foldergram-intent': '1' };
+    expect((await fetch(origin + '/api/folders/retired', { method: 'DELETE', headers })).status).toBe(401);
+    for (const [password, expected] of [['isolated-viewer-only', 403], ['isolated-admin-only', 410]] as const) {
+      const login = await fetch(origin + '/api/auth/login', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get('set-cookie')!.split(';')[0];
+      const response = await fetch(origin + '/api/folders/retired?deleteSourceFolder=true', { method: 'DELETE', headers: { ...headers, cookie } });
+      expect(response.status).toBe(expected);
+      if (expected === 410) expect(await response.json()).toMatchObject({ code: 'LEGACY_FOLDER_DELETE_RETIRED' });
+    }
+    expect(await snapshot()).toEqual(before);
   });
 
   async function createIndexedFolder(
@@ -351,13 +209,4 @@ describe.sequential('gallery folder deletion', () => {
     };
   }
 
-  async function expectPathPresent(targetPath: string): Promise<void> {
-    await expect(fs.stat(targetPath)).resolves.toBeDefined();
-  }
-
-  async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({
-      code: 'ENOENT'
-    });
-  }
 });

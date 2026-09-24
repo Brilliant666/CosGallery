@@ -1,6 +1,5 @@
 import { ManagedCreatorService } from './managed-creator-service.js';
 import fs from 'node:fs';
-import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -28,7 +27,6 @@ import {
   collectionConstants,
   collectionRepository,
   folderRepository,
-  folderScanStateRepository,
   imageRepository,
   likeRepository,
   placeRepository,
@@ -120,10 +118,6 @@ interface FeedRailDefinition {
   description: string;
   singularLabel: string;
   capsules: FeedCapsuleDefinition[];
-}
-
-interface DeleteFolderOptions {
-  deleteSourceFolder?: boolean;
 }
 
 interface StoryRailCapsule {
@@ -368,105 +362,6 @@ function resolveOriginalMediaFile(id: number): { path: string; filename: string 
   };
 }
 
-function resolveIndexedOriginalPath(relativePath: string): string | null {
-  try {
-    return resolveOriginalPath(relativePath);
-  } catch {
-    return null;
-  }
-}
-
-function resolveWithinRoot(rootPath: string, targetPath: string): string | null {
-  const resolved = path.resolve(targetPath);
-  const relative = path.relative(path.resolve(rootPath), resolved);
-
-  if ((relative.startsWith('..') || path.isAbsolute(relative)) || relative === '') {
-    return relative === '' ? resolved : null;
-  }
-
-  return resolved;
-}
-
-function resolveStoredPathWithinRoot(rootPath: string, relativePath: string, label: string): string | null {
-  const resolvedPath = resolveWithinRoot(rootPath, path.join(rootPath, relativePath));
-  if (!resolvedPath && relativePath) {
-    throw new Error(`Stored ${label} path is outside the configured root`);
-  }
-
-  return resolvedPath;
-}
-
-async function removeFileIfPresent(targetPath: string | null): Promise<void> {
-  if (!targetPath) {
-    return;
-  }
-
-  try {
-    await fsPromises.unlink(targetPath);
-  } catch (error) {
-    const fileError = error as NodeJS.ErrnoException;
-    if (fileError.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-}
-
-async function removeFileAndPruneAncestors(rootPath: string, targetPath: string | null): Promise<void> {
-  if (!targetPath) {
-    return;
-  }
-
-  await removeFileIfPresent(targetPath);
-
-  let currentDirectory = path.dirname(targetPath);
-  const resolvedRoot = path.resolve(rootPath);
-
-  while (currentDirectory.startsWith(resolvedRoot) && currentDirectory !== resolvedRoot) {
-    try {
-      await fsPromises.rmdir(currentDirectory);
-    } catch (error) {
-      const directoryError = error as NodeJS.ErrnoException;
-      if (directoryError.code === 'ENOENT' || directoryError.code === 'ENOTEMPTY' || directoryError.code === 'EEXIST' || directoryError.code === 'EPERM' || directoryError.code === 'EBUSY') {
-        return;
-      }
-
-      throw error;
-    }
-
-    currentDirectory = path.dirname(currentDirectory);
-  }
-}
-
-async function removeDirectoryIfEmpty(targetPath: string | null): Promise<void> {
-  if (!targetPath) {
-    return;
-  }
-
-  try {
-    await fsPromises.rmdir(targetPath);
-  } catch (error) {
-    const directoryError = error as NodeJS.ErrnoException;
-    if (directoryError.code !== 'ENOENT' && directoryError.code !== 'ENOTEMPTY' && directoryError.code !== 'EEXIST' && directoryError.code !== 'EPERM' && directoryError.code !== 'EBUSY') {
-      throw error;
-    }
-  }
-}
-
-async function removeDirectoryTree(targetPath: string | null): Promise<void> {
-  if (!targetPath) {
-    return;
-  }
-
-  try {
-    await fsPromises.rm(targetPath, { recursive: true, force: true });
-  } catch (error) {
-    const directoryError = error as NodeJS.ErrnoException;
-    if (directoryError.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-}
-
 function countDerivativeFilesOnDisk(rootPath: string, kind: 'thumbnail' | 'preview'): number {
   try {
     const entries = fs.readdirSync(rootPath, { withFileTypes: true });
@@ -494,10 +389,6 @@ function countDerivativeFilesOnDisk(rootPath: string, kind: 'thumbnail' | 'previ
 
     throw error;
   }
-}
-
-function isSameOrDescendantFolderPath(rootFolderPath: string, candidateFolderPath: string): boolean {
-  return candidateFolderPath === rootFolderPath || candidateFolderPath.startsWith(`${rootFolderPath}/`);
 }
 
 function getParentFolderDisplayName(folderPath: string): string | null {
@@ -2608,114 +2499,6 @@ export const galleryService = {
     }
 
     return permanentDeletionService.deletePost(post.id);
-  },
-
-  async deleteFolder(slug: string, options: DeleteFolderOptions = {}) {
-    if (!storageService.getState().libraryAvailable || scannerService.isLibraryRebuildRequired()) {
-      return null;
-    }
-
-    const folder = folderRepository.getSummaryBySlug(slug);
-    if (!folder) {
-      return null;
-    }
-
-    const deleteSourceFolder = options.deleteSourceFolder === true;
-    const normalizedFolderPath = folder.folder_path;
-    const ownedFolders = folderRepository
-      .getAll()
-      .filter((entry) => entry.carousel_owner_folder_id === folder.id || entry.story_owner_folder_id === folder.id);
-    const affectedFolderIds = [folder.id, ...ownedFolders.map((entry) => entry.id)];
-    const images = affectedFolderIds.flatMap((id) => imageRepository.listForFolderDeletion(id));
-
-    if (deleteSourceFolder) {
-      const affectedFolders = folderRepository
-        .getAll()
-        .filter((entry) => isSameOrDescendantFolderPath(normalizedFolderPath, entry.folder_path));
-      const affectedImages = affectedFolders.flatMap((entry) => imageRepository.listForFolderDeletion(entry.id));
-      const deletedImageCount = affectedImages.length;
-
-      await removeDirectoryTree(resolveWithinRoot(appConfig.galleryRoot, path.join(appConfig.galleryRoot, normalizedFolderPath)));
-      await Promise.all(
-        affectedImages.flatMap((imageRecord) => {
-          const thumbnailPath = resolveStoredPathWithinRoot(appConfig.thumbnailsDir, imageRecord.thumbnail_path, 'thumbnail');
-          const previewPath = resolveStoredPathWithinRoot(appConfig.previewsDir, imageRecord.preview_path, 'preview');
-
-          return [
-            removeFileAndPruneAncestors(appConfig.thumbnailsDir, thumbnailPath),
-            removeFileAndPruneAncestors(appConfig.previewsDir, previewPath)
-          ];
-        })
-      );
-
-      folderScanStateRepository.deleteTree(normalizedFolderPath);
-
-      for (const affectedFolder of affectedFolders) {
-        folderRepository.setAvatar(affectedFolder.id, null, 'auto');
-        folderRepository.delete(affectedFolder.id);
-      }
-
-      return {
-        slug: folder.slug,
-        deletedImageCount,
-        deletedFolderCount: affectedFolders.length,
-        deletedSourceFolder: true
-      };
-    }
-
-    await Promise.all(
-      images.map(async (imageRecord) => {
-        const originalPath = resolveIndexedOriginalPath(imageRecord.relative_path);
-        const thumbnailPath = resolveStoredPathWithinRoot(appConfig.thumbnailsDir, imageRecord.thumbnail_path, 'thumbnail');
-        const previewPath = resolveStoredPathWithinRoot(appConfig.previewsDir, imageRecord.preview_path, 'preview');
-
-        if (!originalPath) {
-          throw new Error('Stored image path is outside the gallery root');
-        }
-
-        await Promise.all([
-          removeFileAndPruneAncestors(appConfig.galleryRoot, originalPath),
-          removeFileAndPruneAncestors(appConfig.thumbnailsDir, thumbnailPath),
-          removeFileAndPruneAncestors(appConfig.previewsDir, previewPath)
-        ]);
-      })
-    );
-
-    for (const affectedFolder of [...ownedFolders, folder]) {
-      folderScanStateRepository.delete(affectedFolder.folder_path);
-      folderRepository.setAvatar(affectedFolder.id, null, 'auto');
-      folderRepository.delete(affectedFolder.id);
-    }
-
-    const cleanupRelativePaths = new Set<string>([normalizedFolderPath]);
-    for (const ownedFolder of ownedFolders) {
-      let candidatePath = ownedFolder.folder_path;
-      while (isSameOrDescendantFolderPath(normalizedFolderPath, candidatePath)) {
-        cleanupRelativePaths.add(candidatePath);
-        if (candidatePath === normalizedFolderPath) break;
-        const parentPath = path.posix.dirname(candidatePath);
-        if (parentPath === candidatePath || parentPath === '.') break;
-        candidatePath = parentPath;
-      }
-    }
-
-    const orderedCleanupPaths = [...cleanupRelativePaths].sort(
-      (left, right) => right.split('/').length - left.split('/').length
-    );
-    for (const relativePath of orderedCleanupPaths) {
-      await Promise.all([
-        removeDirectoryIfEmpty(resolveWithinRoot(appConfig.galleryRoot, path.join(appConfig.galleryRoot, relativePath))),
-        removeDirectoryIfEmpty(resolveWithinRoot(appConfig.thumbnailsDir, path.join(appConfig.thumbnailsDir, relativePath))),
-        removeDirectoryIfEmpty(resolveWithinRoot(appConfig.previewsDir, path.join(appConfig.previewsDir, relativePath)))
-      ]);
-    }
-
-    return {
-      slug: folder.slug,
-      deletedImageCount: images.length,
-      deletedFolderCount: 1,
-      deletedSourceFolder: false
-    };
   },
 
   setTreatCarouselsAsFolders(treatCarouselsAsFolders: boolean) {

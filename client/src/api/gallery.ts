@@ -28,7 +28,6 @@ import type {
   StoriesModeSetting,
   ViewerAccessMode,
   DeleteImageResult,
-  DeleteFolderResult,
   FeedMode,
   FolderImageOrder,
   FolderImageOrderDefaultSetting,
@@ -632,18 +631,6 @@ export function restoreImage(id: number) {
 
 export function deleteImage(id: number) {
   return requestJson<DeleteImageResult>(`/api/posts/${id}`, {
-    method: 'DELETE'
-  });
-}
-
-export function deleteFolder(slug: string, options: { deleteSourceFolder?: boolean } = {}) {
-  const params = new URLSearchParams();
-  if (options.deleteSourceFolder) {
-    params.set('deleteSourceFolder', 'true');
-  }
-
-  const suffix = params.size > 0 ? `?${params.toString()}` : '';
-  return requestJson<DeleteFolderResult>(`/api/folders/${encodeURIComponent(slug)}${suffix}`, {
     method: 'DELETE'
   });
 }

@@ -237,28 +237,6 @@
           <span>{{ t('libraryPage.openFolder') }}</span>
         </button>
         <button
-          v-if="authStore.canDeleteMedia"
-          class="flex items-center gap-[0.8rem] w-full px-4 py-[0.95rem] border-0 border-b border-border text-[#d93025] bg-transparent cursor-pointer text-left"
-          type="button"
-          @click="handleDelete"
-        >
-          <svg
-            class="w-[1.15rem] h-[1.15rem] shrink-0"
-            viewBox="0 0 24 24"
-            role="presentation"
-          >
-            <path
-              d="M9 4.75h6m-8 3h10m-8.5 0v10a1.25 1.25 0 0 0 1.25 1.25h4.5A1.25 1.25 0 0 0 15.5 17.75v-10m-4 3v5m4-5v5"
-              fill="none"
-              stroke="currentColor"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.8"
-            />
-          </svg>
-          <span>{{ t('libraryPage.deleteFolder') }}</span>
-        </button>
-        <button
           class="flex items-center gap-[0.8rem] w-full px-4 py-[0.95rem] border-0 text-text bg-transparent cursor-pointer text-left"
           type="button"
           @click="menuFolder = null"
@@ -282,46 +260,6 @@
       </div>
     </div>
 
-    <!-- Delete confirmation dialog -->
-    <ConfirmDialog
-      v-if="confirmDeleteFolder"
-      :title="t('libraryPage.delete.title')"
-      :message="deleteFolderMessage"
-      :confirm-label="deleteFolderConfirmLabel"
-      :loading-label="deleteFolderLoadingLabel"
-      :loading="deleting"
-      @cancel="closeDeleteDialog"
-      @confirm="confirmDelete"
-    >
-      <template #details>
-        <label class="flex items-start gap-3 mt-3 cursor-pointer select-none">
-          <input
-            v-model="deleteSourceFolder"
-            class="mt-[0.2rem]"
-            type="checkbox"
-            :disabled="deleting"
-          />
-          <span class="grid gap-[0.18rem]">
-            <span class="text-[0.92rem] font-semibold text-text">{{ t('libraryPage.delete.sourceTooTitle') }}</span>
-            <span class="text-[0.84rem] text-muted">
-              {{ deleteSourceFolderLabel }}
-            </span>
-          </span>
-        </label>
-        <p
-          v-if="deleteSourceFolder"
-          class="m-0 mt-3 px-3 py-[0.8rem] rounded-[0.9rem] border border-[rgba(217,48,37,0.24)] text-[0.84rem] text-[#b42318] bg-[rgba(217,48,37,0.08)]"
-        >
-          {{ t('libraryPage.delete.warning') }}
-        </p>
-        <p
-          v-if="deleteError"
-          class="m-0 mt-3 px-3 py-[0.8rem] rounded-[0.9rem] border border-[rgba(217,48,37,0.24)] text-[0.84rem] text-[#b42318] bg-[rgba(217,48,37,0.08)]"
-        >
-          {{ deleteError }}
-        </p>
-      </template>
-    </ConfirmDialog>
   </section>
 </template>
 
@@ -331,16 +269,10 @@
   import { RouterLink, useRouter } from "vue-router"
 
   import Avatar from "../components/Avatar.vue"
-  import ConfirmDialog from "../components/ConfirmDialog.vue"
   import EmptyState from "../components/EmptyState.vue"
   import ErrorState from "../components/ErrorState.vue"
-  import { deleteFolder } from "../api/gallery"
   import { useAppStore } from "../stores/app"
-  import { useAuthStore } from "../stores/auth"
-  import { useFeedStore } from "../stores/feed"
-  import { useLikesStore } from "../stores/likes"
   import { useFoldersStore } from "../stores/folders"
-  import { useMomentsStore } from "../stores/moments"
   import type { FolderSummary } from "../types/api"
   import { formatFolderTitle } from "../utils/folder-titles"
 
@@ -352,20 +284,12 @@
     | "path-asc"
 
   const appStore = useAppStore()
-  const authStore = useAuthStore()
-  const feedStore = useFeedStore()
-  const likesStore = useLikesStore()
   const foldersStore = useFoldersStore()
-  const momentsStore = useMomentsStore()
   const router = useRouter()
   const { t, locale } = useI18n()
   const searchQuery = ref("")
   const sortMode = ref<LibrarySort>("recent-desc")
   const menuFolder = ref<FolderSummary | null>(null)
-  const confirmDeleteFolder = ref<FolderSummary | null>(null)
-  const deleting = ref(false)
-  const deleteSourceFolder = ref(false)
-  const deleteError = ref<string | null>(null)
 
   function formatCount(value: number) {
     return new Intl.NumberFormat(locale.value).format(value)
@@ -405,55 +329,6 @@
   const totalIndexedImages = computed(() =>
     foldersStore.items.reduce((total, folder) => total + folder.imageCount, 0),
   )
-  const deleteChildFolderCount = computed(() => {
-    if (!confirmDeleteFolder.value) {
-      return 0
-    }
-
-    const rootFolderPath = confirmDeleteFolder.value.folderPath
-    return foldersStore.items.filter(folder =>
-      folder.folderPath.startsWith(`${rootFolderPath}/`),
-    ).length
-  })
-  const deleteFolderMessage = computed(() => {
-    if (!confirmDeleteFolder.value) {
-      return ""
-    }
-
-    const directImageLabel = confirmDeleteFolder.value.imageCount === 1
-      ? t("libraryPage.delete.directPostsOne", { count: formatCount(confirmDeleteFolder.value.imageCount) })
-      : t("libraryPage.delete.directPostsOther", { count: formatCount(confirmDeleteFolder.value.imageCount) })
-    if (deleteSourceFolder.value) {
-      return t("libraryPage.delete.messageDeleteSource", { directPosts: directImageLabel })
-    }
-
-    if (deleteChildFolderCount.value > 0) {
-      return t("libraryPage.delete.messageKeepChildren", {
-        directPosts: directImageLabel,
-        childFolders: deleteChildFolderCount.value === 1
-          ? t("libraryPage.delete.childFoldersOne", { count: formatCount(deleteChildFolderCount.value) })
-          : t("libraryPage.delete.childFoldersOther", { count: formatCount(deleteChildFolderCount.value) })
-      })
-    }
-
-    return t("libraryPage.delete.messageEmptyFolder", { directPosts: directImageLabel })
-  })
-  const deleteSourceFolderLabel = computed(() => {
-    if (deleteChildFolderCount.value > 0) {
-      return deleteChildFolderCount.value === 1
-        ? t("libraryPage.delete.sourceTooWithChildrenOne", { count: formatCount(deleteChildFolderCount.value) })
-        : t("libraryPage.delete.sourceTooWithChildrenOther", { count: formatCount(deleteChildFolderCount.value) })
-    }
-
-    return t("libraryPage.delete.sourceTooNoChildren")
-  })
-  const deleteFolderConfirmLabel = computed(() =>
-    deleteSourceFolder.value ? t("libraryPage.delete.confirmSubtree") : t("libraryPage.delete.confirmFolder"),
-  )
-  const deleteFolderLoadingLabel = computed(() =>
-    deleteSourceFolder.value ? t("libraryPage.delete.loadingSubtree") : t("libraryPage.delete.loadingFolder"),
-  )
-
   function matchesSearch(folder: FolderSummary, query: string) {
     if (!query) {
       return true
@@ -513,57 +388,6 @@
     const slug = menuFolder.value.slug
     menuFolder.value = null
     router.push({ name: "folder", params: { slug } })
-  }
-
-  function handleDelete() {
-    if (!authStore.canDeleteMedia) {
-      return
-    }
-
-    confirmDeleteFolder.value = menuFolder.value
-    menuFolder.value = null
-    deleteSourceFolder.value = false
-    deleteError.value = null
-  }
-
-  function closeDeleteDialog(force = false) {
-    if (deleting.value && !force) {
-      return
-    }
-
-    confirmDeleteFolder.value = null
-    deleteSourceFolder.value = false
-    deleteError.value = null
-  }
-
-  async function confirmDelete() {
-    if (!confirmDeleteFolder.value || !authStore.canDeleteMedia) {
-      return
-    }
-
-    deleting.value = true
-    deleteError.value = null
-
-    try {
-      await deleteFolder(confirmDeleteFolder.value.slug, {
-        deleteSourceFolder: deleteSourceFolder.value,
-      })
-      await Promise.all([
-        foldersStore.fetchFolders(true),
-        feedStore.loadInitial(true),
-        likesStore.initialize(true),
-        momentsStore.fetchMoments(true),
-        appStore.fetchStats({ background: true }),
-      ])
-      closeDeleteDialog(true)
-    } catch (error) {
-      deleteError.value =
-        error instanceof Error
-          ? error.message
-          : t("libraryPage.delete.error")
-    } finally {
-      deleting.value = false
-    }
   }
 
   onMounted(async () => {
