@@ -183,8 +183,11 @@ describe('creator work Post topology reconciliation', () => {
     expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM post_items WHERE post_id = 900').get()).toEqual({ count: 0 });
     expect(fixture.database.prepare('SELECT image_id, COUNT(*) AS owners FROM post_items GROUP BY image_id ORDER BY image_id').all())
       .toEqual([101, 102, 103, 104, 105].map((image_id) => ({ image_id, owners: 1 })));
-    expect(fixture.database.prepare("SELECT name, [unique] FROM pragma_index_list('post_items') WHERE name = 'idx_post_items_image_id'").get())
-      .toEqual({ name: 'idx_post_items_image_id', unique: 1 });
+    // 000027 removes the redundant explicit index, not image membership uniqueness.
+    expect(fixture.database.prepare("SELECT name, [unique], origin, partial FROM pragma_index_list('post_items') WHERE name = 'sqlite_autoindex_post_items_1'").get())
+      .toEqual({ name: 'sqlite_autoindex_post_items_1', unique: 1, origin: 'u', partial: 0 });
+    expect(fixture.database.prepare("SELECT name, coll, [desc] FROM pragma_index_xinfo('sqlite_autoindex_post_items_1') WHERE [key]=1").all())
+      .toEqual([{ name: 'image_id', coll: 'BINARY', desc: 0 }]);
 
     const stableSnapshot = rowSnapshot(fixture.database);
     const secondDryRun = run(fixture, true);

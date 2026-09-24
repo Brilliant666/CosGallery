@@ -24,6 +24,7 @@ const FOLDER_SHARES_MIGRATION_VERSION = '000004';
 const POSTS_MIGRATION_VERSION = '000005';
 const COS_GALLERY_MIGRATION_VERSION = '000007';
 const CREATOR_RATINGS_MIGRATION_VERSION = '000008';
+const REDUNDANT_INDEX_MIGRATION_VERSION = '000027';
 export const ARCHIVE_CATALOG_MIGRATION_VERSION = '000009';
 const SCHEMA_MIGRATIONS_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY)';
 const APP_SCHEMA_TABLES = [
@@ -461,6 +462,30 @@ function validateUniqueColumns(database: DatabaseSync, tableName: string, column
   }
 }
 
+export function validateRedundantIndexReplacements(database: DatabaseSync): void {
+  const constraints: Array<[string, string[]]> = [
+    ['images', ['relative_path']], ['post_items', ['post_id', 'position']],
+    ['post_items', ['image_id']], ['posts', ['source_path']],
+    ['folders', ['slug']], ['places', ['slug']],
+    ['archive_catalog_download_tasks', ['source_work_id', 'provider']],
+    ['archive_catalog_metadata_tasks', ['creator_id', 'source']]
+  ];
+  for (const [table, columns] of constraints) {
+    const indexes = database.prepare(`PRAGMA index_list(${quoteIdentifier(table)})`).all() as Array<{
+      name: string; unique: number; partial: number; origin: string;
+    }>;
+    const valid = indexes.some(index => {
+      if (index.unique !== 1 || index.partial !== 0 || !['u', 'pk'].includes(index.origin)) return false;
+      const keys = (database.prepare(`PRAGMA index_xinfo(${quoteIdentifier(index.name)})`).all() as Array<{
+        name: string | null; seqno: number; key: number; desc: number; coll: string;
+      }>).filter(row => row.key === 1).sort((a, b) => a.seqno - b.seqno);
+      return keys.length === columns.length && keys.every((key, position) =>
+        key.name === columns[position] && key.desc === 0 && key.coll === 'BINARY');
+    });
+    if (!valid) throw new Error(`Migration 000027 integrity check failed: ${table} is missing its full BINARY ascending UNIQUE/PRIMARY KEY constraint on (${columns.join(', ')}).`);
+  }
+}
+
 function validateForeignKey(
   database: DatabaseSync,
   tableName: string,
@@ -518,6 +543,7 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
 
   const hasCosGalleryMigration = migrationVersionExists(database, COS_GALLERY_MIGRATION_VERSION);
   const hasCreatorRatingsMigration = migrationVersionExists(database, CREATOR_RATINGS_MIGRATION_VERSION);
+  const hasRedundantIndexMigration = migrationVersionExists(database, REDUNDANT_INDEX_MIGRATION_VERSION);
 
   validateRequiredColumns(database, 'folders', [
     { name: 'carousel_owner_folder_id', type: 'INTEGER', notNull: false, defaultValue: null }
@@ -586,15 +612,21 @@ export function validatePostsMigrationCompleteness(database: DatabaseSync): void
     ['posts', 'idx_posts_visible_sort', ['is_deleted', 'is_trashed', 'sort_timestamp', 'id'], false],
     ['posts', 'idx_posts_type_visibility', ['post_type', 'is_deleted', 'is_trashed'], false],
     ['posts', 'idx_posts_place_visibility', ['place_id', 'is_deleted', 'is_trashed', 'sort_timestamp'], false],
-    ['posts', 'idx_posts_source_path', ['source_path'], false],
     ['posts', 'idx_posts_trashed_listing', ['is_trashed', 'is_deleted', 'trashed_at', 'id'], false],
-    ['post_items', 'idx_post_items_image_id', ['image_id'], true],
-    ['post_items', 'idx_post_items_post_id', ['post_id', 'position'], false],
     ['likes', 'idx_likes_created_at', ['created_at'], false],
     ['collection_items', 'idx_collection_items_post', ['post_id'], false],
     ['collection_items', 'idx_collection_items_created', ['collection_id', 'created_at', 'post_id'], false],
     ['folders', 'idx_folders_carousel_owner', ['carousel_owner_folder_id'], false]
   ];
+  if (hasRedundantIndexMigration) {
+    validateRedundantIndexReplacements(database);
+  } else {
+    requiredIndexes.push(
+      ['posts', 'idx_posts_source_path', ['source_path'], false],
+      ['post_items', 'idx_post_items_image_id', ['image_id'], true],
+      ['post_items', 'idx_post_items_post_id', ['post_id', 'position'], false]
+    );
+  }
   if (hasCosGalleryMigration) {
     requiredIndexes.push([
       'posts',
