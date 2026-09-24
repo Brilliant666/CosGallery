@@ -5,6 +5,9 @@ import { appConfig } from '../config/env.js';
 export function denyRecoveryFileRequests(backupRoot = appConfig.backupRoot): RequestHandler {
   const backupName = path.basename(backupRoot).toLowerCase();
   return (request, response, next) => {
+    // Existing API/media routes own their authorization and path validation.
+    // A folder slug such as "private" is not a filesystem secret request.
+    if (/^\/(?:api|thumbnails|previews)(?:\/|$)/i.test(request.path)) { next(); return; }
     let pathname: string;
     try { pathname = decodeURIComponent(request.path).replace(/\\/g, '/').toLowerCase(); }
     catch { response.status(400).end(); return; }
