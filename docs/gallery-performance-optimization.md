@@ -491,8 +491,9 @@ controlled result above. Raw local evidence remains outside Git.
 
 The later configuration follow-up distinguishes an unused IDE configuration from
 an actual missing recovery input; see [configuration coverage](./application-recovery-points.md).
-It does not change the backup worker, database settings, query results or their
-validation requirements. The preceding **18.69 s** observation remains historical
+It does not change copying, database settings, query results, hashing or their
+validation requirements; snapshot configuration coverage is classified after the
+existing validation. The preceding **18.69 s** observation remains historical
 evidence, not a proven causal regression.
 
 The bounded follow-up used the same 383,802-media, 666,353,664-byte consistent
