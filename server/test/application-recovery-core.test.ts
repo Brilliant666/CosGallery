@@ -203,6 +203,24 @@ describe('application recovery engine', () => {
     fs.mkdirSync(path.join(config.backupRoot, 'point-malformed')); fs.writeFileSync(path.join(config.backupRoot, 'point-malformed', 'metadata.json'), '{');
     expect(new ApplicationRecoveryService(config).getStatus().points).toEqual([]);
   });
+  it('ignores valid JSON with incomplete or invalid success metadata after restart', async () => {
+    const config = fixture(); const point = await generateRecoveryPoint(config, 'manual');
+    const invalid = [
+      { codeVersion: undefined }, { codeVersion: 123 }, { bytes: undefined }, { bytes: -1 }, { bytes: Infinity },
+      { reason: 'unknown' }, { reason: ['manual'] }, { startedAt: 'invalid' }, { completedAt: '2026-02-30T00:00:00.000Z' },
+      { timings: undefined }, { timings: { ...point.timings, totalMs: undefined } }, { timings: { ...point.timings, validationMs: -1 } },
+      { schemaVersions: [27] }, { configuration: { complete: 'yes', gaps: [] } }, { configuration: { complete: false, gaps: [null] } },
+      { validation: { ...point.validation, foreignKeys: 1 } }, { validation: { ...point.validation, tables: 1.5 } },
+      { files: [] }, { files: [{ name: 'gallery.sqlite', bytes: -1, sha256: point.files[0]!.sha256 }] }
+    ];
+    for (const [index, change] of invalid.entries()) {
+      const id = `point-incomplete-${index}`; const directory = path.join(config.backupRoot, id); fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, 'gallery.sqlite'), 'synthetic');
+      fs.writeFileSync(path.join(directory, 'metadata.json'), JSON.stringify({ ...point, ...change, id }));
+    }
+    const status = new ApplicationRecoveryService(config).getStatus();
+    expect(status.points).toEqual([point]); expect(status.latestSuccess?.id).toBe(point.id);
+  });
   it('fails FK validation without publishing or migrating the old database', async () => {
     const config = fixture(); const db = new DatabaseSync(config.sourceDbPath); db.exec('PRAGMA foreign_keys=OFF; INSERT INTO aliases VALUES(2,999,\'broken\')'); db.close();
     await expect(generateRecoveryPoint(config, 'manual')).rejects.toMatchObject({ code: 'RECOVERY_VALIDATION_FAILED' });

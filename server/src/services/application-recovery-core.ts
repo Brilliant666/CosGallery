@@ -51,14 +51,35 @@ export function readRecoveryJson(filename: string): unknown {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Invalid recovery metadata');
   return JSON.parse(fs.readFileSync(filename, 'utf8'));
 }
+function isRecoveryPoint(value: unknown, id: string): value is RecoveryPoint {
+  const object = (input: unknown): input is Record<string, unknown> => input !== null && typeof input === 'object' && !Array.isArray(input);
+  const finiteNonnegative = (input: unknown): input is number => typeof input === 'number' && Number.isFinite(input) && input >= 0;
+  const nonemptyString = (input: unknown): input is string => typeof input === 'string' && input.length > 0;
+  const stringList = (input: unknown): input is string[] => Array.isArray(input) && input.every(item => typeof item === 'string');
+  const timestamp = (input: unknown): input is string => typeof input === 'string' && Number.isFinite(Date.parse(input)) && new Date(input).toISOString() === input;
+  if (!object(value) || value.format !== format || value.status !== 'success' || value.id !== id
+    || typeof value.reason !== 'string' || !['manual', 'daily', 'pre-migration', 'pre-rebuild', 'maintenance'].includes(value.reason)
+    || !timestamp(value.startedAt) || !timestamp(value.completedAt)
+    || !nonemptyString(value.instanceId) || !nonemptyString(value.codeVersion)
+    || !stringList(value.schemaVersions) || !finiteNonnegative(value.bytes) || !Number.isSafeInteger(value.bytes)) return false;
+  if (!Array.isArray(value.files) || !value.files.length || !value.files.every(file => object(file)
+    && nonemptyString(file.name) && !/[\\\u0000:]/.test(file.name) && !file.name.startsWith('/') && !file.name.split('/').includes('..')
+    && finiteNonnegative(file.bytes) && Number.isSafeInteger(file.bytes)
+    && typeof file.sha256 === 'string' && /^[0-9a-f]{64}$/.test(file.sha256))) return false;
+  if (!value.files.some(file => file.name === 'gallery.sqlite') || new Set(value.files.map(file => file.name)).size !== value.files.length) return false;
+  return object(value.configuration) && typeof value.configuration.complete === 'boolean' && stringList(value.configuration.gaps)
+    && object(value.validation) && value.validation.integrity === 'ok' && value.validation.foreignKeys === 0
+    && finiteNonnegative(value.validation.tables) && Number.isSafeInteger(value.validation.tables) && value.validation.tables > 0
+    && object(value.timings) && finiteNonnegative(value.timings.backupMs) && finiteNonnegative(value.timings.validationMs) && finiteNonnegative(value.timings.totalMs);
+}
 export function readRecoveryPoints(root: string): RecoveryPoint[] {
   if (!fs.existsSync(root)) return [];
   return fs.readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory() && /^point-[a-zA-Z0-9-]+$/.test(entry.name))
     .flatMap(entry => {
       try {
-        const point = readRecoveryJson(path.join(root, entry.name, 'metadata.json')) as RecoveryPoint;
+        const point = readRecoveryJson(path.join(root, entry.name, 'metadata.json'));
         const database = fs.lstatSync(path.join(root, entry.name, 'gallery.sqlite'));
-        return point.format === format && point.status === 'success' && point.id === entry.name && typeof point.completedAt === 'string' && Number.isFinite(Date.parse(point.completedAt)) && typeof point.startedAt === 'string' && typeof point.instanceId === 'string' && Array.isArray(point.files) && point.files.every(file => typeof file.name === 'string' && typeof file.bytes === 'number' && typeof file.sha256 === 'string') && Array.isArray(point.schemaVersions) && point.configuration && Array.isArray(point.configuration.gaps) && point.validation?.integrity === 'ok' && database.isFile() && !database.isSymbolicLink() ? [point] : [];
+        return isRecoveryPoint(point, entry.name) && database.isFile() && !database.isSymbolicLink() ? [point] : [];
       } catch { return []; }
     }).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
 }
