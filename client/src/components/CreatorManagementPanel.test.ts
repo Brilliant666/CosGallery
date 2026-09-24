@@ -34,6 +34,29 @@ describe('creator management panel lifecycle and save scopes',()=>{
     await w.setProps({tab:'sources'});await flushPromises();expect(w.get('[data-test=source-check]').attributes('data-active')).toBe('true');expect(w.find('[data-test=source-evidence]').exists()).toBe(true);
     await w.setProps({tab:'overview'});expect(w.get('[data-test=source-check]').attributes('data-active')).toBe('false');expect(w.get('#creator-content-sources').isVisible()).toBe(false);expect(api.saveManagedCreatorProfile).not.toHaveBeenCalled();
   });
+  it('positions a low desktop panel once on open, without scrolling again for tabs, saves or background refresh',async()=>{
+    const scroll=vi.fn();
+    vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
+    vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));
+    const w=panel();await flushPromises();
+    expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
+    await w.setProps({tab:'profile'});await flushPromises();await w.get('.profile-form input').setValue('Renamed');
+    vi.mocked(api.saveManagedCreatorProfile).mockResolvedValue(savedState({...creator,name:'Renamed'}));
+    await w.get('.profile-form').trigger('submit');await flushPromises();expect(w.text()).toContain('资料已保存');
+    await w.setProps({tab:'sources'});await flushPromises();
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...creator,name:'Background saved name',remoteWorks:4});
+    w.getComponent({name:'FirstCollectionSelector'}).vm.$emit('planned',[1]);await flushPromises();
+    expect(w.get('h2').text()).toBe('Background saved name');
+    await w.setProps({tab:'overview'});await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
+  });
+  it.each([{narrow:false,low:false},{narrow:true,low:true}])('does not reposition an already visible desktop panel or a narrow modal: $narrow/$low',async({narrow,low})=>{
+    const media=window.matchMedia('(max-width:1100px)');vi.spyOn(window,'matchMedia').mockReturnValue({...media,matches:narrow});
+    const scroll=vi.fn();
+    vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
+    vi.spyOn(HTMLDialogElement.prototype,'showModal').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
+    vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,low?window.innerHeight*0.75:0,400,500));
+    const w=panel();await flushPromises();expect(w.get('.creator-panel').attributes('aria-modal')).toBe(String(narrow));expect(scroll).not.toHaveBeenCalled();
+  });
   it('stages name, classification and manual aliases then submits one atomic profile save',async()=>{
     const value=structuredClone(creator);value.aliases.push({id:'manual-old',alias:'Previous alias',source:'manual',editable:true});chooseIdentity(value);
     const w=panel('profile');await flushPromises();const form=w.get('.profile-form');await form.get('input').setValue('Renamed');await form.findAll('select')[0]!.setValue('kept');await form.findAll('select')[1]!.setValue('R15');
