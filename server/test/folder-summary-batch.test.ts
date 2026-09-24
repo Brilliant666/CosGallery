@@ -76,11 +76,24 @@ describe('batched physical folder summaries', () => {
   it('assembles all summaries using one statement and retains stable ordering', () => {
     const prepare = vi.spyOn(db, 'prepare');
     const actual = repository.getAllSummaries();
-    expect(prepare).toHaveBeenCalledTimes(1);
+    // One aggregate; the other two statements observe SQLite change versions.
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes('WITH active_posts AS MATERIALIZED'))).toHaveLength(1);
     prepare.mockRestore();
     const expected = [...actual].sort((a, b) => (b.latest_image_mtime_ms ?? -Infinity) - (a.latest_image_mtime_ms ?? -Infinity)
       || a.name.localeCompare(b.name) || a.folder_path.localeCompare(b.folder_path));
     expect(actual.map(row => row.id)).toEqual(expected.map(row => row.id));
     expect(repository.getAllSummaries()).toEqual(actual);
+  });
+
+  it('invalidates the projection after changed folder/media facts without a scan', () => {
+    const before = repository.getAllSummaries();
+    const prepare = vi.spyOn(db, 'prepare');
+    expect(repository.getAllSummaries()).toEqual(before);
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes('WITH active_posts AS MATERIALIZED'))).toHaveLength(0);
+    prepare.mockRestore();
+    db.exec("UPDATE folders SET name='Renamed' WHERE id=1; UPDATE images SET mtime_ms=999999 WHERE id=1");
+    expect(repository.getAllSummaries().find(row => row.id === 1)).toMatchObject({ name: 'Renamed', latest_image_mtime_ms: 999999 });
+    db.exec('UPDATE posts SET is_deleted=1 WHERE id=3');
+    expect(repository.getAllSummaries().find(row => row.id === 3)).toBeUndefined();
   });
 });

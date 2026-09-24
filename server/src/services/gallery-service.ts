@@ -2494,6 +2494,7 @@ export const galleryService = {
     const rebuildRequired = appSettingsRepository.get(LIBRARY_REBUILD_REQUIRED_SETTING_KEY) === '1';
     const lastSuccessfulGalleryRoot = appSettingsRepository.get(LAST_SUCCESSFUL_GALLERY_ROOT_SETTING_KEY);
     const pendingDerivativeMigrationRows = storageState.libraryAvailable ? imageRepository.countPendingDerivativeMigrationRows() : 0;
+    const indexedPosts = storageState.libraryAvailable ? imageRepository.countFeed() : 0;
     const defaultHomeFeedMode = getDefaultHomeFeedMode();
     const defaultLocale = getDefaultLocale();
     const defaultReelsFeedMode = getDefaultReelsFeedMode();
@@ -2507,8 +2508,8 @@ export const galleryService = {
 
     return {
       folders: storageState.libraryAvailable ? folderRepository.count() : 0,
-      indexedImages: storageState.libraryAvailable ? imageRepository.countFeed() : 0,
-      indexedPosts: storageState.libraryAvailable ? imageRepository.countFeed() : 0,
+      indexedImages: indexedPosts,
+      indexedPosts,
       indexedMediaAssets: storageState.libraryAvailable ? imageRepository.countVisibleMediaAssets() : 0,
       indexedCarousels: storageState.libraryAvailable ? imageRepository.countVisibleCarousels() : 0,
       indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleSingleVideos() : 0,

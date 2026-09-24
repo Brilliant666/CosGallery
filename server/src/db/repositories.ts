@@ -1,4 +1,5 @@
 import { databaseManager } from './database.js';
+import { createUnchangedReadCache } from './unchanged-read-cache.js';
 import { effectivePostSortSql } from './work-sort-sql.js';
 import { SHARE_SESSION_SECRET_SETTING_KEY } from '../constants/app-setting-keys.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
@@ -380,7 +381,7 @@ const ALL_FOLDER_SUMMARIES_SQL = `
     JOIN images img ON img.id=pi.image_id GROUP BY p.folder_id
   ), story_owners AS (
     SELECT DISTINCT story_folders.story_owner_folder_id AS folder_id
-    FROM folders story_folders JOIN images story_images ON story_images.folder_id=story_folders.id
+    FROM folders story_folders CROSS JOIN images story_images ON story_images.folder_id=story_folders.id
     WHERE story_folders.role IN ('story_root','story_capsule')
       AND story_images.is_deleted=0 AND story_images.is_trashed=0
   ), ranked_covers AS (
@@ -390,8 +391,8 @@ const ALL_FOLDER_SUMMARIES_SQL = `
           WHEN 'cover.jpg' THEN 1 WHEN 'cover.jpeg' THEN 2 WHEN 'cover.png' THEN 3
           WHEN 'cover.webp' THEN 4 WHEN 'cover.avif' THEN 5 WHEN 'cover.gif' THEN 6 ELSE 7 END,
         images.id ASC) AS rank
-    FROM images JOIN folders ON folders.id=images.folder_id AND folders.role='normal'
-    WHERE images.is_deleted=0 AND images.is_trashed=0 AND LOWER(images.filename) IN (${COVER_FILENAME_SQL})
+    FROM folders CROSS JOIN images ON images.folder_id=folders.id
+    WHERE folders.role='normal' AND images.is_deleted=0 AND images.is_trashed=0 AND LOWER(images.filename) IN (${COVER_FILENAME_SQL})
   ), ranked_fallbacks AS (
     SELECT p.folder_id, pi.image_id,
       ROW_NUMBER() OVER (PARTITION BY p.folder_id ORDER BY p.sort_timestamp DESC,p.id DESC) AS rank
@@ -716,6 +717,9 @@ export interface UpsertCityPlaceInput {
   confidence?: number | null;
 }
 
+const readFolderSummaries = createUnchangedReadCache<FolderSummaryRecord[]>();
+const readPendingDerivativeCount = createUnchangedReadCache<number>();
+
 export const folderRepository = {
   getAll(): FolderRecord[] {
     return database.prepare('SELECT * FROM folders ORDER BY folder_path COLLATE NOCASE ASC').all() as unknown as FolderRecord[];
@@ -726,9 +730,9 @@ export const folderRepository = {
   },
 
   getAllSummaries(): FolderSummaryRecord[] {
-    return database
+    return readFolderSummaries(databaseManager.connection, () => database
       .prepare(ALL_FOLDER_SUMMARIES_SQL)
-      .all() as unknown as FolderSummaryRecord[];
+      .all() as unknown as FolderSummaryRecord[]);
   },
 
   getBySlug(slug: string): FolderRecord | undefined {
@@ -3305,7 +3309,9 @@ export const imageRepository = {
   },
 
   countPendingDerivativeMigrationRows(): number {
-    return Number(
+    // Preserve the exact legacy all-row/case/whitespace contract. Reuse only
+    // while SQLite proves the database unchanged, including external writers.
+    return readPendingDerivativeCount(databaseManager.connection, () => Number(
       (
         database
           .prepare(
@@ -3325,7 +3331,7 @@ export const imageRepository = {
           )
           .get() as { count: number }
       ).count
-    );
+    ));
   },
 
   countMissingTimestampMetadataByFolder(folderId: number): number {

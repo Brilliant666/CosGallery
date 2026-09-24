@@ -4,8 +4,10 @@ import { fetchMomentFeed, fetchMoments } from '../api/gallery';
 import { i18n } from '../locales';
 import type { CalendarDateParts, FeedItem, FeedRailKind, MomentCapsule } from '../types/api';
 import { updateCaptionInItems } from '../utils/caption';
+import { useAuthStore } from './auth';
 
 interface MomentsState {
+  listGeneration: number;
   railKind: FeedRailKind;
   railTitle: string;
   railDescription: string;
@@ -224,6 +226,7 @@ function localizeCapsule(capsule: MomentCapsule, railKind: FeedRailKind): Moment
 
 export const useMomentsStore = defineStore('moments', {
   state: (): MomentsState => ({
+    listGeneration: 0,
     railKind: 'moments',
     railTitle: 'Moments',
     railDescription: 'Memory capsules from your library.',
@@ -262,6 +265,7 @@ export const useMomentsStore = defineStore('moments', {
     },
 
     resetForRebuild() {
+      this.listGeneration += 1;
       this.railKind = 'moments';
       this.railTitle = 'Moments';
       this.railDescription = 'Memory capsules from your library.';
@@ -278,7 +282,7 @@ export const useMomentsStore = defineStore('moments', {
     },
 
     async fetchMoments(force = false) {
-      if (this.loadingList) {
+      if (this.loadingList && !force) {
         return;
       }
 
@@ -288,18 +292,27 @@ export const useMomentsStore = defineStore('moments', {
 
       this.loadingList = true;
       this.listError = null;
+      const generation = ++this.listGeneration;
+      const accessKey = () => {
+        const auth = useAuthStore();
+        return JSON.stringify([auth.role, auth.authenticated, auth.enabled, auth.accessMode, auth.capabilities]);
+      };
+      const access = accessKey();
+      const current = () => generation === this.listGeneration && access === accessKey();
 
       try {
         const payload = await fetchMoments();
+        if (!current()) return;
         this.railKind = payload.railKind;
         this.railTitle = payload.railTitle;
         this.railDescription = payload.railDescription;
         this.railSingularLabel = payload.railSingularLabel;
         this.items = payload.items;
       } catch (error) {
+        if (!current()) return;
         this.listError = error instanceof Error ? error.message : 'Unable to load the home rail';
       } finally {
-        this.loadingList = false;
+        if (generation === this.listGeneration) this.loadingList = false;
       }
     },
 
