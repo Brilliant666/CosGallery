@@ -155,7 +155,9 @@ export const useFeedStore = defineStore('feed', {
       } catch (error) {
         if (current()) this.error = error instanceof Error ? error.message : 'Unable to load feed';
       } finally {
-        if (current()) this.loading = false;
+        // Release only this generation's slot, including changed access. A newer
+        // request after reset owns a different generation and must not be cleared.
+        if (generation === this.generation) this.loading = false;
 
         if (current() && this.reloadRequested) {
           this.reloadRequested = false;

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as galleryApi from '../api/gallery';
 import type { FeedItem } from '../types/api';
 import { useFeedStore } from './feed';
+import { useAuthStore } from './auth';
 
 function createFeedItem(id: number): FeedItem {
   return {
@@ -40,6 +41,20 @@ describe('feed store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.restoreAllMocks();
+  });
+
+  it('discards changed-access results without leaving the request slot occupied', async () => {
+    const pending = createDeferred<Awaited<ReturnType<typeof galleryApi.fetchFeed>>>();
+    vi.spyOn(galleryApi, 'fetchFeed').mockReturnValueOnce(pending.promise).mockResolvedValueOnce({
+      mode: 'recent', items: [createFeedItem(8)], page: 1, limit: 18, total: 1, hasMore: false
+    });
+    const store = useFeedStore(); store.initializeMode('recent');
+    const first = store.loadInitial();
+    useAuthStore().role = 'viewer';
+    pending.resolve({ mode: 'recent', items: [createFeedItem(7)], page: 1, limit: 18, total: 1, hasMore: false });
+    await first;
+    expect(store.items).toEqual([]); expect(store.loading).toBe(false);
+    await store.loadInitial(); expect(store.items.map(item => item.id)).toEqual([8]);
   });
 
   it('loads the recent feed without a random seed', async () => {
