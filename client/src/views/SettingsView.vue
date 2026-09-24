@@ -428,6 +428,8 @@
             </section>
           </section>
 
+          <ApplicationRecoveryPanel />
+
           <!-- Danger Zone -->
           <div v-if="authStore.enabled" class="border border-[rgba(214,48,49,0.3)] rounded-[1.05rem] overflow-hidden">
             <div class="bg-[rgba(214,48,49,0.04)] px-6 py-4 border-b border-[rgba(214,48,49,0.1)]">
@@ -1355,6 +1357,7 @@ import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 
 import ConfirmDialog from '../components/ConfirmDialog.vue';
+import ApplicationRecoveryPanel from '../components/ApplicationRecoveryPanel.vue';
 import {
   fetchAdminStats,
   triggerLibraryRebuild,
