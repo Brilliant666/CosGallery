@@ -2,6 +2,8 @@ node_modules
 dist
 .env
 data/
+data_backup/
+**/data_backup/
 data/db/*.db
 data/db/*.sqlite
 data/db/*.sqlite-shm

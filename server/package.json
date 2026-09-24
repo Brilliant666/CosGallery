@@ -15,6 +15,7 @@
     "reconcile:costuan-numbering": "tsx src/scripts/reconcile-costuan-numbering.ts",
     "local-ingest": "tsx src/scripts/local-ingest.ts",
     "local-folder-admission": "tsx src/scripts/local-folder-admission.ts",
+    "recovery-point": "tsx src/scripts/recovery-point.ts",
     "test": "vitest run --config vitest.config.ts test/"
   },
   "dependencies": {

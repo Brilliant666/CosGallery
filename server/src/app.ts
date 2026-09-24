@@ -9,6 +9,7 @@ import { requireApiAuthentication, requireMediaAuthentication } from './middlewa
 import { requireTrustedMutationRequest } from './middleware/csrf-protection.js';
 import { blockPublicDemoMutations } from './middleware/public-demo-mode.js';
 import { createTextCompression, mountClientDelivery } from './middleware/text-delivery.js';
+import { denyRecoveryFileRequests } from './middleware/protected-recovery-files.js';
 import { apiRouter } from './routes/api.js';
 import { archiveBridgeRouter } from './routes/archive-bridge.js';
 import { authService } from './services/auth-service.js';
@@ -23,6 +24,7 @@ export function applyApiNoStoreHeaders(response: Pick<express.Response, 'setHead
 
 export function createApp() {
   const app = express();
+  app.use(denyRecoveryFileRequests());
   app.use(createTextCompression());
 
   // Only bounded source-evidence text needs more than the default JSON limit.

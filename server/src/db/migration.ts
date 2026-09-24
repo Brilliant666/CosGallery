@@ -17,6 +17,7 @@ import {
 } from './schema-compat.js';
 import { log } from '../services/log-service.js';
 import { storageService } from '../services/storage-service.js';
+import { createApplicationRecoveryService } from '../services/application-recovery-service.js';
 
 export const BASELINE_MIGRATION_VERSION = '000001';
 const CAPTION_MIGRATION_VERSION = '000002';
@@ -138,7 +139,7 @@ function hasCompleteFolderSharesSchema(database: DatabaseSync): boolean {
   );
 }
 
-function repairIncorrectFolderSharesMigrationMarker(database: DatabaseSync): void {
+function repairIncorrectFolderSharesMigrationMarker(database: DatabaseSync, beforeMutation: () => void): void {
   if (!migrationVersionExists(database, FOLDER_SHARES_MIGRATION_VERSION)) {
     return;
   }
@@ -152,6 +153,7 @@ function repairIncorrectFolderSharesMigrationMarker(database: DatabaseSync): voi
   const hasSharePasswordVersion = tableHasColumn(database, 'folders', 'share_password_version');
 
   if (!hasShareLinks && !hasSharePasswords && !hasSharePasswordVersion) {
+    beforeMutation();
     removeMigrationVersion(database, FOLDER_SHARES_MIGRATION_VERSION);
     log.info('Removed an incomplete migration 000004 marker so folder-sharing tables can be created');
     return;
@@ -162,7 +164,7 @@ function repairIncorrectFolderSharesMigrationMarker(database: DatabaseSync): voi
   );
 }
 
-function repairInterruptedPostsMigrationMarker(database: DatabaseSync, validateBeforeMigration: ((database: DatabaseSync) => void) | null): void {
+function repairInterruptedPostsMigrationMarker(database: DatabaseSync, validateBeforeMigration: ((database: DatabaseSync) => void) | null, beforeMutation: () => void): void {
   if (!migrationVersionExists(database, POSTS_MIGRATION_VERSION)) {
     return;
   }
@@ -226,6 +228,7 @@ function repairInterruptedPostsMigrationMarker(database: DatabaseSync, validateB
     throw new Error('Cannot safely resume migration 000005 because scan warning details already exist.');
   }
 
+  beforeMutation();
   database.exec('BEGIN IMMEDIATE');
   try {
     if (hasCarouselOwner) {
@@ -247,7 +250,7 @@ function repairInterruptedPostsMigrationMarker(database: DatabaseSync, validateB
   log.info('Reset an interrupted migration 000005 marker so the posts migration can resume');
 }
 
-function repairKnownIncompleteMigrationMarkers(databasePath: string, options: StartupMigrationOptions, validate: (database: DatabaseSync) => void): string[] {
+function repairKnownIncompleteMigrationMarkers(databasePath: string, options: StartupMigrationOptions, validate: (database: DatabaseSync) => void, beforeMutation: () => void): string[] {
   const database = new DatabaseSync(databasePath);
 
   try {
@@ -255,11 +258,11 @@ function repairKnownIncompleteMigrationMarkers(databasePath: string, options: St
       return [];
     }
 
-    repairIncorrectFolderSharesMigrationMarker(database);
+    repairIncorrectFolderSharesMigrationMarker(database, beforeMutation);
     const versions = appliedMigrationVersions(database);
     const pending = fs.readdirSync(options.migrationsDirectory ?? defaultMigrationsDirectory())
       .some(name => { const version = /^(\d+)_.*\.sql$/.exec(name)?.[1]; return version !== undefined && !versions.includes(version); });
-    repairInterruptedPostsMigrationMarker(database, pending ? validate : null);
+    repairInterruptedPostsMigrationMarker(database, pending ? validate : null, beforeMutation);
     return appliedMigrationVersions(database);
   } finally {
     database.close();
@@ -271,7 +274,27 @@ function appliedMigrationVersions(database: DatabaseSync): string[] {
   return (database.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as {version:string}[]).map(row => row.version);
 }
 
+function migrationRecoveryProtection(databasePath: string): () => void {
+  // Capture whether an application database existed before this invocation. A
+  // fresh empty database must not gain a misleading "before upgrade" backup.
+  let required = false;
+  if (fs.existsSync(databasePath) && fs.statSync(databasePath).size > 0) {
+    const original = new DatabaseSync(databasePath, { readOnly: true });
+    try { required = hasExistingAppSchema(original); } finally { original.close(); }
+  }
+  let completed = false;
+  return () => {
+    if (!required || completed) return;
+    createApplicationRecoveryService(databasePath).createSync('pre-migration');
+    completed = true;
+  };
+}
+
 export function baselineExistingDatabaseIfNeeded(databasePath: string, options: StartupMigrationOptions = {}): BaselineResult {
+  return baselineExistingDatabase(databasePath, options, migrationRecoveryProtection(databasePath));
+}
+
+function baselineExistingDatabase(databasePath: string, options: StartupMigrationOptions, beforeMutation: () => void): BaselineResult {
   const database = new DatabaseSync(databasePath);
   const migrationsDirectory = options.migrationsDirectory ?? defaultMigrationsDirectory();
 
@@ -286,6 +309,7 @@ export function baselineExistingDatabaseIfNeeded(databasePath: string, options: 
       };
     }
 
+    beforeMutation();
     applyBaselineCompatMigrations(database);
     applyBaselineSchema(database, migrationsDirectory);
     const rebuiltForeignKeys = rebuildBaselineForeignKeys(database);
@@ -762,8 +786,12 @@ export function runStartupMigrations(options: StartupMigrationOptions = {}): Sta
     if (migrationVersionExists(database, POSTS_MIGRATION_VERSION)) validationRuns++;
     validatePostsMigrationCompleteness(database);
   };
-  const baselineResult = baselineExistingDatabaseIfNeeded(databasePath, options);
-  const before = repairKnownIncompleteMigrationMarkers(databasePath, options, validate);
+  const beforeMutation = migrationRecoveryProtection(databasePath);
+  const baselineResult = baselineExistingDatabase(databasePath, options, beforeMutation);
+  const before = repairKnownIncompleteMigrationMarkers(databasePath, options, validate, beforeMutation);
+  const pending = fs.readdirSync(options.migrationsDirectory ?? defaultMigrationsDirectory())
+    .some(name => { const version = /^(\d+)_.*\.sql$/.exec(name)?.[1]; return version !== undefined && !before.includes(version); });
+  if (pending) beforeMutation();
   const migrationStarted = performance.now();
   try { runDbmateUp(databasePath, options); }
   catch (error) {
@@ -776,6 +804,10 @@ export function runStartupMigrations(options: StartupMigrationOptions = {}): Sta
     const applied = appliedMigrationVersions(database).filter(version => !before.includes(version));
     log.diagnostic('Startup migration phase', { status: 'ok', migrationsApplied: applied, migrationExecuted: applied.length > 0, durationMs: Number((performance.now() - migrationStarted).toFixed(2)) });
     validate(database);
+    if (tableExists(database, 'archive_catalog_creators') && tableHasColumn(database, 'archive_catalog_creators', 'is_active')) {
+      const marker = database.prepare('SELECT value FROM app_settings WHERE key=?').get('managed_creators.migration_000016') as { value: string } | undefined;
+      if (!marker || JSON.parse(marker.value).completed !== true) beforeMutation();
+    }
     completeManagedCreatorMigration(database, appConfig.galleryRoot);
   } finally {
     log.diagnostic('Startup database validation summary', { validationRuns });

@@ -9,9 +9,10 @@ import { getRelativePathWithinRoot, isSameOrWithinPath, normalizePath } from '..
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const repositoryRoot = path.resolve(moduleDirectory, '../../..');
+export const environmentFile = path.resolve(repositoryRoot, process.env.APP_ENV_FILE ?? '.env');
 
 if (process.env.NODE_ENV !== 'test') {
-  dotenv.config({ path: path.join(repositoryRoot, '.env') });
+  dotenv.config({ path: environmentFile });
 }
 
 const envSchema = z.object({
@@ -23,6 +24,12 @@ const envSchema = z.object({
   DATA_DIR: z.string().optional(),
   GALLERY_ROOT: z.string().optional(),
   DB_DIR: z.string().optional(),
+  BACKUP_ROOT: z.string().trim().min(1).optional(),
+  APP_RUN_CONFIG_FILE: z.string().trim().min(1).optional(),
+  BACKUP_AUTO_ENABLED: z.enum(['true', 'false', '1', '0']).default('false'),
+  BACKUP_INTERVAL_HOURS: z.coerce.number().int().min(24).default(24),
+  BACKUP_RETAIN_DAILY: z.coerce.number().int().min(1).max(365).default(7),
+  BACKUP_RETAIN_WEEKLY: z.coerce.number().int().min(1).max(104).default(4),
   THUMBNAILS_DIR: z.string().optional(),
   PREVIEWS_DIR: z.string().optional(),
   FFMPEG_PATH: z.string().trim().min(1).optional(),
@@ -43,6 +50,8 @@ const envSchema = z.object({
 });
 
 const parsed = envSchema.parse(process.env);
+// Names only: recovery compares supported process overrides without exporting values.
+export const supportedEnvironmentKeys = [...Object.keys(envSchema.shape), 'APP_ENV_FILE', 'LOCAL_INGEST_ARCHIVE_PASSWORD'];
 const isProduction = parsed.NODE_ENV === 'production';
 const devClientPort = parsed.DEV_CLIENT_PORT ?? 4141;
 const serverPort = isProduction
@@ -103,6 +112,7 @@ function parseConfiguredOrigins(value: string | undefined): string[] {
 const dataRoot = resolveConfiguredPath(parsed.DATA_ROOT ?? parsed.DATA_DIR, resolveFromRoot('./data'));
 const galleryRoot = resolveConfiguredPath(parsed.GALLERY_ROOT, path.join(dataRoot, 'gallery'));
 const dbDir = resolveConfiguredPath(parsed.DB_DIR, path.join(dataRoot, 'db'));
+const backupRoot = resolveConfiguredPath(parsed.BACKUP_ROOT, path.join(repositoryRoot, 'data_backup'));
 const geodataDir = path.join(dataRoot, 'geodata');
 const thumbnailsDir = resolveConfiguredPath(parsed.THUMBNAILS_DIR, path.join(dataRoot, 'thumbnails'));
 const previewsDir = resolveConfiguredPath(parsed.PREVIEWS_DIR, path.join(dataRoot, 'previews'));
@@ -155,6 +165,15 @@ export const appConfig = {
   dataRoot,
   galleryRoot,
   dbDir,
+  backupRoot,
+  backupRootExplicit: parsed.BACKUP_ROOT !== undefined,
+  runConfigurationFile: parsed.APP_RUN_CONFIG_FILE ? resolveFromRoot(parsed.APP_RUN_CONFIG_FILE) : null,
+  backupAutomatic: {
+    enabled: parsed.BACKUP_AUTO_ENABLED === 'true' || parsed.BACKUP_AUTO_ENABLED === '1',
+    intervalHours: parsed.BACKUP_INTERVAL_HOURS,
+    retainDaily: parsed.BACKUP_RETAIN_DAILY,
+    retainWeekly: parsed.BACKUP_RETAIN_WEEKLY
+  },
   geodataDir,
   thumbnailsDir,
   previewsDir,

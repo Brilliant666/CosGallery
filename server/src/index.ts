@@ -29,6 +29,7 @@ import { permanentDeletionService } from "./services/permanent-deletion-service.
 import { scannerService } from "./services/scanner-service.js";
 import { watcherService } from "./services/watcher-service.js";
 import { startResourceCatalogUpdater, stopResourceCatalogUpdater } from "./services/resource-catalog-updater.js";
+import { startAutomaticRecoveryPoints, stopAutomaticRecoveryPoints } from "./services/application-recovery-service.js";
 
 function logServerReady(): void {
   if (!appConfig.isDevelopment) {
@@ -93,6 +94,7 @@ async function bootstrap(): Promise<void> {
 
   server.listen(appConfig.port, appConfig.host, () => {
     logServerReady();
+    startAutomaticRecoveryPoints();
     if (startupAction === "blocked") {
       log.info("Gallery watcher deferred until the library rebuild completes");
       startCatalogUpdates();
@@ -122,9 +124,12 @@ async function bootstrap(): Promise<void> {
 
   async function shutdown(signal: string): Promise<void> {
     log.info(`Received ${signal}, shutting down`);
+    const httpClosed = new Promise<void>(resolve => server.close(() => resolve()));
+    await stopAutomaticRecoveryPoints();
     await stopResourceCatalogUpdater();
     await watcherService.stop();
-    server.close(() => process.exit(0));
+    await httpClosed;
+    process.exit(0);
   }
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
