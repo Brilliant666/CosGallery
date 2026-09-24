@@ -428,8 +428,6 @@
             </section>
           </section>
 
-          <ApplicationRecoveryPanel />
-
           <!-- Danger Zone -->
           <div v-if="authStore.enabled" class="border border-[rgba(214,48,49,0.3)] rounded-[1.05rem] overflow-hidden">
             <div class="bg-[rgba(214,48,49,0.04)] px-6 py-4 border-b border-[rgba(214,48,49,0.1)]">
@@ -1227,6 +1225,8 @@
             
             <p v-if="thumbnailRebuildError" class="m-0 px-4 py-[0.85rem] border border-[rgba(214,48,49,0.24)] rounded-[0.9rem] text-[#c0392b] bg-[rgba(214,48,49,0.08)]">{{ thumbnailRebuildError }}</p>
           </section>
+
+          <ApplicationRecoveryPanel />
 
           <!-- Danger Zone -->
           <div class="border border-[rgba(214,48,49,0.3)] rounded-[1.05rem] overflow-hidden" :class="highlightRebuildAction ? 'ring-2 ring-[color-mix(in_srgb,var(--accent)_45%,transparent_55%)]' : ''">
