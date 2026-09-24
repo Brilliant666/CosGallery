@@ -118,6 +118,39 @@ export class LocalIngestDestinationService {
     private readonly libraryRoot = appConfig.galleryRoot
   ) {}
 
+  private managedFolderFacts(galleryFolderId: number) {
+    const folder = this.database.prepare('SELECT id,name,folder_path,role FROM folders WHERE id=?').get(galleryFolderId);
+    const bridges = this.database.prepare(`SELECT id,creator_id,root_path,relative_path,absolute_path,is_active,match_status,gallery_folder_id
+      FROM archive_catalog_local_creator_folders WHERE gallery_folder_id=? ORDER BY id`).all(galleryFolderId);
+    return { folder, bridges };
+  }
+
+  /** The combined editor can select an unlinked directory before a bridge exists.
+   * Validate the same path rules without first writing a tentative relationship. */
+  async inspectGalleryFolder(galleryFolderId: number) {
+    const facts = this.managedFolderFacts(galleryFolderId);
+    const { folder, bridges } = facts;
+    const base = { galleryFolderId, facts: JSON.stringify(facts) };
+    if (!folder || bridges.length > 1) return { ...base, valid: false, unavailableReason: '目录不存在或有多个目录关联' };
+    const bridge = bridges[0];
+    const absolute = path.resolve(this.libraryRoot, String(folder.folder_path));
+    const candidate = await this.validateCandidate({
+      creator_id: Number(bridge?.creator_id ?? 0), canonical_name: String(folder.name), preferred_local_creator_folder_id: null,
+      catalog_folder_id: Number(bridge?.id ?? 0), gallery_folder_id: galleryFolderId,
+      root_path: String(bridge?.root_path ?? this.libraryRoot), relative_path: String(bridge?.relative_path ?? folder.folder_path),
+      absolute_path: String(bridge?.absolute_path ?? absolute), folder_name: String(folder.name),
+      // An explicit link is about to confirm an unowned, active bridge.
+      match_status: bridge?.creator_id == null ? 'matched' : String(bridge.match_status),
+      local_folder_active: Number(bridge?.is_active ?? 1), gallery_folder_path: String(folder.folder_path),
+      gallery_folder_name: String(folder.name), gallery_folder_role: String(folder.role), work_count: 0
+    });
+    return { ...base, valid: candidate?.valid ?? false, unavailableReason: candidate?.unavailableReason ?? null };
+  }
+
+  matchesInspectedGalleryFolder(inspection: { galleryFolderId: number; facts: string }) {
+    return JSON.stringify(this.managedFolderFacts(inspection.galleryFolderId)) === inspection.facts;
+  }
+
   private requireCreator(creatorId: number): CreatorDirectoryRow {
     const row = this.database.prepare(
       `SELECT creators.id AS creator_id,

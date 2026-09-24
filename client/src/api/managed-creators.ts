@@ -10,10 +10,27 @@ export type ManagedCreatorDeletionPreview = {
   blockers:Array<{code:string;label:string;count:number}>;
   confirmationToken:string; removableAliases:number;
 };
+export type ManagedCreatorSavedState = {
+  creator: ArchiveCatalogCreatorDetail;
+  profileRevision: string;
+  directoriesRevision: string;
+  linkedFolderIds: number[];
+  preferredLocalCreatorFolderId: number | null;
+};
+export type ManagedCreatorEditingState = ManagedCreatorSavedState & { destination: LocalIngestDestinationPreference };
+export type ManagedCreatorProfileDraft = ManagedCreatorInput & { manualAliases: string[]; expectedRevision: string };
+export type ManagedCreatorDirectoryDraft = {
+  linkedFolderIds: number[];
+  expectedRevision: string;
+} & ({preferredGalleryFolderId: number | null; preferredLocalCreatorFolderId?: never}
+  | {preferredLocalCreatorFolderId: number | null; preferredGalleryFolderId?: never});
 function mutate<T>(path:string, method:string, body?:unknown) {
   return requestJson<T>(root+path, {method, headers:{'content-type':'application/json'}, body:body===undefined?undefined:JSON.stringify(body)});
 }
 export const createManagedCreator=(body:ManagedCreatorInput)=>mutate<ArchiveCatalogCreatorDetail>('/creators','POST',body);
+export const fetchManagedCreatorEditingState=(id:number)=>requestJson<ManagedCreatorEditingState>(`${root}/creators/${id}/editing-state`);
+export const saveManagedCreatorProfile=(id:number,body:ManagedCreatorProfileDraft)=>mutate<ManagedCreatorSavedState>(`/creators/${id}/profile-settings`,'PUT',body);
+export const saveManagedCreatorDirectories=(id:number,body:ManagedCreatorDirectoryDraft)=>mutate<ManagedCreatorSavedState>(`/creators/${id}/directory-settings`,'PUT',body);
 export const updateManagedCreator=(id:number,body:ManagedCreatorInput)=>mutate<ArchiveCatalogCreatorDetail>(`/creators/${id}`,'PATCH',body);
 export const addManagedAlias=(id:number,alias:string,confirmDistinct:boolean)=>mutate<ArchiveCatalogCreatorDetail>(`/creators/${id}/aliases`,'POST',{alias,confirmDistinct});
 export const deleteManagedAlias=(id:number,aliasId:string)=>mutate<ArchiveCatalogCreatorDetail>(`/creators/${id}/aliases/${encodeURIComponent(aliasId)}`,'DELETE');

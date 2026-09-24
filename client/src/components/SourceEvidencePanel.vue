@@ -96,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import * as api from '../api/source-evidence';
 import { RequestError } from '../api/http';
 import type { SaveSourceEvidenceInput, ConfirmSourceEvidenceInput, LinkSourceEvidenceInput, MapSourceEvidenceEntryInput, SourceEvidenceObservation, SourceEvidencePage } from '../api/source-evidence';
@@ -313,6 +313,10 @@ watch(() => props.creator.id, () => {
   Object.assign(draft, { platform: '', pageUrl: '', pageTitle: '', rawDirectoryText: '', notes: '', resourceLines: '' });
   restorePending(); if (expanded.value) void refresh();
 }, { immediate: true });
+const hasUnsavedChanges = computed(() => !!(pendingSave.value || pendingIdentity.value || pendingLink.value || pendingMapping.value
+  || (manualOpen.value && Object.values(draft).some(value => value.trim())) || identityReason.value.trim()
+  || linkReason.value.trim() || mappingReason.value.trim() || scopeRoot.value.trim() || scopeDirectories.value.trim()));
+defineExpose({ hasUnsavedChanges, isBusy: busy });
 onBeforeUnmount(() => { generation++; });
 </script>
 

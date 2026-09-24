@@ -74,6 +74,20 @@ router.use('/admin/archive-catalog', requireCapability('canAccessSettings', 'Adm
 router.post('/admin/archive-catalog/creators', managedAccess, (request, response) => {
   managedResponse(response, () => new ManagedCreatorService().create(request.body), 201);
 });
+router.get('/admin/archive-catalog/creators/:id/editing-state', managedAccess, async (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  try { response.json(await new ManagedCreatorService().editingState(id)); }
+  catch (error) { managedResponse(response, () => { throw error; }); }
+});
+router.put('/admin/archive-catalog/creators/:id/profile-settings', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().saveProfile(id, request.body));
+});
+router.put('/admin/archive-catalog/creators/:id/directory-settings', managedAccess, async (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  await managedOperationResponse(response, '正在保存博主目录设置', () =>
+    new ManagedCreatorService().saveDirectories(id, request.body));
+});
 router.get('/admin/archive-catalog/creators/:id/deletion-preview', managedAccess, (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
   managedResponse(response, () => new ManagedCreatorService().deletionPreview(id));

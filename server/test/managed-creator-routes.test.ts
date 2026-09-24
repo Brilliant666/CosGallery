@@ -104,6 +104,42 @@ describe.sequential('managed creator admin API', () => {
     expect((await requestTestApp(app,'DELETE',url,headers,body)).status).toBe(404);
     expect((await requestTestApp(app,'GET',base+`/creators/${id}/deletion-preview`)).body.eligible).toBe(false);
   });
+  it('exposes independent atomic editor scopes, rolls back server errors, and refuses active directory operations',async()=>{
+    const created=await requestTestApp(app,'POST',base+'/creators',headers,{name:'Editor sample'});
+    const creatorId=created.body.id;
+    const url=base+`/creators/${creatorId}`;
+    const state=await requestTestApp(app,'GET',url+'/editing-state');
+    expect(state.status).toBe(200);
+    expect(state.body).toMatchObject({creator:{id:creatorId},linkedFolderIds:[],destination:{mode:'new-creator'}});
+    const body={name:'Edited sample',preference:'liked',rating:'R15',manualAliases:['Draft alias'],expectedRevision:state.body.profileRevision};
+    expect((await requestTestApp(app,'PUT',url+'/profile-settings',{},body)).status).toBe(403);
+    db.connection.exec(`CREATE TRIGGER route_reject_profile BEFORE UPDATE OF canonical_name ON archive_catalog_creators
+      WHEN NEW.id=${Number(creatorId)} BEGIN SELECT RAISE(ABORT,'isolated route write failure'); END`);
+    const failed=await requestTestApp(app,'PUT',url+'/profile-settings',headers,body);
+    // The existing application error handler returns 400 for SQLite failures.
+    expect(failed.status).toBe(400);
+    expect(failed.body.message).toContain('isolated route write failure');
+    const unchanged=await requestTestApp(app,'GET',url+'/editing-state');
+    expect(unchanged.body.profileRevision).toBe(state.body.profileRevision);
+    expect(unchanged.body.creator.name).toBe('Editor sample');
+    expect(unchanged.body.creator.aliases.some((alias:{alias:string})=>alias.alias==='Draft alias')).toBe(false);
+    db.connection.exec('DROP TRIGGER route_reject_profile');
+    const saved=await requestTestApp(app,'PUT',url+'/profile-settings',headers,body);
+    expect(saved.status).toBe(200);
+    expect(saved.body.creator).toMatchObject({name:'Edited sample',preference:'liked',rating:'R15'});
+    expect((await requestTestApp(app,'PUT',url+'/profile-settings',headers,body)).body.code).toBe('CREATOR_EDIT_CONFLICT');
+    const {localIngestOperationCoordinator}=await import('../src/services/local-ingest-operation-coordinator.js');
+    let release!:()=>void;
+    const held=localIngestOperationCoordinator.run({state:'running',kind:'batch',message:'isolated editor guard'},
+      ()=>new Promise<void>(resolve=>{release=resolve;}));
+    await vi.waitFor(()=>expect(localIngestOperationCoordinator.snapshot().state).toBe('running'));
+    const directoryBody={linkedFolderIds:[],preferredGalleryFolderId:null,expectedRevision:state.body.directoriesRevision};
+    try {
+      expect((await requestTestApp(app,'PUT',url+'/directory-settings',headers,directoryBody)).body.code).toBe('LOCAL_INGEST_OPERATION_ACTIVE');
+    } finally {release();await held;}
+    expect((await requestTestApp(app,'PUT',url+'/directory-settings',headers,directoryBody)).status).toBe(200);
+    expect((await requestTestApp(app,'PUT',url+'/directory-settings',headers,{...directoryBody,expectedRevision:'0'.repeat(64)})).body.code).toBe('CREATOR_EDIT_CONFLICT');
+  });
   it('requires administrator capability even for alias and relationship mutations',async()=>{
     const {authService}=await import('../src/services/auth-service.js');
     authService.setAdminPassword('fixture-admin-password');
@@ -114,10 +150,13 @@ describe.sequential('managed creator admin API', () => {
       ['POST',base+'/creators',{name:'Blocked'}],['PATCH',base+`/creators/${id}`,{rating:'R18'}],
       ['POST',base+`/creators/${id}/aliases`,{alias:'Blocked'}],['POST',base+`/creators/${id}/restore`,{confirm:true}],
       ['DELETE',base+`/creators/${id}`,{confirm:true,confirmationToken:'0'.repeat(64)}],
+      ['PUT',base+`/creators/${id}/profile-settings`,{name:'Blocked'}],
+      ['PUT',base+`/creators/${id}/directory-settings`,{linkedFolderIds:[]}],
       ['POST',base+`/local-creator-folders/${folderId}/unlink`,{confirm:true}]
     ] as const) expect((await requestTestApp(app,method,url,{...headers,cookie},body)).status).toBe(403);
     expect((await requestTestApp(app,'GET',base,{cookie})).status).toBe(403);
     expect((await requestTestApp(app,'GET',base+`/creators/${id}/deletion-preview`,{cookie})).status).toBe(403);
+    expect((await requestTestApp(app,'GET',base+`/creators/${id}/editing-state`,{cookie})).status).toBe(403);
     for(const table of ['local_ingest_jobs','archive_catalog_download_tasks','archive_catalog_metadata_tasks']) expect(db.connection.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({count:0});
   });
 });

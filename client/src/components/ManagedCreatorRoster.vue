@@ -2,8 +2,9 @@
   <section class="roster" aria-label="博主库">
     <header class="roster-heading">
       <div><h2>博主库</h2><p>统一维护博主 ID、名称与分类。来源平台只补充作品信息。</p></div>
-      <button type="button" class="primary" :disabled="busy" @click="openNew">新增博主</button>
+      <button type="button" class="primary" :disabled="!auth.capabilities.canManageLibrary" @click="openNew">新增博主</button>
     </header>
+    <div class="roster-layout" :class="{'with-panel': panelSelection}"><div class="roster-list-column">
     <form class="roster-filters" @submit.prevent="search" @change="onFilterChange">
       <label class="search">搜索名称或别名<input :value="filters.query" type="search" placeholder="名称或别名" @input="onQueryInput" @compositionstart="startComposition" @compositionend="endComposition" @keydown.enter="onEnter" /></label>
       <label>偏好<select v-model="filters.preference"><option value="">全部偏好</option><option value="liked">喜欢</option><option value="kept">保留</option><option value="unset">未设置</option></select></label>
@@ -14,7 +15,7 @@
       <label>作品对账<select v-model="filters.state"><option value="">全部</option><option value="missing">有缺失作品</option><option value="no-local">无本地作品</option><option value="complete">已完整关联</option><option value="no-source">无来源作品</option><option value="unresolved">待核查</option></select></label>
       <button type="button" @click="resetFilters">重置筛选</button>
     </form>
-    <p v-if="error && !dialogOpen" role="alert" class="error">{{ error }}</p>
+    <p v-if="error" role="alert" class="error">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <div ref="listTop" class="creator-cards" aria-label="博主账本列表">
       <article v-for="creator in payload?.items" :key="creator.id" class="creator-card">
@@ -26,7 +27,7 @@
         <div class="card-metric"><small>本地作品</small><strong>{{ creator.localWorks }}</strong></div>
         <div class="card-metric"><small>已关联</small><strong>{{ creator.matchedWorks }}</strong></div>
         <div class="card-metric" :class="{missing:creator.missingWorks > 0}"><small>待收录</small><strong>{{ creator.missingWorks }}</strong></div>
-        <div class="card-actions"><button type="button" @click="openCreator(creator.id, 'ledger')">查看账本</button><button type="button" @click="emit('resource-catalog', creator.id)">资源目录</button><a :href="`/creator-admission/local/${creator.id}`" :aria-label="`本地导入 ${creator.name}`">本地导入</a><button type="button" :aria-label="`管理 ${creator.name}`" @click="openCreator(creator.id)">管理资料</button></div>
+        <div class="card-actions"><button type="button" @click="emit('resource-catalog', creator.id)">资源目录</button><button type="button" :aria-label="`管理 ${creator.name}`" :aria-pressed="panelSelection === String(creator.id)" @click="openCreator(creator.id)">管理资料</button></div>
       </article>
     </div>
     <p v-if="payload && !payload.items.length">没有符合条件的博主。</p>
@@ -36,153 +37,29 @@
       <button :disabled="!payload?.hasMore || loading" @click="goPage(page + 1)">下一页</button>
     </footer>
 
-    <dialog ref="dialog" class="roster-dialog" aria-labelledby="roster-dialog-title" @close="dialogClosed" @cancel="cancelDialog">
-      <div class="roster-heading"><h2 id="roster-dialog-title">{{ detail ? `${dialogMode === 'ledger' ? '账本' : '管理'} ${detail.name}` : '新增博主' }}</h2><button :disabled="busy" @click="closeDialog">关闭</button></div>
-      <p v-if="detail" class="hint">稳定 ID #{{ detail.id }} · {{ detail.isActive ? '启用' : '停用' }} · 改名不移动本地目录</p>
-      <p v-if="error" role="alert" class="error">{{ error }}</p>
-      <aside v-if="candidates.length" class="collision">
-        <p>可能是已有博主，请先核对：</p>
-        <button v-for="candidate in candidates" :key="candidate.id" :disabled="busy" @click="openCreator(candidate.id)">#{{ candidate.id }} {{ candidate.name }}</button>
-        <label><input v-model="draft.confirmDistinct" type="checkbox" />我已核对，这是不同的人，允许同名</label>
-      </aside>
-      <form v-if="dialogMode === 'manage'" class="roster-edit" @submit.prevent="save">
-        <label>主名称<input v-model="draft.name" required maxlength="255" :disabled="busy" /></label>
-        <label>偏好<select v-model="draft.preference" :disabled="busy"><option :value="null">未设置</option><option value="liked">喜欢</option><option value="kept">保留</option></select></label>
-        <label>博主分级<select v-model="draft.rating" :disabled="busy"><option :value="null">待分类</option><option>R15</option><option>R18</option></select></label>
-        <button class="primary" :disabled="busy">{{ busy ? '正在保存…' : detail ? '保存博主' : '创建博主' }}</button>
-      </form>
-      <template v-if="detail">
-        <SourceEvidencePanel v-if="dialogOpen" :key="detail.id" :creator="detail" />
-        <section aria-label="作品账本"><h3>作品账本</h3>
-          <p>本地 {{ detail.localWorks }} 套 · 来源 {{ detail.remoteWorks }} 套 · 已关联 {{ detail.matchedWorks }} 套 · 已知缺失 {{ detail.missingWorks }} 套 · 待核查 {{ detail.unresolvedLocalWorks }} 套</p>
-          <p class="hint">来源与本地账本的比较结果；查看详情不会检查来源、规划任务或扫描文件。</p>
-          <details class="ledger-detail"><summary>来源合集 · {{ detail.collections.length }} 个</summary>
-            <p v-if="!detail.collections.length" class="hint">尚未接入资源平台合集。</p>
-            <ul class="source-list"><li v-for="collection in detail.collections" :key="collection.id">
-              <strong>{{ collection.title }}</strong><small>{{ sourceLabel(collection.source) }} · {{ collection.sourceCollectionId }} · 平台标注 {{ collection.declaredWorkCount ?? '未知' }} 套</small>
-              <small>来源记录：{{ formatTime(collection.observedAt) }}</small>
-              <a v-if="safeSourceUrl(collection.url)" :href="collection.url!" target="_blank" rel="noopener noreferrer">打开来源</a>
-              <p v-for="(delivery, index) in collection.deliveries" :key="index" class="hint">{{ delivery.provider === 'baidu' ? '百度网盘' : delivery.provider }} · {{ delivery.type }} · {{ delivery.status ?? '状态未知' }}<template v-if="delivery.sourceFolderName"> · 来源目录 {{ delivery.sourceFolderName }}</template><template v-if="delivery.destinationPath"> · {{ delivery.destinationPath }}</template><template v-if="delivery.transferredAt"> · {{ formatTime(delivery.transferredAt) }}</template></p>
-            </li></ul>
-          </details>
-          <details class="ledger-detail"><summary>待收录作品 · {{ detail.missing.length }} 套</summary>
-            <p v-if="!detail.missing.length" class="hint">{{ detail.remoteWorks === 0 ? '尚无来源作品可供比较，不能据此判断已收录完整。' : '当前账本没有已知缺失作品。' }}</p>
-            <template v-else><p class="hint">仅规划此博主的缺失作品任务，不执行网盘或本地入库。</p><button type="button" :disabled="busy || !detail.isActive" @click="requestDownloadPlan">只生成此博主任务</button></template>
-            <ul class="source-list"><li v-for="work in detail.missing" :key="work.workId"><strong>{{ work.sourceOrderLabel ?? (work.sourceOrder === null ? '未编号' : `NO.${work.sourceOrder}`) }} · {{ work.title }}</strong><small>{{ sourceLabel(work.source) }} · 合集 {{ work.sourceCollectionId }}</small></li></ul>
-          </details>
-          <details class="ledger-detail"><summary>待核查本地作品 · {{ detail.unresolved.length }} 套</summary>
-            <p v-if="!detail.unresolved.length" class="hint">当前没有待核查本地作品。</p>
-            <ul class="source-list"><li v-for="(folder, index) in detail.unresolved" :key="`${folder.relativePath}:${index}`"><strong>{{ folder.folderName }}</strong><small>{{ folder.relativePath }} · {{ folder.status === 'ambiguous' ? '匹配存在歧义' : '尚未匹配' }} · 解析编号 {{ folder.parsedSourceOrder ?? '未知' }}</small></li></ul>
-          </details>
-        </section>
-        <template v-if="dialogMode === 'manage'">
-        <section><h3>Stage 1 检查来源与补齐缺失</h3><FirstCollectionSelector :creator="detail" :disabled="busy || !detail.isActive" @planned="handleSourcePlanned" /></section>
-        <section><h3>别名</h3>
-          <p v-if="!visibleAliases.length" class="hint">暂无其他别名。</p>
-          <ul class="alias-list"><li v-for="alias in visibleAliases" :key="alias.id"><span>{{ alias.alias }} <small>{{ sourceLabel(alias.source) }}</small></span>
-            <button v-if="alias.editable" :disabled="busy" @click="removeAlias(alias.id)">删除别名</button><small v-else>只读</small></li></ul>
-          <form class="inline-form" @submit.prevent="addAlias"><label>新增手工别名<input v-model="aliasDraft" required maxlength="255" :disabled="busy" /></label><button :disabled="busy">添加别名</button></form>
-        </section>
-        <section><h3>作品来源（只读）</h3><p v-if="!visibleSources.length">暂无作品来源，可在后续显式规划时关联资源平台。</p>
-          <ul class="source-list current-sources"><li v-for="source in visibleSources" :key="`${source.source}:${source.sourceCreatorId}`">
-            <strong>{{ sourceLabel(source.source) }}</strong> · {{ source.displayName }}<small>{{ source.sourceCreatorId }}</small>
-            <a v-if="safeSourceUrl(source.url)" :href="source.url!" target="_blank" rel="noopener noreferrer">查看来源</a>
-          </li></ul>
-        </section>
-        <section><h3>本地目录关联</h3><p class="hint">仅保存 ID 关联，不重命名目录、不扫描、不生成任务。</p>
-          <ul class="alias-list"><li v-for="folder in detail.localFolders" :key="folder.id"><span>#{{ folder.id }} {{ folder.folderPath }} · {{ folder.workCount }} 套 <small>{{ folder.matchStatus }} / {{ folder.matchMethod ?? '未关联' }}</small></span><button :disabled="busy" @click="pendingAction = { kind: 'unlink', folderId: folder.id }">解除关联</button></li></ul>
-          <form class="inline-form" @submit.prevent="linkFolder"><label>未关联目录<select v-model="folderDraft" :disabled="busy"><option :value="null">选择本地目录</option><option v-for="folder in detail.unlinkedLocalFolders" :key="folder.id" :value="folder.id">#{{ folder.id }} {{ folder.folderPath }}</option></select></label><button :disabled="busy || folderDraft === null">关联目录</button></form>
-        </section>
-        <section><h3>首选入库目录</h3>
-          <p class="hint">只保存目录桥接 ID；不移动文件、不扫描、不创建任务。多个目录未选择时，新任务会关闭式等待确认。</p>
-          <p v-if="ingestDestination" :class="{ error: ['selection-required','preferred-unavailable','linked-folders-unavailable'].includes(ingestDestination.mode) }">
-            {{ ingestDestination.message }}<template v-if="ingestDestination.resolvedCreatorDirectory">：{{ ingestDestination.resolvedCreatorDirectory }}</template>
-          </p>
-          <form v-if="ingestDestination" class="inline-form" @submit.prevent="saveIngestDestination">
-            <label>首选入库目录
-              <select v-model="preferredFolderDraft" :disabled="busy">
-                <option :value="null">不显式选择（使用实际回退规则）</option>
-                <option v-for="folder in ingestDestination.candidates" :key="folder.localCreatorFolderId" :value="folder.localCreatorFolderId" :disabled="!folder.valid">
-                  桥接 #{{ folder.localCreatorFolderId }} · {{ folder.absolutePath }} · {{ folder.workCount }} 套{{ folder.valid ? '' : ` · ${folder.unavailableReason}` }}
-                </option>
-              </select>
-            </label>
-            <button :disabled="busy || preferredFolderDraft === ingestDestination.preferredLocalCreatorFolderId">保存目录选择</button>
-          </form>
-        </section>
-        <section class="state-controls"><h3>{{ detail.isActive ? '停用博主' : '恢复博主' }}</h3>
-          <p>来源 {{ detail.impact.sources }} · 合集 {{ detail.impact.collections }} · 平台作品 {{ detail.impact.remoteWorks }} · 本地作品 {{ detail.impact.localWorks }} · 未完成下载任务 {{ detail.impact.unfinishedDownloadTasks }}</p>
-          <p class="hint">停用仅影响未来任务规划及默认展示；既有作品、任务和关系保留。恢复也不会自动生成任务。</p>
-          <button :disabled="busy" @click="pendingAction = { kind: 'state' }">{{ detail.isActive ? '停用' : '恢复' }}</button>
-        </section>
-        <aside v-if="pendingAction" class="collision" role="group" aria-label="确认变更">
-          <p>{{ pendingAction.kind === 'unlink' ? '确认解除此目录与博主的关联？文件和已有作品关系不会删除。' : `确认${detail.isActive ? '停用' : '恢复'}博主？不会修改既有任务。` }}</p>
-          <button class="primary" :disabled="busy" @click="confirmAction">确认变更</button><button :disabled="busy" @click="pendingAction = null">取消</button>
-        </aside>
-        <section v-if="canCheckDeletion" class="state-controls" aria-label="删除未使用博主" data-test="unused-creator-deletion">
-          <h3>删除未使用博主</h3>
-          <p class="hint">仅限手工创建、已停用且未被业务记录使用的博主。停用会保留身份；删除会移除该身份及可删除的手工别名，不能通过“恢复博主”找回。不删除文件、作品或任务。</p>
-          <button :disabled="busy" data-test="preview-creator-deletion" @click="previewDeletion">{{ deletionPreview ? '重新检查删除条件' : '检查是否可删除' }}</button>
-          <aside v-if="deletionPreview" class="collision" aria-label="删除条件检查结果" data-test="creator-deletion-preview">
-            <p><strong>#{{ deletionPreview.creatorId }} {{ deletionPreview.name }}</strong></p>
-            <template v-if="deletionPreview.blockers.length"><p>存在以下关联，不能删除。请保持停用；此处不会清理关联记录。</p><ul><li v-for="blocker in deletionPreview.blockers" :key="blocker.code">{{ blocker.label }} · {{ blocker.count }}</li></ul></template>
-            <p v-else-if="!deletionPreview.eligible">当前不符合删除条件，请重新检查。</p>
-            <template v-else><p>当前检查未发现阻断关联。将删除此博主身份及 {{ deletionPreview.removableAliases }} 条可删除别名；提交时服务端会再次核对。</p><button class="danger" :disabled="busy || !deletionPreview.confirmationToken" data-test="confirm-creator-deletion" @click="confirmDeletion">确认删除博主</button></template>
-            <button :disabled="busy" @click="deletionPreview = null">取消删除</button>
-          </aside>
-        </section>
-        </template>
-      </template>
-    </dialog>
+    </div><CreatorManagementPanel v-if="panelSelection" :key="panelSelection" ref="panel" :creator-id="panelSelection === 'new' ? null : Number(panelSelection)" :tab="panelTab" @close="closePanel" @tab="changePanelTab" @changed="changed" @created="created" @deleted="deleted" @catalog="id=>emit('resource-catalog',id)" @plan-downloads="id=>emit('plan-downloads',id)" @source-planned="handleSourcePlanned" /></div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref } from 'vue';
-import FirstCollectionSelector from './FirstCollectionSelector.vue';
-import SourceEvidencePanel from './SourceEvidencePanel.vue';
-import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
-import { RequestError } from '../api/http';
-import * as api from '../api/managed-creators';
-import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ArchiveCatalogState, ContentRating, LocalIngestDestinationPreference } from '../types/api';
-
+import { nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
+import CreatorManagementPanel, { type CreatorPanelTab } from './CreatorManagementPanel.vue';
+import { fetchArchiveCatalog } from '../api/gallery';
+import { useAuthStore } from '../stores/auth';
+import { pinia } from '../stores/pinia';
+import type { ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ArchiveCatalogState, ContentRating } from '../types/api';
 const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]]; 'plan-downloads': [creatorId: number]; 'resource-catalog': [creatorId: number] }>();
-const payload = ref<ArchiveCatalogCreatorsPayload | null>(null);
-const listTop = ref<HTMLElement | null>(null);
-const detail = ref<ArchiveCatalogCreatorDetail | null>(null);
-const filters = reactive({ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no'|'no-unchecked'|'no-not-found', state:'' as ''|ArchiveCatalogState });
-const page = ref(1), loading = ref(false), busy = ref(false), error = ref(''), notice = ref('');
-const dialogMode = ref<'ledger'|'manage'>('manage');
-const ledgerStatus = (creator: {remoteWorks:number;localWorks:number;missingWorks:number;unresolvedLocalWorks:number}) => creator.unresolvedLocalWorks > 0 ? '待核查' : creator.remoteWorks === 0 ? '尚未接入资源' : creator.localWorks === 0 ? '尚未入库' : creator.missingWorks > 0 ? `有 ${creator.missingWorks} 套待收录` : '已完整关联';
-const dialog = ref<HTMLDialogElement | null>(null), dialogOpen = ref(false);
-const draft = reactive<api.ManagedCreatorInput>({ name:'', preference:null, rating:null, confirmDistinct:false });
-const aliasDraft = ref(''), folderDraft = ref<number|null>(null);
-const ingestDestination = ref<LocalIngestDestinationPreference | null>(null);
-const preferredFolderDraft = ref<number | null>(null);
-const candidates = ref<Array<{id:number;name:string}>>([]);
-const pendingAction = ref<{kind:'state'}|{kind:'unlink';folderId:number}|null>(null);
-const deletionPreview = ref<api.ManagedCreatorDeletionPreview | null>(null);
-const canCheckDeletion = computed(() => dialogMode.value === 'manage' && detail.value?.seedSource === 'manual' && !detail.value.isActive);
-let deletionRequest = 0;
-let loadGeneration = 0;
-let queryTimer: ReturnType<typeof setTimeout> | undefined;
-let composing = false;
-let disposed = false;
-let requestKey: string | null = null;
-let appliedFilterKey: string | null = null;
-const preferenceLabel = (value:ArchiveCatalogPreference|null) => value === 'liked' ? '喜欢' : value === 'kept' ? '保留' : '未设置';
-const sourceLabel = (source:string) => ({hentaiclub:'历史名称',costuan:'作品来源 · Costuan',manual:'手工', 'manual-history':'历史名称'}[source] ?? source);
-// Presentation only: keep the complete detail object for identity matching and actions.
-const visibleAliases = computed(() => detail.value?.aliases.filter(alias => alias.editable || alias.alias !== detail.value?.name) ?? []);
-const visibleSources = computed(() => detail.value?.sources.filter(source => source.source !== 'hentaiclub' && source.source !== 'manual-history') ?? []);
-const safeSourceUrl = (value:string|null) => !!value && /^https?:\/\//iu.test(value);
-const formatTime = (value:string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', {hour12:false}); };
-function requestDownloadPlan() { if (!detail.value || busy.value || !detail.value.isActive) return; const id = detail.value.id; closeDialog(); emit('plan-downloads', id); }
-function showError(reason:unknown) {
-  error.value = reason instanceof Error ? reason.message : '操作失败';
-  const data = reason instanceof RequestError ? reason.payload as {candidates?:Array<{id:number;name:string}>}|undefined : undefined;
-  candidates.value = data?.candidates ?? [];
-}
+const route=useRoute(),router=useRouter(),auth=useAuthStore(pinia);
+const payload=ref<ArchiveCatalogCreatorsPayload|null>(null),listTop=ref<HTMLElement|null>(null);
+const defaults={ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no'|'no-unchecked'|'no-not-found', state:'' as ''|ArchiveCatalogState };
+const filters=reactive({...defaults});
+const page=ref(1),loading=ref(false),error=ref(''),notice=ref('');
+const panel=ref<InstanceType<typeof CreatorManagementPanel>|null>(null), panelSelection=ref(''),panelTab=ref<CreatorPanelTab>('overview');
+let loadGeneration=0,queryTimer:ReturnType<typeof setTimeout>|undefined,composing=false,disposed=false,requestKey:string|null=null,appliedFilterKey:string|null=null;
+const preferenceLabel=(value:ArchiveCatalogPreference|null)=>value==='liked'?'喜欢':value==='kept'?'保留':'未设置';
+const ledgerStatus=(creator:{remoteWorks:number;localWorks:number;missingWorks:number;unresolvedLocalWorks:number})=>creator.unresolvedLocalWorks>0?'待核查':creator.remoteWorks===0?'尚未接入资源':creator.localWorks===0?'尚未入库':creator.missingWorks>0?`有 ${creator.missingWorks} 套待收录`:'已完整关联';
+function showError(reason:unknown){error.value=reason instanceof Error?reason.message:'读取失败';}
 async function load(force = true) {
   if (disposed) return;
   const filterKey = JSON.stringify(filters);
@@ -207,7 +84,7 @@ function invalidateLoad() { ++loadGeneration; requestKey = null; loading.value =
 async function search() {
   clearQueryTimer();
   if (composing) return;
-  page.value = 1; error.value = ''; await load(false);
+  page.value = 1; error.value = ''; syncFilters(); await load(false);
 }
 function scheduleQuery() {
   clearQueryTimer();
@@ -243,129 +120,46 @@ async function handleSourcePlanned(creatorIds: number[]) {
 }
 async function goPage(value:number) {
   if (JSON.stringify(filters) !== appliedFilterKey) { await search(); return; }
-  clearQueryTimer(); page.value = value;
+  clearQueryTimer(); page.value = value; syncFilters();
   const generation = await load(false);
   await nextTick();
   if (!disposed && generation !== undefined && generation === loadGeneration && listTop.value?.getClientRects().length) {
     listTop.value.scrollIntoView({ block: 'start', behavior: 'auto' });
   }
 }
-function showDialog() { if (!dialog.value?.open) dialog.value?.showModal(); dialogOpen.value = true; }
-function closeDialog() { if (!busy.value) { dialog.value?.close(); dialogOpen.value = false; } }
-function dialogClosed() { dialogOpen.value = false; deletionPreview.value = null; ++deletionRequest; }
-function cancelDialog(event:Event) { if (busy.value) event.preventDefault(); }
-function setDetail(value:ArchiveCatalogCreatorDetail) {
-  detail.value = value;
-  Object.assign(draft,{name:value.name,preference:value.preference,rating:value.rating,confirmDistinct:false});
-  candidates.value = []; pendingAction.value = null; deletionPreview.value = null; ++deletionRequest;
-}
-function openNew() {
-  if (busy.value) return;
-  deletionPreview.value = null; ++deletionRequest;
-  dialogMode.value = 'manage';
-  detail.value = null; ingestDestination.value = null; preferredFolderDraft.value = null; error.value = ''; candidates.value = []; notice.value = '';
-  Object.assign(draft,{name:'',preference:null,rating:null,confirmDistinct:false});
-  showDialog();
-}
-async function openCreator(id:number, mode:'ledger'|'manage' = 'manage') {
-  if (busy.value) return;
-  error.value = ''; candidates.value = []; pendingAction.value = null; aliasDraft.value = ''; folderDraft.value = null; deletionPreview.value = null; ++deletionRequest;
-  try {
-    const [creator, destination] = await Promise.all([fetchArchiveCatalogCreator(id), api.fetchIngestDestination(id)]);
-    dialogMode.value = mode;
-    setDetail(creator);
-    ingestDestination.value = destination;
-    preferredFolderDraft.value = destination.preferredLocalCreatorFolderId;
-    showDialog();
-  } catch (reason) { showError(reason); }
-}
-async function refreshIngestDestination() {
-  if (!detail.value) return;
-  const destination = await api.fetchIngestDestination(detail.value.id);
-  ingestDestination.value = destination;
-  preferredFolderDraft.value = destination.preferredLocalCreatorFolderId;
-}
-async function mutation(action:()=>Promise<ArchiveCatalogCreatorDetail|void>) {
-  if (busy.value) return;
-  busy.value = true; error.value = ''; notice.value = ''; deletionPreview.value = null; ++deletionRequest;
-  try {
-    const result = await action();
-    if (result) setDetail(result);
-    if (detail.value) await refreshIngestDestination();
-    await load(); emit('changed'); notice.value = '博主元数据已保存；未执行扫描或任务规划。';
-  } catch (reason) { showError(reason); }
-  finally { busy.value = false; }
-}
-async function save() { await mutation(() => detail.value ? api.updateManagedCreator(detail.value.id,{...draft}) : api.createManagedCreator({...draft})); }
-async function addAlias() { if (detail.value) await mutation(async () => { const result = await api.addManagedAlias(detail.value!.id,aliasDraft.value,draft.confirmDistinct); aliasDraft.value = ''; return result; }); }
-async function removeAlias(id:string) { if (detail.value) await mutation(() => api.deleteManagedAlias(detail.value!.id,id)); }
-async function linkFolder() { if (detail.value && folderDraft.value !== null) await mutation(async () => { const result = await api.linkManagedFolder(folderDraft.value!,detail.value!.id); folderDraft.value = null; return result; }); }
-async function saveIngestDestination() {
-  if (!detail.value || !ingestDestination.value) return;
-  if (busy.value) return;
-  busy.value = true; error.value = ''; notice.value = ''; deletionPreview.value = null; ++deletionRequest;
-  try {
-    ingestDestination.value = await api.setIngestDestination(
-      detail.value.id,
-      typeof preferredFolderDraft.value === 'number' ? preferredFolderDraft.value : null
-    );
-    preferredFolderDraft.value = ingestDestination.value.preferredLocalCreatorFolderId;
-    await load();
-    emit('changed');
-    notice.value = '首选入库目录已保存；未移动文件、扫描或创建任务。';
-  } catch (reason) { showError(reason); }
-  finally { busy.value = false; }
-}
-async function confirmAction() {
-  const action = pendingAction.value;
-  if (!detail.value || !action) return;
-  await mutation(async () => {
-    if (action.kind === 'state') return api.setManagedCreatorActive(detail.value!.id,!detail.value!.isActive);
-    await api.unlinkManagedFolder(action.folderId);
-    return fetchArchiveCatalogCreator(detail.value!.id);
-  });
-}
-async function previewDeletion() {
-  if (busy.value || !canCheckDeletion.value || !detail.value || !dialogOpen.value) return;
-  const creatorId = detail.value.id, request = ++deletionRequest;
-  busy.value = true; error.value = ''; deletionPreview.value = null; pendingAction.value = null;
-  try {
-    const result = await api.previewManagedCreatorDeletion(creatorId);
-    if (disposed || request !== deletionRequest || detail.value?.id !== creatorId || !dialogOpen.value) return;
-    if (result.creatorId !== creatorId) throw new Error('删除条件与当前博主不一致，请重新检查。');
-    deletionPreview.value = result;
-  } catch (reason) { if (!disposed && request === deletionRequest) showError(reason); }
-  finally { if (!disposed) busy.value = false; }
-}
-async function confirmDeletion() {
-  const preview = deletionPreview.value;
-  if (busy.value || !canCheckDeletion.value || !dialogOpen.value || !preview?.eligible || preview.blockers.length || !preview.confirmationToken || detail.value?.id !== preview.creatorId) return;
-  const request = ++deletionRequest;
-  busy.value = true; error.value = ''; notice.value = '';
-  try {
-    const result = await api.deleteUnusedManagedCreator(preview.creatorId, preview.confirmationToken);
-    if (disposed || request !== deletionRequest) return;
-    if (!result.deleted || result.creatorId !== preview.creatorId) throw new Error('删除结果尚未确认，请刷新列表核对。');
-    deletionPreview.value = null; detail.value = null; ingestDestination.value = null; preferredFolderDraft.value = null; pendingAction.value = null;
-    dialog.value?.close(); dialogOpen.value = false;
-    if (payload.value?.items.length === 1 && page.value > 1) page.value--;
-    await load(); if (disposed) return; emit('changed');
-    notice.value = `已删除未使用博主“${preview.name}”；未删除文件、作品或任务。`;
-  } catch (reason) {
-    if (!disposed && request === deletionRequest) {
-      deletionPreview.value = null;
-      showError(reason);
-      error.value += ' 请重新检查删除条件，不会自动重试删除。';
-    }
-  } finally { if (!disposed) busy.value = false; }
-}
-// Refresh only the visible list. Keep its filters/page and any open management
-// draft intact when another workspace finishes an ingest operation.
-defineExpose({ refresh: () => load() });
-onMounted(() => { void load(); });
-onBeforeUnmount(() => { disposed = true; ++deletionRequest; clearQueryTimer(); invalidateLoad(); });
-</script>
 
+const validSelection=(value:unknown)=>value==='new'?'new':typeof value==='string'&&/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value))?value:'';
+const validTab=(value:unknown):CreatorPanelTab=>['overview','profile','directories','sources'].includes(value as string)?value as CreatorPanelTab:'overview';
+const filterKeys=Object.keys(defaults) as Array<keyof typeof defaults>;
+function syncFilters(){if(!router||!route||route.path!=='/archive-catalog')return;const query:LocationQueryRaw={...route.query};for(const key of filterKeys)query['roster'+key[0]!.toUpperCase()+key.slice(1)]=filters[key]===defaults[key]?undefined:filters[key];query.rosterPage=page.value===1?undefined:String(page.value);void router.replace({query,hash:route.hash});}
+watch(()=>route?.query,query=>{
+ if(!route||route.path!=='/archive-catalog')return;
+ panelSelection.value=(query?.workspace??'roster')==='roster'?validSelection(query?.manageCreator):'';
+ panelTab.value=panelSelection.value==='new'?'profile':validTab(query?.manageTab);
+ const next={...defaults};
+ const options:Record<string,string[]>={preference:['','liked','kept','unset'],rating:['','R15','R18','unclassified'],active:['active','inactive','all'],hasLocal:['','yes','no'],hasSource:['','yes','no','no-unchecked','no-not-found'],state:['','missing','no-local','complete','no-source','unresolved']};
+ for(const key of filterKeys){const value=query?.['roster'+key[0]!.toUpperCase()+key.slice(1)];if(typeof value==='string'&&(key==='query'||options[key]?.includes(value)))(next as Record<string,string>)[key]=value;}
+ const pageValue=typeof query?.rosterPage==='string'&&/^[1-9]\d*$/.test(query.rosterPage)?Number(query.rosterPage):1;
+ const different=JSON.stringify(filters)!==JSON.stringify(next)||page.value!==pageValue;Object.assign(filters,next);page.value=Number.isSafeInteger(pageValue)?pageValue:1;if(different)void load(false);
+},{immediate:true});
+const removeGuard=router?.beforeEach(async(to,from)=>{
+ if(from.path!=='/archive-catalog'||!panelSelection.value)return true;
+ const target=to.path==='/archive-catalog'&&(to.query.workspace??'roster')==='roster'?validSelection(to.query.manageCreator):'';
+ if(target===panelSelection.value)return true;
+ return await panel.value?.requestLeave()??true;
+});
+async function selectPanel(value:string,tab:CreatorPanelTab='overview',replace=false){if(router&&route){const navigate=replace?router.replace.bind(router):router.push.bind(router);await navigate({query:{...route.query,manageCreator:value||undefined,manageTab:value?tab:undefined},hash:route.hash});}else{if(panelSelection.value!==value&&panel.value&&!await panel.value.requestLeave())return;panelSelection.value=value;panelTab.value=tab;}}
+function openNew(){void selectPanel('new','profile');}
+function openCreator(id:number){void selectPanel(String(id));}
+function closePanel(){void selectPanel('');}
+function changePanelTab(tab:CreatorPanelTab){void selectPanel(panelSelection.value,tab);}
+function created(id:number){void selectPanel(String(id),'overview',true);}
+async function changed(){await load();emit('changed');}
+async function deleted(){await selectPanel('','overview',true);if(payload.value?.items.length===1&&page.value>1){page.value--;syncFilters();}await load();notice.value='已删除未使用身份；未删除作品或文件。';}
+defineExpose({refresh:()=>load()});
+onMounted(()=>{void load(false);});
+onBeforeUnmount(()=>{disposed=true;clearQueryTimer();invalidateLoad();removeGuard?.();});
+</script>
 <style scoped>
 .roster{margin-bottom:1.5rem;padding:1.25rem;border:1px solid var(--border);border-radius:1rem;background:var(--surface)}
 h2,h3,p{margin:0} h2{font-size:1.2rem;font-weight:650} h3{font-size:1rem;font-weight:600;margin-bottom:.65rem} p{line-height:1.6}
@@ -384,4 +178,8 @@ label{display:grid;gap:.3rem;font-size:.8rem}input,select,button{font:inherit}in
 </style>
 <style scoped>
 .card-actions a{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:.5rem;background:var(--surface);color:var(--accent);padding:.55rem .85rem;text-decoration:none;white-space:nowrap}.card-actions a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+<style scoped>
+.roster-layout{display:grid;gap:1.1rem;align-items:start;min-width:0}.roster-list-column{min-width:0}.with-panel .creator-card{grid-template-columns:repeat(4,minmax(0,1fr));gap:.65rem;padding:.95rem}.with-panel .card-identity,.with-panel .card-actions{grid-column:1/-1}.with-panel .card-actions{justify-content:flex-end}.with-panel .roster-filters label{flex:1 1 8rem}.with-panel .roster-filters .search{flex-basis:100%}.card-actions [aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+@media(min-width:1101px){.roster-layout.with-panel{grid-template-columns:minmax(0,1.05fr) minmax(25rem,1fr)}}
 </style>
