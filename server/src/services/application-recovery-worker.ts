@@ -87,10 +87,10 @@ export function validateRecoveryDatabase(filename: string, expected: ReturnType<
     return { integrity: 'ok' as const, foreignKeys: 0 as const, tables: actual.tables.length };
   } finally { db.close(); }
 }
-function validateSnapshotConfiguration(filename: string, partial: string, config: ApplicationRecoveryConfig) {
+function validateSnapshotConfiguration(filename: string, partial: string, config: ApplicationRecoveryConfig): boolean {
   const db = new DatabaseSync(filename, { readOnly: true });
   try {
-    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_settings'").get()) return;
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_settings'").get()) return false;
     const get = (key: string) => db.prepare('SELECT value FROM app_settings WHERE key=?').get(key)?.value;
     const password = get('local_ingest.archive_password');
     if (typeof password === 'string') {
@@ -108,6 +108,9 @@ function validateSnapshotConfiguration(filename: string, partial: string, config
     const waiting = get('local-admission.waiting-root.v1');
     if (typeof waiting === 'string' && waiting) roots.push(waiting);
     validateRecoveryRoot({ ...config, forbiddenRoots: [...config.forbiddenRoots, ...roots] });
+    // A validated stored password or explicit disabled decision takes precedence
+    // over the environment, exactly as LocalIngestSettingsService.passwordState.
+    return typeof password === 'string';
   } finally { db.close(); }
 }
 function acquire(root: string, owner: { pid: number; id: string; startedAt: string; reason: RecoveryReason }) {
@@ -191,7 +194,7 @@ export async function generateRecoveryPoint(config: ApplicationRecoveryConfig, r
     }
     const validationStart = performance.now();
     const validation = validateRecoveryDatabase(destination, expected);
-    validateSnapshotConfiguration(destination, partial, config);
+    const snapshotHasPasswordDecision = validateSnapshotConfiguration(destination, partial, config);
     const validationMs = performance.now() - validationStart;
     if (JSON.stringify(inventory(source)) !== JSON.stringify(expected) || JSON.stringify(collectInputs(config)) !== JSON.stringify(inputs)) return fail('RECOVERY_CONFIG_CHANGED', '生成期间结构、配置或密钥发生变化，请重试；旧恢复点保持。');
     source.close(); source = undefined;
@@ -200,7 +203,10 @@ export async function generateRecoveryPoint(config: ApplicationRecoveryConfig, r
     // Hashing a large database is also part of generation: check again directly
     // before publication, not only before that potentially lengthy streaming read.
     if (JSON.stringify(collectInputs(config)) !== JSON.stringify(inputs)) return fail('RECOVERY_CONFIG_CHANGED', '发布前配置或密钥发生变化，请重试；旧恢复点保持。');
-    const point: RecoveryPoint = { format: 'cosgallery-application-recovery-v1', id, status: 'success', reason, startedAt, completedAt: new Date().toISOString(), instanceId: config.instanceId, codeVersion: config.codeVersion, schemaVersions: expected.schemaVersions, files, configuration: { complete: !inputs.gaps.length, gaps: inputs.gaps }, validation, timings: { backupMs, validationMs, totalMs: performance.now() - started }, bytes: files.reduce((n, file) => n + file.bytes, 0) };
+    // Refine only this snapshot's published explanation, never the captured
+    // inputs used by the configuration/key change checks above.
+    const effectiveGaps = snapshotHasPasswordDecision ? inputs.gaps.filter(gap => gap !== 'Process-injected LOCAL_INGEST_ARCHIVE_PASSWORD must be restored separately; its value is not exported.') : inputs.gaps;
+    const point: RecoveryPoint = { format: 'cosgallery-application-recovery-v1', id, status: 'success', reason, startedAt, completedAt: new Date().toISOString(), instanceId: config.instanceId, codeVersion: config.codeVersion, schemaVersions: expected.schemaVersions, files, configuration: { complete: !effectiveGaps.length, gaps: effectiveGaps }, validation, timings: { backupMs, validationMs, totalMs: performance.now() - started }, bytes: files.reduce((n, file) => n + file.bytes, 0) };
     fs.writeFileSync(path.join(partial, 'metadata.json'), JSON.stringify(point, null, 2), { flag: 'wx', mode: 0o600 });
     fs.renameSync(partial, path.join(root, id));
     // Publication is complete before retention. Cleanup failure never invalidates a usable point.

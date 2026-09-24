@@ -179,6 +179,28 @@ describe('application recovery engine', () => {
     await expect(generateRecoveryPoint(config, 'manual')).rejects.toMatchObject({ code: 'RECOVERY_KEY_MISMATCH' });
     expect(JSON.stringify(point)).not.toContain('test-password-not-metadata');
   });
+  it.each(['encrypted', 'disabled', 'absent'] as const)('derives the password environment gap from the %s snapshot, not caller hints', async mode => {
+    const config = fixture();
+    const gap = 'Process-injected LOCAL_INGEST_ARCHIVE_PASSWORD must be restored separately; its value is not exported.';
+    const unrelated = 'APP_RUN_CONFIG_FILE: missing; restore the explicitly selected run configuration.';
+    config.configurationGaps = [gap, unrelated];
+    fs.unlinkSync(path.join(config.privateRoot!, 'local-ingest-archive-password.key'));
+    const raw = new LocalIngestPasswordStore(config.privateRoot!).encrypt('snapshot-only-password');
+    const db = new DatabaseSync(config.sourceDbPath); db.exec('CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT)');
+    if (mode !== 'absent') db.prepare('INSERT INTO app_settings VALUES(?,?)').run('local_ingest.archive_password', mode === 'encrypted' ? raw : JSON.stringify({ version: 1, disabled: true }));
+    db.close();
+    // Deliberately opposite hints: snapshot validation must remain authoritative.
+    config.requiredPrivateFiles = mode === 'absent' ? ['local-ingest-archive-password.key'] : [];
+    if (mode === 'disabled') fs.unlinkSync(path.join(config.privateRoot!, 'local-ingest-archive-password.key'));
+    const point = await generateRecoveryPoint(config, 'manual');
+    expect(point.configuration.gaps).toEqual(mode === 'absent' ? [unrelated, gap] : [unrelated]);
+    expect(point.configuration.complete).toBe(false);
+    expect(config.configurationGaps).toEqual([gap, unrelated]);
+    expect(JSON.stringify(point)).not.toContain('snapshot-only-password');
+    config.configurationGaps = [gap];
+    const passwordOnly = await generateRecoveryPoint(config, 'manual');
+    expect(passwordOnly.configuration).toEqual(mode === 'absent' ? { complete: false, gaps: [gap] } : { complete: true, gaps: [] });
+  });
   it('records optional configuration gaps but fails for missing required encryption keys', async () => {
     const config = fixture(); fs.rmSync(config.configFiles[1]!.path, { recursive: true });
     const point = await generateRecoveryPoint(config, 'manual'); expect(point.configuration.gaps).toContain('config/.run: missing');
