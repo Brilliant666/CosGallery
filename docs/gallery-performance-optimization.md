@@ -420,3 +420,69 @@ and skipped both legacy startup scans. Browser checks cover carousel/Viewer,
 24-limit summaries, detail-on-demand, management navigation/back and narrow layout.
 Later test/document-only commits do not imply the process reloaded. Port 4141
 continues the existing `8a324e4` trial unchanged; this feedback round is not deployed.
+
+## M4/L4 authorized follow-up: application recovery and legacy deletion
+
+This is a later, separately authorized extension of Draft PR41. The earlier
+M4/L4 deferral and deployment statements above describe their historical scope.
+Before this extension, an authorized switch had already put `7dc0f62` on 4141
+(application outputs from `3d8c7d8`). This extension does **not** update or restart
+4141, enable its automatic backups, or merge PR41. Paired preview is on 4241.
+
+### Legacy folder deletion
+
+Repository callers and synthetic FK-enabled fixtures establish that the obsolete
+Folder API had no normal current UI/CLI dependency. With a referencing LocalWork,
+both old deletion modes removed files before the Folder/Post FK failure; without
+such references deletion could succeed. The old `66/146` ratio was not validated
+and is not used as a product rule. The authenticated old route now returns
+`410 / LEGACY_FOLDER_DELETE_RETIRED` before mutation, and its destructive service
+implementation and unused client wrapper/UI have been removed. Existing post,
+trash/recovery, admission cleanup and unused manual-creator operations remain.
+See [the scoped audit](./legacy-folder-delete-retirement.md).
+
+### Recovery points and restoration
+
+The shared child-process engine captures the complete SQLite database, actual
+configuration files and required existing keys, validates the snapshot without
+migrating it, then atomically publishes metadata. Settings GET is read-only;
+explicit creation continues when the page is left. Automatic daily work defaults
+off. Upgrade protection runs before the first actual schema/marker write, and
+index-rebuild protection runs before the maintenance queue/locks. No new database
+migration is required. [Recovery documentation](./application-recovery-points.md)
+defines configuration gaps, retention, target restrictions and restoration steps.
+
+Synthetic restoration compares actual project-schema tables, including canonical
+creators/aliases, Work/LocalWork, source binding and satisfaction, accepted-version
+and sort decisions, and task/admission history. Subsequent file movement and a new
+decision are deliberately absent from the old restored database. The physical
+file stays moved; old failed plans are preserved, not automatically replayed.
+
+### Representative-size backup/read impact
+
+Node 24.19.0 production outputs, an existing consistent 000027 copy, **383,802 media
+rows, 7,619 Posts, 7,617 Works and 7,619 LocalWorks**. No production request, media
+scan, decode or original-file hashing was performed. The benchmark injects a
+read-only connection into the real application read routes and uses independent
+storage paths; it is not a production restart or a full browser page benchmark.
+
+Controlled final sample: database copy **1,328 ms**, snapshot validation **16,773
+ms**, total **18,691 ms**, output **666,354,610 bytes** including its small isolated
+configuration. The large database is streamed/hashed in the child, never loaded
+as one Buffer in the HTTP process. One warmup then three HTTP samples per phase:
+
+| HTTP endpoint | Before backup median [range] ms | During median [range] ms | After median [range] ms |
+| --- | --- | --- | --- |
+| Recent feed, 18 | 139.9 [139.2–150.8] | 161.0 [143.0–174.2] | 242.0 [241.2–250.6] |
+| Moments | 428.9 [428.2–429.2] | 465.9 [454.1–471.9] | 760.2 [748.1–763.8] |
+| Likes, empty in this snapshot | 4.6 [1.9–11.1] | 15.5 [12.7–15.9] | 4.8 [3.0–5.6] |
+
+The HTTP process kept responding during validation rather than blocking for the
+whole 18.7 seconds. This does **not** mean zero cost: feed/moments were slower
+during and immediately after backup. The precise cause of the post-backup increase
+was not isolated, so it is retained as a limitation, not labelled a speedup or
+attributed to a particular cache/OS effect. Event-loop P99/max during the observed
+backup window were 17.2/458.0 ms; those include the existing synchronous reads and
+are not browser long-task/FCP measurements. Earlier development samples ranged
+14.75–20.30 seconds total; one overlapped candidate preparation and is not the
+controlled result above. Raw local evidence remains outside Git.
