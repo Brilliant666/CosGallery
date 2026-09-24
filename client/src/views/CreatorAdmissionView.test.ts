@@ -5,12 +5,12 @@ import { describe, expect, it } from 'vitest';
 import CreatorAdmissionView from './CreatorAdmissionView.vue';
 
 describe('creator admission container', () => {
-  it('retains module state and exact route when switching, with distinct navigation hierarchy', async () => {
+  it.each([false, true])('retains module state and exact route when switching (lazy=%s)', async lazy => {
     const Local = defineComponent({ setup() { return { choice: ref('') }; }, template: '<section><h2>本地入库</h2><input aria-label="未提交选择" v-model="choice" /></section>' });
     const Costuan = defineComponent({ template: '<section><h2>Costuan入库</h2></section>' });
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/creator-admission', name: 'creator-admission', component: CreatorAdmissionView, children: [
-      { path: 'local', name: 'local-admission-workspace', component: Local },
-      { path: 'costuan', name: 'costuan-admission', component: Costuan },
+      { path: 'local', name: 'local-admission-workspace', component: lazy ? () => Promise.resolve(Local) : Local },
+      { path: 'costuan', name: 'costuan-admission', component: lazy ? () => Promise.resolve(Costuan) : Costuan },
       { path: 'review', name: 'local-review', component: Costuan }
     ] }, { path: '/archive-catalog', name: 'archive-catalog', component: Local }] });
     await router.push('/creator-admission/local?collection=confirmed#results');

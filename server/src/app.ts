@@ -8,6 +8,7 @@ import { appConfig, repositoryRoot } from './config/env.js';
 import { requireApiAuthentication, requireMediaAuthentication } from './middleware/auth-protection.js';
 import { requireTrustedMutationRequest } from './middleware/csrf-protection.js';
 import { blockPublicDemoMutations } from './middleware/public-demo-mode.js';
+import { createTextCompression, mountClientDelivery } from './middleware/text-delivery.js';
 import { apiRouter } from './routes/api.js';
 import { archiveBridgeRouter } from './routes/archive-bridge.js';
 import { authService } from './services/auth-service.js';
@@ -23,6 +24,7 @@ export function applyApiNoStoreHeaders(response: Pick<express.Response, 'setHead
 
 export function createApp() {
   const app = express();
+  app.use(createTextCompression());
 
   // Only bounded source-evidence text needs more than the default JSON limit.
   // The service separately caps raw text, lines, URLs and diagnostics; no uploads.
@@ -51,10 +53,7 @@ export function createApp() {
   if (appConfig.nodeEnv === 'production') {
     const clientDist = path.join(repositoryRoot, 'client', 'dist');
     if (fs.existsSync(clientDist)) {
-      app.use(express.static(clientDist));
-      app.get(/^(?!\/api|\/thumbnails|\/previews).*/, (_request, response) => {
-        response.sendFile(path.join(clientDist, 'index.html'));
-      });
+      mountClientDelivery(app, clientDist);
     }
   }
 
