@@ -36,7 +36,7 @@
           <thead class="bg-surface-alt"><tr><th class="p-3">完成时间 / 标识</th><th class="p-3">原因 / 版本</th><th class="p-3">结果</th></tr></thead>
           <tbody><tr v-for="point in state.points" :key="point.id" class="border-t border-border">
             <td class="p-3 align-top">{{ date(point.completedAt) }}<div class="break-all font-mono text-xs text-muted">{{ point.id }}</div></td>
-            <td class="p-3 align-top">{{ reason(point.reason) }}<div class="text-xs text-muted">数据库 {{ point.schemaVersions.at(-1) || '无迁移标记' }} · {{ point.codeVersion.slice(0, 12) }}</div></td>
+            <td class="p-3 align-top">{{ reason(point.reason) }}<div class="text-xs text-muted">数据库 {{ point.schemaVersions.at(-1) || '无迁移标记' }} · {{ point.codeVersion.slice(0, 12) }}</div><div class="text-xs text-muted break-all">来源实例 {{ point.instanceId }}</div></td>
             <td class="p-3 align-top">完整性 / 外键通过 · {{ size(point.bytes) }}<div class="text-xs text-muted">{{ point.configuration.complete ? '配置已收集' : '配置有缺口，恢复前需核对' }} · {{ Math.round(point.timings.totalMs) }} ms</div><div v-if="point.configuration.gaps.length" class="text-xs break-words">{{ point.configuration.gaps.join('；') }}</div></td>
           </tr></tbody>
         </table>
