@@ -486,3 +486,80 @@ backup window were 17.2/458.0 ms; those include the existing synchronous reads a
 are not browser long-task/FCP measurements. Earlier development samples ranged
 14.75–20.30 seconds total; one overlapped candidate preparation and is not the
 controlled result above. Raw local evidence remains outside Git.
+
+### Configuration and bounded paired impact follow-up
+
+The later configuration follow-up distinguishes an unused IDE configuration from
+an actual missing recovery input; see [configuration coverage](./application-recovery-points.md).
+It does not change the backup worker, database settings, query results or their
+validation requirements. The preceding **18.69 s** observation remains historical
+evidence, not a proven causal regression.
+
+The bounded follow-up used the same 383,802-media, 666,353,664-byte consistent
+copy, Node 24.19.0 and frozen production application/worker outputs (`f686a94`).
+Three accepted pairs ran in **A/B, B/A, A/B** order: A had no backup, B created one
+complete manual point. Each process had three fixed warmup rounds. The last pair
+used a separately warmed process with identical inputs; each pair retained its
+own process/connection/cache across A and B. No build, test suite or scan ran in
+the accepted measurement windows. One earlier pair overlapped a short targeted
+test/typecheck and was retained but excluded in full, not selectively filtered.
+
+One sequential request per endpoint was made before the operation, at +7 s,
+after actual child close/activity release, and about +30/+60 s thereafter.
+Controls used the preceding backup duration as the no-op completion anchor
+(approximately 15.6–19.7 s); observed backup completion was 19.65–21.11 s.
+These are matched phases/frequency, not exactly identical wall-clock durations.
+The HTTP client and application shared one process over loopback; this measures
+the real routes, not browser responsiveness or independent-client queue latency.
+
+HTTP medians across the three accepted pairs, with min–max in brackets (ms):
+
+| Endpoint / condition | Before | During | Child exited / control anchor | +30 s | +60 s |
+| --- | --- | --- | --- | --- | --- |
+| Recent / A | 158.9 [152.6–253.4] | 251.4 [151.9–275.7] | 254.2 [203.1–276.3] | 262.1 [253.6–270.6] | 260.5 [251.8–272.8] |
+| Recent / B | 253.0 [250.7–271.3] | 269.5 [268.0–288.8] | 253.6 [251.0–260.1] | 259.9 [257.3–266.7] | 255.9 [250.3–257.7] |
+| Moments / A | 456.6 [453.1–791.8] | 807.4 [452.4–834.2] | 801.1 [644.3–837.6] | 818.8 [807.1–839.0] | 804.7 [801.3–831.5] |
+| Moments / B | 805.4 [797.7–830.9] | 875.8 [855.8–885.5] | 811.1 [801.3–814.9] | 824.0 [780.7–825.3] | 805.2 [789.7–810.5] |
+| Empty likes / A | 6.9 [5.8–9.9] | 7.3 [5.6–16.4] | 8.4 [3.1–19.0] | 8.6 [4.1–14.5] | 6.0 [5.6–19.2] |
+| Empty likes / B | 12.6 [2.6–12.9] | 4.7 [4.3–13.7] | 6.0 [2.3–8.9] | 3.3 [3.2–5.3] | 8.0 [4.8–9.1] |
+
+The unequal starting levels mean that pooled A-versus-B medians are **not** a
+causal effect estimate. In the first accepted no-backup arm, recent/moments grew
+from 152.6/453.1 to 251.8/801.3 ms. In the independently warmed last pair, its
+no-backup arm likewise grew from 158.9/456.6 to 272.8/831.5 ms before that process
+had performed any backup. In contrast, each B arm's +60 s readings were within
+approximately −6% to +3% of its own starting level. No persistent backup-specific
+increase required the conditional +120 s observation. The finite experiment
+does **not** identify the reason for the no-backup drift or establish the cause
+of the older sample; OS caching, frequency, antivirus and other host activity
+remain unmeasured possibilities, not conclusions.
+
+Temporary, non-shipped probes recorded these distinguishing facts:
+
+- B SQL medians for recent were 228.6 / 244.3 / 227.0 / 232.1 / 227.3 ms;
+  moments were 757.4 / 821.5 / 755.2 / 761.7 / 752.2 ms in the five phases.
+  Application medians tracked SQL (recent 250.5 / 266.5 / 249.9 / 256.8 / 252.8;
+  moments 799.1 / 867.5 / 800.6 / 812.3 / 797.5 ms). The largest HTTP-minus-app
+  interval was 17.2 ms across all accepted requests, not proof of a separate
+  server queue. Event-loop maximum 872.9 ms includes these synchronous SQL reads.
+- Response-body fingerprints stayed identical. The read connection reported
+  `total_changes=0`, `data_version=1`, `schema_version=1`, and no transaction at
+  every boundary. These endpoints did not invoke the existing folder-summary /
+  pending-derivative memoizers (zero hit/miss/bypass events); there is no observed
+  cache invalidation to explain the drift, nor a claim that these queries were cached.
+- Copy took 1.202–1.416 s, full snapshot validation 17.748–18.987 s and streamed
+  hashing 0.379–0.386 s. Publication was followed by retention completion within
+  1–11 ms, lock release, successful child exit and active-state release within
+  another 12–14 ms. Source and validation connections closed outside transactions;
+  no child, lock or active task remained after completion.
+- Child CPU consumption was 19.2–20.5 CPU-seconds. Windows per-process I/O counters
+  confirmed read/write activity during the worker, but two-second samples miss
+  operation edges and include cached logical I/O: they are not physical-disk
+  throughput or evidence that a particular system component caused contention.
+
+Conclusion: a modest, bounded during-backup increase is observed, followed by a
+return near each B arm's own baseline. No reproducible persistent worker/query
+defect was isolated, so no speculative performance product change was made.
+The independent no-backup drift and the older observation retain an explicit
+attribution limitation. Local raw timing, stage, SQL and resource evidence is
+stored outside Git under the existing M4/L4 evidence directory.
