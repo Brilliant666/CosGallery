@@ -1,5 +1,7 @@
 # Resource catalog startup lock fix
 
+> 历史故障与修复记录，保留当时顺序和原因；当前启动与 Worker 职责见[架构](how-it-works.md)。不要为复现此记录重启或重复迁移。
+
 PR32 introduced an independent SQLite catalog worker before synchronous gallery
 startup checks. Even when scans are skipped, those checks remove obsolete
 `app_settings` rebuild markers. The production failure occurred at this DELETE

@@ -1,355 +1,59 @@
 ---
-title: Features
-description: Verified product features and UI behaviors in the current Foldergram app.
+title: 功能与边界
+description: CosGallery 当前产品能力、页面职责与未实现边界。
 ---
 
-# Features
+# 功能与边界
 
-This page documents what the current repository actually implements.
+CosGallery 以自己的博主、Work 和本地副本为核心。来源可以先于或晚于本地收录；不是每套图集都必须先进入 Costuan 来源库。
 
-## Home
+## 页面职责
 
-The home view is the primary feed surface.
+| 页面 | 当前用途 | 不会因打开页面自动发生 |
+| --- | --- | --- |
+| 图库账本 → 博主库 | 规范名称、别名、偏好 / 内容分类、启用状态、本地目录关系、来源资料 | 来源采集、下载、作品合并 |
+| 图库账本 → 资源目录 | 无明确范围时先选博主，支持主动切换全库；编目、搜索、分页、详情、导出 | 媒体扫描、文件改名、补建缺失身份 |
+| 博主入库 → 本地入库 | 多博主选目录、预览核对、明确确认、后台接纳与结果 | 未确认范围的自动接纳 |
+| 博主入库 → Costuan | 来源检查、网盘暂存、本地下载后的归档入库 | 自动恢复全部旧队列 |
+| 图库与 Viewer | 主副本图集、按需详情、图片 / 视频浏览 | 跨路由完整详情的永久缓存 |
 
-It includes:
+[页面地图](creator-admission-navigation.md)列出正常入口与旧链接兼容方式。
 
-- three feed modes: Recent, Rediscover, and Random
-- a top Moments or Highlights section
-- feed-card avatar rings that can open an App Folder's avatar story in place when that folder has stories
-- an active home-feed video player that promotes one visible video card at a time and gives that card play, mute, fullscreen, and seek controls
-- feed-card actions for downloading the original media file and opening the original in a new tab
-- bookmark actions that can save a post directly or manage its collection membership from a popover
-- place links on feed-style cards when a photo has an assigned location
-- scan progress states that distinguish discovery from later media-processing work while the library is being prepared
-- a rebuild notice when the configured gallery root changed
-- desktop recommendations for folders based on recency, likes, and recent navigation
-- infinite loading for feed pagination
+## 本地入库和审核
 
-### Feed mode behavior
+已解压资源从网页完成普通主路径，无需命令行；选择多位博主后集中核对，再后台逐项处理。新作品、已有 Work 和同套副本分别确认，身份不明时可暂缓。来源不是必填项。
 
-| Mode | What it does |
-| --- | --- |
-| Recent | "Newest posts first, with lighter runs from the same app folder." |
-| Rediscover | "Older posts resurface when they are worth another look." |
-| Random | "A fresh shuffle that stays steady while you browse." |
+精确审核针对原计划 / Job 与具体文件。JPEG 超限原件保留、PDF 附件和正常 WebP 各有处理边界；保留原件不等于普通解码成功。历史状态与后续完成去向分别显示，有可靠后续完成证据的项目不会作为普通剩余项再次执行。见[本地入库与审核](local-admission-web.md)。
 
-## Reels
+## 来源、版本与补缺
 
-The dedicated reels view is available at `/reels`.
+原始观察、博主归属、批次出处、Work 映射与本地满足不是同一个状态。可靠对应和版本证据成立后才能抑制重复获取；同名或数量接近不能代替判断。来源有冲突时保留审核，不把任务伪装成成功。
 
-It includes:
+Costuan 是当前专用来源链路，浏览器扩展独立安装。0.11.9 的部分资料留存不放宽严格暂存规则。其他网站可人工记录出处，不代表已有自动适配器。见[来源资料](source-evidence-local-admission.md)及[Costuan 入库](local-ingest-closed-loop.md)。
 
-- a video-only queue sourced from indexed library posts
-- a full-height scroll-snap deck
-- wheel, arrow-key, and page-up/page-down navigation in addition to direct scrolling
-- infinite loading with prefetch as you approach the end of the current queue
-- a desktop action bar for like/favorite toggle, details sidebar, folder shortcut, and original-video link
-- a bottom-edge seekable progress UI shared with the feed and post players
-- loading, empty, and error states
-- an app-wide default mode from Settings; the page itself does not expose an inline mode switch
+## 图库与自有目录
 
-### Queue behavior
+- 规范博主可以关联多个本地目录；图集列表每页 24 套摘要，选中后才加载完整媒体。
+- 图集内 Viewer 切换 / 关闭复用当前详情与背景网格；跨路由回访仍可能重新请求。
+- Work 是稳定身份；主副本与额外副本不按文件名自动合并。
+- 资源目录按每位博主的生效时间从早到晚编号，再独立应用显示升降序、筛选与分页。
+- 来源顺序估算是固定确认的排序依据，不是真实发布日期；文件名和来源 NO 不随自有 NO 改写。
+- 目录派生数据持久保存，后台增量更新；初始化、更新中或失败状态明确，不将部分全库当成完整导出。
 
-| Mode | What it does |
-| --- | --- |
-| Recommended | "Affinity-ranked mix." It scores videos using freshness, likes, recent folder affinity, portrait fit, duration fit, and a deterministic seed, then reduces immediate repeats from the same folder when alternatives exist. |
-| Recent | "Newest videos first." |
-| Random | "Stable session shuffle." |
+见[资源目录](own-resource-catalog.md)、[架构](how-it-works.md)。
 
-## Explore
+## 继承的媒体浏览能力
 
-Explore is a dedicated full-screen shell with a darker visual treatment.
+保留首页、短片、图库、搜索、赞过、收藏集、分享与回收站等 Foldergram 浏览能力。图片和视频格式、缩略图 / 预览行为见[媒体处理参考](media-processing.md)；角色和分享范围见[安全](security.md)。
 
-It combines:
+Foldergram 的保留 `carousels/` 目录规则是另一种 Post 组织方式，其 2–20 项限制不是 CosGallery 每套图集的媒体上限。不要为入库而把完整图集强制改成这种目录结构。
 
-- a random feed source
-- client-side ranking that boosts recent folder activity, liked folders, and recently opened folders
-- folder search across name, slug, breadcrumb, and path
-- local recent-search history stored in `localStorage`
+## 尚未实现或受限
 
-Explore is a folder-search and serendipity surface, not a separate backend index.
+- 复杂合集自动拆分、任意已有 Work 合并。
+- 全部历史关系纠正与专项清理的通用网页工具。
+- 任意资源站自动采集、任意压缩包无条件解压入库。
+- 远程访问客户端本地盘符、全平台一致的 Windows 回收站行为。
+- 公网多用户隔离、全局初始化性能保证、无条件解码所有原件。
 
-## Library
-
-Library lists every indexed folder and supports:
-
-- free-text search
-- sorting by recent activity, post count, name, or path
-- quick navigation into folders
-- delete actions from a context menu
-
-### Folder deletion behavior
-
-Library supports two delete flows:
-
-| Flow | Behavior |
-| --- | --- |
-| Delete app folder | Deletes the folder's direct posts and their derivatives. Child app folders are kept. The source folder is only removed if it becomes empty. |
-| Delete folder subtree | Removes the source folder subtree from disk, removes matching derivative subtrees, and deletes all affected indexed folders below that path. |
-
-## Folder pages
-
-A folder page is available at:
-
-- `/f/:slug`
-- `/folders/:slug` as a legacy alias
-
-Folder pages include:
-
-- a folder header with avatar, posts counts, descriptions, and optional avatar-story opening
-- editable folder name and description via an admin "Edit App Folder" flow
-- an admin-only "Share folder" action for scoped read-only sharing
-- long descriptions that collapse to two lines by default and expose an expand/collapse caret only when the text actually overflows
-- a posts grid that follows the app-wide default folder order
-- highlight circles above the posts and reels tabs when the folder has story capsules
-- a reels tab when the folder contains videos
-- infinite loading
-
-The reels tab is a filtered view backed by the same folder endpoint using
-`mediaType=video`.
-
-The post viewer also uses the same default folder order when resolving previous
-and next navigation within a folder.
-
-## Folder sharing
-
-Admins can share one folder without creating user accounts or unlocking the
-whole library.
-
-The Share Folder dialog supports:
-
-- normal public folder URL copying when public viewer mode is enabled
-- read-only links for one folder
-- expiration presets for 1 hour, 24 hours, and 7 days
-- custom expiration timestamps
-- unlimited links that remain revocable
-- reusable per-folder passwords
-- revoking existing share links
-- removing or changing the folder password to invalidate password sessions
-
-Share links and password access are independent ways to open the folder. An
-active share link does not require the folder password, and revoking a link does
-not disable password access. The dialog shows every active access method and
-clarifies which methods remain available after an access setting changes.
-
-Shared visitors use `/share/:slug`, not the normal authenticated folder route.
-They can browse only that folder and its shared post view. They do not get Home,
-Explore, Reels, Places, Settings, Likes, Collections, Trash, scans, rebuild
-actions, captions, cover editing, delete actions, or original-file downloads.
-
-Shared thumbnails and previews are served through `/api/share/images/:id/...`
-after the server checks the folder grant for that image.
-
-## Folder stories and highlights
-
-Foldergram can reserve `AppFolder/stories` as a story-style source for that
-folder.
-
-In the default reserved-stories mode:
-
-- direct media inside `AppFolder/stories` becomes the folder's avatar story set
-- each direct child folder inside `AppFolder/stories` becomes one highlight capsule
-- nested folders below a highlight are folded into that same capsule instead of becoming separate app folders
-- story media is hidden from normal folder, feed, search, and reels surfaces
-- the folder header avatar opens the avatar story when one exists
-- Home feed cards can open the same avatar story from the folder avatar ring
-- the shared stories modal is used for both the home-feed entry point and the folder-page entry points
-- the shared stories modal header includes original-media download plus playback controls for the active story item
-
-If the reserved root has no direct media but highlight capsules do exist,
-Foldergram can synthesize the avatar story from recent highlight media so the
-folder still has an avatar-story entry point.
-
-## Places
-
-Places add an offline location layer for photos that already contain GPS
-metadata.
-
-The current app includes:
-
-- a dedicated `/places` directory page
-- search and sort controls for place name, country, and post counts
-- `/places/:slug` detail pages with grouped posts
-- approximate-city labeling when the stored match is not exact
-- location links on feed-style cards and inside post-viewer metadata
-- a Places shortcut in navigation when indexed places exist
-- Settings controls to prepare offline GeoNames data and rebuild place assignments
-
-## Post detail and modal flow
-
-The canonical post detail route is `/post/:id`.
-
-`/image/:id` remains available as a legacy alias.
-
-Behavior depends on how the route is opened:
-
-- from another page, it can render as a modal over the background route
-- directly, it renders as a full page
-
-The detail view includes:
-
-- image detail media sourced from either generated previews or originals, depending on `IMAGE_DETAIL_SOURCE`
-- video detail playback that defaults to the generated preview source
-- an optional `HD` toggle for compatible higher-resolution MP4 originals
-- previous and next navigation within the same folder and active media filter
-- folder link and breadcrumb context
-- caption text that uses a saved custom caption when present and otherwise falls back to a readable filename
-- an admin-only inline caption edit action in the sidebar summary, with the same caption reflected across feed-style surfaces
-- size, dimensions, MIME type, duration, and location metadata when available
-- like toggle
-- save and collection controls
-- original-media download control
-- original-file link
-- an admin-only "Set as Cover" action to customize the folder avatar, which highlights dynamically if the image is already the cover
-- trash and permanent-delete actions with confirmation for admin sessions only
-
-## Saved posts, likes, and collections
-
-Foldergram has two saved-items storage modes:
-
-- signed-in `admin` and `viewer` sessions use shared SQLite likes and collections
-- anonymous public sessions use browser-local favorites and collections stored in `localStorage`
-
-Collections include:
-
-- a default saved collection surfaced as `All Posts` in the UI
-- custom collections with create, rename, and delete flows
-- bookmark-popover collection membership management from feed cards and the post viewer
-- dedicated `/collections` and `/collections/:slug` routes
-- syncing between the default saved state and custom collection membership
-
-Likes remain separate from saved posts.
-
-The likes view:
-
-- shows liked or favorited posts ordered by the most recent toggle in that mode
-- updates optimistically in the UI
-- drops deleted or trashed posts automatically when they are removed
-- stays intentionally separate from saved-post collections
-
-There is no shared social layer behind any of these surfaces.
-
-## Trash
-
-Trash is an admin-only recovery surface at `/trash`.
-
-It includes:
-
-- paginated deleted-post cards
-- multi-select restore actions
-- multi-select permanent-delete actions
-- folder shortcuts for reviewing where a trashed post came from
-- an empty state when nothing is currently trashed
-
-Moving a post to Trash keeps the original file on disk. Permanent delete removes
-the original file, thumbnail, and preview.
-
-## Moments
-
-Home and `/moments/:id` expose either:
-
-- date-driven Moments
-- fallback Highlights
-
-The selected set depends on timestamp coverage in the current library. The UI
-uses the same route name for both and adapts to the returned payload labels.
-
-This is separate from folder stories and folder highlights sourced
-from reserved `stories/` folders.
-
-## Settings
-
-Settings is the operational control surface for the library.
-
-Its left sidebar is split into:
-
-| Section | What it contains |
-| --- | --- |
-| `Scan & Library` | Phase-aware live scan state, manual scan, thumbnail-only rebuild, and library-index rebuild actions. Admins also see the full report path when a scan finishes with skipped media errors. |
-| `General Settings` | App-language selection with instant local switching plus saved app-wide defaults, Home and Reels default feed modes, the default App Folder photo order, nested folder title format, stories and carousel folder modes, excluded-folder rules, feature introductions, migration decisions, and save-and-scan prompts for folder-rule changes. |
-| `Places` | Offline GeoNames preparation status plus place-assignment rebuild actions for GPS-tagged photos. |
-| `Security & Access` | Admin password, viewer password, public mode, sign-out, and related auth controls. |
-| `System Status` | Storage and index state plus last completed scan details, including whether the last run completed with errors. |
-
-In `General Settings`, the language selector applies immediately in the current
-browser. That browser-local override is stored locally, and clicking `Save
-changes` also stores the selected language as the app-wide default for browsers
-without their own override. That saved default also reaches the login gate and
-other pre-auth translated UI on devices that are using the app-wide language.
-Nested folder title format changes are presentation-only and update without a
-scan. Env-backed excluded-folder rules are shown read-only and custom rules
-are saved at runtime. After changing stories mode, carousel mode, or excluded
-folders, follow the action shown in `Scan & Library` to update the index. Run a
-library scan normally, or rebuild the index when the gallery location requires
-one.
-
-On mobile, Settings uses a dedicated sticky top icon bar instead of the desktop
-sidebar.
-
-The live scan state stays open-ended during discovery and becomes determinate
-when later media-processing work has a known total.
-
-### Access protection
-
-Settings can optionally enable role-based local access for the app.
-
-That flow supports:
-
-- turning the admin password on
-- changing the admin password
-- disabling protection again
-- enabling or disabling a separate viewer password
-- enabling anonymous public browse mode
-- rotating the viewer password without knowing the current one
-- signing the current browser session out
-
-Current non-admin behavior:
-
-- viewers can browse the library and use shared likes and collections
-- anonymous public visitors can browse immediately and use browser-local favorites and collections
-- `viewer` and `anonymous` sessions can elevate through `Unlock admin`
-- non-admin sessions cannot open Settings
-- non-admin sessions cannot use Trash, delete actions, scans, or rebuild actions
-
-### Rebuild actions
-
-| Action | What changes |
-| --- | --- |
-| Scan Library | Runs a normal scan against the current gallery root. In `SCAN_MEDIA_ERROR_MODE=skip`, supported-media failures are reported, skipped, and the run finishes as `completed_with_errors`. |
-| Regenerate Thumbnails | Clears generated thumbnails and video poster images, then rebuilds them from indexed media only. |
-| Rebuild Library Index | Clears indexed folders, posts, likes, folder scan state, and scan history, then rescans the active gallery root and reuses matching cached derivatives when possible. In lazy derivative mode it does not pre-generate missing thumbnails or previews. |
-
-## Theme, language, and local UI preferences
-
-The client also persists a few local browser preferences:
-
-- selected language override
-- light or dark theme
-- whether videos start muted
-- last opened folder
-- recently opened folders
-- recent explore searches
-
-These are stored in `localStorage`.
-
-The selected language also has one extra layer:
-
-- changing the language updates the current browser immediately
-- saving `General Settings` stores that language in the app database as the default for browsers without a local override
-
-## What is intentionally missing
-
-The current repository does **not** implement:
-
-- uploads from the UI
-- comments
-- messaging
-- notifications
-- multi-user accounts
-- remote multi-user permissions
-- cloud sync
-- hierarchical album navigation
-
-## Carousel posts
-
-Carousel posts combine 2–20 images, animated images, and videos in one feed card and viewer. Arrow buttons, keyboard controls, touch swipes, counters, and dots move between items. The post has one shared caption and one set of like, save, collection, trash, and delete actions; active-item download and file details remain asset-specific. See [Carousel Posts](/carousel-posts).
+未使用博主删除仅针对已停用、无引用的手工身份，并需重新核验；[具体边界](unused-manual-creator-deletion.md)不能扩大为批量删除有资源的博主。

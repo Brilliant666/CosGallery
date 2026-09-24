@@ -1,324 +1,110 @@
-# Local admission and review in the web UI
+# 本地入库与精确审核
 
-This is the web continuation of Draft PR38. The CLI remains a maintenance entry;
-ordinary users do not need commands, scope JSON, internal IDs, or an agent.
-This is local-server file handling, not browser media upload or a cloud sync service.
+本指南面向已解压的本地图集。正常流程可全部通过网页完成，不需要 agent、命令行、手写 JSON 或查询内部 ID。后端读取的是**服务所在机器**的目录，不是浏览器上传整套媒体；远程服务器不能直接读取用户电脑上的盘符。
 
-## User flow
+从 **博主入库 → 本地入库**进入多博主工作区，也可从博主资料进入带有规范博主的单博主入口。来源资料是可选项，没有 Costuan 来源也能入库。页面总览见[导航指南](creator-admission-navigation.md)，Costuan 已下载压缩包使用[另一条流程](local-ingest-closed-loop.md)。
 
-1. Open **本地入库** from the main navigation for one or several creators. Existing
-   creator-specific **本地导入** and confirmed source observation links remain valid;
-   a source is not required.
-2. Finish manual copying/extraction first. Browse the configured extracted waiting
-   root, choose the creator parent, then select its direct work directories.
-   Browsing lists one layer only. Preview inventories just the selected scope.
-   There is no additional copy-complete checkbox before preview: a short notice
-   explains the requirement, and the final execution confirmation still asks that
-   the files are no longer being written. Server manifest/target/claim checks remain.
-3. Review new independent works, possible existing works, known local copies and
-   unresolved conflicts. Suggestions are not confirmations. Search this creator's
-   Works by title, catalogue NO or original directory, using names/covers/counts.
-   Stable IDs are carried by the application, never inferred from NO.
-4. Choose new / existing / same-as-this-batch, main or secondary copy, skip or defer.
-   Existing canonical titles remain. Same-title independent Works are supported.
-   No general merging of two existing Works is offered.
-5. Confirm the source/destination scope. New web confirmations use the stated rule
-   **已入库的同一作品不重复获取**, without an extra policy checkbox: they explicitly
-   send `acceptExistingVersion:true`, retaining `localOnly:false`. This is an
-   acquisition preference, not a claim that the copy is complete, source-identical,
-   or decodable. Future supported source imports can reuse it only through existing
-   reliable matching and local-validity checks. Existing sources still require
-   individual selection; no blanket source fulfillment is introduced. An unsubmitted
-   draft may use the rule at its next new confirmation, never as a retroactive
-   approval. Pending receipts retry their exact original policy (including false or
-   mixed creator policies); confirmed plans, CLI defaults, exclusions and revocations
-   are unchanged. Ads require an
-   **additional explicit confirmation of the exact relative-file list**; unchecked attachments
-   stay. Batch provenance alone never satisfies downloads. Exact version acceptance
-   requires selecting the existing Work and specific sources, using original claim
-   checks and the fulfillment service, without rewriting staged history.
-6. Follow real stages and results. Recent batches and URL restoration survive
-   refresh/new tabs. A lost response is retried with the same receipt. Closing the
-   page does not cancel a submitted operation. In the same browser tab, the general
-   local-admission entry restores the last opened collection after visiting an album;
-   **新建批次** explicitly starts a fresh scope. The remembered ID never starts or
-   resumes work: status is fetched with normal authorization. Unavailable batches
-   report an error rather than displaying cached success. New tabs can use the exact
-   collection URL or recent history; no cross-browser navigation promise is made.
-7. An unfinished item opens **查看并处理** or continues the original plan. Eligible
-   Stage3 reviews open the shared panel from the existing Stage3 list and remain
-   Stage3 jobs; they never become folder-admission plans.
+## 1 选择图集
 
-The extracted waiting root defaults to the gallery's sibling `cos等待入库` and can
-be set by a manager. It must exist on the same volume and be independent from the
-gallery, archive inbox and processing root. Linked ancestors, junctions, traversal
-and arbitrary absolute directory selection are rejected server-side. There is no
-shell-command or arbitrary-file-management endpoint.
+先完成手工复制、下载和解压，准备如下结构。名称只是示例，不要求改成统一编号：
 
-### Batch advertisement selection
+```text
+已解压等待区/
+  博主甲/
+    图集原目录一/
+    图集原目录二/
+  博主乙/
+    图集原目录三/
+```
 
-The confirmation page groups advertisement candidates by their complete basename,
-showing the selected-directory count, file count and selected count. Select/clear a
-specific filename or all candidates across **all pages and groups**. Only directories
-chosen as new/existing/same-as are affected; skip/defer, identity, main-copy and source
-choices remain unchanged. Newly selecting a directory for admission preselects **all
-listed advertisement candidates**, including TXT/URL and recognized image ads. The
-user may clear individual paths, names or the whole selection. This is a web-form
-default, not a new filename rule or permission to remove files outside the saved
-candidate list. The exact list still requires final explicit confirmation.
-Switching among admission identity choices, refreshing, restoring saved draft
-choices or carrying unchanged choices into repreview preserves manual deselections,
-including an empty list. Existing confirmed plans and pending receipts are unchanged.
+1. 在常驻的等待区设置中核对路径；配置变更需保存。
+2. 点击**重新读取等待区**，勾选博主父目录。规范名或已登记别名可提供身份候选；未匹配或有歧义时手动选择现有规范博主，不会自动建人或启用已停用身份。
+3. 勾选本次作品目录，可以一次选择多位博主。每个直接子目录表示一个拟接纳作品，内部文件结构保留。
+4. 点击**下一步：检查所选图集**，生成并保存预览。此时只盘点明确范围，没有执行文件移动或入库。
 
-The user has confirmed the ecytt02 advertisements `492.jpg` and `009-01.jpg` as global
-exact-filename rules. Any creator's new local admission can recognize these basenames
-(case-insensitive, including nested paths). No wildcard, similar number or other JPG
-is included. These image ads use the same preselected, cancellable web default as the
-other listed candidates. They remain explicitly listed in `approvedAds` and in the
-last confirmation dialog. Image ads moved out do not become gallery media. The preview
-image count is the original inventory, not a promise that excluded ads remain indexed.
+等待区必须与正式图库同卷，并独立于图库、压缩包待入库区和处理区。路径边界、符号链接及 junction 等由服务端检查。页面不提供任意文件管理或任意路径执行能力。
 
-An old **unsubmitted** draft can show these additional candidates from its saved
-manifest without another disk inventory or changing its plan. Existing confirmed
-payloads, past batches and outstanding retry receipts never gain new approvals.
-Choosing defaults is not execution. New web confirmations explicitly include
-`advertisementDisposition:'recycle_bin'`: after indexing, the approved files go to
-the Windows Recycle Bin and only their known empty staging directories are removed.
-The temporary attachment area is not a permanent ad archive. A native recycle failure
-keeps the item at its indexed checkpoint and reports partial completion; resume uses
-the same plan and exact durable file intents. This is recoverable recycling, not
-permanent deletion. Files not explicitly approved remain untouched.
+每批最多 100 位博主；同一博主的多个父目录需分开确认，不能在一个批次里默默合并。空父目录和仅含内部保留目录的父目录不列为待选作品，这只是读取过滤，不等于已经清理或全部任务成功。
 
-Old confirmed plans and pending receipts without this optional field retain their
-original attachment handling. They are not silently upgraded by a new UI. Historical
-attachments need the separate exact `preview-recycle-advertisements` /
-`recycle-advertisements` request described in the CLI document. A failed historical
-cleanup retries that original cleanup request, not ordinary admission resume. No
-previously indexed gallery or old source copy is swept or rewritten.
+## 2 检查并确认
 
-The same exact-name helper is used by new ordinary Stage3 staging. Advertisement
-files remain in its original processing content, outside `ready`, and follow the
-existing recoverable processing cleanup (or remain when cleanup is disabled).
-Existing ready content, immutable staging manifests and explicit review plans keep
-their recorded classification. A new optional `imageAdvertisementPolicy: 1` in the
-job summary fixes the rule for an in-progress new staging attempt, including copy
-fallback/replay; absent historical markers do not authorize retroactive cleanup.
-No schema migration or source/plugin rule is added for this filename policy.
+正常新作品会预选，但**预选不是执行批准**。先看“需处理”，再查看“已选入库”；可按博主、组别、状态和标题筛选。逐项边界提示与处理选项在图集行内展示，不必进入处理弹窗。
 
-## Review, persistence and failure behavior
-
-### Independent multi-creator workspace
-
-The local-admission workspace is a library-level entry, not a requirement to open
-each creator's management page. Existing creator-specific and source-evidence links
-remain valid. The normal path is three stages: choose creator directories and work
-scope, review one combined confirmation, then read durable background results.
-
-The root browser only enumerates the configured waiting directory's immediate
-children. Canonical names and registered aliases suggest existing active creator
-identities; an ambiguous/unmatched directory needs an explicit selection. No creator
-is automatically created or reactivated. Detailed inventory is limited to the work
-directories selected for preview, not the whole waiting area or gallery.
-
-A multi-creator collection coordinates the existing per-creator admission plans.
-It is not a new Work database or fabricated archive-ingest history. The server saves
-the exact confirmed scope before dispatch and executes creator plans serially under
-the existing admission barrier. Closing the browser does not discard the collection.
-An interrupted collection retains child checkpoints and requires an explicit resume;
-opening the workspace does not automatically replay old queues. A failed child is
-reported independently of other completed/remaining confirmed children.
-If an unstarted source changes after confirmation, continuing the old payload does
-not approve that change. Prepare a new preview for those still-unmoved directories;
-keep the old failed collection as history. Moved items use their original checkpoint
-and exact recovery workflow, not a new plan that pretends they were never moved.
-
-One collection accepts at most 100 creators, each with one selected parent directory.
-Multiple alias folders for the same creator must be reviewed in separate scopes;
-they are never silently combined or omitted. The submit check validates all selected
-manifests and targets before atomically saving every child confirmation. The existing
-engine validates again when each child actually starts. A collection child cannot be
-submitted or resumed independently through an old single-creator URL.
-
-On first review, clear new-work candidates are preselected, never submitted. Review
-starts with pending items across all selected creators; selected works have collapsed
-cards, with creator/group/status filters and title/directory search. Scope selection
-can select currently filtered, uniquely resolved creators together without replacing
-manual directory choices or combining two parent directories for the same creator.
-
-Unsent choices record UI-only automatic/manual provenance. Manual defer/skip/title,
-identity and primary choices are not reinterpreted as defaults. One tab's ten recent
-unsent drafts can be restored after fetching authorized server state; this is not a
-cross-browser saved draft guarantee. Original pending execution receipts always take
-precedence, including their historical acquisition policy. UI-only provenance and
-advertisement cancellation history never enter the execution payload.
-
-The controls distinguish three operations:
-
-- **上一步：调整导入范围** reopens the unsubmitted draft's selected creators and
-  directories. Renamed/new directories are not automatically selected. Cancel returns
-  to the same review; submitting the edited scope creates a new unconfirmed preview.
-- **重新读取并核对** rereads the selected creator parents and creates a new draft.
-  It handles both edits inside existing works and splitting/renaming collections into
-  new direct-child work directories. Removed paths and newly discovered directories
-  are recorded in the preview; no physical files are deleted by this operation.
-  Automatically deferred or selected new works are reconsidered against fresh facts;
-  now-safe new works are selected in the same operation. Manual defer/skip remain,
-  and changed manual identity decisions require review. New paths never inherit an
-  old collection's identity or advertisement approvals. Changing creator or parent
-  still needs explicit scope adjustment. There is no separate supplement button.
-- **更新进度** (results), or **读取已保存状态** (review technical details), reads saved
-  server state only. Neither inventories disk nor resumes work. Refresh reconciles
-  any changed saved summary with current choices, without overwriting manual decisions.
-
-Repreview never edits the original plan or carries its execution receipt. Unsent
-confirmed identity choices carry only when the saved manifest, target, boundary,
-advertisement and creator-scoped identity/source facts still match. Changed existing
-Work/same-as decisions become manual defer; one peer's changed evidence also invalidates
-its dependent same-as choice. Legacy choices without provenance are conservative manual
-choices. Surviving advertisement cancellations persist even across an unsafe intermediate
-preview. Automatic safe-new selection is not an execution authorization. The API
-rechecks draft/confirmation/owner state under its publication transaction, so a
-concurrent confirmation prevents publishing a replacement draft. Confirmed or moved
-items stay with their original checkpoint/recovery workflow.
-
-History names the creators and links previous/subsequent previews. Lineage is optional
-metadata published atomically in new children's existing context JSON; old drafts lack
-it and remain readable. No schema migration or original confirmed-payload change.
-Result items expose DB-only next-action hints from actual execution checkpoints, saved
-plan membership, LocalWork/Post links and active owners. File-review links appear only
-for eligible files-verified projects and disappear while a batch is active. Hints are
-not authority: execution/review routes still validate their original guards.
-
-Each grouped advertisement filename has one tri-state checkbox (all/partial/none).
-Batch select/clear remains available, and affects only selected admission directories.
-Final confirmation shows creator-level counts first; expandable exact directory, Work,
-target and advertisement lists remain available. Separate execution/advertisement
-confirmation is still required. No list/filter/checkbox action moves or recycles files.
-
-Only clear new-work candidates can be selected together. Existing Work reuse,
-same-work copies, source acceptance and exceptions remain explicit, creator-scoped
-choices. Cross-creator Work reuse and same-as references are not supported. Optional
-sources/settings and technical identifiers are secondary details rather than steps
-every user must repeat. Exact advertisement choices and recoverable handling remain
-visible in the final confirmation, including selections spanning creators/pages.
-
-### Irregular extracted collections are not automatically reorganized
-
-One selected direct child directory still represents one proposed Work, with its
-internal structure preserved. Recursive inventory counts files; it does not prove
-that a wrapper containing several shoots is a single album. Structural hints are
-review prompts, not a semantic classification of photography or duplicate content.
-
-For example, a creator wrapper might contain `working/Pic/albums`, another copy of
-`albums`, and separate year/month image/video trees. Selecting those wrapper folders
-would propose large combined Works. Establish the intended album boundaries first:
-which branch is authoritative, which same-named directories are duplicates or distinct
-shoots, and which loose videos belong to which album. Similar names/counts/sizes alone
-do not authorize merging, skipping or deletion.
-
-This workspace does not silently flatten, split, rename or merge those collections.
-Keep uncertain scopes deferred while other creators proceed. Existing exact review
-handles supported failed admission/Stage3 checkpoints and file exceptions; it is not
-a general arbitrary-folder restructuring tool. Preparing a regular waiting layout
-remains a separate scoped operation when genuinely needed.
-
-- Review files are paginated. Status reads saved summaries, not disk media, full
-  manifest hashes or decoder results. Polling is confined to the open active page
-  and stops on completion, repeated network failure or leaving the page.
-- A JPEG can be kept as an unsupported original only after the existing Sharp
-  pixel-limit diagnosis. It remains excluded from normal image counts and decoding;
-  the safety limit is unchanged. Valid WebP is ordinary media. PDF uses existing
-  attachment rules, not an advertisement classification.
-  In the Stage3 review path, named TXT/URL files not approved for removal are also
-  retained explicitly as attachments, rather than inherited blanket ad cleanup.
-- Explicitly selected ads or damaged files move on the same volume into recoverable
-  quarantine in the existing precise-review workflow, never permanent deletion. This
-  is distinct from new-admission advertisement recycling above. Durable intent with exact evidence precedes
-  the move; destination verification precedes success. Retry reconciles both paths.
-- Handling files and registering results are separate steps. Folder review uses
-  original `recover` with an internal preparation callback under the admission lock,
-  then applies the unchanged plan. Stage3 prepares under its existing barrier and
-  calls `previewReview` / `resumeReview` for the original Job.
-- Original plans remain immutable. New approved-advertisement removals are independent
-  decisions restricted to exact original TXT/URL entries in an unfinished, unindexed
-  item. Old decisions are readable; without this optional flag old rules are unchanged.
-- PID/token ownership, active source claims, occupancy and manifest validation remain
-  authoritative. Live or unknown owners are not stolen based on time. External file
-  edits cannot be prevented; observed changes stop execution and remain visible.
-- Dead-process work is interrupted, not automatically replayed on page load. Explicit
-  continuation uses original checkpoints. Unstarted items may obtain a new preview
-  without replaying completed ones. File failures never mark Jobs ingested by fiat.
-
-## Reused services and new orchestration
-
-The authoritative engines remain `LocalFolderAdmissionService`, `LocalIngestService`,
-`WorkIdentityService`, `ArchiveLocalFulfillmentService`, `SourceEvidenceService`,
-the scoped scanner and the admission barrier.
-
-Manager-only routes `/api/admin/local-admission/*` and `/api/admin/local-review/*`
-use existing authentication, authorization and write-intent/CSRF protections.
-Selections are bounded; media is not uploaded. Dispatch is in-process but plans,
-requests and file-action receipts are persistent, not in-memory-only jobs.
-
-Migration **000025_local_admission_web.sql** adds only orchestration tables:
-
-| Table | Purpose |
+| 本次处理 | 作用 |
 | --- | --- |
-| `local_admission_web_batches` | Preview context, immutable submitted payload, dispatch owner/outcome |
-| `local_admission_web_items` | Lightweight summaries/actions; execution joins original checkpoints |
-| `local_admission_web_requests` | Idempotent submit/continue receipt |
-| `local_review_web_sessions` | Review baseline, confirmation and original recovery request |
-| `local_review_web_file_actions` | Recoverable move intent and verified result |
+| 接纳为新独立作品 | 为当前目录建立独立 Work，允许同名不同作品；保留原目录名和内部结构 |
+| 对应已有作品 | 查找并明确选择同一博主的已有 Work，将本目录作为其副本；可明确选择是否作为主副本 |
+| 与本批另一目录同套 | 将本博主本批两个目录归入同一个 Work，两份副本保留；不是合并已有两个 Work |
+| 跳过本次导入，保留等待区文件 | 本次不处理，不移动也不删除 |
+| 暂缓，保留等待区文件 | 尚未确定身份、目录边界或异常处理，保留以后核对 |
 
-000024 is unchanged. Old business rows are not backfilled. Repeated migration SQL
-preserves receipts; reopening preserves sessions. Automatic destructive down is
-refused because it would erase operation receipts. Do not restore an old full backup
-over later trial data.
+“对应已有作品”可按标题、自有目录 NO 或原目录查找，不需手填 Work ID。仅选择处理类型而未补齐目标的条目仍是“需处理”；完整选择后会立即更新筛选结果。同名、同套数或同大小不自动证明是同一作品。
 
-Migration **000026_local_admission_collections.sql** adds the multi-creator envelope,
-without rewriting 000025 or any existing confirmed plan:
+默认规则是**已入库的同一作品不重复获取**，不再要求另勾一个“接受可用版本”选项。这是获取偏好，不表示文件完整、与所有来源逐字节一致或全部可解码。后补来源仍需可靠身份对应及当前本地有效性判断；已有明确来源的满足范围按具体勾选项处理，批次出处不会自动满足下载。详见[本地优先与来源复用](local-first-source-reuse.md)。
 
-| Table | Purpose |
+### 文件修改后怎么办
+
+| 操作 | 读取什么 / 产生什么 |
 | --- | --- |
-| `local_admission_web_collections` | Combined confirmation, serial dispatch owner and overall outcome |
-| `local_admission_web_collection_batches` | Ordered links to original per-creator batches |
-| `local_admission_web_collection_requests` | Idempotent combined submit/continue receipts |
+| **重新读取并核对** | 重新读取本批已选博主父目录并盘点范围，保存关联的新预览；适用于内部文件变化，以及把合集拆分、重命名为多个直接作品目录 |
+| 步骤条 **1 选择图集** | 修改博主、父目录或所选范围；点击下一步才按修改后的范围重新检查 |
+| **读取已保存状态**（批次详情） | 只读取服务器已保存状态，不盘点文件、不批准新范围 |
+| **更新进度**（入库结果） | 读取后台执行进度，不重新检查磁盘、不继续任务 |
 
-The collection endpoints live under `/api/admin/local-admission/collections`;
-`GET /:id/scope` returns the saved scope without filesystem inventory, and
-`POST /:id/repreview` prepares a new unconfirmed draft from that scope or an explicitly
-edited replacement. The original collection remains unchanged. These add no migration.
-The explicit `{refreshDirectories:true}` form powers **重新读取并核对**; it cannot be
-combined with `scopes`. A shallow sibling-name inventory stored in batch context keeps
-previously unselected siblings outside the refreshed scope. Internal directories,
-linked new paths and paths reserved by other confirmed plans are not added. Existing
-selected paths that become invalid remain visible as conflicts. Scope metadata is
-excluded from work review fingerprints. It adds no migration or execution authority.
-Legacy contexts have no such inventory: newly discovered paths are shown with an
-explicit **range confirmation** requirement, not automatically selected and not
-misrepresented as a user's manual deferral or a file conflict. One batch-level
-confirmation lists the affected creator/directory scope and preselects only safe
-new works. Identity/boundary conflicts still require review; manual skip/defer and
-advertisement cancellations remain. This changes only unsubmitted browser choices,
-not the execution ledger, and never submits admission by itself.
-`scopeReviewRequired` marks these system-generated suggestions. Existing saved
-drafts are recognized read-only only when the exact historical system reason and
-the discovery report agree on creator, parent and directory. No rescan or migration
-is needed to expose the confirmation in an already-saved draft. Pending range
-requirements survive further repreview. Confirmed plans and deliberately deferred
-items carried from executed batches remain their original decisions.
-Optional `directoryRefresh` metadata preserves the added/removed report after reload.
-If no reviewable directories remain, the operation reports this and keeps the old
-draft rather than publishing an empty collection. Concurrent changes during reading
-require another refresh; draft and activity guards are checked again when publishing.
-`workspace` reads configured top-level directories and `creators` searches active
-canonical identities and registered aliases. These have the same manager access and
-write-intent checks as single-creator admission. All-deferred creators remain explicit
-outcomes, not silently dropped work. Read-only polling uses durable summaries only.
-The existing 1 MiB HTTP body limit remains; very large explicit file selections may
-need separate collections rather than an unlimited request size.
+重新读取会显示新增、移出或变化的目录；“移出”是从新预览范围移出，不是删除文件。此前未选择的其他作品不会因此被全部纳入。新增目录不能继承旧合集的身份和广告批准；旧草稿缺少范围证据时需先确认发现范围。系统待确认与人工暂缓分开，人工跳过、暂缓和取消广告选择不会被自动覆盖。
 
-## Verification and trial boundary
+复杂合集需要先由用户在等待区确认作品边界并整理。例如一个“全年合集”拆为数个独立作品目录，再重新读取并核对。页面不会自动判断拍摄主题、拆分合集或合并两个已有 Work。已提交或已移动的目录不能以修改草稿方式掩盖原检查点，须按原计划处理。
+
+### 广告与最终确认
+
+点击**广告附件**查看本批的具体候选。首次选择接纳时，列出的 TXT、URL 及已识别图片广告候选默认勾选，可以逐项、同名或整批取消；TXT/URL 的候选身份本身不证明内容一定是广告。人工取消选择会保留。
+
+精确文件名规则包含 `492.jpg` 与 `009-01.jpg`，不扩展为相近编号或任意 JPG。默认选择仅作用于本批明确目录，不是全库文件清理。最终仍需另外批准列出的具体广告文件。
+
+点击**确认入库…**核对所有博主、作品对应、目标目录、副本和广告处置，再确认文件已停止写入并执行。新网页确认的广告在索引完成后送入 Windows 回收站；旧计划继续使用原先记录的处置方式，不能因更新 UI 偷改历史批准。回收失败会保留检查点并报告，不能视为已完成清理。
+
+未选广告保留；目标占用不覆盖；跳过和暂缓不删除。最终确认不是仅下载 scope 或保存 JSON，而是提交后端真实接纳任务。
+
+## 3 入库结果与后续处理
+
+已确认批次由后台按博主串行处理，进度来自实际文件、索引和身份检查点。关闭或切换页面不会主动取消任务。服务中断可能留下未完成状态，**重新打开页面不会自动重跑队列**。
+
+- **入库记录**：打开历史弹窗，重新查看批次、草稿、结果及中断记录。
+- **查看图集**：在完成项上打开图库和 Viewer。通常从本标签页返回本地入库可恢复最近批次，也可使用带批次参数的链接。
+- **后续核对**：将尚未执行且仍符合条件的暂缓范围放入关联新草稿；已移动项按原检查点恢复，不能重新当新目录导入。
+- **查看并处理 / 原计划继续**：仅在相应状态可用，使用原计划和明确范围，不重跑已完成作品。
+- **清理本批空目录**：明确回收本批已核验为空且无活动任务的父目录；非空和仍有保留附件的目录不清理。正常新入库的空父目录收尾与图集结果分别记录，清理失败不表示作品未入库。
+
+旧批次的失败、暂缓、尝试和确认时间保留。若精确目录、目标、完成记录及 Work/LocalWork 关系证明后来已完成，页面另示**后续已完成**并链接后续结果 / 图集，不再次计入当前待入库或允许普通重跑。没有可靠依据则显示尚未明确；旧大容器不能据此解释为“还缺一套”。
+
+服务器持久保存提交、回执和执行结果。未提交选择仅在当前浏览器标签页的会话范围恢复，不承诺跨设备永久保存；回执不明确时使用**原请求重试**，不要新建同范围批次来替代它。
+
+## 异常文件：网页精确审核
+
+本地接纳结果与 Costuan 原 Job 的适用异常可打开同一**查看并处理**页面，但各自保留原任务类型。入口会先检查是否满足审核条件，并非任意失败均可放行。
+
+1. **生成本项审核预览**：读取当前项证据并保存审核会话，可能核验原包和媒体，不扫描全库，也不先移动文件。
+2. 查看相对文件名、问题和可用处置，逐文件选择。
+3. **查看文件处置确认**，明确批准后**确认处置并后台继续**。
+4. 查看真实文件处置与恢复结果；失败后仅重试这个原处置与原计划。
+
+| 文件情况 | 当前能力 |
+| --- | --- |
+| JPEG 确实触发既有像素上限 | 可明确保留为未支持原件，不降低解码上限、不计作普通展示图片 |
+| PDF 及审核允许的 TXT / URL | 可按附件保留，不转换成图片；URL 不会被打开 |
+| 正常可解码 WebP | 作为正常媒体，不需逐个批准 |
+| 明确广告 / 损坏文件 | 审核允许时逐文件可恢复移出，先记持久化意图、核对实际处置，再恢复原任务 |
+| 未支持类型、证据变化、身份或活动任务冲突 | 保持暂停，不提供“忽略全部错误” |
+
+审核中的**可恢复移出**与新入库广告送回收站不是同一操作。保留原件不等于已经解码；记录决定也不等于实际文件处置已经完成。查看最终文件动作与索引结果，不能只看接口回执。
+
+## 维护边界
+
+普通入库和符合条件的精确审核无需命令行。历史广告专项回收、部分事后身份关系维护等仍使用[本地接纳维护 CLI](local-folder-admission.md)，不是本页面一键清理能力。来源资料中的后补批次 / 精确条目对应目前仍需填写稳定 ID，见[来源资料说明](source-evidence-local-admission.md)。
+
+服务复用原接纳、作品身份、本地满足及扫描引擎；活动 claim、目录占用、manifest 与身份检查仍由后端执行。网页 orchestration 表保存草稿、不可变确认、幂等回执、审核文件动作；不是第二套作品身份系统。
+
+## 历史实现与验证记录（PR38 阶段）
 
 Focused tests cover original-engine execution, immutable replay, identity/main-copy
 choices, exact source acceptance with staged history, changes/claims, auth/CSRF,
@@ -355,87 +141,8 @@ Advertisement-result transactions also reserve the top-level writer before readi
 No filesystem operation is wrapped in a blanket SQLite retry. The historical paused
 batch's error is retained; its exact former lock-owning connection was not observed.
 
-Previously completed real jobs must not be replayed. Preview data is never copied to
-production. A runtime update requires paired client/server/CLI artifacts, a current
-backup and the authorized maintenance window. Candidate installation alone is not
-merge approval. The user has now explicitly authorized PR38 closure after the priority
-checks; Script PR13 and the installed plugin remain outside that release.
+该阶段运行交接要求配套前端、后端和 CLI，并保留当前备份；隔离数据没有复制到正式数据区，已完成真实任务不重放。PR38 当时先试用再收尾，Script PR13 的合并与安装另行处理。这是历史交接边界，不表示当前仍待批准合并。
 
-### Parents containing only internal residual directories
 
-The waiting-area workspace inspects only the immediate children of each safe creator
-parent. A nonempty parent containing exclusively real reserved `.local-admission-*`
-or `.local-review-*` directories is omitted from pending creator selection. This is a
-read-only presentation filter: it does not enumerate those containers or remove them.
-Empty parents are also omitted. Ordinary directories/files and reserved-name files
-or links remain visible. Unreadable parents remain visible with their error and cannot be selected.
 
-Historical advertisement cleanup remains a separate explicit operation through
-`preview-recycle-advertisements` and `recycle-advertisements`, using the immutable
-original plan and exact approved files. It records recycling/removal evidence without
-replaying admission. Merely opening or refreshing the waiting area never cleans old
-attachments, and a hidden parent is not proof that every historical job succeeded.
-
-### Continue unresolved items and finalize empty parents
-
-An inactive confirmed collection exposes `remainingCount` and an explicit
-`POST /collections/:id/remaining-preview` action. This creates a linked, unconfirmed
-draft directly in review, containing only original deferred entries with no execution
-checkpoint. Completed/skipped entries and exact paths claimed by another immutable
-plan are excluded. Local targets registered after the original preview are excluded;
-pre-existing identity conflicts remain reviewable. Missing original directory names
-stay visible as conflicts; renamed/new directories are never silently substituted.
-From that follow-up draft, **重新读取并核对** can discover the split replacements
-without returning to step 1; the original sibling exclusion boundary is retained.
-Manual deferral reasons survive. Repeat clicks, including concurrent requests, reuse
-the existing current follow-up draft. Rechecking that draft preserves its lineage.
-Original confirmations, plans, checkpoints and request receipts remain immutable.
-
-After successful web admission, only that batch's verified empty creator parent is
-eligible for recycling. Ordinary content, deferred directories and internal retained
-attachments prevent cleanup. A separate result records cleanup success or failure;
-failure must not downgrade completed admission. The helper checks direct-child scope,
-ancestors, activity, identity and emptiness, isolates the empty directory under a
-reserved temporary name, and restores it when new content or a recycle failure is
-observed. Arbitrary external writers cannot be atomically locked by the Windows
-recycle API; a failed restore reports its retained location without overwriting a
-recreated parent. Only the helper's empty wrapper is removed non-recursively.
-
-Historical empty parents require the explicit `POST /collections/:id/cleanup-empty-parents`
-action in results. Listing, refreshing and restarting do not perform historical cleanup.
-Both actions require management authorization and write intent, reject active owners
-and preserve activity/claim protection. No migration or automatic remaining-job execution
-is introduced. Rapid-iteration runtime management may be performed by Codex when the
-user explicitly authorizes it, using the same production entry and configuration.
-
-### Historical state and later completion
-
-History retains its original status, error, attempt and confirmation. A separate
-read-only `currentDisposition` can identify an exact directory scope completed by a
-later confirmed web batch, with its Work/LocalWork and result links. The projection
-requires the same creator, input scope and target, a completed execution checkpoint,
-and matching authoritative Work/LocalWork ownership. Names or source numbers alone
-are not evidence. Ambiguous matches remain unresolved; a split historical container
-is not interpreted as one missing work. Completion time is labeled as the later
-batch's completion time; when that time is unavailable, no item timestamp is invented.
-
-`currentTotals` is distinct from historical totals. Reliably covered items are not
-counted again as currently pending or selected for advertisement handling. Old
-confirm/resume and the underlying admission executor reject replay of covered items,
-including CLI use of the old plan. Partially covered history can create a linked,
-unconfirmed review of eligible remaining scope, without editing the original plan;
-moved/indexed checkpoints must still use their original recovery path. A separate
-new scope can admit a legitimate extra copy and is not blocked by an earlier batch.
-
-Lookup starts at the requested batches and uses the existing creator index for later
-execution records. SQL count does not grow with the number of items; it neither reads
-media nor scans or hashes files. No migration, persistent replacement state machine,
-automatic historical cleanup or production replay is introduced.
-
-The final synthetic browser admission exposed one remaining deferred-writer edge
-in `ArchiveCatalogService` reconciliation after media indexing. A separate SQLite
-writer regression reproduces failure at the first local-folder upsert in the old
-transaction. The synchronous catalog transaction now reserves its top-level writer
-before identity reads; nested calls keep their caller's SAVEPOINT/rollback ownership.
-Writer timeout still fails with no partial catalog commit. This is not a retry of
-filesystem operations, an admission-history rewrite, or a global lock redesign.
+> 上述为历史实现与验证经过，测试计数、端口和当时的候选部署限制不代表当前运行现场或本次文档任务的新验收。当前正常操作以本页前半部分为准；PR38 / PR39 已合并，插件后续状态见[来源资料说明](source-evidence-local-admission.md)。

@@ -1,180 +1,72 @@
 ---
-title: FAQ
-description: Short answers to common questions about Foldergram's actual scope and behavior.
+title: 常见问题
+description: CosGallery 的身份、目录、入库、来源与历史状态常见问题。
 ---
 
-# FAQ
+# 常见问题
 
-## Is Foldergram a cloud product?
+## 图库账本、资源目录和博主入库有什么区别？
 
-No. The current repository is designed for local-only, self-hosted use.
+“图库账本”管理博主与自己的资源目录；“资源目录”按独立 Work 编目、搜索和导出。“博主入库”是执行入口，分已解压作品的“本地入库”和 Costuan 来源检查、网盘暂存、本机解压入库。页面地图见[导航说明](./creator-admission-navigation.md)。
 
-## Does it upload or sync my media anywhere?
+## 没有 Costuan 来源，可以直接收录吗？
 
-No. Originals stay in the configured gallery root.
+可以。已解压资源使用本地入库，确认规范博主和作品边界即可走正常网页流程，不需要伪造 Costuan 编号或先采集来源。来源资料可以稍后登记；建立明确 Work 对应后，再判断具体来源是否已被本地版本满足。只有批次出处或相同标题并不足以自动完成对应。
 
-## Does it scan files directly during API requests?
+## 普通入库仍需 agent 或命令行吗？
 
-No. Request handlers read from SQLite and derivative directories. Scanning is a
-separate service.
+不需要。网页支持选目录、预览、行内处理、集中确认、后台执行与结果查看，也支持多博主。已有服务支持的本地异常和 Stage3 原 Job 精确审核有网页入口。复杂合集如何拆成作品仍需用户整理；部分历史广告专项及事后关系维护仍使用维护入口，不等于所有维护操作都已网页化。
 
-## Are files in the gallery root indexed?
+详见[本地入库与审核](./local-admission-web.md)。
 
-No. Foldergram ignores files placed directly in `GALLERY_ROOT`.
+## 本地入库会上传整套媒体吗？原件会移动吗？
 
-## Do nested folders merge into their parent album?
+网页提交范围和决定，不上传整套媒体；本机后端读取允许的目录。确认接纳后会按计划移动作品目录并建立索引，因此不能描述为“原件永不移动”。浏览图库通常读取索引，首次缺少缩略图或预览时可能生成缓存。远程服务器不能直接读取浏览器用户的本机盘符。
 
-No. Nested folders become separate albums when they directly contain supported
-media.
+## “重新读取并核对”和刷新进度一样吗？
 
-## How does the app select a folder's avatar or cover image?
+不一样。刷新进度读取已有执行状态；重新读取并核对会检查等待范围内当前文件/目录，并生成需要查看的范围变化。手工拆分、删除或重命名作品目录后，应重新核对新范围，不能让原来的确认自动批准新目录。离开页面不会主动取消已经提交的后台任务，但未提交选择不能视为跨设备永久保存。
 
-By default, Foldergram automatically selects a `cover.jpg` (or `.jpeg`, `.png`, `.webp`, `.avif`, `.gif`) file within the folder if one exists.
-If no explicit cover file is found, it falls back to the most recent (newest) supported media file in that folder.
-Admins can also use the "Set as Cover" action from the detail view of any image to set it as the cover without renaming files.
-Any explicit `cover.*` files are hidden from the normal folder grid so they don't appear as duplicate posts. Images manually set as the cover via the UI remain visible in the folder grid.
+## 历史批次失败或暂缓，是不是还没有入库？
 
-## How do reserved stories folders work?
+不一定。历史执行状态保留当时事实；若可靠记录证明该项后来完成，会展示“后续已完成”和相应结果/图集链接。不要重跑已覆盖的项。只有同名、同 NO 或套数相同而无可靠关系时，保持“后续对应尚未明确”，不能猜测已经覆盖或仍缺几套。
 
-In the default mode, `AppFolder/stories` is treated as a story source for that
-folder:
+## 一个 Work、多份本地副本和多个来源如何计数？
 
-- direct media inside `stories/` becomes the avatar story set
-- each direct child folder becomes one highlight capsule
-- nested folders stay inside that same highlight capsule
-- story media is hidden from normal folder, feed, and reels surfaces while this mode is active
+Work 是独立作品。主副本提供默认展示与目录的本地统计，额外副本保留独立记录，来源各自保留外部声明。同一 Work 的多个来源/副本不会变成多行独立目录。同名不同 Work 仍分开；主副本不可用不会自动更换为次副本。
 
-If you already rely on folders literally named `stories` as normal app folders,
-open `Settings -> General Settings`, enable `Treat stories folders as normal
-app folders`, then rescan from `Settings -> Scan & Library`.
+## 资源目录 NO 为什么会变化？
 
-## Can I exclude source folders from scanning?
+NO 在每位博主范围内按生效排序时间从早到晚编排，稳定 ID 打破同时间并列。显示方向、搜索、分页和全库视图不改变 NO；补入更早作品或确认排序时间后，该博主后面的 NO 可能顺移。文件名、来源 NO 和 Work ID 不随目录 NO 改写。估算排序时间不是实际发布日期。
 
-Yes.
+## 资源目录每次刷新都会重新扫描媒体吗？
 
-Foldergram supports two sources of exclusion rules:
+不会。正常列表、搜索、分页和导出读取持久化完成版本；后台 Worker 处理事实变化产生的待更新标记，不扫描原件或生成图片。但等待区列举、文件预览/重读、入库、审核和缺失缓存生成确实会访问磁盘，不能概括为“所有 API 都不读文件”。
 
-- `GALLERY_EXCLUDED_FOLDERS` in `.env` or Docker Compose
-- custom rules in `Settings -> General Settings`
+## 网盘已经暂存，为什么还不能显示已入库？
 
-Rules without a slash match folder names anywhere in the gallery tree, such as
-`@eaDir` or `thumbnails`. Rules with a slash match one exact relative path
-under `GALLERY_ROOT`, such as `Archive/cache`.
+暂存只说明选中的文件已经在网盘目标范围。用户还需通过百度客户端下载到本机，再由 Costuan 入库检查下载稳定性、解压和建立图库索引。来源数量减本地数量不是可靠缺失数，来源 NO 也不是 Work 身份。暂停时查看具体阶段，不反复点击所有历史任务。
 
-Changing env-backed rules requires a restart. Changing custom rules in
-`General Settings` requires saving the change and then running a scan from
-`Scan & Library`.
+## 插件版本更新会自动继续旧队列吗？
 
-## Are likes shared with other users?
+不会。插件 0.11.9 增加的部分来源资料留存与同请求重传，不等于放宽严格自动检查/暂存规则。更新不自动恢复旧任务。本仓库不会替用户自动安装或重载浏览器扩展，操作参考[配套插件说明](https://github.com/Brilliant666/Script/tree/main/CostuanArchiveManager)。
 
-Admin and viewer sessions share SQLite likes for the current library.
+## 所有 TXT、URL、PDF 或超大 JPEG 都能当广告删除吗？
 
-Anonymous public sessions do not write to SQLite likes. They use browser-local
-favorites only.
+不能仅凭扩展名作这个结论。核对页面显示具体候选和当前选择，执行前确认准确文件。PDF 按附件规则处理；正常 WebP 是媒体。达到既有解码上限的 JPEG 只有经过明确审核才能作为不支持的原件保留，保留不表示正常解码或计入普通图片数。精确审核可恢复移出和新接纳广告回收也不是同一文件去向。
 
-## Are saved posts and collections shared with other users?
+## 为什么不能删除有历史记录的停用博主？
 
-Admin and viewer sessions use shared SQLite collections for the current
-library.
+停用不等于未使用。删除入口仅允许已停用、无阻断业务引用的手工身份，历史引用也算使用；它不是任意博主删除、Work 合并或资源清理工具。见[删除未使用博主](./unused-manual-creator-deletion.md)。
 
-Anonymous public sessions use browser-local saved posts and collections stored
-in `localStorage`.
+## 每次启动都要迁移、扫描和重建目录吗？
 
-## Can Foldergram group photos by location?
+不必混为一谈。无新迁移时迁移检查为 no-op，但每次进程启动仍做必要完整性校验；已有图库索引通常跳过启动扫描，空索引会首次扫描。Costuan 补偿扫描受独立开关控制，目录 Worker 复用已完成结果、处理待更新项。见[启动原理](./how-it-works.md#启动时的几种工作)。
 
-Yes, when photos already contain GPS EXIF metadata.
+## 可以直接放在公网或 NAS 给多人使用吗？
 
-Prepare the offline place dataset from `Settings -> Places`, then rebuild place
-assignments. Foldergram will expose a Places directory plus place detail pages
-for matched photos.
+当前文档推荐已经核对的本机源码运行路径。认证为实例级角色与密码，不是多用户独立账户；远端文件访问、Windows 回收站、同卷移动等都有边界。Docker/云端/NAS 不能仅因继承上游配置就视为 CosGallery 完整验证的平台。见[安装](./installation.md)和[安全](./security.md)。
 
-## Can I move `GALLERY_ROOT` without rebuilding everything?
+## Foldergram 的故事、轮播和喜欢收藏还在吗？
 
-Sometimes.
-
-If the new root still contains the same indexed library at the same relative
-paths with matching size, mtime, and extension, Foldergram validates the move
-at startup, refreshes stored source paths, and keeps the existing index.
-
-If that validation fails, Foldergram requires `Rebuild Library Index` before
-scans continue.
-
-## Does Foldergram have authentication?
-
-It has optional role-based password protection for the app instance.
-
-The current implementation supports:
-
-- an `admin` password with full access
-- an optional `viewer` password with browse-only access and shared likes
-- an optional `public` browse mode with anonymous local favorites and admin unlock
-
-It still does **not** have per-user accounts or per-user data isolation.
-
-## Can I share only one folder?
-
-Yes. Admins can open a folder page and use the Share button next to `Edit App
-Folder`.
-
-Folder sharing supports expiring links, unlimited revocable links, and reusable
-per-folder passwords. Shared visitors open `/share/:slug` and can browse only
-that folder.
-
-## Do folder shares unlock the whole library?
-
-No. A folder share is not an admin session, viewer session, or public-library
-mode. It does not grant Home, feed search, Reels, Places, Likes, Collections,
-Trash, Settings, scans, rebuild actions, captions, cover editing, delete
-actions, or original-file downloads.
-
-## Why does the API call posts "images" in some fields?
-
-That naming is historical. The current app indexes both images and videos, and
-several payload fields still use `image` terminology while carrying mixed media.
-
-## Can Foldergram play videos directly from the original file?
-
-Yes, sometimes. Compatible MP4 originals can be exposed as an optional `HD`
-source in the detail player while the generated preview remains the default
-playback source.
-
-## Why are thumbnails or previews being created while I browse?
-
-That is expected when `DERIVATIVE_MODE=lazy`.
-
-Foldergram still indexes metadata during scans, but it waits to generate
-missing thumbnails and previews until `/thumbnails/...` or `/previews/...` is
-requested. Once generated, those files are cached on disk for later requests.
-
-## Why would I use `Regenerate Thumbnails` instead of `Rebuild Library Index`?
-
-Use `Regenerate Thumbnails` when the index is still correct and you only want to
-regenerate feed/profile thumbnails and video poster images. Use `Rebuild
-Library Index` when the gallery root changed or the index itself needs to be
-reset.
-
-## Is the local-origin mutation check the same as authentication?
-
-No. It is a separate trust check for browser-triggered mutations.
-
-Foldergram's optional admin/viewer/public access control is the auth layer; the
-local-origin mutation check is an additional safeguard around mutating routes.
-
-## Does the app support remote multi-user access?
-
-Not as a documented or hardened product target in the current repository.
-
-The intended scope is still a single-user or shared-household local deployment,
-not a full multi-user media portal.
-
-## Can anyone browse the app anonymously?
-
-Yes, if an admin enables `viewer_access_mode=public` from Settings.
-
-In that mode, visitors can browse immediately and keep favorites only in the
-current browser, alongside browser-local saved collections. Admin-only controls
-still require unlocking with the admin password.
-
-## How do I create a post with several photos or videos?
-
-Put 2–20 supported files directly in `AppFolder/carousels/Post name/`, prefix their filenames to control order, and scan. The first item is the post cover, the child-folder name is the default caption, and the carousel counts as one post. Videos inside it play in the carousel rather than appearing in Reels. See [Carousel Posts](/carousel-posts).
+仍保留这些图库能力，但它们不是 CosGallery Work 身份的替代物。普通扫描有 `stories/`、`carousels/` 的保留目录规则，已解压图集也不能因此任意混成一套。轮播结构见[轮播帖子](./carousel-posts.md)，媒体处理见[媒体说明](./media-processing.md)。管理员/viewer 使用共享数据库喜欢与收藏，匿名 public 模式使用浏览器本地数据。

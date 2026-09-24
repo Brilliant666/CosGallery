@@ -1,5 +1,7 @@
 # Gallery path indexes and canonical work summaries
 
+> 历史资料：阶段性能记录。基线、未部署描述和样本仅对应当时验证；当前能力见[功能](features.md)。
+
 ## Scope and implementation
 
 Baseline: `d493c741825afdec9d6c90de90d9f9deeb3bf580`.

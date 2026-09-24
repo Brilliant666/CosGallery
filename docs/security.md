@@ -1,230 +1,60 @@
 ---
-title: Security
-description: The real security posture of Foldergram, including admin/viewer/public access control, mutation trust checks, and local-only caveats.
+title: 安全与数据保护
+description: CosGallery 的管理权限、插件连接、文件保护与备份边界。
 ---
 
-# Security
+# 安全与数据保护
 
-Foldergram is built for local-only and self-hosted browsing.
-Its security model is intentionally narrow even though it now supports an
-optional admin/viewer/public access gate for homelab and LAN use.
+CosGallery 当前面向本机与受控自托管环境。继承的密码保护不是多用户账号平台；部署到公网、多人隔离和云端访问并非已经验证完成的产品路径。
 
-## What Foldergram assumes
+## 访问控制
 
-- you run it on your own machine or behind a trusted local-network or reverse-proxy setup
-- the app is not exposed directly to the public internet without additional protection
-- the built-in auth story is a small role-based password gate, not a multi-user account system
-- processes and accounts with write access to the configured gallery, thumbnail,
-  and preview roots are trusted not to replace directories while Foldergram is
-  performing a delete or recovery operation
+设置中可配置管理员密码、独立 viewer 密码以及匿名 public 浏览模式。管理员拥有管理能力；viewer 可以浏览并使用共享喜欢/收藏，但不能因此执行入库、来源维护或删除。匿名公开浏览会开放可见图库，喜欢与收藏保存在该浏览器，不写入共享数据库。
 
-## Password protection
+启用密码后，应用保存带盐密码哈希和会话配置，使用签名的 `HttpOnly` Cookie。修改密码或访问模式会使旧会话失效。受保护接口及媒体响应使用不缓存策略；public 模式的公开数据会隐藏本地路径和 EXIF 等信息。Health、认证入口和限定范围的分享接口有各自规则，不是整个 API 都必须先登录。
 
-Foldergram can optionally protect the library from the Settings page with:
+未启用应用密码不是独立权限防线。不要把服务可达、管理按钮可见或同源检查视为“只允许本机本人”。当前没有逐用户账户、逐用户数据隔离、内置 TLS 终止或完整的企业安全审计；业务计划与回执虽可追溯，不等于统一安全审计系统。
 
-- an `admin` password for full access
-- an optional separate `viewer` password for browse-only access
-- an optional `public` viewer mode for anonymous browsing with local favorites
+## 网页变更请求与插件是两条入口
 
-When enabled:
+普通网页变更 API 要求 `x-foldergram-intent: 1`，并检查请求来源：
 
-- Foldergram stores one-way password hashes, salts, and session metadata in SQLite `app_settings`
-- the browser unlocks access with a signed `HttpOnly` session cookie
-- the session payload carries the current role (`admin` or `viewer`)
-- `/api` routes require that session, except for `GET /api/health`, `GET /api/auth/status`, `POST /api/auth/login`, `POST /api/auth/unlock-admin`, `POST /api/auth/logout`, and the scoped `/api/share/...` routes
-- generated media under `/thumbnails` and `/previews` also require that session unless public viewer mode is enabled
-- in `viewer_access_mode=public`, safe read routes and generated media can be browsed anonymously
-- anonymous public JSON payloads omit local media paths, post source paths, and EXIF metadata, including nested carousel items
-- anonymous public favorites stay in the browser and never write into SQLite likes
-- authenticated API and media responses are marked `Cache-Control: no-store` and `Vary: Cookie`
-- the production service worker skips caching protected thumbnail and preview responses
-- admin-only routes reject `viewer` and `anonymous` sessions with `403` or `401` depending on auth state
+- 开发/测试使用允许的 loopback 主机和开发端口。
+- production 对照提供应用的请求主机及端口；还可显式配置 `CSRF_TRUSTED_ORIGINS`。
+- 请求同时缺少 `Origin`、`Referer` 时，该中间件仅凭 intent 标记即可通过来源检查；后续认证与能力检查仍适用。这不是完整的公网加固方案。
 
-Changing either stored password or the viewer-access mode rotates the session
-version, which invalidates older sessions. Disabling password protection clears
-the stored auth settings.
+`/api/archive-bridge` 在普通网页认证/变更中间件之前注册，单独要求 loopback 连接与有效的 `x-cosgallery-bridge-token`。它允许扩展跨域通信，不应被描述为“没有网页 Cookie 就不能使用”，也不能把连接令牌当作可公开信息。反向代理配置不当可能削弱本机来源假设，不要直接把 bridge 代理到公网。
 
-## Folder shares
+插件会在用户授权流程内访问 Costuan 和网盘；这与仅浏览本地图册不同。资料留存不等于批准下载，部分来源证据也不能绕过完整目录核验、活动 claim 和明确任务范围。
 
-Folder shares are narrower than viewer sessions. They grant read-only access to
-one folder through `/share/:slug` and do not unlock Home, feed search, Reels,
-Places, Likes, Collections, Trash, Settings, scans, rebuilds, captions, cover
-editing, delete actions, or original-file downloads.
+## 限定文件夹分享
 
-Admins can create:
+文件夹分享是独立的只读授权，不是 admin/viewer 会话，也不开放整个图库、管理入口或原件下载。共享媒体接口再次核对该文件夹授权。
 
-- expiring folder links
-- unlimited folder links that can still be revoked
-- reusable per-folder passwords
+分享可用过期链接、可撤销链接或文件夹密码。链接与密码是不同授权途径：撤销链接不会顺便作废用户已知道的文件夹密码。需要撤销两者时分别处理。链接原始 token 仅在创建时返回，数据库保存哈希；分享 Cookie 独立于普通登录 Cookie。
 
-Share links and folder passwords are independent grants rather than layers of
-the same grant. Visitors with an active link do not also need the folder
-password. Revoking a link invalidates that link and its session, but visitors
-who know the reusable folder password can still create a password session. To
-remove both access paths, revoke the applicable links and change or remove the
-folder password.
+## 文件与业务保护
 
-For share links:
+- 原件读取按索引 ID 解析并限制在配置的图库根内，不接受任意客户端绝对路径直接下载。
+- 本地接纳、精确审核和继续原计划仍检查明确范围、目录/文件证据、身份、目标占用和活动任务。不能用手工改状态代替文件处理成功。
+- 删除文件前会核对配置根和路径；永久删除还使用隔离、文件身份核验和恢复记录。保护只覆盖应用自己的受控操作，不能防住另一个具有同等磁盘写权限的进程在检查后恶意替换目录。
+- “删除未使用博主”仅适用于已停用且无任何阻断引用的手工身份，不级联删除图库原件。详见[删除边界](./unused-manual-creator-deletion.md)。
+- 原始文件、Windows 回收站、应用回收站和精确审核隔离区不是同一个概念。看清操作的具体文件和去向，不按同名、同 NO 或相同数量自动删除。
 
-- the raw token is generated once and returned only in the creation response
-- the share URL places the raw token in the URL fragment as `#token=...`
-- SQLite stores only a SHA-256 token hash plus a short token prefix
-- expired and revoked links stop creating or validating share sessions
+保持图库、等待区、数据库和私有材料目录只对可信账号开放；正式文件处理期间避免外部程序继续改写所选范围。
 
-After a visitor unlocks a share, Foldergram sets a separate signed `HttpOnly`
-cookie named `foldergram_share_session`. That cookie is not an admin or viewer
-session. The server re-checks the underlying link or folder-password version
-before granting folder access, so revoking a link, expiring a link, changing a
-folder password, or removing a folder password invalidates older share grants.
+## 解压密码与连接凭据
 
-Shared media does not use raw `/thumbnails/...` or `/previews/...` URLs in API
-payloads. Shared folder payloads point to `/api/share/images/:id/thumbnail` and
-`/api/share/images/:id/preview`, and those routes check that the request has a
-grant for the image's folder before serving or lazily generating the derivative.
+解压密码是可编辑的入库配置，不是插件连接密钥。管理员打开“入库设置与环境工具”时可以读取并修改有效密码，普通列表只显示是否配置。密码不进入 URL、普通日志或导出。明确清空与保留原值的语义见[密码设置](./local-ingest-password-settings.md)。
 
-## Mutation protection
+本地保存的解压密码使用 AES-256-GCM 加密，密文在数据库，独立 key 在 `DATA_ROOT/private/local-ingest-archive-password.key`。备份需同时保留两者，并作为敏感恢复材料保护；二者一起泄漏即可解密。key 丢失或密文损坏时拒绝静默回退，不应随意生成新 key 覆盖旧文件。
 
-All mutating API routes pass through `requireTrustedMutationRequest`.
+Windows 保护依赖目录和文件 ACL，不能把 POSIX 创建权限视为 Windows ACL 或 DPAPI 保证。`.env`、数据库、密钥、浏览器扩展存储、Cookie、连接令牌和真实业务导出均不应提交到 Git 或公开报告。
 
-That middleware does two things:
+## 备份和部署建议
 
-1. Requires `x-foldergram-intent: 1`
-2. Rejects non-loopback `Origin` or `Referer` values when those headers are present
+使用[一致性备份](./how-it-works.md#备份与恢复)，同时保护原件、配置和敏感恢复材料。缩略图不是原件备份。不要为修一个历史状态恢复旧整库、执行 down、清空迁移记录或清理真实任务历史。
 
-Allowed hostnames are:
+优先使用 loopback；确需局域网或反向代理访问时，先配置认证、可信来源和 HTTPS，并核对代理头与 bridge 暴露范围。纯 HTTP 不保护网络中的密码与 Cookie。现有进程级简单限流用于减少基础滥用，不能代替网络隔离或公网安全设计。
 
-- `localhost`
-- `127.0.0.1`
-- `::1`
-
-Allowed ports are:
-
-- `DEV_SERVER_PORT` and the reserved `DEV_CLIENT_PORT` through `DEV_CLIENT_PORT + 3` range in development or test
-- `SERVER_PORT` in production, with loopback origins or the exact host that served the app accepted for browser mutations
-- explicit extra origins can be allowed through `CSRF_TRUSTED_ORIGINS`
-
-## What this protects against
-
-With password protection enabled, this design helps reduce opportunistic
-browsing of the library from other machines on the same network.
-
-Separately, the mutation checks help reduce accidental or cross-site
-browser-triggered mutations from untrusted origins.
-
-It is especially relevant for:
-
-- feed and folder reads when password protection is enabled
-- generated thumbnails and previews when password protection is enabled and public mode is off
-- delete actions
-- like toggles
-- manual rescans
-- rebuild operations
-- Settings-only auth changes
-
-## Path confinement
-
-Foldergram does not serve arbitrary filesystem paths from the client.
-
-### Original-file serving
-
-`GET /api/originals/:id`:
-
-- looks up the post by numeric ID
-- resolves the stored absolute path
-- confirms that path is still within `GALLERY_ROOT`
-- confirms the file still exists
-
-### Scan error reports
-
-Per-run full scan error reports are written under `<DATA_ROOT>/scan-errors/`
-when skip mode records supported-media failures.
-
-- report paths are surfaced through admin-only scan details
-- viewer-safe scan responses force `error_text` to `null`
-- the report directory is kept separate from `/thumbnails` and `/previews`, so those files are not exposed through derivative static serving
-
-### Delete actions
-
-Delete flows resolve target files and directories inside configured roots before
-removing them. If a stored path falls outside the expected root, the operation
-throws instead of deleting blindly. Permanent deletion also rejects symbolic-link
-path components, verifies file and parent-directory identities around each
-filesystem mutation, and serializes its own scans, rebuilds, lazy derivative
-generation, recovery, and deletion work.
-
-This confinement guarantee covers Foldergram's own concurrent operations and
-filesystem state present when an operation is validated. It is not a security
-boundary against another process or account that can write to those same roots
-and deliberately swap a checked directory at the exact moment of a rename or
-unlink. Preventing that race requires platform-specific directory-handle-relative
-filesystem operations that Foldergram does not currently use. Keep these storage
-roots private to the account running Foldergram and pause other filesystem writers
-during permanent deletion or recovery.
-
-## Storage availability behavior
-
-On startup, Foldergram checks:
-
-- gallery directory
-- thumbnails directory
-- previews directory
-- database directory
-
-If the database directory is unavailable, it falls back to an in-memory
-database. If the gallery or derivative directories are unavailable, the library
-is marked unavailable and the UI receives explicit storage-state information.
-
-This is a resilience measure, not a security feature.
-
-## Rate limiting
-
-Foldergram includes small in-memory rate limiters for:
-
-- authentication attempts
-- folder share token and password unlock attempts
-- admin mutation routes such as rescan and rebuild operations
-
-These limiters are process-local and intentionally simple. They are useful for
-basic abuse reduction, not for hardened distributed deployments.
-
-## Important limitations
-
-Foldergram does **not** currently provide:
-
-- multi-user authentication
-- per-user authorization
-- TLS termination
-- audit logging
-- hardened remote deployment defaults
-- external identity provider integration
-- per-user isolation
-
-## Practical advice
-
-Use Foldergram like a local app:
-
-- use strong, different admin and viewer passwords if you expose it on a homelab or LAN
-- remember that public viewer mode exposes the library to anyone who can reach the app
-- keep it on loopback unless you know exactly how you are proxying and protecting it
-- terminate HTTPS upstream if the app is reachable off-box
-- remember that on plain HTTP, both the password and session cookie are visible to anyone who can sniff that local network traffic
-- do not assume the password layer and mutation checks are a full internet-facing security boundary
-- treat delete actions as destructive and permanent
-
-## A precise caveat about headers
-
-If a mutating request omits both `Origin` and `Referer`, the middleware still
-accepts it as long as `x-foldergram-intent: 1` is present. That is acceptable
-for the current local-only model, but it is one reason these checks should not
-be described as a full remote-hardening story.
-
-## What Foldergram does not try to be
-
-Foldergram is not attempting to be:
-
-- a cloud photo product
-- a multi-user NAS portal
-- a public media server with account management
-- a zero-trust network service
-
-The implementation is much closer to a private local gallery with a browser UI.
+数据库目录不可用时，当前实现会退到内存数据库并写日志。这是降级行为，不是数据已经持久保存；发现此状态应先修复路径，不能继续真实入库。图库或派生目录不可用也应按存储错误处理，而不是关掉校验继续运行。

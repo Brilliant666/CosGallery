@@ -1,5 +1,7 @@
 # 本地入库双博主真实基线
 
+> 历史资料：历史真实验证记录，不是重复执行这些目录的指令；当前流程见[Costuan 入库](local-ingest-closed-loop.md)。
+
 记录时间：2026-09-02（Asia/Shanghai）
 任务：`LOCAL_INGEST_CLOSED_LOOP_V1_TWO_CREATOR_E2E`
 

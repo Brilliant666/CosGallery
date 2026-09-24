@@ -1,131 +1,91 @@
-# CosGallery own resource catalog
+# 自有资源目录
 
-The admin ledger's resource-catalog workspace describes confirmed **local Works**,
-not the creator's complete worldwide publication history. It is a read-only view:
-opening, filtering, copying and exporting it do not scan disk, match sources,
-create Works, plan downloads or rename local directories.
+资源目录描述 CosGallery 当前已编目的**本地 Work**，不是某位博主在全世界发布过的完整作品列表。它是可重建的只读展示数据，不是第二套手工维护的作品库。
 
-## Identity and numbering
+从**图库账本 → 资源目录**进入时，按明确的范围上下文展示：
 
-- Work IDs remain the identity. A same-title pair of different Works remains two
-  entries; confirmed copies of one Work occupy one entry.
-- An explicit primary is authoritative. The reader does not promote a secondary
-  when the primary is temporarily unavailable. A single unambiguous legacy copy
-  can provide the existing implicit representative; ambiguous cases stay visible
-  for review rather than choosing a copy by title or number.
-- Existing legacy local records can resolve their indexed Post by the unique
-  exact creator-directory/work-relative path relationship. This does not persist
-  a new binding and is not a title/NO-based source match.
-- Catalog display order follows the persisted gallery folder order: `sort_timestamp`
-  and Post ID, both ascending for oldest-first or descending for newest-first.
-  Missing reliable sort evidence is not replaced with the current time or an
-  external source date.
-- Numbering always uses ascending `sort_timestamp`, then ascending Post ID and
-  Work ID as deterministic tie breakers, independently of display direction.
-  Changing oldest/newest display order does not change a Work's NO. Unarranged
-  rows remain unnumbered at the end in either direction. TXT labels numbering
-  and display order separately; CSV and filtered exports retain the same NOs.
-- Numbering runs over the creator's entire eligible collection before search,
-  status filtering and pagination. Minimum three digits, with no truncation past
-  999. A filtered result keeps its original number. New insertions may shift NOs,
-  never Work/LocalWork/Post/Image IDs or paths.
-- A NO is a presentation value, not a source key, filename, task identifier or
-  permanent identity. Migration 000022 saves this rebuildable value only in the
-  derived catalog rows; it never writes numbering into Work or source records.
+- 没有指定博主或全库范围时，默认查找、选择单个博主，不自动展开全库作品。
+- 从博主库的博主卡片进入，直接带入对应博主。
+- 主动点击“查看全部作品”入口时，才进入全库范围，页面显示“全部博主”。
+- 已带有有效 `creatorId` 或 `scope=all` 的资源目录链接，按其上下文恢复；同时存在时以 `creatorId` 为准。
 
-## Local facts and source facts
+打开、搜索、翻页、查看详情和导出，不会扫描磁盘、创建 Work、匹配来源、规划下载或改文件名。
 
-Counts and media bytes belong to the representative copy's valid indexed image
-and video members. Secondary copies, advertisements, ordinary attachments,
-retained unsupported originals and remote archive declarations are not summed
-into these bytes. `LocalWork.total_bytes` is not used as a media-size shortcut.
-Unknown statistics stay unknown. A retained last index is labelled as such, not
-presented as a fresh disk inspection.
+## Work、主副本与额外副本
 
-Temporarily inactive records are distinguished from explicit trash/deletion.
-Historical readable Posts without a reliable Work are disclosed as identity gaps;
-reading does not repair them. Source-only Works do not acquire local catalog NOs.
+- **规范博主**：统一的本地身份，可以有已登记别名和多个本地目录。
+- **Work**：独立作品身份，链接使用稳定 ID。同名不同 Work 仍是两行。
+- **本地副本（LocalWork）**：同一 Work 可以有多个目录副本，在资源目录中仍只占一行。
+- **主副本**：提供代表封面、统计与排序依据。已明确主副本暂不可用时，不会自动改用次副本。
+- **来源关系**：保留平台标题、编号与映射依据，不代替本地 Work 身份；不同来源编号可能对应同一 Work。
 
-Source platform, original title and source numbering remain separate from the
-canonical Work title and CosGallery NO. No source does not mean a website lacks
-that work. Multiple saved sources remain within the same Work row.
+没有显式主副本的历史记录，仅在单一可靠副本等现有规则允许时使用代表项。有歧义则明确展示，不按名称、编号或大小猜测。
 
-## Navigation and consistency
+## 自有 NO 如何产生
 
-The roster action and workspace selector open the same component/data service.
-The selected creator is addressable through ledger query parameters. The roster
-stays mounted so its current filters and page survive workspace navigation.
-Resource reads are lazy: other workspaces do not fetch a resource catalog.
+每位博主在自己的完整可编目集合中，先按**生效排序时间从早到晚**编号；时间相同按稳定 Post ID、Work ID 规则确定顺序，再应用页面升降序。
 
-The default workspace shows all creators; the roster action limits the same page
-to one creator. Global search matches title, creator name/aliases and original
-copy directory names. Each creator retains its own NO namespace.
+因此：
 
-Migration 000022 adds a persistent, rebuildable read model. SQLite triggers mark
-affected creator generations in the same transaction as the facts. A single
-background worker reads one consistent generation and atomically publishes its
-lightweight rows, copy details and summaries. Ordinary requests read completed
-rows; they do not generate catalogs or aggregate media. Restart resumes pending
-updates and reuses completed rows. See [invalidation coverage](resource-catalog-invalidation.md).
+- 搜索、状态筛选、分页和升降序不重新编号；第二页不从 NO.001 开始。
+- 全库视图仍使用各博主自己的 NO，不产生跨博主连续编号。不同博主都可以有 NO.001。
+- 补入作品或确认排序时间后，该博主后续 NO 可能顺移；Work ID、路径、原目录名和来源编号不随之修改。
+- 编号至少三位，超过 999 不截断。
+- 无可靠排序依据的记录显示**未编排**，不随意补当前时间或来源页面更新时间。
 
-Pagination, expanded details and exports carry a version token; a mismatch
-requires refresh rather than combining numbering states. The UI distinguishes
-ready, updating, uninitialized and failed states, and only polls while pending.
-It retains an already displayed version when a newer version is found. Exports
-require a complete current scope. A failed update keeps previous completed data
-and is retried without a maintenance button. Live deletion/ownership guards may
-hide a now-invalid row before its replacement publication; pending summaries are
-explicitly still the last completed summaries, not a new complete snapshot.
+生效时间包含已确认的作品级排序决定，图库与资源目录共用。按来源顺序估算的时间标为**估算**，仅为编排依据，不是真实发布日期或拍摄日期；采用值固定保存，不随浏览重新插值。详细机制见[确认排序时间](confirmed-work-sort-time.md)。
 
-## Copy and export
+## 表格、搜索与详情
 
-The UI distinguishes full scoped catalog from the current filtered result; neither
-means the current page only. Text includes creator, NO, canonical title and local
-media counts/capacity. Unknown values and unarranged entries are explicit.
-TXT adds generation time, order, scope and the dynamic-NO explanation. CSV retains
-stable IDs, byte values, original directory names and saved source summaries.
-Global exports include creator name/ID and stable Work ID. The CSV download also
-delivers its matching `.metadata.json` with revision, scope, order, generation time
-and row count; a visible metadata download link remains if the browser blocks a
-second automatic download. Save both files together.
+全库 / 单博主视图支持作品标题、博主名 / 别名和原目录名搜索，及博主、本地状态、来源关系筛选。全库行中显示博主，不能仅凭 NO 识别作品。
 
-CSV cells are quoted/escaped and formula-leading values are made inert. Management
-paths, credentials, extraction codes and passwords are not export fields. Source
-links are restricted to safe HTTP(S) URLs without credentials or private query data.
-No export modifies master data or the local filesystem names.
+可用作品的相对顺序与同口径图库一致，但目录可能还包含不可用或未编排记录，不应强求总行数与默认图库卡片数相同。
 
-## Access and scope
+展开详情按 Work 读取副本和来源摘要；主副本 / 次副本链接继续使用原图库与 Viewer。列表不逐行请求完整媒体，不需要浏览全套图片来编目。
 
-List, details, creator selection and export are admin APIs protected on the server.
-Nothing is added to public gallery or sharing responses. The selected album links
-use the existing library routes and retain primary/secondary navigation behavior.
+| 提示 | 含义 |
+| --- | --- |
+| 未关联来源 | 本地尚无可靠对应，不是“网站没有此作品” |
+| 不可用 | 已记录的本地副本当前不可用；不是自动删除或自动换主副本 |
+| 未编排 | 缺少可靠生效排序依据，保留记录但不猜 NO |
+| 历史身份缺口 | 存在可读取 Post，却没有可靠 Work 关系；读取不会补建作品 |
+| 明确删除 / 回收 | 按既有可见性规则处理，不伪装成暂不可用 |
 
-Development uses an independent worktree and isolated test data. Production4141,
-its database/caches, user IDE files, ingestion, recovery and source automation are
-outside this implementation's mutation scope. This change is delivered as an
-unmerged, undeployed review PR.
+图片数、视频数与媒体字节来自代表副本的有效索引成员，排除次副本、广告、普通附件和保留的未支持原件。来源声明与本地实测分别显示；未知值保持未知，沿用旧索引时不能视为刚完成磁盘检查。
 
-## Application entry points
+## 持久目录与版本
 
-- `ArchiveCatalogView` mounts `ResourceCatalog` only for the resource workspace.
-  Both the roster action and workspace tab use
-  `/archive-catalog?workspace=resources&creatorId=...`.
-- `ResourceCatalogBuilder` owns scoped generation, copy selection and numbering.
-  `ResourceCatalogReadModel` captures fact generations and atomically publishes.
-  `ResourceCatalogService` reads published rows, filters and exports. None calls
-  the fulfillment evaluator, `hydratePostItems`, or enumerates media on disk.
-- The management-capability-protected API prefix is
-  `/api/admin/archive-catalog/resource-catalog`:
-  `GET /creators`, `GET /all`, `GET /:creatorId`, `GET /:creatorId/works/:workId`,
-  and `GET /all|:creatorId/export?format=txt|csv&scope=all|filtered`.
-  Global detail reads include `revisionScope=all`; direction is `order=oldest|newest`.
-- Subsequent pages, details and exports carry a SHA-256 token of small version
-  identifiers, not a freshly computed content hash.
-  Export requires it. A changed snapshot returns HTTP 409
-  `RESOURCE_CATALOG_CHANGED`; invalid transport parameters return 400.
-- Migration 000022 creates three derived tables, their indexes and fact-change
-  triggers. No public write endpoint or new business task is added. The background
-  worker writes only rebuildable projections. It never changes acquisition evidence.
+迁移 `000022` 建立独立派生表和变更触发器。事实变化在同一数据库事务中标记受影响博主；后台目录 Worker 按一致代次生成并一次发布。普通列表、详情、翻页与导出直接读已完成记录，不再每次构建全博主快照或聚合全媒体。
+
+页面区分**已完成、正在更新、尚未初始化、更新失败**。首次编目完成前不能把部分结果称为完整全库；失败时保留上一份完整结果和待更新状态。启动后复用已完成目录并恢复待更新工作，不要求用户每次手工重建。
+
+列表、后续页、详情和导出使用同一版本依据。发现版本变化需刷新，不能拼接两份编号；导出冲突返回 `409 RESOURCE_CATALOG_CHANGED`。已显示旧版本可以保留提示，删除 / 归属保护仍即时生效，旧汇总不代表新的完整事实。
+
+目录 Worker 只读数据库事实并写派生结果，和图库启动扫描、Costuan 待入库补偿扫描不是一回事。实现与覆盖见[失效机制](resource-catalog-invalidation.md)和[读取模型历史测量](resource-catalog-read-model-performance.md)。
+
+## 导出
+
+可复制或导出**完整当前范围**、**当前筛选结果**；“完整”不是当前一页。支持 TXT 和 CSV，全库导出包含博主名称 / ID 及稳定 Work ID，多来源或多副本不重复占作品行。
+
+- TXT 包含生成时间、范围、编号 / 展示顺序和动态编号说明。
+- CSV 保留稳定 ID、数值字节数、原目录名及来源摘要，并提供对应 `.metadata.json`，记录版本、范围、顺序和行数。
+- 保存 CSV 时一并保存 metadata。浏览器阻止第二个自动下载时，页面仍提供元信息下载链接。
+- 编号与同版本页面一致；数据变化导致冲突时刷新后重新导出，不把新 CSV 覆盖历史文件后声称旧快照已修正。
+- 导出不包含绝对管理路径、凭据、提取码或密码；CSV 字段转义并防护公式前缀。
+
+入口和所有目录 API 要求管理权限，目录数据不附加到公开图库或分享响应。
+
+## 实现入口
+
+`ResourceCatalogBuilder` 负责受限范围生成、代表副本与编号；
+`ResourceCatalogReadModel` 负责代次捕获和原子发布；
+`ResourceCatalogService` 读取已发布行、详情、筛选与导出。
+
+API 前缀为 `/api/admin/archive-catalog/resource-catalog`，提供 `/creators`、`/all`、`/:creatorId`、`/:creatorId/works/:workId` 及相应导出。版本令牌基于轻量版本标识，不是每次重算目录内容哈希。详情不枚举磁盘媒体；派生目录不替代来源领取和接纳时的权威判断。
+
+## 历史验证阅读方式
+
+以下保留 PR30 当时的隔离测量。它描述的是早期按请求生成实现，**不是当前持久读取模型，也不是当前运行环境的性能承诺**。测试数量、端口与当时“不重启生产”均是历史事实。本次文档整理没有重新执行业务或性能测试。
 
 ## Original PR30 validation (historical)
 
@@ -171,7 +131,7 @@ numbering/export beyond 999 and fixed-count scoped database reads, not the cost 
 every possible creator's real media membership. Media aggregates remain proportional
 to the selected creator's indexed members; there is no permanent result cache.
 
-## Isolated production-build measurements
+## Historical PR30 isolated production-build measurements
 
 Measured with Node 24.19.0, a synthetic creator with 1,005 local Works and about
 1,008 indexed media members, including 100 legacy copies without explicit Post

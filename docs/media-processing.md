@@ -5,6 +5,8 @@ description: Supported formats, derivative generation rules, and video playback 
 
 # Media Processing
 
+> 底层媒体参考：本页介绍继承的解码与派生行为。CosGallery 的身份与入库流程见[本地入库与审核](local-admission-web.md)。受限 JPEG 的原件保留不是成功解码；PDF 附件也不会变成普通图片。媒体生成与资源目录数据库编目是不同工作。
+
 Foldergram generates derivatives so feed and detail views can stay fast without
 touching original files on every request. Depending on configuration, those
 derivatives are either created during scans or lazily on first request and then

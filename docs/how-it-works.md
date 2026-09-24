@@ -1,330 +1,95 @@
 ---
-title: How It Works
-description: The indexing model, storage layout, scan lifecycle, and feed logic behind Foldergram.
+title: 数据与运行原理
+description: CosGallery 的作品身份、目录读模型、文件存储、启动流程与备份边界。
 ---
 
-# How It Works
+# 数据与运行原理
 
-## Architecture at a glance
+CosGallery 以规范博主、独立作品和自己的本地图库为核心。外部来源是资料与获取途径，不是作品身份的唯一依据。普通操作见[本地入库](./local-admission-web.md)和[博主入库导航](./creator-admission-navigation.md)；本页解释数据为什么这样组织。
 
-Foldergram has two deliberate layers:
+## 三层数据，不是三套作品库
 
-1. A scanner/indexer that walks the gallery tree, updates SQLite, and generates derivatives.
-2. A runtime API and SPA that read indexed data from SQLite and serve static derivative assets.
+| 层次 | 保存内容 | 用途与边界 |
+| --- | --- | --- |
+| 权威业务数据 | 规范博主及别名、Work、LocalWork、媒体索引、来源对应、接受/审核决定、计划与执行历史 | 决定身份、归属、主副本、是否可执行和具体来源是否本地满足 |
+| 资源目录读模型 | 按 Work 的轻量目录行、主副本统计、每博主 NO、完成版本、待更新/失败状态 | 支持目录列表、搜索、分页和导出；可重建，不能代替执行时的业务校验 |
+| 文件 | 原始图片/视频、等待区资源、保留原件/附件，以及缩略图/预览缓存 | 数据库索引不是原件备份；派生缓存也不是入库事实 |
 
-That separation is the core performance decision in the project.
+一位博主可以对应多个本地目录。一个 Work 可以有主副本和额外副本，也可以对应多个来源条目；同名不一定是同一 Work，来源编号不同也不一定是不同作品。主副本不可用时，不自动选另一份代替它。
 
-## Source discovery model
+底层仍保留 Foldergram 的 `folders`、`images`、`posts` 和 `post_items` 等索引。图库卡片、物理媒体成员和独立 Work 是不同统计单位，不能仅凭其中一个总数推算另外两个。
 
-Foldergram recursively walks `GALLERY_ROOT` and applies these rules:
+## 网页、CLI 与插件的职责
 
-- Hidden paths are skipped.
-- Managed storage paths under the gallery root are skipped.
-- Folder exclusions from `GALLERY_EXCLUDED_FOLDERS` and saved `General Settings` rules are skipped.
-- Any non-hidden folder that directly contains supported media becomes an indexed album.
-- Files directly in `GALLERY_ROOT` are ignored.
-- Nested folders are treated separately from their parent folders.
-- In the default reserved-stories mode, a child `stories/` folder beneath an indexed owner folder is withheld from normal album discovery and scanned separately as story data.
+- 网页通过管理接口生成预览、确认范围、提交后台接纳并查看结果；普通本地入库不需要手写 JSON 或使用 CLI。
+- 网页与维护 CLI 复用接纳、身份、来源满足和精确审核服务。计划、执行回执、文件处理决定保存在数据库，不以某一页是否打开为准。
+- Costuan 插件访问外部网站和网盘，并通过本机 bridge 接口交换明确范围的资料/任务。网页、插件、百度客户端下载和本机解压入库各有职责；网盘暂存成功不等于本地入库成功。
+- 来源资料可以先保留原文、片段和批次出处。它不自动变成 Work，不自动取得完整核验状态，也不自动证明某一来源已经被本地版本满足。
 
-## Reserved stories folders
+详见[来源资料](./source-evidence-local-admission.md)与[本地版本复用](./local-first-source-reuse.md)。
 
-By default, Foldergram treats `AppFolder/stories` as a reserved subtree for
-that app folder.
+## 持久化目录如何更新
 
-The scan model is:
+相关事实写入时，SQLite 触发器在同一事务内标记受影响博主；CLI 和独立数据库连接也受这些触发器覆盖。触发器不扫描磁盘、不解码媒体，也不当场重建整份目录。
 
-- direct media inside `AppFolder/stories` becomes a `story_root` folder used for the avatar story set
-- each direct child directory under `AppFolder/stories` becomes one `story_capsule`
-- nested media below that direct child directory is collected recursively into the same capsule
-- reserved story folders do not become normal app folders while this mode is enabled
-- if the reserved root has no direct media but highlight capsules exist, Foldergram synthesizes an avatar-story entry from recent highlight media
+目录 Worker 读取一致的事实版本，按博主合并更新，完整生成后一次发布。发布前再次核对代次：计算期间有新变更时，不清掉新变更；失败时保留上次完整结果和待更新/错误状态。改动归属时会考虑相关旧、新博主。
 
-This behavior is controlled by the Settings toggle `Treat stories folders as
-normal app folders`. When that legacy mode is enabled, `stories/` folders are
-discovered like ordinary app folders again.
+正常目录列表、搜索、翻页和导出读取已发布结果，不先重算整库快照。详情按对应 Work 读取所需内容，不为展开一行重建整个博主目录。首次未初始化、正在更新和失败必须与“完整目录”区分；分页和导出按版本核对，冲突时刷新，不拼接不同编号版本。
 
-## Excluded folders
+正常缓存生成不会仅因文件被访问或通用更新时间变化而让所有目录失效。重启后复用完成结果并继续处理持久化待更新项。具体依赖和发布规则见[目录失效机制](./resource-catalog-invalidation.md)。
 
-Foldergram merges exclusion rules from:
+## 编号与排序
 
-- `GALLERY_EXCLUDED_FOLDERS`
-- custom rules saved from `Settings -> General Settings`
+资源目录在每位博主范围内按生效作品排序时间从早到晚编号，同时间沿用稳定身份顺序，之后才应用页面的升序/降序。搜索、分页和全库视图不重新编号，不同博主可以各有 NO.001。
 
-Rule semantics are intentionally simple:
+新增作品或确认排序时间变化可能让该博主后续 NO 顺移。NO 不写回 Work ID、来源编号或文件名。经确认的估算值只是固定的排序依据，不是恢复出的拍摄时间或真实发布日期。详见[资源目录](./own-resource-catalog.md)与[确认排序时间](./confirmed-work-sort-time.md)。
 
-- values without a slash match folder names anywhere in the gallery tree
-- values with a slash match one exact relative path below `GALLERY_ROOT`
+## 存储布局
 
-Excluded folders are skipped during startup scans, rescans, and watcher-driven
-discovery work. Changing the saved runtime rules updates `app_settings`
-immediately, but a follow-up scan from `Settings -> Scan & Library` is still
-required so already-indexed matches can be soft-removed from the library.
-
-## Storage layout
-
-By default the app uses:
+下列是默认布局，路径均可按[配置说明](./configuration.md)调整，不要求某个盘符：
 
 ```text
-data/
-  gallery/       # originals
-  db/
-    gallery.sqlite
-  thumbnails/    # asset-key-sharded thumbnail derivatives
-  previews/      # asset-key-sharded preview derivatives
-  scan-errors/   # created on demand for full scan error reports
+DATA_ROOT/
+  gallery/       # 默认 GALLERY_ROOT：图库原始媒体
+  db/            # 默认 DB_DIR：gallery.sqlite 与可能存在的 SQLite 辅助文件
+  thumbnails/    # 默认 THUMBNAILS_DIR：缩略图缓存
+  previews/      # 默认 PREVIEWS_DIR：图片/视频预览缓存
+  private/       # 本地敏感恢复材料，不作为静态资源提供
+  scan-errors/   # 按需生成的扫描错误报告
 ```
 
-The database schema includes:
+等待区和 Costuan 解压工作区不是缩略图缓存。后端读取的是**运行后端的那台机器**能访问的目录；把网页部署到远端并不会让服务器自动访问浏览器用户的本地盘符。
 
-- `folders`
-- `images`
-- `places`
-- `scan_runs`
-- `app_settings`
-- `folder_scan_state`
-- `likes`
-- `collections`
-- `collection_items`
+浏览主要使用数据库索引；这不等于“所有接口都不读磁盘”。列举等待区、重新检查文件、接纳/审核、原件读取和缺失派生生成会按对应操作访问文件。普通图集列表保留摘要读取，打开所选图集才取完整媒体明细，Viewer 在当前图集内复用详情。
 
-## What is stored per indexed post
+## 启动时的几种工作
 
-The `images` table stores:
-
-- a stable `asset_key` used for derivative storage
-- normalized relative and absolute paths
-- file size and `mtime_ms`
-- width and height
-- display orientation and animation flags when relevant
-- media type and MIME type
-- duration for videos
-- a fingerprint built from `relative_path + file_size + mtime_ms`
-- `sort_timestamp`
-- `taken_at` and `taken_at_source`
-- an optional `place_id` for GPS-resolved photos
-- stored derivative paths
-- playback strategy for videos
-- soft-delete state including `deleted_at`
-- trash state including `trashed_at`
-
-## Stable ordering
-
-Foldergram preserves stable sort order across rescans.
-
-If a file already exists in the database, the scanner keeps its prior
-`sort_timestamp`. If not, it falls back to:
-
-1. the existing `first_seen_at`, if present
-2. the current file `mtime_ms`
-
-That prevents older posts from jumping around every time the library is rescanned.
-
-## Soft delete and reactivation
-
-Foldergram does not hard-delete missing indexed files during scans.
-
-Instead it:
-
-- marks missing files as `is_deleted = 1`
-- records `deleted_at`
-- keeps their historical row data
-- reactivates them if the same relative path reappears later
-
-Direct user-triggered permanent delete actions are different. Foldergram first
-moves the source files and derivatives into private quarantine areas within their
-configured storage roots. It then removes the post and related index records in
-one database transaction. If either step fails before the transaction commits,
-the quarantined files are restored and the post remains unchanged.
-
-## Trash versus permanent delete
-
-Foldergram also supports a separate user trash state for admin delete flows.
-
-- moving a post to Trash keeps the original file on disk
-- trashed posts are hidden from feed, folder, detail, likes, and collections surfaces
-- restoring a trashed post makes it visible again without a rescan
-- permanently deleting a post removes the original file plus derivatives
-
-Interrupted permanent deletions are recovered automatically at server startup
-and before another permanent deletion. If the database still contains the post,
-Foldergram restores its quarantined files. If the database transaction already
-committed, Foldergram keeps the post deleted and retries quarantine cleanup.
-Only empty source and derivative directories are pruned. Scans, index rebuilds,
-thumbnail rebuilds, lazy derivative generation, and permanent deletions run one
-at a time so indexing or derivative work cannot race a deletion or remove its
-quarantine data.
-
-This is separate from scan-time `is_deleted`, which tracks missing files on disk.
-
-## Folder shortcuts during scans
-
-To avoid unnecessary work, Foldergram records per-folder scan signatures in
-`folder_scan_state`. If a folder signature still matches and metadata coverage is
-complete, the scanner can skip reprocessing every file in that folder.
-
-That shortcut is bypassed when Foldergram needs to repair unchanged derivatives
-or when gallery-root assumptions no longer match.
-
-## Full scan lifecycle
-
-During a full scan, Foldergram:
-
-1. Walks the gallery tree to discover source folders.
-2. Stats supported files in those folders.
-3. Resolves folder records and stable slugs.
-4. Scans reserved `stories/` subtrees for owner folders when reserved-stories mode is active.
-5. Reads or refreshes media metadata.
-6. Reconciles eligible file moves so the same row, likes, and derivative paths can survive path changes.
-7. Marks missing indexed rows as deleted.
-8. Queues derivative work for changed or missing outputs.
-9. Depending on `SCAN_MEDIA_ERROR_MODE`, either records and skips supported-media failures or fails fast on the first one.
-10. Performs deferred stale-derivative cleanup after successful scans.
-11. Writes scan status to `scan_runs` and, when needed, a per-run full scan error report.
-
-## Scan progress phases
-
-Foldergram reports long-running scans in three phases:
-
-- `migration` checks previously indexed rows, backfills missing `asset_key` values, and moves, repairs, or regenerates legacy derivatives before fresh indexing begins
-- `discovery` walks the gallery tree, resolves folders, refreshes metadata, and reconciles safe file moves
-- `derivatives` processes queued thumbnail and preview jobs after discovery has identified the required work
-- completed runs can finish as `completed_with_errors` when skip mode records supported-media failures
-
-Only migration and derivative work have a fixed total upfront. Discovery still
-reports discovered and processed folder and post counts, but the client keeps
-that phase indeterminate because the final discovery total can keep growing
-while more folders are found.
-
-## Incremental scans and watching
-
-The project includes a chokidar watcher for development. It batches changes with
-a `700ms` debounce window and chooses between:
-
-- a full rescan for directory add/remove events
-- an incremental scan for file-level changes
-
-The watcher is not part of request handling, and request handlers never scan the
-filesystem directly.
-
-## Feed behavior
-
-The home feed supports three modes:
-
-| Mode | Behavior |
+| 阶段 | 实际职责 |
 | --- | --- |
-| `recent` | Uses `taken_at` when available, otherwise `sort_timestamp`, then diversifies bursts from the same folder. |
-| `rediscover` | Surfaces posts older than 180 days and prioritizes liked items within that older pool. |
-| `random` | Uses a deterministic seeded shuffle so a browsing session stays stable while paging. |
+| 数据库迁移与校验 | 正常入口应用待执行增量迁移；检查结构、关系、外键和 SQLite 完整性。单个服务进程的无迁移/修复初始化完整校验一次；升级或修复可能需要前后检查，不能只比较次数 |
+| 图库启动检查 | 已有索引通常记录 `Startup scan skipped`；空索引会启动首次图库扫描。图库根路径变动还有位置校验，不能把“已跳过”当作所有新安装的固定行为 |
+| Costuan 本地启动补偿 | `LOCAL_INGEST_STARTUP_SCAN=false` 关闭等待区补偿扫描；中断 Job 状态恢复仍独立执行，不等于自动重跑原任务 |
+| 目录 Worker | 在启动相关写入之后启动独立 SQLite 连接，更新待处理的派生目录；不扫描原媒体、不生成图片缓存 |
 
-## Reels behavior
+`pnpm start` 当前会先运行独立 `dist/scripts/migrate.js`，再运行 `dist/index.js`；后者建立数据库连接时也会调用迁移检查。因此不能把服务进程的 `validationRuns=1` 扩大为整个 npm script 链只检查一次。这与直接运行配套 production `index.js` 的历史进程记录不同，本轮文档不修改启动脚本。
 
-The `/reels` route reads only indexed video candidates from SQLite. It does not
-scan the filesystem on request.
+HTTP 可用与首次目录全部完成是两个时点。数据库校验失败应阻止正常启用；Worker 失败则保留旧完整目录和待更新状态。不要仅凭 Health 成功判断编目、入库或恢复全部完成，也不要承诺固定启动秒数。
 
-The page opens with the app-wide default configured in Settings and does not
-provide an inline mode switch of its own.
+## 文件去向与历史
 
-| Mode | Behavior |
-| --- | --- |
-| `recommended` | Builds a seeded queue from indexed videos using freshness, likes, folder-affinity signals from recent navigation, portrait fit, duration fit, and a small deterministic jitter. It also penalizes immediate repeats from the same folder when alternatives exist. |
-| `recent` | Uses newest indexed videos first. |
-| `random` | Uses a deterministic seeded shuffle so the queue stays stable while paging. |
+- 普通本地接纳会按确认计划把作品目录移入图库并建立索引，不是“原件永不移动”。
+- 新接纳中明确批准的广告按该计划的回收策略处理；精确审核中可恢复移出的文件使用相应隔离路径，两者不能混称为永久删除。
+- JPEG 解码上限触发后获准保留的原件，仍是保留文件，不计作已正常解码图片；PDF 按附件规则处理，正常 WebP 按媒体处理。
+- 图库回收站状态、扫描发现原件缺失、Windows 回收站和永久删除是不同机制。图库回收站先隐藏索引项；永久删除另有实际文件删除和恢复保护。
+- 历史失败/暂缓记录保留当时事实；有可靠后续关联时展示“后续已完成”，不把旧 attempt 改写为成功，也不应重新执行已完成项。
 
-## Moments and highlights
+## 备份与恢复
 
-`GET /api/feed/moments` can return either Moments or Highlights.
+备份至少分开考虑：
 
-### Moments
+1. **一致性数据库副本**：采用 SQLite 支持的在线备份方式，或在相关写入进程已正常停止后保存数据库目录的完整状态。运行中只复制 `gallery.sqlite`，忽略 WAL 等辅助文件，不是可靠的一致性备份。
+2. **原始资源与待处理文件**：图库原件、仍需处理的等待区/审核保留文件，不可由数据库或缩略图重建。
+3. **配置及密钥**：环境配置、必要本机路径设置，以及启用本地解压密码时的 `DATA_ROOT/private/local-ingest-archive-password.key`。数据库密文和此文件需一同保护；不要输出、提交或公开它们。
+4. **派生缓存**：可重建，但保存它们可以避免恢复后大量首次生成；不要把清缓存作为常规修复动作。
 
-Foldergram prefers date-based moments when the library has enough EXIF-backed
-timestamps:
-
-- at least `24` indexed posts
-- at least `18` posts with `taken_at_source = 'exif'`
-- at least `30%` EXIF coverage
-
-The current date-driven capsules are:
-
-- On This Day
-- This Week
-- Last Year Around Now
-
-These date-driven capsule payloads also include structured calendar parts so
-the client can localize their labels from the server-selected dates instead of
-rebuilding the windows in the browser.
-
-### Highlights
-
-When date coverage is too sparse, Foldergram falls back to curated sets:
-
-- Recent Batches
-- Forgotten Favorites
-- Deep Cuts
-- Lucky Dip
-
-## Places resolution
-
-Places are an offline, opt-in layer built from photo GPS metadata.
-
-- admins prepare a local GeoNames dataset from `Settings -> Places`
-- rebuilding place assignments reads stored EXIF latitude and longitude from indexed photos
-- matched results are stored in the `places` table and linked from `images.place_id`
-- runtime Places pages then read only from SQLite, just like feed and folder pages
-
-Photos without GPS metadata, and videos, simply remain unassigned.
-
-## Folder stories
-
-Folder stories use separate SQLite-backed queries from `GET /api/feed/moments`.
-
-- folder summaries expose whether a folder currently has an avatar-story entry point
-- `GET /api/folders/:slug/stories` returns the folder's avatar story and highlight capsules
-- `GET /api/folders/:slug/stories/:id` pages through the media for one story capsule
-- neither route walks the filesystem on request
-
-## Saved posts and collections
-
-Foldergram keeps likes separate from saved-post collections.
-
-- `admin` and `viewer` sessions store shared likes and collections in SQLite
-- anonymous public sessions use browser-local favorites and collections instead
-- a default saved collection is always present, and custom collections can group the same post into multiple buckets
-- because normal rescans preserve stable image rows when possible, shared collection membership usually survives ordinary maintenance scans
-
-## Gallery root relocation
-
-Foldergram tracks the last successful gallery root. If that path changes and
-there is already indexed content, startup first validates whether the new root
-still represents the same indexed library.
-
-If validation succeeds, Foldergram refreshes stored absolute source paths and
-continues using the current index, likes, thumbnails, previews, and sort
-ordering. If validation fails, the scanner marks the library as requiring a
-rebuild to prevent silent cross-library drift.
-
-## Derivative migration and move preservation
-
-On upgraded libraries, the next full scan backfills `asset_key` values and
-moves stored derivatives from the legacy mirrored layout into the new sharded
-layout. The migration only rewrites stored derivative paths when the new target
-already exists, and it repairs surviving legacy files before falling back to
-regeneration. After that migration is complete, full rescans can reconcile safe
-file moves by matching size, rounded mtime, and extension, with a basename
-tie-break when needed. When reconciliation succeeds, the original row ID, likes,
-`sort_timestamp`, and derivative paths are preserved.
-
-## Runtime read model
-
-Once data is indexed:
-
-- folder pages read from SQLite
-- feed pages read from SQLite
-- likes read from SQLite
-- moments, highlights, and folder stories read from SQLite
-- thumbnails and previews are served as static files
-- originals are served by image ID only
-
-## Posts and carousel discovery
-
-Visible items are represented by `posts`; ordered physical membership lives in `post_items`. Ordinary media has one member, while `AppFolder/carousels/Post name/` can have up to 20. Runtime pages query posts first and hydrate each page's members in one batch. Post IDs, captions, likes, saved state, trash state, and sort timestamps stay stable when carousel files reorder.
-
-In reserved mode, a folder can qualify as an App Folder solely through a valid immediate carousel child. Folder counts count posts, and Reels queries require a single-item video post, so videos inside real carousels are excluded.
+记录备份对应的代码与迁移版本。恢复前先保护备份之后的新入库、新来源资料和配置，确认版本兼容。旧整库恢复、执行 down 或删除迁移记录都不是解决单项失败的通用步骤；优先沿原计划查看具体错误和恢复入口。更多见[排错](./troubleshooting.md)与[安全](./security.md)。
