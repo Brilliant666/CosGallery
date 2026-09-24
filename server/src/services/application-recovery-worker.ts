@@ -63,7 +63,7 @@ function collectInputs(config: ApplicationRecoveryConfig) {
     } else return fail('RECOVERY_UNSAFE_PATH', '配置或密钥不是普通文件。');
   }
   for (const input of config.configFiles) add(input.path, `config/${input.label}`, !!input.required);
-  if (config.privateRoot) add(config.privateRoot, 'private', false);
+  if (config.privateRoot && fs.existsSync(config.privateRoot)) add(config.privateRoot, 'private', false);
   for (const name of config.requiredPrivateFiles ?? []) {
     if (!config.privateRoot || !files.some(file => file.name === `private/${name}`)) return fail('RECOVERY_REQUIRED_FILE_MISSING', '数据库使用的加密密钥缺失，无法建立可恢复点。');
   }
@@ -197,6 +197,9 @@ export async function generateRecoveryPoint(config: ApplicationRecoveryConfig, r
     source.close(); source = undefined;
     fs.chmodSync(destination, 0o600);
     const files = [{ name: 'gallery.sqlite', bytes: fs.statSync(destination).size, sha256: shaFile(destination) }, ...inputs.files.map(({ name, bytes, sha256 }) => ({ name, bytes, sha256 }))];
+    // Hashing a large database is also part of generation: check again directly
+    // before publication, not only before that potentially lengthy streaming read.
+    if (JSON.stringify(collectInputs(config)) !== JSON.stringify(inputs)) return fail('RECOVERY_CONFIG_CHANGED', '发布前配置或密钥发生变化，请重试；旧恢复点保持。');
     const point: RecoveryPoint = { format: 'cosgallery-application-recovery-v1', id, status: 'success', reason, startedAt, completedAt: new Date().toISOString(), instanceId: config.instanceId, codeVersion: config.codeVersion, schemaVersions: expected.schemaVersions, files, configuration: { complete: !inputs.gaps.length, gaps: inputs.gaps }, validation, timings: { backupMs, validationMs, totalMs: performance.now() - started }, bytes: files.reduce((n, file) => n + file.bytes, 0) };
     fs.writeFileSync(path.join(partial, 'metadata.json'), JSON.stringify(point, null, 2), { flag: 'wx', mode: 0o600 });
     fs.renameSync(partial, path.join(root, id));
