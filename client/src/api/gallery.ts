@@ -317,10 +317,12 @@ export function fetchCosGalleryCreators(
   contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive',
   query?: string,
   page = 1,
-  limit = 50
+  limit = 60,
+  preference?: 'liked' | 'kept'
 ) {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (contentRating) params.set('contentRating', contentRating);
+  if (preference) params.set('preference', preference);
   if (query?.trim()) params.set('q', query.trim());
   return requestJson<import('../types/api').CosGalleryCreatorsPayload>(`/api/cos-gallery/creators?${params.toString()}`);
 }

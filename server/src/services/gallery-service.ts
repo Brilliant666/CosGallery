@@ -1333,9 +1333,10 @@ function listFallbackAvatarStoryItems(
 export const galleryService = {
   getCosGalleryCreators(
     page = 1,
-    limit = 50,
+    limit = 60,
     contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive',
-    query?: string
+    query?: string,
+    preference?: 'liked' | 'kept'
   ) {
     if (!storageService.getState().libraryAvailable) {
       return {
@@ -1355,6 +1356,9 @@ export const galleryService = {
       inactive: allItems.filter(item => item.rosterStatus === 'inactive').length
     };
     const filtered = allItems.filter((creator) => {
+      // Apply user preference to the complete canonical identity range, before
+      // pagination. It is not a work like, collection, or task priority.
+      if (preference && creator.preference !== preference) return false;
       if (contentRating === 'inactive') {
         if (creator.rosterStatus !== 'inactive') return false;
       } else {

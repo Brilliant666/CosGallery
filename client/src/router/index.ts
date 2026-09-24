@@ -244,6 +244,15 @@ export const router = createRouter({
     }
   ],
   scrollBehavior(to, from, savedPosition) {
+    if (to.name === 'library' && from.name === 'library') {
+      // The library owns filter/page navigation intent and its keyed reading
+      // positions, including Back/Forward between filter combinations.
+      return false;
+    }
+    if (to.path === '/archive-catalog' && from.path === to.path) {
+      // Changing the selected management panel/tab must not move its list.
+      return false;
+    }
     if (to.name === 'canonical-work-gallery' && from.name === to.name
       && to.params.creatorId === from.params.creatorId && to.params.postId === from.params.postId) {
       // The same grid stays mounted while its query-driven viewer opens/switches/closes.

@@ -8,12 +8,13 @@ import { fetchCosGalleryCreators } from '../api/gallery';
 vi.mock('../api/gallery', () => ({ fetchCosGalleryCreators: vi.fn() }));
 const routerState = vi.hoisted(() => ({
   route: { name: 'library', query: {} as Record<string, string>, fullPath: '/library' },
-  replace: vi.fn()
+  replace: vi.fn(),
+  push: vi.fn()
 }));
 vi.mock('vue-router', async (importOriginal) => {
   const { reactive } = await import('vue');
   routerState.route = reactive(routerState.route);
-  return { ...await importOriginal<typeof import('vue-router')>(), onBeforeRouteLeave: vi.fn(), useRoute: () => routerState.route, useRouter: () => ({ replace: routerState.replace }) };
+  return { ...await importOriginal<typeof import('vue-router')>(), onBeforeRouteLeave: vi.fn(), onBeforeRouteUpdate: vi.fn(), useRoute: () => routerState.route, useRouter: () => ({ replace: routerState.replace, push: routerState.push }) };
 });
 
 describe('managed gallery classifications', () => {
@@ -24,6 +25,9 @@ describe('managed gallery classifications', () => {
       routerState.route.query = location.query;
       routerState.route.fullPath = '/library?' + new URLSearchParams(location.query).toString();
     });
+    routerState.push.mockReset().mockImplementation(routerState.replace);
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
     routerState.route.query = {};
     routerState.route.fullPath = '/library';
   });
@@ -61,16 +65,62 @@ describe('managed gallery classifications', () => {
     wrapper.unmount();
   });
 
-  it('requests exact rating and lifecycle filters rather than inferring from names', async () => {
+  it('combines rating, preference and search and requests sixty without hidden daily lifecycle filters', async () => {
     vi.mocked(fetchCosGalleryCreators).mockResolvedValue({total:0,page:1,limit:50,hasMore:false,summary:{all:0,R15:0,R18:0,unclassified:0,unlinked:0,inactive:0},items:[]});
     const wrapper=mount(CosGalleryHomeView,{global:{stubs:{RouterLink:true}}});
     await flushPromises();
-    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined,'',1,50);
-    for(const [label,value] of [['R15','R15'],['R18','R18'],['待分类','unclassified'],['未关联','unlinked'],['已停用','inactive']]) {
-      await wrapper.findAll('button').find(button=>button.text()===label)!.trigger('click');
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined,'',1,60,undefined);
+    for(const value of ['R15','R18']) {
+      await wrapper.get('select[aria-label="分级"]').setValue(value);
       await flushPromises();
-      expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(value,'',1,50);
+      expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(value,'',1,60,undefined);
     }
+    await wrapper.get('select[aria-label="偏好"]').setValue('liked');
+    await wrapper.get('input[type="search"]').setValue('别名');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18','别名',1,60,'liked');
+    expect(routerState.route.query).toEqual({ q: '别名', rating: 'R18', preference: 'liked' });
+    expect(wrapper.findAll('option').map(option => option.text())).not.toContain('未关联');
+    wrapper.unmount();
+  });
+  it('keeps old special URLs explicit and unchanged until the user exits the filter', async () => {
+    routerState.route.query = { rating: 'inactive' };
+    routerState.route.fullPath = '/library?rating=inactive';
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValue({total:0,page:1,limit:60,hasMore:false,summary:{all:0,R15:0,R18:0,unclassified:0,unlinked:0,inactive:0},items:[]});
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('inactive', '', 1, 60, undefined);
+    expect(wrapper.get('[role="status"]').text()).toContain('范围未改变');
+    await wrapper.get('select[aria-label="分级"]').setValue('all');
+    await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined, '', 1, 60, undefined);
+    expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it('restores return positions, but choosing all uses the cached data without its old scroll and repeated all is inert', async () => {
+    const reading = useCreatorReadingStore();
+    reading.libraryPages['library:60:/library?rating=R18'] = { items: [], total: 2, scrollY: 870 };
+    reading.libraryPages['library:60:/library?'] = { items: [], total: 121, scrollY: 1300 };
+    routerState.route.query = { rating: 'R18' };
+    routerState.route.fullPath = '/library?rating=R18';
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 870 });
+    await wrapper.get('select[aria-label="分级"]').setValue('all');
+    await flushPromises();
+    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 0 });
+    expect(wrapper.text()).toContain('第 1 / 3 页');
+    const count = vi.mocked(window.scrollTo).mock.calls.length;
+    await wrapper.get('select[aria-label="分级"]').setValue('all');
+    await flushPromises();
+    expect(vi.mocked(window.scrollTo).mock.calls).toHaveLength(count);
+    expect(fetchCosGalleryCreators).not.toHaveBeenCalled();
+    // Browser history restores the exact old filter position, not another key.
+    routerState.route.query = { rating: 'R18' };
+    routerState.route.fullPath = '/library?rating=R18';
+    await flushPromises();
+    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 870 });
     wrapper.unmount();
   });
 });
