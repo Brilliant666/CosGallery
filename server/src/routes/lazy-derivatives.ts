@@ -75,7 +75,7 @@ function queueLazyGeneration(
   const existingGeneration = inflightGenerations.get(absoluteOutputPath);
   if (existingGeneration) return existingGeneration;
 
-  const generationWork = generationLimit(() => maintenanceOperationLock.runExclusive(async () => {
+  const generationWork = generationLimit(() => maintenanceOperationLock.runGeneration(async () => {
     const imageRecord = findCurrentImageRecord(requestedPath, kind, expectedImageId);
     if (!imageRecord) throw new DerivativeRecordNotFoundError('Derivative no longer has an indexed image record');
 
