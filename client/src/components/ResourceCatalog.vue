@@ -1,13 +1,9 @@
 <template>
-  <section class="resource-catalog" aria-label="资源目录" @keydown.esc="pickerOpen = false; exportOpen = false; moreOpen = false">
+  <section class="resource-catalog" aria-label="资源目录" @keydown.esc="exportOpen = false; moreOpen = false">
     <header v-if="!payload">
       <h2>资源目录</h2>
     </header>
-    <div class="catalog-toolbar">
-    <div class="creator-picker">
-      <button type="button" :aria-expanded="pickerOpen" aria-controls="resource-creator-picker" @click="pickerOpen = !pickerOpen">{{ payload?.creator?.canonicalName ?? (creatorId ? `博主 #${creatorId}` : '全部博主') }} ▾</button>
-      <div v-if="pickerOpen" id="resource-creator-picker" class="menu creator-menu">
-      <button type="button" data-test="view-all" @click="selectAll">全部博主</button>
+    <div class="creator-picker" aria-label="目录范围">
     <form class="creator-search" @submit.prevent="searchCreators">
       <label
         >规范博主名称或别名<input
@@ -15,6 +11,8 @@
           type="search"
           placeholder="搜索并选择博主" /></label
       ><button>查找博主</button>
+      <button type="button" data-test="view-all" :aria-pressed="!creatorId && hasScope" :disabled="!creatorId && hasScope" @click="selectAll">全部博主</button>
+      <strong v-if="creatorId" class="current-creator">当前博主：{{ payload?.creator?.canonicalName ?? `博主 #${creatorId}` }}</strong>
     </form>
     <div v-if="choices.length" class="choices">
       <button
@@ -27,13 +25,13 @@
       </button>
     </div>
     <p v-if="searchNotice" role="status">{{ searchNotice }}</p>
-      </div>
     </div>
+    <div class="catalog-toolbar">
     <template v-if="payload">
       <strong class="scope-count">完整目录 {{ payload.summary.totalWorks }} 套</strong>
       <div class="status-tags" aria-label="完整目录状态">
-        <button v-for="tag in statusTags" :key="tag.value" :aria-pressed="filters.localState === tag.value" @click="selectState(tag.value)">{{ tag.label }} {{ tag.count }}</button>
-        <button v-if="(payload.summary.unlinkedWorks ?? 0) > 0 || filters.source === 'unlinked'" :aria-pressed="filters.source === 'unlinked'" @click="selectSource('unlinked')">未关联来源 {{ payload.summary.unlinkedWorks ?? '未知' }}</button>
+        <span v-for="tag in statusTags" :key="tag.value">{{ tag.label }} {{ tag.count }}</span>
+        <span v-if="(payload.summary.unlinkedWorks ?? 0) > 0 || filters.source === 'unlinked'">未关联来源 {{ payload.summary.unlinkedWorks ?? '未知' }}</span>
       </div>
       <a v-if="payload.creator" :href="`/library/${payload.creator.id}`">查看图库</a>
       <div class="menu-anchor export-panel">
@@ -113,9 +111,8 @@
             @compositionstart="composing = true"
             @compositionend="compositionEnd" /></label>
         <label>展示方向<select v-model="filters.order" @change="applyFilters"><option value="oldest">从早到晚</option><option value="newest">从晚到早</option></select></label>
-        <label class="exception-toggle"><input type="checkbox" :checked="filters.localState === 'exception'" @change="selectState(filters.localState === 'exception' ? 'all' : 'exception')" />只看异常</label>
         <label
-          >本地状态<select v-model="filters.localState" @change="applyFilters">
+          >本地状态<select v-model="filters.localState" data-test="local-state" @change="applyFilters">
             <option value="all">全部状态</option>
             <option value="exception">只看异常（并集）</option>
             <option value="indexed">已索引</option>
@@ -123,7 +120,7 @@
             <option value="unarranged">未编排/待核对</option>
           </select></label
         ><label
-          >来源<select v-model="filters.source" @change="applyFilters">
+          >来源<select v-model="filters.source" data-test="source-filter" @change="applyFilters">
             <option value="all">全部</option>
             <option value="linked">已关联来源</option>
             <option value="unlinked">未关联来源</option>
@@ -132,6 +129,7 @@
         <span class="filtered-count">当前筛选 {{ payload.total }} 套</span>
         <button v-if="filters.q || filters.localState !== 'all' || filters.source !== 'all'" type="button" @click="clearFilters">清除筛选</button>
       </form>
+      <p v-if="filters.localState !== 'all' && filters.source !== 'all'" class="hint" data-test="combined-filters">同时满足：{{ filters.localState === 'exception' ? '只看异常' : stateLabel(filters.localState) }} · {{ filters.source === 'unlinked' ? '未关联来源' : '已关联来源' }}</p>
       <p v-if="notice" role="status">{{ notice }}</p>
       <p v-if="metadataDownload"><a :href="metadataDownload.url" :download="metadataDownload.name">下载本次 CSV 的配套元信息</a>（与 CSV 一同保存）</p>
       <div class="table-scroll">
@@ -291,9 +289,9 @@ import {
 const props = withDefaults(defineProps<{ creatorId: number | null; globalScope?: boolean; scopeError?: string }>(), { globalScope: true, scopeError: '' });
 const emit = defineEmits<{ select: [id: number | null]; all: []; resolved: [id: number | null]; unavailable: [] }>();
 const hasScope = computed(() => !props.scopeError && (props.creatorId !== null || props.globalScope !== false));
-const pickerOpen = ref(false), exportOpen = ref(false), moreOpen = ref(false), notesOpen = ref(false);
-function selectCreator(id: number) { pickerOpen.value = false; emit('select', id); }
-function selectAll() { pickerOpen.value = false; emit('all'); }
+const exportOpen = ref(false), moreOpen = ref(false), notesOpen = ref(false);
+function selectCreator(id: number) { emit('select', id); }
+function selectAll() { emit('all'); }
 const reading = useCreatorReadingStore();
 const payload = ref<ResourcePage | null>(null),
   creatorQuery = ref(''),
@@ -318,8 +316,6 @@ const statusTags = computed(() => [
   { value: 'unarranged', label: '待核对/未编排', count: payload.value?.summary.unarrangedWorks ?? 0 },
   { value: 'unavailable', label: '主副本不可用', count: payload.value?.summary.unavailableWorks ?? 0 }
 ].filter(tag => tag.count > 0 || filters.localState === tag.value));
-function selectState(state: string) { filters.localState = state; applyFilters(); }
-function selectSource(source: string) { filters.source = filters.source === source ? 'all' : source; applyFilters(); }
 function clearFilters() { filters.q = ''; filters.localState = 'all'; filters.source = 'all'; applyFilters(); }
 function rowClick(event: MouseEvent, workId: number) {
   if ((event.target as HTMLElement).closest('a,button,input,select') || window.getSelection()?.toString()) return;
@@ -641,13 +637,14 @@ onBeforeUnmount(() => {
   background: var(--color-surface, #fff);
 }
 .catalog-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:0.65rem; margin-bottom:1rem; }
-.creator-picker, .menu-anchor { position:relative; }
+.menu-anchor { position:relative; }
+.creator-picker { border-bottom:1px solid var(--color-border,#ddd); margin-bottom:1rem; }
+.current-creator { align-self:center; font-size:0.9rem; overflow-wrap:anywhere; }
+.creator-search button[aria-pressed="true"] { opacity:1; color:var(--color-accent,#007bcb); border-color:currentColor; }
 .scope-count { font-size:0.9rem; white-space:nowrap; }
 .status-tags { display:flex; flex-wrap:wrap; gap:0.4rem; flex:1; }
-.status-tags button { padding:0.3rem 0.5rem; font-size:0.78rem; }
-.status-tags button[aria-pressed="true"] { color:var(--color-accent,#007bcb); border-color:currentColor; }
+.status-tags span { padding:0.3rem 0.5rem; font-size:0.78rem; border-radius:0.5rem; background:var(--color-bg,#f5f6f8); color:var(--color-muted,#667085); }
 .menu { position:absolute; z-index:20; top:calc(100% + 0.4rem); right:0; min-width:16rem; max-width:calc(100vw - 3rem); padding:0.85rem; border:1px solid var(--color-border,#ddd); border-radius:0.75rem; background:var(--color-surface,#fff); box-shadow:0 8px 26px #0002; }
-.creator-menu { left:0; right:auto; width:25rem; }
 .menu.exports { margin:0; display:grid; align-items:stretch; gap:0.6rem; }
 .choices { max-height:20rem; overflow:auto; display:grid; align-items:stretch; }
 .choices button { text-align:left; }
@@ -657,7 +654,6 @@ onBeforeUnmount(() => {
 .number-cell { white-space:nowrap; }
 .title-cell { min-width:12rem; max-width:28rem; overflow-wrap:anywhere; }
 .exception-badge { display:block; color:#a24710; font-size:0.8rem; }
-.exception-toggle { display:flex; align-items:center; align-self:center; gap:0.35rem; }
 .filtered-count { margin-left:auto; font-size:0.85rem; white-space:nowrap; }
 h2,
 h3 {
@@ -787,20 +783,14 @@ summary { cursor: pointer; }
   .resource-catalog {
     padding: 0.75rem;
   }
-  .catalog-toolbar > .creator-picker,
   .catalog-toolbar > .scope-count {
     flex-basis: 100%;
     min-width: 0;
   }
-  .creator-picker > button {
-    width: 100%;
-    text-align: left;
-    overflow-wrap: anywhere;
-  }
   .status-tags {
     flex: 1 0 100%;
   }
-  .status-tags button {
+  .status-tags span {
     white-space: nowrap;
   }
   .filters label,
