@@ -4,7 +4,7 @@
       <div><h2>博主库</h2><p>统一维护博主 ID、名称与分类。来源平台只补充作品信息。</p></div>
       <button type="button" class="primary" :disabled="!auth.capabilities.canManageLibrary" @click="openNew">新增博主</button>
     </header>
-    <div class="roster-layout" :class="{'with-panel': panelSelection}"><div class="roster-list-column">
+    <div class="roster-layout"><div class="roster-list-column">
     <form class="roster-filters" @submit.prevent="search" @change="onFilterChange">
       <label class="search">搜索名称或别名<input :value="filters.query" type="search" placeholder="名称或别名" @input="onQueryInput" @compositionstart="startComposition" @compositionend="endComposition" @keydown.enter="onEnter" /></label>
       <label>偏好<select v-model="filters.preference"><option value="">全部偏好</option><option value="liked">喜欢</option><option value="kept">保留</option><option value="unset">未设置</option></select></label>
@@ -37,7 +37,7 @@
       <button :disabled="!payload?.hasMore || loading" @click="goPage(page + 1)">下一页</button>
     </footer>
 
-    </div><CreatorManagementPanel v-if="panelSelection" :key="panelSelection" ref="panel" :layout-ready="layoutReady && initialRosterSettled" :creator-id="panelSelection === 'new' ? null : Number(panelSelection)" :tab="panelTab" @close="closePanel" @tab="changePanelTab" @changed="changed" @created="created" @deleted="deleted" @catalog="id=>emit('resource-catalog',id)" @plan-downloads="id=>emit('plan-downloads',id)" @source-planned="handleSourcePlanned" /></div>
+    </div><CreatorManagementPanel v-if="panelSelection" :key="panelSelection" ref="panel" :creator-id="panelSelection === 'new' ? null : Number(panelSelection)" :tab="panelTab" @close="closePanel" @tab="changePanelTab" @changed="changed" @created="created" @deleted="deleted" @catalog="id=>emit('resource-catalog',id)" @plan-downloads="id=>emit('plan-downloads',id)" @source-planned="handleSourcePlanned" /></div>
   </section>
 </template>
 
@@ -50,13 +50,11 @@ import { useAuthStore } from '../stores/auth';
 import { pinia } from '../stores/pinia';
 import type { ArchiveCatalogCreatorsPayload, ArchiveCatalogPreference, ArchiveCatalogState, ContentRating } from '../types/api';
 const emit = defineEmits<{ changed: []; sourcePlanned: [creatorIds: number[]]; 'plan-downloads': [creatorId: number]; 'resource-catalog': [creatorId: number] }>();
-withDefaults(defineProps<{layoutReady?:boolean}>(),{layoutReady:true});
 const route=useRoute(),router=useRouter(),auth=useAuthStore(pinia);
 const payload=ref<ArchiveCatalogCreatorsPayload|null>(null),listTop=ref<HTMLElement|null>(null);
 const defaults={ query:'', preference:'' as ''|'liked'|'kept'|'unset', rating:'' as ''|ContentRating|'unclassified', active:'active' as 'active'|'inactive'|'all', hasLocal:'' as ''|'yes'|'no', hasSource:'' as ''|'yes'|'no'|'no-unchecked'|'no-not-found', state:'' as ''|ArchiveCatalogState };
 const filters=reactive({...defaults});
 const page=ref(1),loading=ref(false),error=ref(''),notice=ref('');
-const initialRosterSettled=ref(false);
 const panel=ref<InstanceType<typeof CreatorManagementPanel>|null>(null), panelSelection=ref(''),panelTab=ref<CreatorPanelTab>('overview');
 let loadGeneration=0,queryTimer:ReturnType<typeof setTimeout>|undefined,composing=false,disposed=false,requestKey:string|null=null,appliedFilterKey:string|null=null;
 const preferenceLabel=(value:ArchiveCatalogPreference|null)=>value==='liked'?'喜欢':value==='kept'?'保留':'未设置';
@@ -76,7 +74,7 @@ async function load(force = true) {
     const result = await fetchArchiveCatalog(params);
     if (generation === loadGeneration) { payload.value = result; appliedFilterKey = filterKey; return generation; }
   } catch (reason) { if (generation === loadGeneration) { requestKey = null; showError(reason); } }
-  finally { if (generation === loadGeneration) { loading.value = false; initialRosterSettled.value = true; } }
+  finally { if (generation === loadGeneration) { loading.value = false; } }
 }
 function clearQueryTimer() { clearTimeout(queryTimer); queryTimer = undefined; }
 function onFilterChange(event: Event) {
@@ -182,6 +180,5 @@ label{display:grid;gap:.3rem;font-size:.8rem}input,select,button{font:inherit}in
 .card-actions a{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:.5rem;background:var(--surface);color:var(--accent);padding:.55rem .85rem;text-decoration:none;white-space:nowrap}.card-actions a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
 <style scoped>
-.roster-layout{display:grid;gap:1.1rem;align-items:start;min-width:0}.roster-list-column{min-width:0}.with-panel .creator-card{grid-template-columns:repeat(4,minmax(0,1fr));gap:.65rem;padding:.95rem}.with-panel .card-identity,.with-panel .card-actions{grid-column:1/-1}.with-panel .card-actions{justify-content:flex-end}.with-panel .roster-filters label{flex:1 1 8rem}.with-panel .roster-filters .search{flex-basis:100%}.card-actions [aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
-@media(min-width:1101px){.roster-layout.with-panel{grid-template-columns:minmax(0,1.05fr) minmax(25rem,1fr)}}
+.roster-layout{display:grid;gap:1.1rem;align-items:start;min-width:0}.roster-list-column{min-width:0}.card-actions [aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
 </style>

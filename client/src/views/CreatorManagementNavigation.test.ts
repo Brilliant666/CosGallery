@@ -9,7 +9,6 @@ import * as api from '../api/managed-creators';
 import { useAuthStore } from '../stores/auth';
 import { pinia } from '../stores/pinia';
 import { creator,payload,editingState,deferred } from '../components/creator-panel-test-fixtures';
-import CreatorManagementPanel from '../components/CreatorManagementPanel.vue';
 vi.mock('../api/gallery',()=>({fetchArchiveCatalog:vi.fn(),fetchArchiveCatalogCreator:vi.fn(),planArchiveDownloadTasks:vi.fn(),fetchLocalIngestSettings:vi.fn()}));
 vi.mock('../api/local-admission',()=>({fetchAdmissionBatches:vi.fn()}));
 vi.mock('../api/managed-creators',()=>({fetchManagedCreatorEditingState:vi.fn(),saveManagedCreatorProfile:vi.fn(),saveManagedCreatorDirectories:vi.fn()}));
@@ -32,30 +31,32 @@ describe('management panel real router context and draft guards',()=>{
     expect(w.find('.creator-panel').exists()).toBe(false);expect(router.currentRoute.value.query).toMatchObject({rosterPage:'2',rosterPreference:'liked'});expect(router.currentRoute.value.query.manageCreator).toBeUndefined();expect(router.currentRoute.value.query.manageTab).toBeUndefined();
     router.back();await flushPromises();expect(w.get('.creator-panel h2').text()).toBe('Alpha');expect(w.get('#creator-tab-profile').attributes('aria-selected')).toBe('true');
   });
-  it.each(['summary-first','roster-first','roster-failure'] as const)('waits for summary and initial roster settlement before positioning the deep-linked panel: %s',async(order)=>{
-    const summary=deferred<typeof payload>(),roster=deferred<typeof payload>();vi.mocked(fetchArchiveCatalog).mockImplementation(params=>params?.limit===1?summary.promise:roster.promise);
-    const scroll=vi.fn();vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
-    const bounds=vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,0,400,500));
-    const {w,router}=await setup();const management=w.getComponent(CreatorManagementPanel);
-    expect(management.props('layoutReady')).toBe(false);expect(w.get('.creator-panel h2').text()).toBe('Alpha');expect(scroll).not.toHaveBeenCalled();
-    if(order==='roster-first')roster.resolve(payload);else summary.resolve(payload);
-    await flushPromises();expect(management.props('layoutReady')).toBe(false);expect(scroll).not.toHaveBeenCalled();
-    bounds.mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));
-    if(order==='roster-first')summary.resolve(payload);else if(order==='roster-failure')roster.reject(new Error('Roster unavailable'));else roster.resolve(payload);
-    await flushPromises();
-    expect(management.props('layoutReady')).toBe(true);expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
-    await router.push({query:{...router.currentRoute.value.query,manageTab:'directories'}});await flushPromises();
-    const refresh=deferred<typeof payload>();vi.mocked(fetchArchiveCatalog).mockImplementation(params=>params?.limit===1?Promise.resolve(payload):refresh.promise);
-    management.vm.$emit('changed');await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);expect(management.props('layoutReady')).toBe(true);
-    refresh.resolve(payload);await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
+  it('opens a modal independently of slow surrounding reads, and keeps draft protection on Escape',async()=>{
+    const summary=deferred<typeof payload>(),roster=deferred<typeof payload>();
+    vi.mocked(fetchArchiveCatalog).mockImplementation(params=>params?.limit===1?summary.promise:roster.promise);
+    const modal=vi.spyOn(HTMLDialogElement.prototype,'showModal');
+    const {w,router}=await setup();expect(modal).toHaveBeenCalledTimes(1);
+    expect(w.get('.creator-panel').attributes('aria-modal')).toBe('true');
+    expect(w.find('.with-panel').exists()).toBe(false);
+    await w.get('.profile-form input').setValue('Draft');
+    await w.get('.creator-panel').trigger('cancel');await flushPromises();
+    expect(w.get('.leave-dialog').element.open).toBe(true);
+    await w.get('.leave-dialog').trigger('cancel');await flushPromises();
+    expect(router.currentRoute.value.query.manageCreator).toBe('1');
+    expect(w.get('.profile-form input').element.value).toBe('Draft');
+    summary.resolve(payload);roster.resolve(payload);await flushPromises();
+    await w.get('.creator-panel').trigger('cancel');await flushPromises();
+    await button(w,'放弃更改并继续').trigger('click');await flushPromises();
+    expect(w.find('.creator-panel').exists()).toBe(false);
+    expect(router.currentRoute.value.query).toMatchObject({rosterPage:'2',rosterPreference:'liked'});
   });
   it('cancels changing workspace without hiding the dirty panel, then discards only by explicit choice',async()=>{
     const {w,router}=await setup();await w.get('.profile-form input').setValue('Uncommitted name');await w.get('[data-test=workspace-resources]').trigger('click');await flushPromises();expect(w.get('.leave-dialog').element.open).toBe(true);expect(w.find('[data-test=resource-catalog]').exists()).toBe(false);await button(w,'取消跳转').trigger('click');await flushPromises();expect(w.get('.creator-panel').isVisible()).toBe(true);expect(w.get('.profile-form input').element.value).toBe('Uncommitted name');expect(router.currentRoute.value.query.workspace).toBeUndefined();
     await w.get('[data-test=workspace-resources]').trigger('click');await flushPromises();await button(w,'放弃更改并继续').trigger('click');await flushPromises();expect(router.currentRoute.value.query.workspace).toBe('resources');expect(w.find('.creator-panel').exists()).toBe(false);expect(w.get('[data-test=resource-catalog]').isVisible()).toBe(true);expect(api.saveManagedCreatorProfile).not.toHaveBeenCalled();
   });
-  it('leaves the list interactive but guards switching identity while retaining unsaved draft on cancel',async()=>{
-    const {w,router}=await setup();await w.get('.profile-form input').setValue('A draft');await w.get('button[aria-label="管理 Beta"]').trigger('click');await flushPromises();await button(w,'取消跳转').trigger('click');await flushPromises();expect(router.currentRoute.value.query.manageCreator).toBe('1');expect(w.get('.profile-form input').element.value).toBe('A draft');
-    await w.get('button[aria-label="管理 Beta"]').trigger('click');await flushPromises();await button(w,'放弃更改并继续').trigger('click');await flushPromises();expect(router.currentRoute.value.query.manageCreator).toBe('2');expect(w.get('.creator-panel h2').text()).toBe('Beta');expect(w.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
+  it('guards programmatic identity navigation while retaining unsaved draft on cancel',async()=>{
+    const {w,router}=await setup();await w.get('.profile-form input').setValue('A draft');void router.push({query:{...router.currentRoute.value.query,manageCreator:'2',manageTab:'overview'}});await flushPromises();await button(w,'取消跳转').trigger('click');await flushPromises();expect(router.currentRoute.value.query.manageCreator).toBe('1');expect(w.get('.profile-form input').element.value).toBe('A draft');
+    void router.push({query:{...router.currentRoute.value.query,manageCreator:'2',manageTab:'overview'}});await flushPromises();await button(w,'放弃更改并继续').trigger('click');await flushPromises();expect(router.currentRoute.value.query.manageCreator).toBe('2');expect(w.get('.creator-panel h2').text()).toBe('Beta');expect(w.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
   });
   it('routes internal local-admission links through the dirty guard, but does not capture modifier/new-tab clicks',async()=>{
     const {w,router}=await setup();await w.get('.profile-form input').setValue('Draft');await w.get('#creator-tab-directories').trigger('click');await flushPromises();expect(router.currentRoute.value.query.manageTab).toBe('directories');const link=w.get('a[href="/creator-admission/local/1"]');

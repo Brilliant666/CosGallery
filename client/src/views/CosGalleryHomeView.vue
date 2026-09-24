@@ -20,17 +20,20 @@
       </form>
 
       <div class="flex flex-wrap items-center gap-3" aria-label="博主筛选">
-        <label class="flex items-center gap-2 text-sm font-semibold">分级
-          <select :value="rating" class="rounded-xl border border-border bg-surface px-4 py-2.5" aria-label="分级" @change="setRating(($event.target as HTMLSelectElement).value as RatingFilter)">
-            <option v-if="legacyRatingLabel" :value="rating" disabled>历史筛选：{{ legacyRatingLabel }}</option>
-            <option value="all">全部</option><option value="R15">R15</option><option value="R18">R18</option>
-          </select>
-        </label>
-        <label class="flex items-center gap-2 text-sm font-semibold">偏好
-          <select :value="preference" class="rounded-xl border border-border bg-surface px-4 py-2.5" aria-label="偏好" @change="setPreference(($event.target as HTMLSelectElement).value as PreferenceFilter)">
-            <option value="all">全部</option><option value="liked">喜欢</option><option value="kept">保留</option>
-          </select>
-        </label>
+        <div role="group" aria-label="分级" class="flex flex-wrap items-center gap-2 text-sm font-semibold">
+          <span aria-hidden="true" class="mr-1 text-muted">分级</span>
+          <button v-for="option in ratingOptions" :key="option.value" type="button" :value="option.value" :aria-pressed="rating === option.value"
+            class="rounded-full border px-4 py-2.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            :class="rating === option.value ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-text hover:border-accent/60'"
+            @click="setRating(option.value)">{{ option.label }}</button>
+        </div>
+        <div role="group" aria-label="偏好" class="flex flex-wrap items-center gap-2 text-sm font-semibold">
+          <span aria-hidden="true" class="mr-1 text-muted">偏好</span>
+          <button v-for="option in preferenceOptions" :key="option.value" type="button" :value="option.value" :aria-pressed="preference === option.value"
+            class="rounded-full border px-4 py-2.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            :class="preference === option.value ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-text hover:border-accent/60'"
+            @click="setPreference(option.value)">{{ option.label }}</button>
+        </div>
         <span class="ml-auto text-sm text-muted">{{ total }} 位博主 · 每页 {{ PAGE_SIZE }} 位</span>
       </div>
       <p v-if="legacyRatingLabel" role="status" class="m-0 rounded-xl border border-amber-300 px-4 py-3 text-sm text-amber-700">当前沿用旧链接的“{{ legacyRatingLabel }}”筛选，范围未改变。日常入口已收起；选择分级“全部”可退出此筛选，身份管理请前往博主库。</p>
@@ -103,6 +106,8 @@ import { useCreatorReadingStore } from '../stores/creator-reading';
 type RatingFilter = 'all' | ContentRating | 'unclassified' | 'unlinked' | 'inactive';
 type PreferenceFilter = 'all' | 'liked' | 'kept';
 const PAGE_SIZE = 60;
+const ratingOptions = [{ value: 'all', label: '全部' }, { value: 'R15', label: 'R15' }, { value: 'R18', label: 'R18' }] as const;
+const preferenceOptions = [{ value: 'all', label: '全部' }, { value: 'liked', label: '喜欢' }, { value: 'kept', label: '保留' }] as const;
 const legacyLabels = { unclassified: '待分类', unlinked: '未关联', inactive: '已停用' };
 const validRatings = ['R15', 'R18', ...Object.keys(legacyLabels)];
 

@@ -70,18 +70,28 @@ describe('managed gallery classifications', () => {
     const wrapper=mount(CosGalleryHomeView,{global:{stubs:{RouterLink:true}}});
     await flushPromises();
     expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined,'',1,60,undefined);
+    expect(wrapper.find('select').exists()).toBe(false);
+    expect(wrapper.get('[role="group"][aria-label="分级"]').findAll('button').map(item=>item.text())).toEqual(['全部','R15','R18']);
+    expect(wrapper.get('[role="group"][aria-label="偏好"]').findAll('button').map(item=>item.text())).toEqual(['全部','喜欢','保留']);
     for(const value of ['R15','R18']) {
-      await wrapper.get('select[aria-label="分级"]').setValue(value);
+      await wrapper.get(`[aria-label="分级"] button[value="${value}"]`).trigger('click');
       await flushPromises();
       expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(value,'',1,60,undefined);
+      expect(wrapper.get(`[aria-label="分级"] button[value="${value}"]`).attributes('aria-pressed')).toBe('true');
     }
-    await wrapper.get('select[aria-label="偏好"]').setValue('liked');
+    await wrapper.get('[aria-label="偏好"] button[value="liked"]').trigger('click');
     await wrapper.get('input[type="search"]').setValue('别名');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
     expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18','别名',1,60,'liked');
     expect(routerState.route.query).toEqual({ q: '别名', rating: 'R18', preference: 'liked' });
-    expect(wrapper.findAll('option').map(option => option.text())).not.toContain('未关联');
+    expect(wrapper.get('[aria-label="偏好"] button[value="liked"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[aria-label="分级"]').text()).not.toContain('未关联');
+    const requestCount=vi.mocked(fetchCosGalleryCreators).mock.calls.length,pushCount=routerState.push.mock.calls.length;
+    await wrapper.get('[aria-label="偏好"] button[value="liked"]').trigger('click');await wrapper.get('[aria-label="分级"] button[value="R18"]').trigger('click');await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenCalledTimes(requestCount);expect(routerState.push).toHaveBeenCalledTimes(pushCount);
+    await wrapper.get('[aria-label="偏好"] button[value="kept"]').trigger('click');await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18','别名',1,60,'kept');
     wrapper.unmount();
   });
   it('keeps old special URLs explicit and unchanged until the user exits the filter', async () => {
@@ -92,7 +102,8 @@ describe('managed gallery classifications', () => {
     await flushPromises();
     expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('inactive', '', 1, 60, undefined);
     expect(wrapper.get('[role="status"]').text()).toContain('范围未改变');
-    await wrapper.get('select[aria-label="分级"]').setValue('all');
+    expect(wrapper.findAll('[aria-label="分级"] button[aria-pressed="true"]')).toHaveLength(0);
+    await wrapper.get('[aria-label="分级"] button[value="all"]').trigger('click');
     await flushPromises();
     expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined, '', 1, 60, undefined);
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
@@ -107,12 +118,12 @@ describe('managed gallery classifications', () => {
     const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
     await flushPromises();
     expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 870 });
-    await wrapper.get('select[aria-label="分级"]').setValue('all');
+    await wrapper.get('[aria-label="分级"] button[value="all"]').trigger('click');
     await flushPromises();
     expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 0 });
     expect(wrapper.text()).toContain('第 1 / 3 页');
     const count = vi.mocked(window.scrollTo).mock.calls.length;
-    await wrapper.get('select[aria-label="分级"]').setValue('all');
+    await wrapper.get('[aria-label="分级"] button[value="all"]').trigger('click');
     await flushPromises();
     expect(vi.mocked(window.scrollTo).mock.calls).toHaveLength(count);
     expect(fetchCosGalleryCreators).not.toHaveBeenCalled();

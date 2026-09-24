@@ -25,10 +25,10 @@ describe('managed roster UI',()=>{
     vi.mocked(api.fetchManagedCreatorEditingState).mockResolvedValue(editingState());vi.mocked(api.fetchIngestDestination).mockResolvedValue(structuredClone(destination));
     vi.mocked(api.createManagedCreator).mockResolvedValue(structuredClone(creator));vi.mocked(api.saveManagedCreatorProfile).mockResolvedValue(savedState());vi.mocked(api.saveManagedCreatorDirectories).mockResolvedValue(savedState());
   });
-  it('has two card actions and opens the nonmodal read-only overview without writes or execution components',async()=>{
+  it('has two card actions and opens the modal read-only overview without writes or execution components',async()=>{
     const w=mountRoster();await flushPromises();expect(w.get('.creator-card').text()).toContain('平台作品');expect(w.get('.creator-card').text()).toContain('已关联');
     expect(w.get('.card-actions').findAll('button').map(item=>item.text())).toEqual(['资源目录','管理资料']);expect(w.get('.card-actions').findAll('a')).toHaveLength(0);
-    await button(w,'管理资料').trigger('click');await flushPromises();expect(w.get('.creator-panel').attributes('aria-modal')).toBe('false');expect(w.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
+    await button(w,'管理资料').trigger('click');await flushPromises();expect(w.get('.creator-panel').attributes('aria-modal')).toBe('true');expect(w.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
     expect(w.find('.profile-form').exists()).toBe(false);expect(w.find('source-evidence-panel-stub').exists()).toBe(false);expect(api.fetchManagedCreatorEditingState).not.toHaveBeenCalled();expect(api.saveManagedCreatorProfile).not.toHaveBeenCalled();expect(w.emitted('plan-downloads')).toBeUndefined();
     await button(w,'关闭').trigger('click');await flushPromises();expect(w.find('.creator-panel').exists()).toBe(false);
   });

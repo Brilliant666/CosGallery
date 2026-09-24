@@ -23,7 +23,7 @@
     </div>
 
     <p v-if="downloadNotice" role="alert" class="mb-4 text-sm text-red-700">{{ downloadNotice }}</p>
-    <div v-if="rosterVisited" v-show="workspace === 'roster'"><ManagedCreatorRoster ref="managedRoster" :layout-ready="summaryLayoutReady" @changed="loadCatalog()" @source-planned="loadCatalog" @plan-downloads="planCreatorDownloads" @resource-catalog="openResourceCatalog" /></div>
+    <div v-if="rosterVisited" v-show="workspace === 'roster'"><ManagedCreatorRoster ref="managedRoster" @changed="loadCatalog()" @source-planned="loadCatalog" @plan-downloads="planCreatorDownloads" @resource-catalog="openResourceCatalog" /></div>
     <ResourceCatalog v-if="workspace === 'resources'" :key="permissionContext" :creator-id="resourceCreatorId" :global-scope="resourceGlobalScope" :scope-error="resourceScopeError" @select="openResourceCatalog" @all="openAllResources" @resolved="rememberResourceScope" @unavailable="discardRememberedScope" />
 
   </section>
@@ -120,7 +120,6 @@ function openAllResources() {
 }
 
 const summary = ref<ArchiveCatalogSummary | null>(null);
-const summaryLayoutReady = ref(false);
 const managedRoster = ref<InstanceType<typeof ManagedCreatorRoster> | null>(null);
 const planningDownloads = ref(false);
 const downloadNotice = ref('');
@@ -142,7 +141,6 @@ function formatCount(value: number) {
 async function loadCatalog() {
   try { const payload = await fetchArchiveCatalog({ page: 1, limit: 1 }); if (alive) summary.value = payload.summary; }
   catch { /* The roster owns its visible loading and error state. */ }
-  finally { if (alive) summaryLayoutReady.value = true; }
 }
 async function planCreatorDownloads(id: number) {
   if (planningDownloads.value) return;

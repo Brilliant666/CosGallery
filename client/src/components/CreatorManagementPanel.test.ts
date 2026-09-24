@@ -14,7 +14,7 @@ vi.mock('../api/gallery',()=>({fetchArchiveCatalogCreator:vi.fn()}));
 vi.mock('../api/local-admission',()=>({fetchAdmissionBatches:vi.fn()}));
 vi.mock('../api/managed-creators',()=>({createManagedCreator:vi.fn(),fetchManagedCreatorEditingState:vi.fn(),saveManagedCreatorProfile:vi.fn(),saveManagedCreatorDirectories:vi.fn(),updateManagedCreator:vi.fn(),addManagedAlias:vi.fn(),deleteManagedAlias:vi.fn(),setManagedCreatorActive:vi.fn(),previewManagedCreatorDeletion:vi.fn(),deleteUnusedManagedCreator:vi.fn(),linkManagedFolder:vi.fn(),unlinkManagedFolder:vi.fn(),fetchIngestDestination:vi.fn(),setIngestDestination:vi.fn()}));
 const button=(w:ReturnType<typeof mount>,text:string)=>w.findAll('button').find(item=>item.text()===text)!;
-const panel=(tab:CreatorPanelTab='overview',creatorId:number|null=1,layoutReady=true)=>mount(CreatorManagementPanel,{props:{creatorId,tab,layoutReady},global:{stubs:{FirstCollectionSelector:{name:'FirstCollectionSelector',props:['active'],template:'<div data-test="source-check" :data-active="active" />'},SourceEvidencePanel:{name:'SourceEvidencePanel',data:()=>({hasUnsavedChanges:false,isBusy:false}),template:'<div data-test="source-evidence" />'}}}});
+const panel=(tab:CreatorPanelTab='overview',creatorId:number|null=1)=>mount(CreatorManagementPanel,{props:{creatorId,tab},global:{stubs:{FirstCollectionSelector:{name:'FirstCollectionSelector',props:['active'],template:'<div data-test="source-check" :data-active="active" />'},SourceEvidencePanel:{name:'SourceEvidencePanel',data:()=>({hasUnsavedChanges:false,isBusy:false}),template:'<div data-test="source-evidence" />'}}}});
 const preview:api.ManagedCreatorDeletionPreview={creatorId:1,name:'Alpha',eligible:true,blockers:[],confirmationToken:'preview-v1',removableAliases:2};
 const chooseIdentity=(value:ArchiveCatalogCreatorDetail)=>{vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(value));vi.mocked(api.fetchManagedCreatorEditingState).mockResolvedValue(editingState(value));};
 describe('creator management panel lifecycle and save scopes',()=>{
@@ -29,60 +29,41 @@ describe('creator management panel lifecycle and save scopes',()=>{
     vi.mocked(api.previewManagedCreatorDeletion).mockResolvedValue(structuredClone(preview));vi.mocked(api.deleteUnusedManagedCreator).mockResolvedValue({deleted:true,creatorId:1});
   });
   it('opens a read-only overview, keeps source task components lazy and inactive when hidden',async()=>{
-    const w=panel();await flushPromises();expect(w.get('.creator-panel').attributes('aria-modal')).toBe('false');expect(w.text()).toContain('尚无来源记录，不能据此判断已全部收齐');
+    const w=panel();await flushPromises();expect(w.get('.creator-panel').attributes('aria-modal')).toBe('true');expect(w.text()).toContain('尚无来源记录，不能据此判断已全部收齐');
     expect(api.fetchManagedCreatorEditingState).not.toHaveBeenCalled();expect(w.find('[data-test=source-check]').exists()).toBe(false);expect(w.find('[data-test=source-evidence]').exists()).toBe(false);expect(w.find('.save-bar').exists()).toBe(false);
     await w.setProps({tab:'sources'});await flushPromises();expect(w.get('[data-test=source-check]').attributes('data-active')).toBe('true');expect(w.find('[data-test=source-evidence]').exists()).toBe(true);
     await w.setProps({tab:'overview'});expect(w.get('[data-test=source-check]').attributes('data-active')).toBe('false');expect(w.get('#creator-content-sources').isVisible()).toBe(false);expect(api.saveManagedCreatorProfile).not.toHaveBeenCalled();
   });
-  it('positions a low desktop panel once on open, without scrolling again for tabs, saves or background refresh',async()=>{
-    const scroll=vi.fn();
-    vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
-    vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));
+  it.each([1440,1920,390])('opens a true modal without moving the background at width %i',async(width)=>{
+    vi.spyOn(window,'innerWidth','get').mockReturnValue(width);
+    const scroll=vi.fn(),show=vi.spyOn(HTMLDialogElement.prototype,'show');
+    const modal=vi.spyOn(HTMLDialogElement.prototype,'showModal').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
     const w=panel();await flushPromises();
-    expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
+    expect(modal).toHaveBeenCalledTimes(1);expect(show).not.toHaveBeenCalled();
+    expect(w.get('.creator-panel').attributes('aria-modal')).toBe('true');expect(document.body.style.overflow).toBe('hidden');
     await w.setProps({tab:'profile'});await flushPromises();await w.get('.profile-form input').setValue('Renamed');
     vi.mocked(api.saveManagedCreatorProfile).mockResolvedValue(savedState({...creator,name:'Renamed'}));
-    await w.get('.profile-form').trigger('submit');await flushPromises();expect(w.text()).toContain('资料已保存');
+    await w.get('.profile-form').trigger('submit');await flushPromises();
     await w.setProps({tab:'sources'});await flushPromises();
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...creator,name:'Background saved name',remoteWorks:4});
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...creator,name:'Background saved name'});
     w.getComponent({name:'FirstCollectionSelector'}).vm.$emit('planned',[1]);await flushPromises();
-    expect(w.get('h2').text()).toBe('Background saved name');
-    await w.setProps({tab:'overview'});await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
+    expect(modal).toHaveBeenCalledTimes(1);expect(scroll).not.toHaveBeenCalled();
   });
-  it('waits for the initial surrounding layout before positioning, and never repeats after readiness changes',async()=>{
-    const scroll=vi.fn();vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
-    const bounds=vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,0,400,500));
-    const w=panel('overview',1,false);await flushPromises();expect(bounds).not.toHaveBeenCalled();expect(scroll).not.toHaveBeenCalled();
-    bounds.mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));await w.setProps({layoutReady:true});await flushPromises();
-    expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
-    await w.setProps({layoutReady:false});await w.setProps({layoutReady:true,tab:'profile'});await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
+  it('restores the previous scroll lock and opener focus without scrolling when closed',async()=>{
+    const opener=document.createElement('button');document.body.append(opener);opener.focus();
+    const previousOverflow=document.body.style.overflow;document.body.style.overflow='clip';
+    const focus=vi.spyOn(opener,'focus');const w=panel('profile');await flushPromises();
+    document.body.append(w.element);w.get('.profile-form input').element.focus();
+    expect(document.activeElement).not.toBe(opener);expect(document.body.style.overflow).toBe('hidden');
+    w.unmount();expect(document.body.style.overflow).toBe('clip');expect(document.activeElement).toBe(opener);
+    expect(focus).toHaveBeenLastCalledWith({preventScroll:true});opener.remove();document.body.style.overflow=previousOverflow;
   });
-  it('waits for its initial editing and history content before the single desktop positioning',async()=>{
-    const edit=deferred<api.ManagedCreatorEditingState>(),history=deferred<Awaited<ReturnType<typeof fetchAdmissionBatches>>>();
-    vi.mocked(api.fetchManagedCreatorEditingState).mockReturnValue(edit.promise);vi.mocked(fetchAdmissionBatches).mockReturnValue(history.promise);
-    const scroll=vi.fn();vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
-    vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));
-    const w=panel('profile');await flushPromises();expect(scroll).not.toHaveBeenCalled();
-    edit.resolve(editingState());await flushPromises();expect(w.find('.profile-form').exists()).toBe(true);expect(scroll).not.toHaveBeenCalled();
-    history.reject(new Error('History unavailable'));await flushPromises();expect(scroll).toHaveBeenCalledExactlyOnceWith({block:'start',behavior:'auto'});
-    await w.setProps({tab:'directories'});await flushPromises();expect(scroll).toHaveBeenCalledTimes(1);
-  });
-  it('does not position for stale identity responses or after the panel closes',async()=>{
-    const a=deferred<ArchiveCatalogCreatorDetail>(),b=deferred<ArchiveCatalogCreatorDetail>(),history=deferred<Awaited<ReturnType<typeof fetchAdmissionBatches>>>();
-    vi.mocked(fetchArchiveCatalogCreator).mockImplementation(id=>id===1?a.promise:b.promise);vi.mocked(fetchAdmissionBatches).mockReturnValue(history.promise);
-    const scroll=vi.fn();vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
-    vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,window.innerHeight*0.75,400,500));
-    const w=panel();await w.setProps({creatorId:2});a.resolve(creator);await flushPromises();expect(scroll).not.toHaveBeenCalled();expect(fetchAdmissionBatches).not.toHaveBeenCalled();
-    b.resolve({...creator,id:2,name:'Beta'});await flushPromises();expect(scroll).not.toHaveBeenCalled();w.unmount();
-    history.resolve({items:[],total:0,page:1,pageSize:20,hasMore:false});await flushPromises();expect(scroll).not.toHaveBeenCalled();
-  });
-  it.each([{narrow:false,low:false},{narrow:true,low:true}])('does not reposition an already visible desktop panel or a narrow modal: $narrow/$low',async({narrow,low})=>{
-    const media=window.matchMedia('(max-width:1100px)');vi.spyOn(window,'matchMedia').mockReturnValue({...media,matches:narrow});
-    const scroll=vi.fn();
-    vi.spyOn(HTMLDialogElement.prototype,'show').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
-    vi.spyOn(HTMLDialogElement.prototype,'showModal').mockImplementation(function(){this.open=true;this.scrollIntoView=scroll;});
-    vi.spyOn(HTMLDialogElement.prototype,'getBoundingClientRect').mockReturnValue(new DOMRect(0,low?window.innerHeight*0.75:0,400,500));
-    const w=panel();await flushPromises();expect(w.get('.creator-panel').attributes('aria-modal')).toBe(String(narrow));expect(scroll).not.toHaveBeenCalled();
+  it('does not let Escape on the nested unsaved dialog request closing the parent modal',async()=>{
+    const w=panel('profile');await flushPromises();await w.get('.profile-form input').setValue('Draft');
+    const leaving=w.vm.requestLeave();await flushPromises();await w.get('.leave-dialog').trigger('cancel');
+    expect(await leaving).toBe(false);expect(w.get('.creator-panel').element.open).toBe(true);
+    expect(w.emitted('close')).toBeUndefined();expect(w.vm.dirtyTabs).toEqual(['profile']);
+    await w.get('.creator-panel').trigger('cancel');expect(w.emitted('close')).toEqual([[]]);
   });
   it('stages name, classification and manual aliases then submits one atomic profile save',async()=>{
     const value=structuredClone(creator);value.aliases.push({id:'manual-old',alias:'Previous alias',source:'manual',editable:true});chooseIdentity(value);
