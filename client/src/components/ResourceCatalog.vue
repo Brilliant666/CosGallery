@@ -3,27 +3,31 @@
     <header v-if="!payload">
       <h2>资源目录</h2>
     </header>
-    <div class="creator-picker" aria-label="目录范围">
+    <div ref="creatorPicker" class="creator-picker" aria-label="目录范围" @keydown.esc.stop.prevent="dismissCreatorSearch">
     <form class="creator-search" @submit.prevent="searchCreators">
       <label
         >规范博主名称或别名<input
           v-model="creatorQuery"
           type="search"
-          placeholder="搜索并选择博主" /></label
-      ><button>查找博主</button>
+          placeholder="输入名称或别名，回车搜索"
+          @input="dismissCreatorSearch"
+          @compositionstart="creatorComposing = true"
+          @compositionend="creatorComposing = false"
+          @keydown.enter="creatorEnter" /></label>
       <button type="button" data-test="view-all" :aria-pressed="!creatorId && hasScope" :disabled="!creatorId && hasScope" @click="selectAll">全部博主</button>
       <strong v-if="creatorId" class="current-creator">当前博主：{{ payload?.creator?.canonicalName ?? `博主 #${creatorId}` }}</strong>
     </form>
-    <div v-if="choices.length" class="choices">
-      <button
+    <ul v-if="choices.length" class="choices" aria-label="博主搜索结果">
+      <li
         v-for="choice in choices"
         :key="choice.id"
-        @click="selectCreator(choice.id)"
       >
-        #{{ choice.id }} {{ choice.canonicalName
-        }}{{ choice.enabled ? '' : '（停用）' }}
-      </button>
-    </div>
+        <button type="button" @click="selectCreator(choice.id)">
+          {{ choice.canonicalName }}{{ choice.enabled ? '' : '（停用）' }}
+          <small v-if="duplicateChoiceNames.has(choice.canonicalName)">身份 #{{ choice.id }}</small>
+        </button>
+      </li>
+    </ul>
     <p v-if="searchNotice" role="status">{{ searchNotice }}</p>
     </div>
     <div class="catalog-toolbar">
@@ -290,13 +294,38 @@ const props = withDefaults(defineProps<{ creatorId: number | null; globalScope?:
 const emit = defineEmits<{ select: [id: number | null]; all: []; resolved: [id: number | null]; unavailable: [] }>();
 const hasScope = computed(() => !props.scopeError && (props.creatorId !== null || props.globalScope !== false));
 const exportOpen = ref(false), moreOpen = ref(false), notesOpen = ref(false);
-function selectCreator(id: number) { emit('select', id); }
-function selectAll() { emit('all'); }
+function selectCreator(id: number) { resetCreatorSearch(); emit('select', id); }
+function selectAll() { resetCreatorSearch(); emit('all'); }
 const reading = useCreatorReadingStore();
 const payload = ref<ResourcePage | null>(null),
   creatorQuery = ref(''),
   choices = ref<ResourceCreator[]>([]),
   searchNotice = ref('');
+const creatorPicker = ref<HTMLElement | null>(null);
+const creatorComposing = ref(false);
+const duplicateChoiceNames = computed(() => {
+  const seen = new Set<string>(), duplicates = new Set<string>();
+  for (const choice of choices.value) {
+    if (seen.has(choice.canonicalName)) duplicates.add(choice.canonicalName);
+    seen.add(choice.canonicalName);
+  }
+  return duplicates;
+});
+function dismissCreatorSearch() {
+  ++searchToken;
+  choices.value = [];
+  searchNotice.value = '';
+}
+function resetCreatorSearch() { dismissCreatorSearch(); creatorQuery.value = ''; }
+function outsideCreatorSearch(event: Event) {
+  if (event.target instanceof Node && !creatorPicker.value?.contains(event.target)) dismissCreatorSearch();
+}
+function creatorEnter(event: KeyboardEvent) {
+  // Enter confirms an IME composition, not a search, until composition has ended.
+  if (event.isComposing || creatorComposing.value || event.keyCode === 229) { event.preventDefault(); return; }
+  event.preventDefault();
+  void searchCreators();
+}
 const loading = ref(false),
   error = ref(''),
   stale = ref(false),
@@ -339,7 +368,11 @@ function schedulePoll() {
   pollTimer = setTimeout(() => { if (!loading.value && !polling) void loadPage(payload.value?.page ?? 1, true, true); else schedulePoll(); }, 3000);
 }
 function visibilityChanged() { schedulePoll(); }
-onMounted(() => document.addEventListener('visibilitychange', visibilityChanged));
+onMounted(() => {
+  document.addEventListener('visibilitychange', visibilityChanged);
+  document.addEventListener('pointerdown', outsideCreatorSearch);
+  document.addEventListener('focusin', outsideCreatorSearch);
+});
 function failure(value: unknown) {
   if (value instanceof RequestError && value.status === 409) {
     stale.value = true;
@@ -352,10 +385,14 @@ function failure(value: unknown) {
   } else error.value = value instanceof Error ? value.message : '读取失败';
 }
 async function searchCreators() {
-  const current = ++searchToken;
-  searchNotice.value = '';
+  if (creatorComposing.value) return;
+  dismissCreatorSearch();
+  const query = creatorQuery.value.trim();
+  if (!query) return;
+  const current = searchToken;
+  searchNotice.value = '正在查找博主…';
   try {
-    const result = await findResourceCreators(creatorQuery.value.trim());
+    const result = await findResourceCreators(query);
     if (current !== searchToken) return;
     choices.value = result.items;
     searchNotice.value =
@@ -365,7 +402,7 @@ async function searchCreators() {
           ? ''
           : '没有符合名称或别名的博主。';
   } catch (e) {
-    if (current === searchToken) failure(e);
+    if (current === searchToken) searchNotice.value = e instanceof Error ? e.message : '查找失败，请重试。';
   }
 }
 async function loadPage(page = 1, refreshRevision = false, background = false) {
@@ -452,7 +489,7 @@ watch(
     ++token;
     ++detailToken;
     ++exportToken;
-    ++searchToken;
+    resetCreatorSearch();
     clearTimeout(timer);
     clearTimeout(pollTimer);
     clearMetadataDownload();
@@ -622,6 +659,8 @@ onBeforeUnmount(() => {
   clearMetadataDownload();
   clearTimeout(pollTimer);
   document.removeEventListener('visibilitychange', visibilityChanged);
+  document.removeEventListener('pointerdown', outsideCreatorSearch);
+  document.removeEventListener('focusin', outsideCreatorSearch);
   ++token;
   ++searchToken;
   ++detailToken;
@@ -646,8 +685,9 @@ onBeforeUnmount(() => {
 .status-tags span { padding:0.3rem 0.5rem; font-size:0.78rem; border-radius:0.5rem; background:var(--color-bg,#f5f6f8); color:var(--color-muted,#667085); }
 .menu { position:absolute; z-index:20; top:calc(100% + 0.4rem); right:0; min-width:16rem; max-width:calc(100vw - 3rem); padding:0.85rem; border:1px solid var(--color-border,#ddd); border-radius:0.75rem; background:var(--color-surface,#fff); box-shadow:0 8px 26px #0002; }
 .menu.exports { margin:0; display:grid; align-items:stretch; gap:0.6rem; }
-.choices { max-height:20rem; overflow:auto; display:grid; align-items:stretch; }
-.choices button { text-align:left; }
+.choices { max-height:14rem; max-width:32rem; overflow:auto; display:grid; gap:0.25rem; padding:0; margin:0 0 1rem; list-style:none; }
+.choices button { width:100%; text-align:left; }
+.creator-search input { width:18rem; max-width:100%; }
 .catalog-row { cursor:pointer; }
 .catalog-row:hover, .catalog-row:focus-visible { background:var(--color-bg,#f5f6f8); }
 .catalog-row:focus-visible { outline:2px solid var(--color-accent,#007bcb); outline-offset:-2px; }
@@ -676,7 +716,6 @@ small,
 .filters,
 .exports,
 .catalog-heading,
-.choices,
 footer {
   display: flex;
   gap: 0.75rem;

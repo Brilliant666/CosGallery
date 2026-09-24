@@ -126,8 +126,12 @@ describe('resource catalog', () => {
     await w.get('.creator-search').trigger('submit');
     await flushPromises();
     expect(api.findResourceCreators).toHaveBeenCalledWith('别名');
-    await button(w, '#2 别名对应博主').trigger('click');
+    expect(w.text()).not.toContain('查找博主');
+    expect(w.get('.choices').text()).not.toContain('#2');
+    await button(w, '别名对应博主').trigger('click');
     expect(w.emitted('select')).toEqual([[2]]);
+    expect(w.find('.choices').exists()).toBe(false);
+    expect((w.get('.creator-search input').element as HTMLInputElement).value).toBe('');
   });
   it('clearing selection isolates late global results and performs no new global read', async () => {
     const slow = deferred<api.ResourcePage>();
@@ -340,6 +344,98 @@ describe('resource catalog', () => {
     await flushPromises();
     expect(api.fetchResourceDetail).toHaveBeenCalledWith(1, 22, 'r1', undefined);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(row.text);
+  });
+  it('ignores blank and composing Enter, searches only on committed Enter without changing scope', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    const input = w.get('.creator-search input');
+    await input.setValue('   ');
+    await input.trigger('keydown', { key: 'Enter' });
+    await w.get('.creator-search').trigger('submit');
+    expect(api.findResourceCreators).not.toHaveBeenCalled();
+    await input.setValue('神');
+    await input.trigger('compositionstart');
+    await input.trigger('keydown', { key: 'Enter', isComposing: true });
+    await w.get('.creator-search').trigger('submit');
+    expect(api.findResourceCreators).not.toHaveBeenCalled();
+    await input.trigger('compositionend');
+    await input.trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    expect(api.findResourceCreators).toHaveBeenCalledExactlyOnceWith('神');
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(1);
+    expect(w.emitted('select')).toBeUndefined();
+    expect(w.emitted('all')).toBeUndefined();
+  });
+  it('dismisses with Escape or outside pointer/focus, and never reopens merely on focus', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 }, attachTo: document.body });
+    await flushPromises();
+    const input = w.get('.creator-search input');
+    await input.setValue('神');
+    for (const cancel of ['escape', 'pointer', 'focus']) {
+      await input.trigger('keydown', { key: 'Enter' });
+      await flushPromises();
+      expect(w.find('.choices').exists()).toBe(true);
+      if (cancel === 'escape') {
+        const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+        input.element.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+      else if (cancel === 'pointer') document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      else await w.get('.filters input').trigger('focusin');
+      await flushPromises();
+      expect(w.find('.choices').exists()).toBe(false);
+      expect((input.element as HTMLInputElement).value).toBe('神');
+      await input.trigger('focus');
+      expect(w.find('.choices').exists()).toBe(false);
+    }
+    expect(api.findResourceCreators).toHaveBeenCalledTimes(3);
+    expect(w.emitted('select')).toBeUndefined();
+    expect(w.emitted('all')).toBeUndefined();
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(1);
+  });
+  it.each(['edit', 'escape', 'outside', 'all', 'scope', 'unmount'])('ignores a late search after %s', async (action) => {
+    const pending = deferred<Awaited<ReturnType<typeof api.findResourceCreators>>>();
+    vi.mocked(api.findResourceCreators).mockReturnValueOnce(pending.promise);
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 }, attachTo: document.body });
+    await flushPromises();
+    const input = w.get('.creator-search input');
+    await input.setValue('神');
+    await w.get('.creator-search').trigger('submit');
+    expect(w.text()).toContain('正在查找博主');
+    if (action === 'edit') await input.setValue('');
+    if (action === 'escape') await input.trigger('keydown', { key: 'Escape' });
+    if (action === 'outside') document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    if (action === 'all') await w.get('[data-test="view-all"]').trigger('click');
+    if (action === 'scope') await w.setProps({ creatorId: 2 });
+    if (action === 'unmount') w.unmount();
+    pending.resolve({ items: [{ id: 2, canonicalName: '迟到的博主', enabled: true, preference: null }], total: 1 });
+    await flushPromises();
+    expect(w.find('.choices').exists()).toBe(false);
+    if (action !== 'unmount') expect(w.text()).not.toContain('正在查找博主');
+    if (action === 'edit') expect(w.emitted('all')).toBeUndefined();
+  });
+  it('reports empty/error searches locally and shows IDs only for ambiguous names', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    const input = w.get('.creator-search input');
+    await input.setValue('神');
+    vi.mocked(api.findResourceCreators).mockResolvedValueOnce({ items: [], total: 0 });
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises();
+    expect(w.text()).toContain('没有符合名称或别名的博主');
+    vi.mocked(api.findResourceCreators).mockRejectedValueOnce(new Error('搜索暂时失败'));
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises();
+    expect(w.get('.creator-picker [role="status"]').text()).toBe('搜索暂时失败');
+    expect(w.find('[role="alert"]').exists()).toBe(false);
+    const items = [2, 3].map(id => ({ id, canonicalName: '同名博主', enabled: true, preference: null }));
+    vi.mocked(api.findResourceCreators).mockResolvedValueOnce({ items, total: 3 });
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises();
+    expect(w.get('.choices').text()).toContain('身份 #2');
+    expect(w.get('.choices').text()).toContain('身份 #3');
+    expect(w.text()).toContain('共 3 位，请缩小搜索范围');
+    await w.get('.choices button').trigger('click');
+    expect(w.emitted('select')).toEqual([[2]]);
+    expect(w.find('.choices').exists()).toBe(false);
+    expect(w.text()).not.toContain('请缩小搜索范围');
   });
   it('global rows keep their own creator links and global revision on detail reads', async () => {
     const p = page(2);
