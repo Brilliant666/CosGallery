@@ -787,6 +787,22 @@ summary { cursor: pointer; }
   .resource-catalog {
     padding: 0.75rem;
   }
+  .catalog-toolbar > .creator-picker,
+  .catalog-toolbar > .scope-count {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+  .creator-picker > button {
+    width: 100%;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .status-tags {
+    flex: 1 0 100%;
+  }
+  .status-tags button {
+    white-space: nowrap;
+  }
   .filters label,
   .creator-search label {
     width: 100%;
