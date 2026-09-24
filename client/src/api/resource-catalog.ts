@@ -62,6 +62,8 @@ export interface ResourcePage {
     sourceOnlyWorks: number;
     legacyPosts: number;
     excludedDeletedWorks: number;
+    linkedWorks?: number;
+    unlinkedWorks?: number;
   };
   legacyGaps: { postId: number; title: string; reason: string; creatorId?: number; creatorName?: string }[];
   items: ResourceRow[];

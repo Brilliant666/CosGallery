@@ -13,7 +13,7 @@ export function createResourceCatalogRouter() {
     q: z.string().max(500).optional(),
     order: z.enum(['oldest', 'newest']).optional(),
     localState: z
-      .enum(['all', 'indexed', 'unavailable', 'unarranged'])
+      .enum(['all', 'indexed', 'unavailable', 'unarranged', 'exception'])
       .optional(),
     source: z.enum(['all', 'linked', 'unlinked']).optional(),
     page: z.coerce.number().int().positive().optional(),

@@ -79,7 +79,8 @@ export class ResourceCatalogService {
     if (creatorId !== null) { conditions.push('r.creator_id=?'); args.push(creatorId); }
     if (filter.q?.trim()) { conditions.push('(instr(r.search_text,?)>0 OR instr(s.aliases_text,?)>0)');
       const q = filter.q.trim().toLocaleLowerCase(); args.push(q, q); }
-    if (filter.localState && filter.localState !== 'all') { conditions.push('r.local_state=?'); args.push(filter.localState); }
+    if (filter.localState === 'exception') conditions.push("r.local_state IN ('unavailable','unarranged')");
+    else if (filter.localState && filter.localState !== 'all') { conditions.push('r.local_state=?'); args.push(filter.localState); }
     if (filter.source && filter.source !== 'all') { conditions.push('r.has_source=?'); args.push(Number(filter.source === 'linked')); }
     return { sql: `FROM resource_catalog_rows r JOIN resource_catalog_state s ON r.creator_id=s.creator_id WHERE ${conditions.join(' AND ')}`, args };
   }
@@ -91,12 +92,18 @@ export class ResourceCatalogService {
   list(creatorId: number | null, filter: ResourceCatalogFilter = {}): ResourceCatalogPage {
     return this.read(db => {
       const context = this.context(db, creatorId, filter.order); this.checkRevision(context.revision, filter.revision);
+      // Aggregate only the published lightweight rows, in the same read snapshot as
+      // the page. Counts describe the whole scope, not the current filter or page.
+      const full = this.selection(creatorId, {});
+      const sources = db.prepare(`SELECT COALESCE(SUM(r.has_source=1),0) linkedWorks,
+        COALESCE(SUM(r.has_source=0),0) unlinkedWorks ${full.sql}`).get(...full.args)!;
       const { sql, args } = this.selection(creatorId, filter);
       const total = Number(db.prepare(`SELECT COUNT(*) n ${sql}`).get(...args)!.n);
       const page = Math.max(1, filter.page ?? 1), pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 50));
       const items = db.prepare(`SELECT r.row_json ${sql} ${this.ordering(context.sortOrder)} LIMIT ? OFFSET ?`)
         .all(...args, pageSize, (page - 1) * pageSize).map(row => JSON.parse(String(row.row_json)) as ResourceCatalogRow);
-      return { ...context, items, total, page, pageSize };
+      return { ...context, summary: { ...context.summary, linkedWorks: Number(sources.linkedWorks),
+        unlinkedWorks: Number(sources.unlinkedWorks) }, items, total, page, pageSize };
     });
   }
   detail(creatorId: number, workId: number, revision?: string, revisionScope: 'all' | 'creator' = 'creator'): ResourceCatalogDetail {

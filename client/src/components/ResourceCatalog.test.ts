@@ -83,7 +83,9 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const button = (w: ReturnType<typeof mount>, text: string) =>
-  w.findAll('button').find((b) => b.text() === text)!;
+  text === '展开详情' || text === '收起'
+    ? w.get('.catalog-row')
+    : w.findAll('button').find((b) => b.text() === text)!;
 describe('resource catalog', () => {
   enableAutoUnmount(afterEach);
   beforeEach(() => {
@@ -109,18 +111,19 @@ describe('resource catalog', () => {
     });
   });
   afterEach(() => vi.useRealTimers());
-  it('defaults to a picker without requesting global data and resolves names/aliases explicitly', async () => {
+  it('defaults to global data and uses a lightweight explicit name/alias picker', async () => {
     const w = mount(ResourceCatalog, { props: { creatorId: null } });
     await flushPromises();
-    expect(api.fetchResourceCatalog).not.toHaveBeenCalled();
+    expect(api.fetchResourceCatalog).toHaveBeenCalledWith(null, expect.any(Object), 1, undefined);
     expect(api.exportResourceCatalog).not.toHaveBeenCalled();
-    expect(w.find('table').exists()).toBe(false);
-    expect(w.find('.filters').exists()).toBe(false);
-    expect(w.text()).toContain('请选择一位博主');
-    await button(w, '查看全部作品').trigger('click');
+    expect(w.find('table').exists()).toBe(true);
+    expect(w.find('.filters').exists()).toBe(true);
+    await w.get('.creator-picker > button').trigger('click');
+    await button(w, '全部博主').trigger('click');
     expect(w.emitted('all')).toEqual([[]]);
     expect(api.fetchResourceDetail).not.toHaveBeenCalled();
     expect(api.findResourceCreators).not.toHaveBeenCalled();
+    await w.get('.creator-picker > button').trigger('click');
     await w.get('.creator-search input').setValue('别名');
     await w.get('.creator-search').trigger('submit');
     await flushPromises();
@@ -141,7 +144,7 @@ describe('resource catalog', () => {
     await flushPromises();
     expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(2);
     expect(w.find('table').exists()).toBe(false);
-    expect(w.text()).toContain('请选择一位博主');
+    expect(w.text()).toContain('全部博主');
   });
   it('keeps secondary controls collapsed without hiding read-model failures', async () => {
     const p = page();
@@ -149,8 +152,8 @@ describe('resource catalog', () => {
     vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
     const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
     await flushPromises();
-    expect(w.get('.filter-panel').attributes('open')).toBeUndefined();
-    expect(w.get('.export-panel').attributes('open')).toBeUndefined();
+    expect(w.get('.filters').isVisible()).toBe(true);
+    expect(w.get('#resource-export').isVisible()).toBe(false);
     expect(w.text()).toContain('目录更新失败');
     expect(button(w, '导出 CSV').attributes('disabled')).toBeDefined();
   });
@@ -349,8 +352,9 @@ describe('resource catalog', () => {
     await button(w, '展开详情').trigger('click');
     await flushPromises();
     expect(api.fetchResourceDetail).toHaveBeenCalledWith(2, 22, 'r2', 'all');
-    await button(w, '更换博主').trigger('click');
-    expect(w.emitted('select')).toEqual([[null]]);
+    await w.get('.creator-picker > button').trigger('click');
+    await button(w, '全部博主').trigger('click');
+    expect(w.emitted('all')).toEqual([[]]);
   });
   it('discloses incomplete initialization, blocks export, and polls a new revision without overlapping requests', async () => {
     vi.useFakeTimers();
@@ -431,5 +435,57 @@ describe('resource catalog', () => {
     expect(names).toEqual(['CosGallery-1-r1.csv', 'CosGallery-1-r1.metadata.json']);
     expect(create).toHaveBeenCalledTimes(2);
     click.mockRestore();
+  });
+  it('keeps scope counts while applying visible exception/source/search filters and preserves zero selected states', async () => {
+    const p = page(); p.summary.unlinkedWorks = 70; p.total = 12;
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } }); await flushPromises();
+    expect(w.get('.scope-count').text()).toBe('完整目录 101 套');
+    expect(w.get('.filtered-count').text()).toBe('当前筛选 12 套');
+    await w.get('.exception-toggle input').setValue(true); await flushPromises();
+    expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(1, expect.objectContaining({ localState: 'exception', source: 'all' }), 1, 'r1');
+    await button(w, '未关联来源 70').trigger('click'); await flushPromises();
+    expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(1, expect.objectContaining({ localState: 'exception', source: 'unlinked' }), 1, 'r1');
+    const zero = page(); zero.summary.unavailableWorks = 0; zero.total = 0; zero.items = [];
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValueOnce(zero);
+    await button(w, '主副本不可用 1').trigger('click'); await flushPromises();
+    expect((w.get('.exception-toggle input').element as HTMLInputElement).checked).toBe(false);
+    expect(button(w, '主副本不可用 0').attributes('aria-pressed')).toBe('true');
+    expect(w.text()).toContain('当前筛选没有作品');
+    await button(w, '清除筛选').trigger('click'); await flushPromises();
+    expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(1, expect.objectContaining({ localState: 'all', source: 'all', q: '' }), 1, 'r1');
+  });
+  it('supports keyboard details and keeps row actions and selected text from expanding', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } }); await flushPromises();
+    const rowElement = w.get('.catalog-row');
+    expect(rowElement.attributes('aria-expanded')).toBe('false');
+    w.get('.row-actions a').element.addEventListener('click', event => event.preventDefault());
+    await w.get('.row-actions a').trigger('click');
+    await button(w, '复制单条').trigger('click'); await flushPromises();
+    expect(rowElement.attributes('aria-expanded')).toBe('false');
+    expect(api.fetchResourceDetail).toHaveBeenCalledTimes(1);
+    const selection = vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => 'selected title' } as Selection);
+    await rowElement.trigger('click'); expect(rowElement.attributes('aria-expanded')).toBe('false');
+    selection.mockRestore();
+    await rowElement.trigger('keydown', { key: 'Enter' }); await flushPromises();
+    expect(rowElement.attributes('aria-expanded')).toBe('true');
+    expect(w.get(`#${rowElement.attributes('aria-controls')}`).exists()).toBe(true);
+    expect(api.fetchResourceDetail).toHaveBeenCalledTimes(2);
+    await rowElement.trigger('keydown', { key: ' ' });
+    expect(rowElement.attributes('aria-expanded')).toBe('false');
+    expect(w.get('.catalog-row').text()).not.toContain('0V');
+  });
+  it('invalid explicit scope never reads all and a late export cannot download into a new page', async () => {
+    const invalid = mount(ResourceCatalog, { props: { creatorId: null, globalScope: false, scopeError: '无效博主链接' } });
+    await flushPromises(); expect(api.fetchResourceCatalog).not.toHaveBeenCalled();
+    expect(invalid.get('[role="alert"]').text()).toBe('无效博主链接'); invalid.unmount();
+    const pending = deferred<{ text: string; metadata: Record<string, unknown> | null }>();
+    vi.mocked(api.exportResourceCatalog).mockReturnValueOnce(pending.promise);
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } }); await flushPromises();
+    await button(w, '复制目录').trigger('click');
+    await button(w, '下一页').trigger('click'); await flushPromises();
+    pending.resolve({ text: 'late export', metadata: null }); await flushPromises();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(w.text()).not.toContain('已复制');
   });
 });

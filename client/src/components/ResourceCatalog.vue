@@ -1,9 +1,14 @@
 <template>
-  <section class="resource-catalog" aria-label="资源目录">
+  <section class="resource-catalog" aria-label="资源目录" @keydown.esc="pickerOpen = false; exportOpen = false; moreOpen = false">
     <header v-if="!payload">
       <h2>资源目录</h2>
     </header>
-    <form v-if="!hasScope" class="creator-search" @submit.prevent="searchCreators">
+    <div class="catalog-toolbar">
+    <div class="creator-picker">
+      <button type="button" :aria-expanded="pickerOpen" aria-controls="resource-creator-picker" @click="pickerOpen = !pickerOpen">{{ payload?.creator?.canonicalName ?? (creatorId ? `博主 #${creatorId}` : '全部博主') }} ▾</button>
+      <div v-if="pickerOpen" id="resource-creator-picker" class="menu creator-menu">
+      <button type="button" data-test="view-all" @click="selectAll">全部博主</button>
+    <form class="creator-search" @submit.prevent="searchCreators">
       <label
         >规范博主名称或别名<input
           v-model="creatorQuery"
@@ -11,43 +16,56 @@
           placeholder="搜索并选择博主" /></label
       ><button>查找博主</button>
     </form>
-    <div v-if="!hasScope && choices.length" class="choices">
+    <div v-if="choices.length" class="choices">
       <button
         v-for="choice in choices"
         :key="choice.id"
-        @click="emit('select', choice.id)"
+        @click="selectCreator(choice.id)"
       >
         #{{ choice.id }} {{ choice.canonicalName
         }}{{ choice.enabled ? '' : '（停用）' }}
       </button>
     </div>
-    <p v-if="!hasScope && searchNotice" role="status">{{ searchNotice }}</p>
-    <p v-if="!hasScope" class="hint">请选择一位博主查看资源目录。</p>
-    <button v-if="!hasScope" class="secondary-entry" data-test="view-all" @click="emit('all')">查看全部作品</button>
-    <div v-if="hasScope" class="navigation">
-      <button @click="emit('back')">返回博主库</button>
-      <button @click="emit('select', null)">更换博主</button>
+    <p v-if="searchNotice" role="status">{{ searchNotice }}</p>
+      </div>
     </div>
+    <template v-if="payload">
+      <strong class="scope-count">完整目录 {{ payload.summary.totalWorks }} 套</strong>
+      <div class="status-tags" aria-label="完整目录状态">
+        <button v-for="tag in statusTags" :key="tag.value" :aria-pressed="filters.localState === tag.value" @click="selectState(tag.value)">{{ tag.label }} {{ tag.count }}</button>
+        <button v-if="(payload.summary.unlinkedWorks ?? 0) > 0 || filters.source === 'unlinked'" :aria-pressed="filters.source === 'unlinked'" @click="selectSource('unlinked')">未关联来源 {{ payload.summary.unlinkedWorks ?? '未知' }}</button>
+      </div>
+      <a v-if="payload.creator" :href="`/library/${payload.creator.id}`">查看图库</a>
+      <div class="menu-anchor export-panel">
+        <button :aria-expanded="exportOpen" aria-controls="resource-export" @click="exportOpen = !exportOpen; moreOpen = false">导出</button>
+        <div v-show="exportOpen" id="resource-export" class="menu exports">
+          <label>范围<select v-model="scope" data-test="export-scope">
+            <option value="all">{{ payload.creator ? '当前博主完整目录' : '全库完整目录' }}（全部分页）</option>
+            <option value="filtered">当前筛选结果（全部分页）</option>
+          </select></label>
+          <button :disabled="exportDisabled" @click="exportAll('copy')">复制目录</button>
+          <button :disabled="exportDisabled" @click="exportAll('txt')">导出 TXT</button>
+          <button :disabled="exportDisabled" @click="exportAll('csv')">导出 CSV</button>
+        </div>
+      </div>
+      <div class="menu-anchor"><button :aria-expanded="moreOpen" aria-controls="resource-more" @click="moreOpen = !moreOpen; exportOpen = false">更多</button>
+        <div v-show="moreOpen" id="resource-more" class="menu"><button data-test="refresh" @click="refresh">刷新目录</button><button @click="notesOpen = !notesOpen; moreOpen = false">目录说明与完整统计</button></div>
+      </div>
+    </template>
+    </div>
+    <p v-if="scopeError" role="alert" class="error">{{ scopeError }}</p>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <p v-if="loading" role="status">正在读取资源目录…</p>
     <template v-if="payload">
-      <header class="catalog-heading">
-        <h3>
-          {{ payload.creator?.canonicalName ?? '全部博主' }}
-          <small>{{ payload.summary.totalWorks }} 套独立作品</small>
-        </h3>
-        <a v-if="payload.creator" :href="`/library/${payload.creator.id}`">查看图库</a
-        ><button data-test="refresh" @click="refresh">刷新目录</button>
-      </header>
       <p v-if="payload.readModel.status !== 'ready' || !payload.readModel.complete" class="hint" role="status" data-test="read-model-status">
         {{ modelStatus }} · 已初始化 {{ payload.readModel.initializedCreators }}/{{ payload.readModel.totalCreators }} 位博主
         <template v-if="!payload.readModel.complete">；当前目录尚不完整，暂不可导出。</template>
         <template v-else-if="payload.readModel.status !== 'ready'">；当前展示上一份完整版本。</template>
       </p>
       <p v-if="stale" role="status" class="stale">
-        作品数据已更新，请刷新资源目录；当前保留原编排。
+        作品数据已更新，请刷新资源目录；当前保留原编排。<button @click="refresh">就地刷新</button>
       </p>
-      <details class="catalog-notes"><summary>目录说明与统计</summary>
+      <section v-if="notesOpen" class="catalog-notes" aria-label="目录说明与统计">
       <p class="stats">
         独立作品 {{ payload.summary.totalWorks }} · 已编目
         {{ payload.summary.numberedWorks }} · 未编排/待核对
@@ -83,8 +101,8 @@
           </li>
         </ul>
       </details>
-      </details>
-      <p v-if="payload.summary.unavailableWorks || payload.summary.unarrangedWorks || payload.summary.legacyPosts" class="hint" data-test="catalog-warning">部分作品不可用或待核对，请展开目录说明查看。</p>
+      </section>
+      <p v-if="payload.summary.unavailableWorks || payload.summary.unarrangedWorks || payload.summary.legacyPosts" class="hint" data-test="catalog-warning">部分作品不可用或待核对，可在更多中查看目录说明。</p>
       <form class="filters" @submit.prevent="applyFilters">
         <label
           >作品搜索<input
@@ -95,9 +113,11 @@
             @compositionstart="composing = true"
             @compositionend="compositionEnd" /></label>
         <label>展示方向<select v-model="filters.order" @change="applyFilters"><option value="oldest">从早到晚</option><option value="newest">从晚到早</option></select></label>
-        <details class="filter-panel"><summary>筛选</summary><div class="filter-fields"><label
+        <label class="exception-toggle"><input type="checkbox" :checked="filters.localState === 'exception'" @change="selectState(filters.localState === 'exception' ? 'all' : 'exception')" />只看异常</label>
+        <label
           >本地状态<select v-model="filters.localState" @change="applyFilters">
             <option value="all">全部状态</option>
+            <option value="exception">只看异常（并集）</option>
             <option value="indexed">已索引</option>
             <option value="unavailable">主副本不可用</option>
             <option value="unarranged">未编排/待核对</option>
@@ -108,88 +128,55 @@
             <option value="linked">已关联来源</option>
             <option value="unlinked">未关联来源</option>
           </select></label
-        ></div></details>
-      </form>
-      <details class="export-panel"><summary>复制/导出</summary>
-      <div class="exports">
-        <label
-          >复制/导出范围<select v-model="scope" data-test="export-scope">
-            <option value="all">完整目录（全部分页）</option>
-            <option value="filtered">当前筛选结果（全部分页）</option>
-          </select></label
-        ><button
-          :disabled="exportDisabled"
-          @click="exportAll('copy')"
         >
-          复制目录</button
-        ><button :disabled="exportDisabled" @click="exportAll('txt')">
-          导出 TXT</button
-        ><button :disabled="exportDisabled" @click="exportAll('csv')">
-          导出 CSV
-        </button>
-      </div>
+        <span class="filtered-count">当前筛选 {{ payload.total }} 套</span>
+        <button v-if="filters.q || filters.localState !== 'all' || filters.source !== 'all'" type="button" @click="clearFilters">清除筛选</button>
+      </form>
       <p v-if="notice" role="status">{{ notice }}</p>
       <p v-if="metadataDownload"><a :href="metadataDownload.url" :download="metadataDownload.name">下载本次 CSV 的配套元信息</a>（与 CSV 一同保存）</p>
-      </details>
       <div class="table-scroll">
         <table>
           <thead>
             <tr>
               <th v-if="!creatorId">博主</th>
-              <th>CosGallery NO / 作品</th>
-              <th>排序时间</th>
-              <th>主副本媒体</th>
-              <th>索引状态</th>
-              <th>已有来源对应</th>
+              <th>NO</th><th>作品</th>
+              <th>排序日期</th>
+              <th>内容</th>
+              <th>状态</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             <template v-for="item in payload.items" :key="item.workId"
-              ><tr>
-                <td v-if="!creatorId"><button @click="emit('select', item.creatorId)">{{ item.creatorName }}</button></td>
+              ><tr class="catalog-row" tabindex="0" :aria-expanded="expanded === item.workId" :aria-controls="`resource-detail-${item.workId}`" :aria-label="`${item.title}，${expanded === item.workId ? '收起' : '展开'}详情`" @click="rowClick($event, item.workId)" @keydown.enter.self.prevent="toggleDetail(item.workId)" @keydown.space.self.prevent="toggleDetail(item.workId)">
+                <td v-if="!creatorId"><button @click.stop="selectCreator(item.creatorId)">{{ item.creatorName }}</button></td>
+                <td class="number-cell"><strong>{{ item.no ?? '未编排' }}</strong></td><td class="title-cell">{{ item.title }}</td>
+                <td :title="date(item.sortTimestamp)">{{ shortDate(item.sortTimestamp) }} <span v-if="item.sortEstimate" class="estimate-badge" data-test="sort-estimate" title="按来源顺序估算的排序时间，详细依据见展开详情">估算</span></td>
                 <td>
-                  <strong>{{ item.no ?? '未编排' }}</strong> {{ item.title }}
-                </td>
-                <td>{{ date(item.sortTimestamp) }} <span v-if="item.sortEstimate" class="estimate-badge" data-test="sort-estimate" title="按来源顺序估算的排序时间，详细依据见展开详情">估算</span></td>
-                <td>
-                  {{ item.imageCount ?? '未知' }} P /
-                  {{ item.videoCount ?? '未知' }} V<br />{{
-                    bytes(item.mediaBytes)
-                  }}<small v-if="item.statisticsBasis === 'last-indexed'"
+                  {{ content(item) }}<small v-if="item.statisticsBasis === 'last-indexed'"
                     >按最后索引记录</small
                   >
                 </td>
                 <td>
-                  {{ stateLabel(item.localState)
-                  }}<small>{{ item.reason }}</small>
+                  <span v-if="item.localState !== 'indexed'" class="exception-badge" :title="item.reason ?? undefined">{{ stateLabel(item.localState) }}</span>
+                  <span v-if="!item.sources.length" class="hint">未关联来源</span>
+                  <span v-if="item.localState === 'indexed' && item.sources.length" aria-label="无异常">—</span>
                 </td>
                 <td>
-                  {{ item.sources.length ? `已关联 ${item.sources.length} 条来源` : '未关联来源' }}
-                </td>
-                <td>
-                  <div class="row-actions">
+                  <div class="row-actions" @click.stop>
                     <a
                       v-if="item.primaryPostId && item.localState === 'indexed'"
                       :href="`/library/${item.creatorId}/works/${item.primaryPostId}`"
-                      >查看图集</a
-                    ><button
+                      title="查看图集">查看图集</a><button
                       :disabled="stale || loading"
-                      @click="toggleDetail(item.workId)"
-                    >
-                      {{
-                        expanded === item.workId ? '收起' : '展开详情'
-                      }}</button
-                    ><button
-                      :disabled="stale || loading"
-                      @click="copyOne(item)"
+                      title="复制单条目录" @click="copyOne(item)"
                     >
                       复制单条
                     </button>
                   </div>
                 </td>
               </tr>
-              <tr v-if="expanded === item.workId">
+              <tr v-if="expanded === item.workId" :id="`resource-detail-${item.workId}`">
                 <td :colspan="creatorId ? 6 : 7" class="detail">
                   <p v-if="detailLoading">正在读取详情…</p>
                   <template v-else-if="details[item.workId]"
@@ -199,6 +186,7 @@
                       }}
                       · 主 LocalWork #{{ item.primaryLocalWorkId ?? '未知' }}
                     </p>
+                    <p>排序时间：{{ date(item.sortTimestamp) }}；{{ stateLabel(item.localState) }}<template v-if="item.reason"> · {{ item.reason }}</template></p>
                     <div v-if="details[item.workId]!.item.sortEstimate" class="sort-estimate-basis" data-test="sort-estimate-basis">
                       <p>按来源顺序估算的排序时间：{{ date(details[item.workId]!.item.sortTimestamp) }}；原值：{{ date(details[item.workId]!.item.sortEstimate!.originalTimestamp) }}。</p>
                       <p>来源 NO.{{ details[item.workId]!.item.sortEstimate!.sourceOrder }}；前参照 Work #{{ details[item.workId]!.item.sortEstimate!.lower.workId }}（来源 NO.{{ details[item.workId]!.item.sortEstimate!.lower.sourceOrder }}，{{ date(details[item.workId]!.item.sortEstimate!.lower.timestamp) }}）；后参照 Work #{{ details[item.workId]!.item.sortEstimate!.upper.workId }}（来源 NO.{{ details[item.workId]!.item.sortEstimate!.upper.sourceOrder }}，{{ date(details[item.workId]!.item.sortEstimate!.upper.timestamp) }}）。</p>
@@ -300,9 +288,12 @@ import {
   type ResourcePage,
   type ResourceRow
 } from '../api/resource-catalog';
-const props = defineProps<{ creatorId: number | null; globalScope?: boolean }>();
-const emit = defineEmits<{ select: [id: number | null]; all: []; back: [] }>();
-const hasScope = computed(() => props.creatorId !== null || props.globalScope === true);
+const props = withDefaults(defineProps<{ creatorId: number | null; globalScope?: boolean; scopeError?: string }>(), { globalScope: true, scopeError: '' });
+const emit = defineEmits<{ select: [id: number | null]; all: []; resolved: [id: number | null]; unavailable: [] }>();
+const hasScope = computed(() => !props.scopeError && (props.creatorId !== null || props.globalScope !== false));
+const pickerOpen = ref(false), exportOpen = ref(false), moreOpen = ref(false), notesOpen = ref(false);
+function selectCreator(id: number) { pickerOpen.value = false; emit('select', id); }
+function selectAll() { pickerOpen.value = false; emit('all'); }
 const reading = useCreatorReadingStore();
 const payload = ref<ResourcePage | null>(null),
   creatorQuery = ref(''),
@@ -322,6 +313,18 @@ function clearMetadataDownload() {
   metadataDownload.value = null;
 }
 const filters = reactive({ q: '', localState: 'all', source: 'all', order: 'oldest' as 'oldest' | 'newest' });
+const statusTags = computed(() => [
+  { value: 'indexed', label: '已索引', count: Math.max(0, (payload.value?.summary.totalWorks ?? 0) - (payload.value?.summary.unarrangedWorks ?? 0) - (payload.value?.summary.unavailableWorks ?? 0)) },
+  { value: 'unarranged', label: '待核对/未编排', count: payload.value?.summary.unarrangedWorks ?? 0 },
+  { value: 'unavailable', label: '主副本不可用', count: payload.value?.summary.unavailableWorks ?? 0 }
+].filter(tag => tag.count > 0 || filters.localState === tag.value));
+function selectState(state: string) { filters.localState = state; applyFilters(); }
+function selectSource(source: string) { filters.source = filters.source === source ? 'all' : source; applyFilters(); }
+function clearFilters() { filters.q = ''; filters.localState = 'all'; filters.source = 'all'; applyFilters(); }
+function rowClick(event: MouseEvent, workId: number) {
+  if ((event.target as HTMLElement).closest('a,button,input,select') || window.getSelection()?.toString()) return;
+  void toggleDetail(workId);
+}
 const exportDisabled = computed(() => busy.value || stale.value || loading.value || !payload.value?.readModel.complete || payload.value.readModel.status !== 'ready');
 const modelStatus = computed(() => ({ ready: '当前完成版本', updating: '正在更新目录', uninitialized: '目录尚未初始化', failed: '目录更新失败，将自动重试' })[payload.value?.readModel.status ?? 'uninitialized']);
 const scope = ref<'all' | 'filtered'>('all');
@@ -344,6 +347,11 @@ onMounted(() => document.addEventListener('visibilitychange', visibilityChanged)
 function failure(value: unknown) {
   if (value instanceof RequestError && value.status === 409) {
     stale.value = true;
+    ++detailToken;
+    ++exportToken;
+    detailLoading.value = false;
+    busy.value = false;
+    clearMetadataDownload();
     error.value = '编排已变化，请刷新后继续；未合并不同版本的目录。';
   } else error.value = value instanceof Error ? value.message : '读取失败';
 }
@@ -371,6 +379,10 @@ async function loadPage(page = 1, refreshRevision = false, background = false) {
     current = ++token;
   if (background) polling = true;
   else {
+    ++exportToken;
+    busy.value = false;
+    clearMetadataDownload();
+    notice.value = '';
     ++detailToken;
     expanded.value = null;
     detailLoading.value = false;
@@ -395,6 +407,7 @@ async function loadPage(page = 1, refreshRevision = false, background = false) {
         stale.value = true;
         ++detailToken;
         ++exportToken;
+        clearMetadataDownload();
         busy.value = false;
         detailLoading.value = false;
         notice.value = '目录版本已变化，请刷新后查看；当前页和编号保持原版本。';
@@ -407,10 +420,14 @@ async function loadPage(page = 1, refreshRevision = false, background = false) {
       detailLoading.value = false;
     }
     payload.value = result;
+    emit('resolved', id);
     stale.value = false;
     details.value = {};
   } catch (e) {
-    if (current === token) failure(e);
+    if (current === token) {
+      failure(e);
+      if (e instanceof RequestError && e.status === 404) emit('unavailable');
+    }
   } finally {
     if (background) polling = false;
     if (current === token) { loading.value = false; schedulePoll(); }
@@ -434,7 +451,7 @@ function compositionEnd(event: Event) {
   queryInput(event);
 }
 watch(
-  () => [props.creatorId, props.globalScope],
+  () => [props.creatorId, props.globalScope, props.scopeError],
   () => {
     ++token;
     ++detailToken;
@@ -469,6 +486,7 @@ watch(
       ++token;
       ++detailToken;
       ++exportToken;
+      clearMetadataDownload();
       loading.value = false;
       busy.value = false;
     }
@@ -480,7 +498,7 @@ async function toggleDetail(workId: number) {
     ++detailToken;
     return;
   }
-  if (!payload.value || stale.value) return;
+  if (!payload.value || stale.value || loading.value) return;
   expanded.value = workId;
   const current = ++detailToken,
     id = payload.value.items.find(item => item.workId === workId)!.creatorId,
@@ -492,7 +510,7 @@ async function toggleDetail(workId: number) {
   detailLoading.value = true;
   try {
     const result = await fetchResourceDetail(id, workId, revision, props.creatorId === null ? 'all' : undefined);
-    if (current === detailToken) details.value[workId] = result;
+    if (current === detailToken && payload.value?.revision === revision) details.value[workId] = result;
   } catch (e) {
     if (current === detailToken) failure(e);
   } finally {
@@ -500,7 +518,7 @@ async function toggleDetail(workId: number) {
   }
 }
 async function copyOne(item: ResourceRow) {
-  if (!payload.value || stale.value) return;
+  if (!payload.value || stale.value || loading.value) return;
   const current = ++exportToken,
     snapshot = payload.value;
   try {
@@ -572,7 +590,12 @@ async function exportAll(action: 'copy' | 'txt' | 'csv') {
   }
 }
 const date = (value: number | null) =>
-  value === null ? '未知 / 未编排' : new Date(value).toLocaleString();
+  value === null ? '未知 / 未编排' : `${new Date(value).toLocaleString()} (${timeZone})`;
+const shortDate = (value: number | null) => value === null ? '未知' : new Date(value).toLocaleDateString();
+const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const content = (item: ResourceRow) => [item.imageCount === null ? '图片数未知' : `${item.imageCount}P`,
+  item.videoCount === null ? '视频数未知' : item.videoCount > 0 ? `${item.videoCount}V` : null,
+  bytes(item.mediaBytes)].filter(Boolean).join(' · ');
 const bytes = (value: number | null) =>
   value === null
     ? '容量未知'
@@ -617,6 +640,25 @@ onBeforeUnmount(() => {
   padding: 1.25rem;
   background: var(--color-surface, #fff);
 }
+.catalog-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:0.65rem; margin-bottom:1rem; }
+.creator-picker, .menu-anchor { position:relative; }
+.scope-count { font-size:0.9rem; white-space:nowrap; }
+.status-tags { display:flex; flex-wrap:wrap; gap:0.4rem; flex:1; }
+.status-tags button { padding:0.3rem 0.5rem; font-size:0.78rem; }
+.status-tags button[aria-pressed="true"] { color:var(--color-accent,#007bcb); border-color:currentColor; }
+.menu { position:absolute; z-index:20; top:calc(100% + 0.4rem); right:0; min-width:16rem; max-width:calc(100vw - 3rem); padding:0.85rem; border:1px solid var(--color-border,#ddd); border-radius:0.75rem; background:var(--color-surface,#fff); box-shadow:0 8px 26px #0002; }
+.creator-menu { left:0; right:auto; width:25rem; }
+.menu.exports { margin:0; display:grid; align-items:stretch; gap:0.6rem; }
+.choices { max-height:20rem; overflow:auto; display:grid; align-items:stretch; }
+.choices button { text-align:left; }
+.catalog-row { cursor:pointer; }
+.catalog-row:hover, .catalog-row:focus-visible { background:var(--color-bg,#f5f6f8); }
+.catalog-row:focus-visible { outline:2px solid var(--color-accent,#007bcb); outline-offset:-2px; }
+.number-cell { white-space:nowrap; }
+.title-cell { min-width:12rem; max-width:28rem; overflow-wrap:anywhere; }
+.exception-badge { display:block; color:#a24710; font-size:0.8rem; }
+.exception-toggle { display:flex; align-items:center; align-self:center; gap:0.35rem; }
+.filtered-count { margin-left:auto; font-size:0.85rem; white-space:nowrap; }
 h2,
 h3 {
   font-weight: 650;
@@ -672,14 +714,14 @@ a {
 }
 table {
   width: 100%;
-  min-width: 850px;
+  min-width: 760px;
   border-collapse: collapse;
   font-size: 0.85rem;
 }
 th,
 td {
   text-align: left;
-  padding: 0.8rem;
+  padding: 0.65rem 0.55rem;
   border-bottom: 1px solid var(--color-border, #ddd);
   vertical-align: top;
 }
@@ -691,7 +733,7 @@ th {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.3rem 0.5rem;
-  min-width: 12rem;
+  min-width: 9rem;
 }
 .row-actions button {
   padding: 0.3rem 0.45rem;
@@ -735,7 +777,7 @@ footer {
   font-size: 0.85rem;
 }
 summary { cursor: pointer; }
-.catalog-notes, .export-panel { margin: 0.8rem 0; }
+.catalog-notes { margin: 0.8rem 0; padding:0.75rem; background:var(--color-bg,#f5f6f8); border-radius:0.6rem; }
 .catalog-notes summary { color: var(--color-muted, #667085); font-size: 0.85rem; }
 .filter-fields { padding-top: 0.75rem; }
 .stats {

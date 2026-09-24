@@ -60,6 +60,8 @@ export interface ResourceCatalogPage {
     sourceOnlyWorks: number;
     legacyPosts: number;
     excludedDeletedWorks: number;
+    linkedWorks?: number;
+    unlinkedWorks?: number;
   };
   items: ResourceCatalogRow[];
   page: number;
@@ -74,7 +76,7 @@ export interface ResourceCatalogPage {
 export interface ResourceCatalogFilter {
   order?: 'oldest' | 'newest';
   q?: string;
-  localState?: 'all' | ResourceCatalogState;
+  localState?: 'all' | 'exception' | ResourceCatalogState;
   source?: 'all' | 'linked' | 'unlinked';
   page?: number;
   pageSize?: number;

@@ -672,6 +672,31 @@ describe.sequential('read-only own resource catalog', () => {
     expect(publishedService.detail(1, sample.work).item.title).toBe('Changed in another entry');
     expect(publishedService.list(null).readModel.complete).toBe(true);
   });
+  it('filters exceptions as a union with source/search AND and keeps complete-scope source counts', async () => {
+    flush();
+    const before = db.connection.prepare('SELECT publication FROM resource_catalog_meta WHERE id=1').get();
+    const full = publishedService.list(1);
+    const unavailable = publishedService.list(1, { localState: 'unavailable', pageSize: 100 });
+    const unarranged = publishedService.list(1, { localState: 'unarranged', pageSize: 100 });
+    const exceptions = publishedService.list(1, { localState: 'exception', pageSize: 100 });
+    expect(unavailable.total).toBeGreaterThan(0);
+    expect(unarranged.total).toBeGreaterThan(0);
+    expect(exceptions.total).toBe(unavailable.total + unarranged.total);
+    expect(new Set(exceptions.items.map(item => item.workId))).toEqual(new Set([...unavailable.items, ...unarranged.items].map(item => item.workId)));
+    expect(exceptions.items.every(item => item.localState !== 'indexed')).toBe(true);
+    const unlinked = publishedService.list(1, { localState: 'exception', source: 'unlinked', pageSize: 100 });
+    expect(unlinked.items.every(item => !item.sources.length)).toBe(true);
+    expect(full.summary.linkedWorks! + full.summary.unlinkedWorks!).toBe(full.total);
+    const empty = publishedService.list(1, { q: 'no-such-work-fixture', localState: 'exception', source: 'unlinked' });
+    expect(empty.total).toBe(0);
+    expect(empty.summary).toEqual(full.summary);
+    expect(publishedService.list(1, { page: 2 }).summary).toEqual(full.summary);
+    const exported = publishedService.exportBundle(1, 'csv', 'filtered', { localState: 'exception', source: 'unlinked', revision: full.revision });
+    expect(exported.metadata).toMatchObject({ rowCount: unlinked.total, filters: { localState: 'exception', source: 'unlinked' } });
+    const response = await requestTestApp(app, 'GET', '/api/admin/archive-catalog/resource-catalog/1?localState=exception');
+    expect(response.status).toBe(200);
+    expect(db.connection.prepare('SELECT publication FROM resource_catalog_meta WHERE id=1').get()).toEqual(before);
+  });
   it('does not parse a publication from a newer incompatible rule version', () => {
     flush();
     db.connection.exec('UPDATE resource_catalog_state SET rule_version=2 WHERE creator_id=1');
