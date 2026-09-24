@@ -687,7 +687,8 @@ onBeforeUnmount(() => {
 .menu.exports { margin:0; display:grid; align-items:stretch; gap:0.6rem; }
 .choices { max-height:14rem; max-width:32rem; overflow:auto; display:grid; gap:0.25rem; padding:0; margin:0 0 1rem; list-style:none; }
 .choices button { width:100%; text-align:left; }
-.creator-search input { width:18rem; max-width:100%; }
+.creator-search label { width:18rem; max-width:100%; min-width:0; }
+.creator-search input { width:100%; min-width:0; }
 .catalog-row { cursor:pointer; }
 .catalog-row:hover, .catalog-row:focus-visible { background:var(--color-bg,#f5f6f8); }
 .catalog-row:focus-visible { outline:2px solid var(--color-accent,#007bcb); outline-offset:-2px; }
