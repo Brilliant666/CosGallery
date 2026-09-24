@@ -8,6 +8,7 @@ import type { AppStatus, ScanProgress } from '../types/api';
 import { useAppStore } from '../stores/app';
 import { useFeedStore } from '../stores/feed';
 import { useMomentsStore } from '../stores/moments';
+import * as galleryApi from '../api/gallery';
 import HomeView from './HomeView.vue';
 
 const routerLinkStub = defineComponent({
@@ -164,6 +165,62 @@ describe('HomeView', () => {
     await flushPromises();
 
     expect(wrapper.get('[data-test="initial-scan-phase"]').text()).toBe('Derivatives');
+  });
+
+  it('waits for saved preferences before mounting the loader and requests only recent', async () => {
+    let resolve!: (status: AppStatus) => void;
+    vi.spyOn(galleryApi, 'fetchStats').mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const fetch = vi.spyOn(galleryApi, 'fetchFeed').mockResolvedValue({ items: [], page: 1, limit: 18, total: 0, hasMore: false, mode: 'recent' });
+    vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'InfiniteLoader' }).exists()).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+    const status = createAppStatus({ isScanning: false });
+    status.preferences.defaultHomeFeedMode = 'recent';
+    resolve(status);
+    await flushPromises();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(1, 18, 'recent', undefined);
+    wrapper.unmount();
+  });
+
+  it('keeps an explicit mode choice while preferences are pending', async () => {
+    let resolve!: (status: AppStatus) => void;
+    vi.spyOn(galleryApi, 'fetchStats').mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const fetch = vi.spyOn(galleryApi, 'fetchFeed').mockResolvedValue({ items: [], page: 1, limit: 18, total: 0, hasMore: false, mode: 'rediscover' });
+    vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    const mode = wrapper.findAll('button').find(button => button.attributes('aria-label')?.startsWith('Rediscover'));
+    expect(mode).toBeDefined();
+    await mode!.trigger('click');
+    expect(fetch).not.toHaveBeenCalled();
+    const status = createAppStatus({ isScanning: false });
+    status.preferences.defaultHomeFeedMode = 'recent';
+    resolve(status);
+    await flushPromises();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(1, 18, 'rediscover', undefined);
+    wrapper.unmount();
+  });
+
+  it('does not load feed when storage is unavailable or the view left during initialization', async () => {
+    const status = createAppStatus({ isScanning: false });
+    status.storage.available = false;
+    vi.spyOn(galleryApi, 'fetchStats').mockResolvedValueOnce(status);
+    const fetch = vi.spyOn(galleryApi, 'fetchFeed');
+    const wrapper = mountHomeView();
+    await flushPromises();
+    expect(fetch).not.toHaveBeenCalled();
+    wrapper.unmount();
+    useAppStore().resetProtectedState();
+    let resolve!: (value: AppStatus) => void;
+    vi.mocked(galleryApi.fetchStats).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const departed = mountHomeView();
+    departed.unmount();
+    resolve(createAppStatus({ isScanning: false }));
+    await flushPromises();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('renders the home stories rail with a dedicated horizontal scroll track', async () => {

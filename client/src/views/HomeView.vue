@@ -111,6 +111,10 @@
 
       <!-- States -->
       <EmptyState v-if="appStore.isLibraryUnavailable" title="Library storage unavailable" :description="appStore.libraryUnavailableReason" />
+      <div v-else-if="!appStore.stats && appStore.error">
+        <ErrorState title="Could not load library status" :message="appStore.error" />
+        <button class="btn-primary" type="button" :disabled="appStore.loadingStats" @click="appStore.ensureStatus()">{{ t('common.retry') }}</button>
+      </div>
       <ErrorState v-else-if="feedStore.error" title="Could not load feed" :message="feedStore.error" />
 
       <!-- Initial scan state (no feed yet) -->
@@ -194,7 +198,7 @@
           />
         </div>
         <div class="w-full max-w-[29.375rem] mx-auto">
-          <InfiniteLoader :loading="feedStore.loading" :has-more="feedStore.hasMore" @load-more="feedStore.loadMore" />
+          <InfiniteLoader v-if="initialFeedReady" :loading="feedStore.loading" :has-more="feedStore.hasMore" @load-more="feedStore.loadMore" />
         </div>
       </template>
 
@@ -318,6 +322,9 @@ const isCompactHomeLayout = ref(false);
 const requestingHomeScan = ref(false);
 const homeScanError = ref<string | null>(null);
 const feedStoryError = ref<string | null>(null);
+const initialFeedReady = ref(false);
+let homeActive = true;
+let explicitMode: FeedMode | null = null;
 
 function formatDisplayFolderTitle(folder: NonNullable<typeof homeSummaryFolder.value> | (typeof recommendedFolders.value)[number]) {
   return formatFolderTitle(folder, appStore.nestedFolderTitleFormat);
@@ -458,6 +465,10 @@ async function warmScanStatus() {
 }
 
 async function selectMode(mode: FeedMode) {
+  explicitMode = mode;
+  // User intent wins over a late saved preference, but storage/access status is
+  // still required before any request is made.
+  if (!initialFeedReady.value) return;
   await feedStore.setMode(mode);
 }
 
@@ -541,6 +552,15 @@ async function runHomeScan() {
   }
 }
 
+async function initializeHomeFeed() {
+  if (initialFeedReady.value || !homeActive || !appStore.stats || appStore.isLibraryUnavailable || !authStore.accessGranted) return;
+  if (explicitMode || !feedStore.initialized) {
+    feedStore.initializeMode(explicitMode ?? appStore.defaultHomeFeedMode);
+  }
+  initialFeedReady.value = true;
+  await Promise.all([feedStore.loadInitial(), momentsStore.fetchMoments()]);
+}
+
 onMounted(async () => {
   updateHomeLayout();
 
@@ -554,27 +574,31 @@ onMounted(async () => {
   }
 
   if (!appStore.stats) {
-    await appStore.fetchStats().catch(() => {});
+    await appStore.ensureStatus();
   }
 
-  if (appStore.isLibraryUnavailable) {
+  await initializeHomeFeed();
+});
+
+watch(() => appStore.stats, async (stats) => {
+  if (!stats) {
+    initialFeedReady.value = false;
+    explicitMode = null;
     return;
   }
-
-  feedStore.initializeMode(appStore.defaultHomeFeedMode);
-  await Promise.all([feedStore.loadInitial(), momentsStore.fetchMoments()]);
+  await initializeHomeFeed();
 });
 
 watch(
   () => [appStore.stats?.indexedImages ?? 0, appStore.stats?.folders ?? 0] as const,
-  async ([indexedImages, folderCount]) => {
-    if (appStore.isLibraryUnavailable) {
+  async ([indexedImages], previous) => {
+    if (!previous || previous[0] === 0 && !feedStore.initialized) return;
+    if (!initialFeedReady.value || !appStore.stats || appStore.isLibraryUnavailable) {
       return;
     }
 
-    if (folderCount > 0 && folderCount !== foldersStore.items.length) {
-      await foldersStore.fetchFolders(true);
-    }
+    // App owns folder-list refreshes. Its summary count is not necessarily the
+    // number of visible sidebar entries and must not trigger another fetch here.
 
     if (indexedImages > 0 && feedStore.items.length === 0 && !feedStore.loading) {
       await feedStore.loadInitial(true);
@@ -590,7 +614,7 @@ watch(
   () => appStore.stats?.scan.lastCompletedScan?.id ?? null,
   async (lastCompletedScanId, previousScanId) => {
     if (
-      appStore.isLibraryUnavailable ||
+      !initialFeedReady.value || appStore.isLibraryUnavailable ||
       lastCompletedScanId === null ||
       lastCompletedScanId === previousScanId ||
       momentsStore.loadingList
@@ -623,6 +647,7 @@ watch(
 );
 
 onUnmounted(() => {
+  homeActive = false;
   homeLayoutResizeObserver?.disconnect();
   homeLayoutResizeObserver = null;
   window.removeEventListener('resize', updateHomeLayout);

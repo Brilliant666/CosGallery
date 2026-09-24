@@ -118,7 +118,7 @@ function resetProtectedState() {
 }
 
 async function loadProtectedState(force = false) {
-  const tasks: Array<Promise<unknown>> = [appStore.fetchStats(force ? { background: true } : {}), foldersStore.fetchFolders(force)];
+  const tasks: Array<Promise<unknown>> = [appStore.ensureStatus(force), foldersStore.fetchFolders(force)];
 
   if (authStore.canUseSavedItems) {
     tasks.push(likesStore.initialize(force));

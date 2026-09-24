@@ -62,6 +62,25 @@ describe('feed store', () => {
     expect(feedStore.items.map((item) => item.id)).toEqual([7]);
   });
 
+  it('cannot repopulate or clear loading for a new access generation from an old request', async () => {
+    const old = createDeferred<Awaited<ReturnType<typeof galleryApi.fetchFeed>>>();
+    const fresh = createDeferred<Awaited<ReturnType<typeof galleryApi.fetchFeed>>>();
+    vi.spyOn(galleryApi, 'fetchFeed').mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    const store = useFeedStore();
+    store.initializeMode('recent');
+    const first = store.loadInitial();
+    store.resetForRebuild();
+    const second = store.loadInitial();
+    old.resolve({ mode: 'recent', items: [createFeedItem(1)], page: 1, limit: 18, total: 1, hasMore: false });
+    await first;
+    expect(store.items).toEqual([]);
+    expect(store.loading).toBe(true);
+    fresh.resolve({ mode: 'recent', items: [createFeedItem(2)], page: 1, limit: 18, total: 1, hasMore: false });
+    await second;
+    expect(store.items.map(item => item.id)).toEqual([2]);
+    expect(store.loading).toBe(false);
+  });
+
   it('reloads initialized items when the active mode changed since the last fetch', async () => {
     const fetchFeedSpy = vi.spyOn(galleryApi, 'fetchFeed').mockResolvedValue({
       mode: 'recent',
