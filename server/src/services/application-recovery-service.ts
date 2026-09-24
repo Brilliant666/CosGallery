@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import dotenv from 'dotenv';
-import { appConfig, environmentFile, repositoryRoot, supportedEnvironmentKeys } from '../config/env.js';
+import { appConfig, environmentFile, repositoryRoot, supportedEnvironmentKeys, isEnvironmentValueRestorable } from '../config/env.js';
 import { isSameOrWithinPath } from '../utils/path-utils.js';
 import { ApplicationRecoveryService, waitForRecoveryCreates } from './application-recovery-core.js';
 
@@ -43,25 +43,73 @@ function readConfigurationText(filename: string): string {
   return fs.readFileSync(filename, 'utf8');
 }
 
-function backedRunEnvironment(): Array<{ filename: string; values: Record<string, string> }> {
+function runEnvironment(xml: string): Record<string, string> | null {
+  // Strictly read the small IDE XML subset; no DTD/entity expansion or execution.
+  const stack: string[] = [], values: Record<string, string> = {};
+  let configurations = 0, roots = 0;
+  const decode = (value: string) => value.replace(/&(?:quot|apos|lt|gt|amp|#\d+|#x[0-9a-fA-F]+);/g, entity => {
+    const known: Record<string, string> = { '&quot;': '"', '&apos;': "'", '&lt;': '<', '&gt;': '>', '&amp;': '&' };
+    return known[entity] ?? String.fromCodePoint(parseInt(entity.slice(entity.startsWith('&#x') ? 3 : 2, -1), entity.startsWith('&#x') ? 16 : 10));
+  });
+  try {
+    const tokens = xml.match(/<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<[^>]*>|[^<]+/g) ?? [];
+    if (tokens.join('') !== xml) return null;
+    for (const token of tokens) {
+      if (token.startsWith('<!--') || token.startsWith('<?')) continue;
+      if (!token.startsWith('<')) { if (token.trim()) return null; continue; }
+      if (token.startsWith('</')) { if (token !== `</${stack.pop()}>`) return null; continue; }
+      const tag = token.match(/^<([A-Za-z_][\w:.-]*)([\s\S]*?)(\/?)>$/);
+      if (!tag) return null;
+      const [, name, rawAttributes, selfClosing] = tag;
+      const attributes: Record<string, string> = {};
+      let rest = rawAttributes!;
+      while (rest.trim()) {
+        const attribute = rest.match(/^\s+([\w:.-]+)\s*=\s*("[^"]*"|'[^']*')/);
+        if (!attribute || attribute[1]! in attributes) return null;
+        const value = attribute[2]!.slice(1, -1);
+        if (value.includes('<') || /&(?!(?:quot|apos|lt|gt|amp|#\d+|#x[0-9a-fA-F]+);)/.test(value)) return null;
+        attributes[attribute[1]!] = decode(value); rest = rest.slice(attribute[0].length);
+      }
+      if (!stack.length) { if (++roots !== 1 || name !== 'component') return null; }
+      if (name === 'configuration') configurations++;
+      if (name === 'env') {
+        if (stack.at(-1) !== 'envs' || !attributes.name || attributes.value === undefined || attributes.name in values) return null;
+        values[attributes.name] = attributes.value;
+      }
+      if (!selfClosing) stack.push(name!);
+    }
+    return !stack.length && roots === 1 && configurations === 1 ? values : null;
+  } catch { return null; }
+}
+
+function backedRunEnvironment(uncovered: string[]) {
   const directory = path.join(repositoryRoot, '.run');
-  if (!appConfig.runConfigurationFile && !fs.existsSync(directory)) return [];
-  const decode = (value: string) => value.replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const explicit = appConfig.runConfigurationFile;
+  const gaps: string[] = [];
+  const empty = () => ({ files: [] as Array<{ filename: string; values: Record<string, string> }>, gaps });
+  if (!explicit && !fs.existsSync(directory)) return empty();
   const candidates = appConfig.runConfigurationFile ? [appConfig.runConfigurationFile]
     : fs.readdirSync(directory).filter(name => name.endsWith('.run.xml')).map(name => path.join(directory, name));
   const matches = candidates.flatMap(filename => {
-    if (!fs.existsSync(filename)) return [];
-    const xml = readConfigurationText(filename);
-    const entries = [...xml.matchAll(/<env\s+name="([^"]*)"\s+value="([^"]*)"\s*\/?\s*>/g)]
-      .map(([, key, value]) => [decode(key!), decode(value!)] as const);
-    // Only configurations compatible with this actual process are candidates.
-    // File values are retained in memory solely for equality; never metadata.
-    const values = Object.fromEntries(entries);
-    if (!appConfig.runConfigurationFile && (!entries.length || entries.some(([key, value]) => process.env[key] !== value))) return [];
+    if (!fs.existsSync(filename)) { if (explicit) gaps.push('APP_RUN_CONFIG_FILE: missing; restore the explicitly selected run configuration.'); return []; }
+    let values: Record<string, string> | null;
+    try { values = runEnvironment(readConfigurationText(filename)); } catch { values = null; }
+    if (!values) { if (explicit) gaps.push('APP_RUN_CONFIG_FILE: invalid; verify the explicitly selected run configuration.'); return []; }
+    const entries = Object.entries(values).filter(([key]) => supportedEnvironmentKeys.includes(key));
+    const actual = Object.fromEntries(supportedEnvironmentKeys.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
+    if (entries.some(([key, value]) => key === 'APP_ENV_FILE' ? path.resolve(repositoryRoot, value) !== environmentFile
+      : key === 'APP_RUN_CONFIG_FILE' ? path.resolve(repositoryRoot, value) !== appConfig.runConfigurationFile
+      : !isEnvironmentValueRestorable(key, value, actual))) {
+      if (explicit) gaps.push('APP_RUN_CONFIG_FILE: mismatch; the selected run configuration does not reproduce this instance.');
+      return [];
+    }
+    // A sole file is not launch evidence. Implicit selection must explain a real
+    // process override not already recoverable from .env and the code defaults.
+    if (!explicit && !entries.some(([key, value]) => uncovered.includes(key) && process.env[key] === value)) return [];
     return [{ filename, values }];
   });
-  return matches.length === 1 ? matches : [];
+  if (matches.length > 1) gaps.push('Run configuration source unconfirmed: multiple candidates; uncovered process settings require separate restoration.');
+  return { files: matches.length === 1 ? matches : [], gaps };
 }
 
 let version: string | undefined;
@@ -82,20 +130,24 @@ export function createApplicationRecoveryService(databasePath = appConfig.databa
   }
   const envPath = environmentFile;
   const envValues = fs.existsSync(envPath) ? dotenv.parse(readConfigurationText(envPath)) : {};
-  const runEnvironments = backedRunEnvironment();
+  const uncovered = supportedEnvironmentKeys.filter(key => !key.startsWith('APP_') && process.env[key] !== undefined
+    && !isEnvironmentValueRestorable(key, process.env[key]!, envValues));
+  const run = backedRunEnvironment(uncovered);
+  const runEnvironments = run.files;
   // Only report configuration names, never their values or arbitrary process.env.
-  const injected = supportedEnvironmentKeys
-    .filter(key => process.env[key] !== undefined && process.env[key] !== envValues[key]
-      && !runEnvironments.some(({ values }) => values[key] === process.env[key]));
+  const backedValues = { ...envValues, ...(runEnvironments[0]?.values ?? {}) };
+  const injected = uncovered.filter(key => !isEnvironmentValueRestorable(key, process.env[key]!, backedValues));
+  const hasEnvFile = fs.existsSync(envPath);
   return new ApplicationRecoveryService({
     backupRoot: appConfig.backupRoot, sourceDbPath: databasePath,
     instanceId: `cosgallery-${appConfig.port}-${createHash('sha256').update(path.resolve(databasePath)).digest('hex').slice(0, 12)}`, codeVersion: codeVersion(),
-    configFiles: [{ path: envPath, label: '.env' }, ...runEnvironments.map(({ filename }, index) => ({ path: filename, label: `.run/${index}-${path.basename(filename)}` }))],
+    configFiles: [...(hasEnvFile ? [{ path: envPath, label: '.env' }] : []), ...runEnvironments.map(({ filename }, index) => ({ path: filename, label: `.run/${index}-${path.basename(filename)}` }))],
     privateRoot: path.join(appConfig.dataRoot, 'private'),
     automatic: appConfig.backupAutomatic,
     configurationGaps: [
       ...injected.map(key => `Process-injected ${key} must be restored separately; its value is not exported.`),
-      ...(!runEnvironments.length ? ['No matching active .run configuration was identified; process-only launch settings need separate restoration.'] : [])
+      ...run.gaps,
+      ...(!hasEnvFile && process.env.APP_ENV_FILE ? ['APP_ENV_FILE: missing; restore the explicitly selected environment file.'] : [])
     ],
     ...readRecoveryFacts(databasePath)
   });

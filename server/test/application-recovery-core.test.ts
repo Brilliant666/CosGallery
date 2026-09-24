@@ -173,6 +173,8 @@ describe('application recovery engine', () => {
     db.prepare('INSERT INTO app_settings VALUES(?,?)').run('local_ingest.archive_password', raw); db.close();
     const point = await generateRecoveryPoint(config, 'manual');
     expect(new LocalIngestPasswordStore(path.join(config.backupRoot, point.id, 'private')).decrypt(raw)).toBe('test-password-not-metadata');
+    fs.writeFileSync(path.join(config.privateRoot!, 'local-ingest-archive-password.key'), Buffer.alloc(32, 7));
+    await expect(generateRecoveryPoint(config, 'manual')).rejects.toMatchObject({ code: 'RECOVERY_KEY_MISMATCH' });
     config.requiredPrivateFiles = []; fs.unlinkSync(path.join(config.privateRoot!, 'local-ingest-archive-password.key'));
     await expect(generateRecoveryPoint(config, 'manual')).rejects.toMatchObject({ code: 'RECOVERY_KEY_MISMATCH' });
     expect(JSON.stringify(point)).not.toContain('test-password-not-metadata');

@@ -28,8 +28,9 @@
         最近失败：{{ date(state.lastFailure.at) }} · {{ state.lastFailure.message }}（{{ state.lastFailure.code }}）。已有成功恢复点保留，失败或未完成目录不作为成功恢复点。
       </p>
       <p v-if="state.latestSuccess && !state.latestSuccess.configuration.complete" class="m-0 rounded-xl border border-amber-300 p-3 text-sm">
-        最近恢复点的数据库校验通过，但配置恢复仍有缺口：{{ state.latestSuccess.configuration.gaps.join('；') }}。恢复前需补齐相应配置，不能仅凭数据库校验通过启动。
+        最近恢复点的数据库校验通过，但创建时记录了配置恢复缺口：{{ state.latestSuccess.configuration.gaps.join('；') }}。恢复前需核对相应配置，不能仅凭数据库校验通过启动。
       </p>
+      <p class="m-0 text-sm text-muted">配置完整性按本实例的配置文件与对应代码默认值判断；未使用 IDE 不要求 .run。必需密钥必须与数据库配套验证。历史记录保留创建时的判定，不随当前配置重写。</p>
       <div v-if="state.points.length" class="max-h-80 overflow-auto rounded-xl border border-border">
         <table class="w-full text-left text-sm">
           <caption class="p-3 text-left font-semibold">已完成恢复点 · {{ state.points.length }} 份</caption>
@@ -37,7 +38,7 @@
           <tbody><tr v-for="point in state.points" :key="point.id" class="border-t border-border">
             <td class="p-3 align-top">{{ date(point.completedAt) }}<div class="break-all font-mono text-xs text-muted">{{ point.id }}</div></td>
             <td class="p-3 align-top">{{ reason(point.reason) }}<div class="text-xs text-muted">数据库 {{ point.schemaVersions.at(-1) || '无迁移标记' }} · {{ point.codeVersion.slice(0, 12) }}</div><div class="text-xs text-muted break-all">来源实例 {{ point.instanceId }}</div></td>
-            <td class="p-3 align-top">完整性 / 外键通过 · {{ size(point.bytes) }}<div class="text-xs text-muted">{{ point.configuration.complete ? '配置已收集' : '配置有缺口，恢复前需核对' }} · {{ Math.round(point.timings.totalMs) }} ms</div><div v-if="point.configuration.gaps.length" class="text-xs break-words">{{ point.configuration.gaps.join('；') }}</div></td>
+            <td class="p-3 align-top">完整性 / 外键通过 · {{ size(point.bytes) }}<div class="text-xs text-muted">{{ point.configuration.complete ? '配置材料与默认值已覆盖' : '创建时配置有缺口，恢复前需核对' }} · {{ Math.round(point.timings.totalMs) }} ms</div><div v-if="point.configuration.gaps.length" class="text-xs break-words">{{ point.configuration.gaps.join('；') }}</div></td>
           </tr></tbody>
         </table>
       </div>

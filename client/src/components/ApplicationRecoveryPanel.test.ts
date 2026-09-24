@@ -39,6 +39,18 @@ describe('application recovery settings', () => {
     expect(w.text()).toContain('空间不足'); expect(w.text()).toContain('one'); expect(w.text()).toContain('missing_run_config');
     expect(createApplicationRecoveryPoint).toHaveBeenCalledTimes(1);
   });
+  it('shows complete non-IDE materials without a warning and keeps historical gaps visibly historical', async () => {
+    const current = { id:'current', status:'success' as const, reason:'manual', startedAt:'2026-01-01T00:00:00Z', completedAt:'2026-01-01T00:00:01Z', schemaVersions:['000027'], codeVersion:'abc', instanceId:'isolated', files:[], configuration:{complete:true,gaps:[]},validation:{integrity:'ok' as const,foreignKeys:0,tables:50},timings:{backupMs:1,validationMs:2,totalMs:3},bytes:1024 };
+    const historical = { ...current, id:'historical', configuration:{complete:false,gaps:['legacy missing run configuration']} };
+    vi.mocked(fetchApplicationRecoveryStatus).mockResolvedValue({...status(),latestSuccess:current,points:[current,historical]});
+    const w=render(); await flushPromises();
+    expect(w.find('.border-amber-300').exists()).toBe(false);
+    expect(w.text()).toContain('配置材料与默认值已覆盖');
+    expect(w.text()).toContain('未使用 IDE 不要求 .run');
+    expect(w.text()).toContain('legacy missing run configuration');
+    expect(w.text()).toContain('创建时配置有缺口');
+    expect(createApplicationRecoveryPoint).not.toHaveBeenCalled();
+  });
   it('ignores late reads after access loss and does not expose protected metadata', async () => {
     let resolve!: (v:ApplicationRecoveryStatus)=>void;
     vi.mocked(fetchApplicationRecoveryStatus).mockReturnValue(new Promise(r=>{resolve=r;}));
