@@ -149,6 +149,22 @@ describe('application recovery engine', () => {
     expect(readRecoveryPoints(config.backupRoot)).toHaveLength(1);
     expect(fs.existsSync(path.join(config.backupRoot, '.partial-interrupted'))).toBe(true);
   });
+  it('does not steal a replacement live lock when two processes race to recover an interrupted lock', async () => {
+    const config = fixture(); fs.mkdirSync(config.backupRoot);
+    const lock = path.join(config.backupRoot, '.recovery-lock'); fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: 2147483647, id: 'dead' }));
+    const realMkdir = fs.mkdirSync;
+    vi.spyOn(fs, 'mkdirSync').mockImplementation((target, options) => {
+      if (String(target) === path.join(lock, '.reaper')) {
+        fs.renameSync(lock, path.join(config.backupRoot, '.interrupted-other'));
+        realMkdir(lock);
+        fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, id: 'replacement' }));
+      }
+      return realMkdir(target, options as never) as never;
+    });
+    await expect(generateRecoveryPoint(config, 'manual')).rejects.toMatchObject({ code: 'RECOVERY_BUSY' });
+    expect(JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')).id).toBe('replacement');
+  });
   it('validates encrypted snapshot configuration with the included key independently of caller hints', async () => {
     const config = fixture();
     fs.unlinkSync(path.join(config.privateRoot!, 'local-ingest-archive-password.key'));

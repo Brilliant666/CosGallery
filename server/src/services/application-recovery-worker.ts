@@ -114,12 +114,29 @@ function acquire(root: string, owner: { pid: number; id: string; startedAt: stri
   const lock = path.join(root, '.recovery-lock');
   try { fs.mkdirSync(lock); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const observed = fs.lstatSync(lock);
+    if (!observed.isDirectory() || observed.isSymbolicLink()) return fail('RECOVERY_UNSAFE_PATH', '恢复点锁目录异常，未接管。');
+    let priorText: string | null = null;
     let live = true;
-    try { const prior = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')); try { process.kill(prior.pid, 0); } catch (e) { live = (e as NodeJS.ErrnoException).code !== 'ESRCH'; } } catch { live = Date.now() - fs.statSync(lock).mtimeMs < 10 * 60_000; }
+    try { priorText = fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'); const prior = JSON.parse(priorText); try { process.kill(prior.pid, 0); } catch (e) { live = (e as NodeJS.ErrnoException).code !== 'ESRCH'; } } catch { live = Date.now() - observed.mtimeMs < 10 * 60_000; }
     if (live) return fail('RECOVERY_BUSY', '已有恢复点正在生成，请等待其完成。');
-    // Rename an abandoned lock first; never remove a newly acquired competitor's lock.
+    // Reapers arbitrate inside the observed lock, then recheck identity/owner. A
+    // competing worker may already have replaced it between observation and mkdir.
+    const reaper = path.join(lock, '.reaper');
+    try { fs.mkdirSync(reaper); } catch { return fail('RECOVERY_BUSY', '另一个进程正在接管恢复点任务。'); }
+    const reaperToken = crypto.randomUUID();
+    fs.writeFileSync(path.join(reaper, 'token'), reaperToken, { flag: 'wx', mode: 0o600 });
     const abandoned = path.join(root, `.interrupted-lock-${crypto.randomUUID()}`);
-    try { fs.renameSync(lock, abandoned); fs.mkdirSync(lock); } catch { return fail('RECOVERY_BUSY', '另一个进程正在接管恢复点任务。'); }
+    try {
+      const current = fs.lstatSync(lock);
+      let currentText: string | null = null;
+      try { currentText = fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'); } catch { /* An interrupted lock may have no owner. */ }
+      if (current.ino !== observed.ino || current.dev !== observed.dev || currentText !== priorText) return fail('RECOVERY_BUSY', '恢复点锁已变化，未接管其他进程。');
+      fs.renameSync(lock, abandoned); fs.mkdirSync(lock);
+    } catch { return fail('RECOVERY_BUSY', '另一个进程正在接管恢复点任务。'); }
+    finally {
+      try { if (fs.readFileSync(path.join(reaper, 'token'), 'utf8') === reaperToken) { fs.unlinkSync(path.join(reaper, 'token')); fs.rmdirSync(reaper); } } catch { /* Renamed abandoned locks retain their evidence. */ }
+    }
   }
   fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
   return () => { try { const current = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')); if (current.id === owner.id) { fs.unlinkSync(path.join(lock, 'owner.json')); fs.rmdirSync(lock); } } catch { /* Preserve uncertain ownership. */ } };
