@@ -20,6 +20,7 @@ import {
   TREAT_STORIES_AS_FOLDERS_SETTING_KEY
 } from '../constants/app-setting-keys.js';
 import { derivativeVersion as buildDerivativeVersion, imageDerivativeVersion } from '../utils/derivative-version.js';
+import { isPublishedDerivativeFile } from '../utils/derivative-spec.js';
 import { appConfig } from '../config/env.js';
 import {
   appSettingsRepository,
@@ -466,7 +467,7 @@ async function removeDirectoryTree(targetPath: string | null): Promise<void> {
   }
 }
 
-function countDerivativeFilesOnDisk(rootPath: string): number {
+function countDerivativeFilesOnDisk(rootPath: string, kind: 'thumbnail' | 'preview'): number {
   try {
     const entries = fs.readdirSync(rootPath, { withFileTypes: true });
     let count = 0;
@@ -475,11 +476,11 @@ function countDerivativeFilesOnDisk(rootPath: string): number {
       const entryPath = path.join(rootPath, entry.name);
 
       if (entry.isDirectory()) {
-        count += countDerivativeFilesOnDisk(entryPath);
+        count += countDerivativeFilesOnDisk(entryPath, kind);
         continue;
       }
 
-      if (entry.isFile() && entry.name !== '.gitkeep') {
+      if (entry.isFile() && isPublishedDerivativeFile(entry.name, kind)) {
         count += 1;
       }
     }
@@ -1114,14 +1115,7 @@ function toCalendarDateParts(date: Date): CalendarDateParts {
   };
 }
 
-function getHighlightFeedOverlapImageIds(): Set<number> {
-  const recentFeedItems = imageRepository.listRecentCandidates(0, HIGHLIGHT_FEED_OVERLAP_WINDOW);
-
-  return new Set(recentFeedItems.map((item) => item.id));
-}
-
-function getRecentBatchHighlightItems(excludedImageIds: Set<number>): FeedImage[] {
-  const candidates = imageRepository.listRecentCandidates(0, HIGHLIGHT_BATCH_CANDIDATE_LIMIT);
+function getRecentBatchHighlightItems(candidates: FeedImage[], excludedImageIds: Set<number>): FeedImage[] {
   const bursts = groupFeedBursts(candidates)
     .filter((burst) => burst.items.length >= 2)
     .slice(0, HIGHLIGHT_BATCH_COUNT * 2);
@@ -1211,11 +1205,14 @@ function buildMomentRailDefinition(now = new Date()): FeedRailDefinition {
 }
 
 function buildHighlightRailDefinition(now = new Date()): FeedRailDefinition {
-  const excludedImageIds = getHighlightFeedOverlapImageIds();
+  // Both reads used the same stable time/id order and offset. Reuse its prefix
+  // for overlap exclusion instead of querying and hydrating the first 18 twice.
+  const recentCandidates = imageRepository.listRecentCandidates(0, HIGHLIGHT_BATCH_CANDIDATE_LIMIT);
+  const excludedImageIds = new Set(recentCandidates.slice(0, HIGHLIGHT_FEED_OVERLAP_WINDOW).map(item => item.id));
   const rediscoverCutoff = now.getTime() - REDISCOVER_MIN_AGE_MS;
   const dailySeed = createDailySeed(now);
   const highlightFetchLimit = HIGHLIGHT_CAPSULE_MAX_ITEMS + HIGHLIGHT_FEED_OVERLAP_WINDOW;
-  const recentBatchItems = getRecentBatchHighlightItems(excludedImageIds);
+  const recentBatchItems = getRecentBatchHighlightItems(recentCandidates, excludedImageIds);
   const forgottenFavoriteItems = limitHighlightItems(
     likeRepository.listLikedOlderThan(1, highlightFetchLimit, rediscoverCutoff),
     1,
@@ -1319,18 +1316,18 @@ function getSelectedFeedRail(now = new Date()) {
   const totalImages = imageRepository.countFeed();
   const exifImages = imageRepository.countByTakenAtSource('exif');
   const preferMoments = shouldPreferMomentRail(totalImages, exifImages);
-  const momentRail = materializeRailDefinition(buildMomentRailDefinition(now));
-  const highlightRail = materializeRailDefinition(buildHighlightRailDefinition(now));
-
-  if (preferMoments && momentRail.capsules.length > 0) {
-    return momentRail;
-  }
-
-  if (highlightRail.capsules.length > 0) {
-    return highlightRail;
-  }
-
-  return momentRail.capsules.length > 0 ? momentRail : highlightRail;
+  const build = (moments: boolean) => {
+    const definition = moments ? buildMomentRailDefinition(now) : buildHighlightRailDefinition(now);
+    return { definition, rail: materializeRailDefinition(definition) };
+  };
+  // Do not assemble the unused rail. The definitions belong to this read only:
+  // capture-date windows, local calendar day and daily seed are recomputed next time.
+  const preferred = build(preferMoments);
+  if (preferred.rail.capsules.length > 0) return preferred;
+  const fallback = build(!preferMoments);
+  if (fallback.rail.capsules.length > 0) return fallback;
+  // Preserve the original empty result's Highlights metadata regardless of preference.
+  return preferMoments ? fallback : preferred;
 }
 
 function buildFolderStoryRail(folder: FolderSummaryRecord): StoryRailPayload {
@@ -1690,7 +1687,7 @@ export const galleryService = {
       };
     }
 
-    const rail = getSelectedFeedRail(new Date());
+    const { rail } = getSelectedFeedRail(new Date());
     return {
       railKind: rail.kind,
       railTitle: rail.title,
@@ -1706,21 +1703,21 @@ export const galleryService = {
     }
 
     const now = new Date();
-    const rail = getSelectedFeedRail(now);
+    const { rail, definition: selectedDefinition } = getSelectedFeedRail(now);
     const capsule = rail.capsules.find((entry) => entry.id === id);
 
     if (!capsule) {
       return null;
     }
 
-    const definition = (rail.kind === 'moments' ? buildMomentRailDefinition(now) : buildHighlightRailDefinition(now)).capsules.find(
+    const definition = selectedDefinition.capsules.find(
       (entry) => entry.id === id
     );
     if (!definition) {
       return null;
     }
 
-    const total = definition.count();
+    const total = capsule.imageCount;
 
     return {
       railKind: rail.kind,
@@ -2491,8 +2488,8 @@ export const galleryService = {
       indexedCarousels: storageState.libraryAvailable ? imageRepository.countVisibleCarousels() : 0,
       indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleSingleVideos() : 0,
       deletedImages: storageState.libraryAvailable ? imageRepository.countDeleted() : 0,
-      thumbnailCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.thumbnailsDir) : 0,
-      previewCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.previewsDir) : 0,
+      thumbnailCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.thumbnailsDir, 'thumbnail') : 0,
+      previewCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.previewsDir, 'preview') : 0,
       lastScan: lastCompletedScan,
       scan: this.getAdminScanProgress(),
       storage: {

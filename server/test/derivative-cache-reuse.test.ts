@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -70,6 +71,10 @@ describe.sequential('derivative cache reuse audit', () => {
   function image(filename = 'image.jpg') {
     const folder = repositories.folderRepository.upsert({ slug: 'synthetic', name: 'Synthetic', folderPath: 'synthetic' });
     const assetKey = createHash('sha256').update(filename).digest('hex').slice(0, 32);
+    const source = path.join(config.galleryRoot, 'synthetic', filename);
+    mkdirSync(path.dirname(source), { recursive: true });
+    writeFileSync(source, Buffer.alloc(12));
+    utimesSync(source, 1, 1);
     return repositories.imageRepository.upsert({ folderId: folder.id, assetKey, filename, extension: '.jpg', relativePath: `synthetic/${filename}`, absolutePath: path.join(config.galleryRoot, 'synthetic', filename), fileSize: 12, width: 20, height: 30, mediaType: 'image', mimeType: 'image/jpeg', durationMs: null, isAnimated: false, fingerprint: `fixture-${filename}`, mtimeMs: 1000, firstSeenAt: '2026-01-01T00:00:00Z', sortTimestamp: 1000, takenAt: 1000, takenAtSource: 'mtime', exifJson: '{}', thumbnailPath: getThumbnailPathForAssetKey(assetKey), previewPath: getPreviewPathForAssetKey(assetKey, 'image'), playbackStrategy: 'preview' });
   }
 

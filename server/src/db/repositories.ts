@@ -1011,7 +1011,7 @@ export const placeRepository = {
         `
         SELECT places.*, COUNT(posts.id) AS post_count
         FROM places
-        INNER JOIN posts ON posts.place_id = places.id
+        CROSS JOIN posts ON posts.place_id = places.id
         INNER JOIN folders ON folders.id = posts.folder_id
         WHERE ${VISIBLE_POST_WHERE_SQL}
         GROUP BY places.id
@@ -3550,7 +3550,7 @@ export const likeRepository = {
         places.kind AS placeKind,
         places.is_approximate AS placeIsApproximate
       FROM likes
-      INNER JOIN posts ON posts.id = likes.post_id
+      CROSS JOIN posts ON posts.id = likes.post_id
       INNER JOIN folders ON folders.id = posts.folder_id
       JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
       JOIN images ON images.id = post_items.image_id
@@ -3596,7 +3596,7 @@ export const likeRepository = {
         places.kind AS placeKind,
         places.is_approximate AS placeIsApproximate
       FROM likes
-      INNER JOIN posts ON posts.id = likes.post_id
+      CROSS JOIN posts ON posts.id = likes.post_id
       INNER JOIN folders ON folders.id = posts.folder_id
       JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
       JOIN images ON images.id = post_items.image_id
@@ -3810,7 +3810,7 @@ export const collectionRepository = {
           (
             SELECT COUNT(*)
             FROM collection_items
-            INNER JOIN posts ON posts.id = collection_items.post_id
+            CROSS JOIN posts ON posts.id = collection_items.post_id
             JOIN post_items pi ON pi.post_id = posts.id AND pi.position = 1
             JOIN images ON images.id = pi.image_id
             INNER JOIN folders ON folders.id = posts.folder_id

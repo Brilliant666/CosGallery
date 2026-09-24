@@ -19,6 +19,8 @@
     </div>
   </AppShell>
   <AdminUnlockDialog v-if="authStore.unlockDialogOpen" />
+  <RouteLoadRecoveryDialog :recovery="routeLoadRecovery" />
+  <MediaLoadNotice />
 </template>
 
 <script setup lang="ts">
@@ -29,7 +31,9 @@ import { RouterView, useRoute, useRouter, type RouteLocationNormalizedLoaded } f
 import AppShell from './components/AppShell.vue';
 import AdminUnlockDialog from './components/AdminUnlockDialog.vue';
 import AuthGate from './components/AuthGate.vue';
-import { canAccessRoute, routeAllowsPublicShareAccess } from './router';
+import { canAccessRoute, routeAllowsPublicShareAccess, routeLoadRecovery } from './router';
+import RouteLoadRecoveryDialog from './components/RouteLoadRecoveryDialog.vue';
+import MediaLoadNotice from './components/MediaLoadNotice.vue';
 import PostView from './views/PostView.vue';
 import { useAppStore } from './stores/app';
 import { useAuthStore } from './stores/auth';

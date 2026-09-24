@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router';
+import { installRouteLoadRecovery } from '../utils/route-load-recovery';
 
 import HomeView from '../views/HomeView.vue';
 import PostView from '../views/PostView.vue';
@@ -314,3 +315,6 @@ router.beforeEach((to) => {
 
   return canAccessRoute(to) ? true : { name: 'home' };
 });
+
+// Register before app.use(router) starts the initial navigation, including deep links.
+export const routeLoadRecovery = installRouteLoadRecovery(router);

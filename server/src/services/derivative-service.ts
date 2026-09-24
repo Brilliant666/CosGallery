@@ -18,7 +18,7 @@ import {
 } from '../utils/image-utils.js';
 import { THUMBNAIL_QUALITY, PREVIEW_QUALITY, WEBP_EFFORT, VIDEO_PREVIEW_MAX_LONG_EDGE, VIDEO_PREVIEW_MAX_SHORT_EDGE, VIDEO_PREVIEW_QUALITY, VIDEO_AUDIO_BITRATE } from '../utils/derivative-spec.js';
 export { VIDEO_PREVIEW_MAX_LONG_EDGE, VIDEO_PREVIEW_MAX_SHORT_EDGE } from '../utils/derivative-spec.js';
-import { writeVersionedDerivative } from '../utils/derivative-version.js';
+import { writeVersionedDerivative, type DerivativeGenerationExpectation } from '../utils/derivative-version.js';
 import { safeJoin } from '../utils/path-utils.js';
 
 const execFileAsync = promisify(execFile);
@@ -661,7 +661,8 @@ export async function generateThumbnailDerivative(
   sourcePath: string,
   relativePath: string,
   force = false,
-  overrides: DerivativePathOverrides = {}
+  overrides: DerivativePathOverrides = {},
+  expectation?: DerivativeGenerationExpectation
 ): Promise<ThumbnailDerivativeResult> {
   const mediaType = getMediaTypeFromExtension(path.extname(relativePath));
   const isAvif = path.extname(relativePath).toLowerCase() === '.avif';
@@ -670,19 +671,19 @@ export async function generateThumbnailDerivative(
   let shouldWriteThumbnail = false;
 
   if (mediaType === 'video') {
-    shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'video', force, temporary => writeVideoThumbnail(sourcePath, temporary));
+    shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'video', force, temporary => writeVideoThumbnail(sourcePath, temporary), expectation);
   } else if (isAvif) {
     const avifSource = await inspectAvifSource(sourcePath, {
       requireAnimatedVideoStreamIndex: true
     });
 
     if (avifSource.metadata.isAnimated) {
-      shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeAnimatedAvifThumbnail(sourcePath, temporary, requireAnimatedAvifVideoStreamIndex(avifSource)));
+      shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeAnimatedAvifThumbnail(sourcePath, temporary, requireAnimatedAvifVideoStreamIndex(avifSource)), expectation);
     } else {
-      shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeImageThumbnail(sourcePath, temporary));
+      shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeImageThumbnail(sourcePath, temporary), expectation);
     }
   } else {
-    shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeImageThumbnail(sourcePath, temporary));
+    shouldWriteThumbnail = await writeVersionedDerivative(sourcePath, thumbnailAbsolutePath, 'thumbnail', 'image', force, temporary => writeImageThumbnail(sourcePath, temporary), expectation);
   }
 
   return {
@@ -695,7 +696,8 @@ export async function generatePreviewDerivative(
   sourcePath: string,
   relativePath: string,
   force = false,
-  overrides: DerivativePathOverrides = {}
+  overrides: DerivativePathOverrides = {},
+  expectation?: DerivativeGenerationExpectation
 ): Promise<PreviewDerivativeResult> {
   const mediaType = getMediaTypeFromExtension(path.extname(relativePath));
   const isAvif = path.extname(relativePath).toLowerCase() === '.avif';
@@ -704,19 +706,19 @@ export async function generatePreviewDerivative(
   let shouldWritePreview = false;
 
   if (mediaType === 'video') {
-    shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'video', force, temporary => writeVideoPreview(sourcePath, temporary));
+    shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'video', force, temporary => writeVideoPreview(sourcePath, temporary), expectation);
   } else if (isAvif) {
     const avifSource = await inspectAvifSource(sourcePath, {
       requireAnimatedVideoStreamIndex: true
     });
 
     if (avifSource.metadata.isAnimated) {
-      shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeAnimatedAvifPreview(sourcePath, temporary, requireAnimatedAvifVideoStreamIndex(avifSource)));
+      shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeAnimatedAvifPreview(sourcePath, temporary, requireAnimatedAvifVideoStreamIndex(avifSource)), expectation);
     } else {
-      shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeImagePreview(sourcePath, temporary));
+      shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeImagePreview(sourcePath, temporary), expectation);
     }
   } else {
-    shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeImagePreview(sourcePath, temporary));
+    shouldWritePreview = await writeVersionedDerivative(sourcePath, previewAbsolutePath, 'preview', 'image', force, temporary => writeImagePreview(sourcePath, temporary), expectation);
   }
 
   return {

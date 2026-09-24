@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { renameSync } from 'node:fs';
 import path from 'node:path';
 import { appConfig } from '../config/env.js';
 import { PREVIEW_MAX_WIDTH, THUMBNAIL_SIZE } from './image-utils.js';
@@ -7,6 +8,17 @@ import { withDerivativeOutputWrite } from '../services/derivative-output-lock.js
 import { THUMBNAIL_QUALITY, PREVIEW_QUALITY, WEBP_EFFORT, VIDEO_PREVIEW_MAX_LONG_EDGE, VIDEO_PREVIEW_MAX_SHORT_EDGE, VIDEO_PREVIEW_QUALITY, VIDEO_AUDIO_BITRATE, DERIVATIVE_RECIPE_VERSION } from './derivative-spec.js';
 
 export type DerivativeKind = 'thumbnail' | 'preview';
+
+export class SourceIndexOutdatedError extends Error {
+  readonly code = 'SOURCE_INDEX_OUTDATED';
+  constructor() { super('Source changed; index update required before generating derivatives.'); }
+}
+
+export interface DerivativeGenerationExpectation {
+  expectedVersion: string;
+  // Synchronous: no event-loop yield between the authoritative check and rename.
+  validate: () => void;
+}
 
 // Bump the recipe when orientation/animation/encoder behavior changes. Display
 // titles, source links and sort decisions deliberately do not participate.
@@ -49,12 +61,14 @@ export async function stampDerivative(output: string, version: string): Promise<
 
 export async function writeVersionedDerivative(
   source: string, output: string, kind: DerivativeKind, mediaType: string,
-  force: boolean, write: (temporaryOutput: string) => Promise<void>
+  force: boolean, write: (temporaryOutput: string) => Promise<void>, expectation?: DerivativeGenerationExpectation
 ): Promise<boolean> {
   return withDerivativeOutputWrite(output, async () => {
+    expectation?.validate();
     const before = await fs.stat(source);
     const sourceVersion = derivativeSourceVersion(before.size, before.mtimeMs);
     const version = derivativeVersion(sourceVersion, kind, mediaType);
+    if (expectation && version !== expectation.expectedVersion) throw new SourceIndexOutdatedError();
     if (!force && await hasCurrentDerivative(output, version)) return false;
     // Unstamped legacy files have no reliable provenance. Upgrade only the
     // requested output; never delete/scan/prewarm the existing cache tree.
@@ -64,9 +78,12 @@ export async function writeVersionedDerivative(
       await write(temporary);
       const after = await fs.stat(source);
       if (derivativeSourceVersion(after.size, after.mtimeMs) !== sourceVersion) {
-        throw new Error('Source changed during derivative generation; retry after indexing.');
+        throw new SourceIndexOutdatedError();
       }
-      await fs.rename(temporary, output);
+      expectation?.validate();
+      // A bounded local rename avoids an async DB-change gap after validation.
+      // No media bytes are synchronously loaded or encoded here.
+      renameSync(temporary, output);
       await stampDerivative(output, version);
       return true;
     } finally { await fs.rm(temporary, { force: true }).catch(() => undefined); }

@@ -8,6 +8,7 @@ import type { AppStatus, ScanProgress } from '../types/api';
 import { useAppStore } from '../stores/app';
 import { useFeedStore } from '../stores/feed';
 import { useMomentsStore } from '../stores/moments';
+import { useAuthStore } from '../stores/auth';
 import * as galleryApi from '../api/gallery';
 import HomeView from './HomeView.vue';
 
@@ -126,6 +127,10 @@ describe('HomeView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.restoreAllMocks();
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+      queueMicrotask(() => callback(0));
+      return 1;
+    });
     i18n.global.locale.value = DEFAULT_LOCALE;
     Object.defineProperty(window, 'innerWidth', {
       configurable: true,
@@ -183,6 +188,56 @@ describe('HomeView', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith(1, 18, 'recent', undefined);
     wrapper.unmount();
+  });
+
+  it('waits for first feed settlement and a paint opportunity before moments, with a stable rail slot', async () => {
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    let complete!: () => void;
+    vi.spyOn(useFeedStore(), 'loadInitial').mockImplementation(() => new Promise<void>(resolve => { complete = resolve; }));
+    const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frames.push(callback); return frames.length; });
+    const wrapper = mountHomeView();
+    await flushPromises();
+    expect(moments).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="moments-slot"]').attributes('aria-busy')).toBe('true');
+    complete();
+    await flushPromises();
+    expect(moments).not.toHaveBeenCalled();
+    frames.shift()!(0);
+    await flushPromises();
+    expect(moments).not.toHaveBeenCalled();
+    frames.shift()!(16);
+    await flushPromises();
+    expect(moments).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('still requests moments after a failed first feed, without waiting forever', async () => {
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    vi.spyOn(galleryApi, 'fetchFeed').mockRejectedValue(new Error('feed offline'));
+    const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+    expect(useFeedStore().error).toBe('feed offline');
+    expect(moments).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it.each(['leave', 'access', 'reset'] as const)('does not dispatch a delayed rail after %s', async reason => {
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    let complete!: () => void;
+    vi.spyOn(useFeedStore(), 'loadInitial').mockImplementation(() => new Promise<void>(resolve => { complete = resolve; }));
+    const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+    if (reason === 'leave') wrapper.unmount();
+    if (reason === 'access') useAuthStore().$patch({ authenticated: false, role: 'anonymous', accessMode: 'password', enabled: true });
+    if (reason === 'reset') useAppStore().resetProtectedState();
+    complete();
+    await flushPromises();
+    expect(moments).not.toHaveBeenCalled();
+    if (reason !== 'leave') wrapper.unmount();
   });
 
   it('keeps an explicit mode choice while preferences are pending', async () => {

@@ -21,6 +21,7 @@
       :preload="preload"
       @fullscreen-change="handleFullscreenChange"
       @auto-play-fail="handleAutoplayFail"
+      @error="handleMediaError"
     >
       <media-provider />
       <media-poster
@@ -126,6 +127,7 @@ import type { MediaPlayerElement } from 'vidstack/elements';
 import type { MediaFullscreenChangeEvent, MediaLoadingStrategy, PlayerSrc } from 'vidstack';
 
 import { videoPreviewWouldDownscale } from '../utils/media';
+import { diagnoseMediaFailure, mediaAccessKey, reportMediaLoadIssue } from '../utils/media-load-diagnostics';
 import VideoProgressFooter from './VideoProgressFooter.vue';
 
 const props = withDefaults(
@@ -245,6 +247,15 @@ function handleFullscreenChange(event: MediaFullscreenChangeEvent) {
 
 function handleMuteClick() {
   emit('toggle-mute');
+}
+
+let mediaErrorGeneration = 0;
+watch(() => props.src, () => { mediaErrorGeneration += 1; });
+onBeforeUnmount(() => { mediaErrorGeneration += 1; });
+async function handleMediaError() {
+  const source = activeVideoUrl.value, generation = mediaErrorGeneration, access = mediaAccessKey();
+  const code = await diagnoseMediaFailure(source);
+  if (code && generation === mediaErrorGeneration && source === activeVideoUrl.value && access === mediaAccessKey()) reportMediaLoadIssue(source, code);
 }
 
 async function handleAutoplayFail() {

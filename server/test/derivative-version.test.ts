@@ -61,10 +61,41 @@ describe('persistent derivative source and recipe provenance', () => {
     expect(await versions.writeVersionedDerivative(source, output, 'thumbnail', 'image', true, write)).toBe(true);
   });
   it('refuses publication when the source changes during generation', async () => {
-    await expect(versions.writeVersionedDerivative(source, output, 'thumbnail', 'image', false, async temporary => {
+    await versions.writeVersionedDerivative(source, output, 'thumbnail', 'image', false, write);
+    const oldVersion = await version();
+    const oldStamp = await fs.readFile(`${output}.version.json`, 'utf8');
+    await expect(versions.writeVersionedDerivative(source, output, 'thumbnail', 'image', true, async temporary => {
       await write(temporary); await fs.writeFile(source, 'changed');
-    })).rejects.toThrow('Source changed');
-    await expect(fs.access(output)).rejects.toThrow();
+    })).rejects.toMatchObject({ code: 'SOURCE_INDEX_OUTDATED' });
+    expect(await fs.readFile(output, 'utf8')).toBe('derivative fixture');
+    expect(await fs.readFile(`${output}.version.json`, 'utf8')).toBe(oldStamp);
+    expect(await versions.hasCurrentDerivative(output, oldVersion)).toBe(true);
+  });
+
+  it('rejects a stale expected index before encoding, retaining old output and stamp', async () => {
+    await versions.writeVersionedDerivative(source, output, 'thumbnail', 'image', false, write);
+    const expectedVersion = await version();
+    const oldStamp = await fs.readFile(`${output}.version.json`, 'utf8');
+    await fs.writeFile(source, 'replacement with different source metadata');
+    const encode = vi.fn(write);
+    await expect(versions.writeVersionedDerivative(source, output, 'thumbnail', 'image', true, encode,
+      { expectedVersion, validate: () => undefined })).rejects.toMatchObject({ code: 'SOURCE_INDEX_OUTDATED' });
+    expect(encode).not.toHaveBeenCalled();
+    expect(await fs.readFile(output, 'utf8')).toBe('derivative fixture');
+    expect(await fs.readFile(`${output}.version.json`, 'utf8')).toBe(oldStamp);
+  });
+
+  it('checks current identity/version immediately before publication and preserves the old pair on failure', async () => {
+    await versions.writeVersionedDerivative(source, output, 'thumbnail', 'image', false, write);
+    const expectedVersion = await version();
+    const oldStamp = await fs.readFile(`${output}.version.json`, 'utf8');
+    let current = true;
+    await expect(versions.writeVersionedDerivative(source, output, 'thumbnail', 'image', true, async temporary => {
+      await fs.writeFile(temporary, 'new complete output'); current = false;
+    }, { expectedVersion, validate: () => { if (!current) throw new Error('indexed identity changed'); } })).rejects.toThrow('indexed identity changed');
+    expect(await fs.readFile(output, 'utf8')).toBe('derivative fixture');
+    expect(await fs.readFile(`${output}.version.json`, 'utf8')).toBe(oldStamp);
+    expect((await fs.readdir(root)).some(name => name.includes('.tmp'))).toBe(false);
   });
 
   it('does not replace a file while a response holds its output lease and releases failed readers', async () => {

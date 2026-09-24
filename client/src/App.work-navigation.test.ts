@@ -12,7 +12,8 @@ import { useFoldersStore } from './stores/folders';
 import { useLikesStore } from './stores/likes';
 import { useCollectionsStore } from './stores/collections';
 
-vi.mock('./router', () => ({ canAccessRoute: () => true, routeAllowsPublicShareAccess: () => false }));
+vi.mock('./router', () => ({ canAccessRoute: () => true, routeAllowsPublicShareAccess: () => false, routeLoadRecovery: { state: { value: null } } }));
+vi.mock('./components/MediaLoadNotice.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./api/gallery', async () => ({ ...await vi.importActual('./api/gallery'), fetchCanonicalCreator: vi.fn(), fetchCanonicalCreatorWork: vi.fn(), fetchImage: vi.fn(), fetchFolder: vi.fn().mockResolvedValue({ canonicalCreatorId: null }) }));
 vi.mock('./views/PostView.vue', async () => {
   const { defineComponent } = await import('vue');

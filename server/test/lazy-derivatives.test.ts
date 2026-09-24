@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { mkdirSync, writeFileSync, statSync, utimesSync } from 'node:fs';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type express from 'express';
@@ -293,6 +294,11 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
     const previewRelativePath = getPreviewRelativePath(relativePath, mediaType);
     const thumbnailRelativePath = getThumbnailRelativePath(relativePath);
     const fileSize = 2_048 + mtimeMs;
+    const currentSource = path.join(appConfig.galleryRoot, relativePath);
+    mkdirSync(path.dirname(currentSource), { recursive: true });
+    writeFileSync(currentSource, Buffer.alloc(fileSize));
+    utimesSync(currentSource, mtimeMs / 1000, mtimeMs / 1000);
+    const sourceStat = statSync(currentSource);
 
     return imageRepository.upsert({
       folderId: folder.id,
@@ -308,7 +314,7 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
       durationMs,
       isAnimated: options.isAnimated ?? false,
       fingerprint: createFingerprint(relativePath, fileSize, mtimeMs),
-      mtimeMs,
+      mtimeMs: sourceStat.mtimeMs,
       firstSeenAt: '2026-01-01T00:00:00.000Z',
       sortTimestamp: mtimeMs,
       takenAt: mtimeMs,
@@ -323,6 +329,7 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
   async function createSourceFile(relativePath: string): Promise<void> {
     const absolutePath = path.join(appConfig.galleryRoot, relativePath);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    if (await fs.stat(absolutePath).then(() => true, () => false)) return;
     await fs.writeFile(absolutePath, `source:${relativePath}`);
   }
 
@@ -523,7 +530,8 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
       path.join(appConfig.galleryRoot, image.relative_path),
       image.relative_path,
       false,
-      { thumbnailPath: image.thumbnail_path }
+      { thumbnailPath: image.thumbnail_path },
+      { expectedVersion: expect.any(String), validate: expect.any(Function) }
     );
   });
 
@@ -571,7 +579,8 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
       path.join(appConfig.galleryRoot, image.relative_path),
       image.relative_path,
       false,
-      { previewPath: image.preview_path }
+      { previewPath: image.preview_path },
+      { expectedVersion: expect.any(String), validate: expect.any(Function) }
     );
   });
 
@@ -592,7 +601,8 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
       path.join(appConfig.galleryRoot, image.relative_path),
       image.relative_path,
       false,
-      { previewPath: image.preview_path }
+      { previewPath: image.preview_path },
+      { expectedVersion: expect.any(String), validate: expect.any(Function) }
     );
   });
 

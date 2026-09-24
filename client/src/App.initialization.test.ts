@@ -12,7 +12,8 @@ import { useFoldersStore } from './stores/folders';
 import { useLikesStore } from './stores/likes';
 import { useCollectionsStore } from './stores/collections';
 
-vi.mock('./router', () => ({ canAccessRoute: () => true, routeAllowsPublicShareAccess: () => false }));
+vi.mock('./router', () => ({ canAccessRoute: () => true, routeAllowsPublicShareAccess: () => false, routeLoadRecovery: { state: { value: null } } }));
+vi.mock('./components/MediaLoadNotice.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./api/gallery', async () => ({ ...await vi.importActual('./api/gallery'), fetchFolders: vi.fn() }));
 const stats = (folders = 1, scan = 1) => ({ folders, indexedPosts: 5, storage: { available: true }, scan: { lastCompletedScan: { id: scan } } } as AppStatus);
 function deferred<T>() {

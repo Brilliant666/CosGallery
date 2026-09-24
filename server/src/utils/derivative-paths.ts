@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { IMAGE_DERIVATIVE_EXTENSION, VIDEO_PREVIEW_EXTENSION } from './derivative-spec.js';
 
 import type { MediaType } from '../types/models.js';
 
@@ -37,7 +38,7 @@ export function getThumbnailPathForAssetKey(
   layoutVersion: DerivativeStorageLayoutVersion = DERIVATIVE_STORAGE_LAYOUT_VERSION
 ): string {
   const normalized = normalizeAssetKey(assetKey);
-  return `${getDerivativeShard(normalized, layoutVersion)}/${normalized}.webp`;
+  return `${getDerivativeShard(normalized, layoutVersion)}/${normalized}${IMAGE_DERIVATIVE_EXTENSION}`;
 }
 
 export function getPreviewPathForAssetKey(
@@ -46,6 +47,6 @@ export function getPreviewPathForAssetKey(
   layoutVersion: DerivativeStorageLayoutVersion = DERIVATIVE_STORAGE_LAYOUT_VERSION
 ): string {
   const normalized = normalizeAssetKey(assetKey);
-  const extension = mediaType === 'video' ? '.mp4' : '.webp';
+  const extension = mediaType === 'video' ? VIDEO_PREVIEW_EXTENSION : IMAGE_DERIVATIVE_EXTENSION;
   return `${getDerivativeShard(normalized, layoutVersion)}/${normalized}${extension}`;
 }
