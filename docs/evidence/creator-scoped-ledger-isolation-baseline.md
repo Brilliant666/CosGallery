@@ -10,8 +10,8 @@
 - Stage 3 allowlist: `倦倦喵`.
 - Service was stopped and port 4141 was not listening.
 - New pre-fix backup: `data/db/backups/gallery-before-scoped-ledger-fix-20260903-010331.sqlite` (126,279,680 bytes). Both integrity checks passed and the path is Git-ignored.
-- `G:\cos待入库\五更百鬼` contained exactly `033.7z` through `053.7z` (21 files, 3,413,803,069 bytes).
-- `G:\cos图集\五更百鬼` contained 35 direct work folders and 790 files (8,267,590,983 bytes).
+- `<INBOX_ROOT>\五更百鬼` contained exactly `033.7z` through `053.7z` (21 files, 3,413,803,069 bytes).
+- `<GALLERY_ROOT>\五更百鬼` contained 35 direct work folders and 790 files (8,267,590,983 bytes).
 
 Stable production table snapshots were recorded before any code change. In particular, the `local_ingest_jobs` row hash, Stage 3 settings and allowlist were retained for the final safety comparison.
 

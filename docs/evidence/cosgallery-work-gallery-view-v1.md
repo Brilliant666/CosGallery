@@ -230,7 +230,7 @@ Regression results:
 - migration bootstrap/up/down/repeat coverage: 17 passed inside the full server suite;
 - `git diff --check`: passed.
 
-The production 4141 service was already running when this follow-up began and was neither started, stopped nor restarted. The browser harness used port 4243, an ignored temporary database snapshot and an ignored temporary cache. The production database, `G:\cos图集`, `G:\cos待入库` and `G:\cos处理中` were not opened through mutating application endpoints or modified by the follow-up.
+The production 4141 service was already running when this follow-up began and was neither started, stopped nor restarted. The browser harness used port 4243, an ignored temporary database snapshot and an ignored temporary cache. The production database, `<GALLERY_ROOT>`, `<INBOX_ROOT>` and `<PROCESSING_ROOT>` were not opened through mutating application endpoints or modified by the follow-up.
 
 ## 10. Portrait-crop preview and active-media frame follow-up (2026-09-04, historical 3:4 checkpoint)
 

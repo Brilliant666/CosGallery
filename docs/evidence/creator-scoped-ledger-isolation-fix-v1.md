@@ -113,7 +113,7 @@ The production database was never passed to a reconciliation service.
 
 ### Two consecutive creator-scoped runs
 
-Target: creator id 39 / `五更百鬼`; filesystem input read-only: `G:\cos图集\五更百鬼`.
+Target: creator id 39 / `五更百鬼`; filesystem input read-only: `<GALLERY_ROOT>\五更百鬼`.
 
 Both runs returned:
 
@@ -146,7 +146,7 @@ Non-target (other 32 local creators) hashes were also identical before/after bot
 
 ### Explicit full reconciliation on the copy
 
-A deliberate full ledger reconciliation read all 33 creator directories from `G:\cos图集` against the same database copy. Before and after:
+A deliberate full ledger reconciliation read all 33 creator directories from `<GALLERY_ROOT>` against the same database copy. Before and after:
 
 - active local works: 1,744;
 - linked: 1,744;
@@ -163,8 +163,8 @@ The cancellation of a conversational instruction did not create the corruption. 
 ## Real-data safety
 
 - Production `gallery.sqlite`: read-only integrity/baseline queries plus creation of the pre-fix backup only.
-- `G:\cos图集`: read-only directory enumeration and file stats; no writes, moves, derivatives, or timestamp-setting calls.
-- `G:\cos待入库`: no scan, extraction, move, or cleanup.
+- `<GALLERY_ROOT>`: read-only directory enumeration and file stats; no writes, moves, derivatives, or timestamp-setting calls.
+- `<INBOX_ROOT>`: no scan, extraction, move, or cleanup.
 - `033.7z` through `053.7z`: never opened or processed.
 - Recycle Bin: not invoked.
 - Production LocalIngest: not invoked.
@@ -183,4 +183,4 @@ The final read-only production check reproduced every pre-change table hash exac
 | `local_ingest_jobs` | 9 | `0addad6eed1c8ae3026304903178e4aadfa4bc2ff99594cdff139efaba4b2f66` |
 | `app_settings` | 11 | `c2e9164f2cd7031ecf1f126ddb6d6edc07d5669485b1b166b0ad8eed4dc1355b` |
 
-The final G-drive metadata census also matched the baseline: `G:\cos图集\五更百鬼` still has 35 direct work directories, 790 files and 8,267,590,983 bytes; `G:\cos待入库\五更百鬼` still has exactly 21 files named `033.7z` through `053.7z` and 3,413,803,069 bytes. No production service was started.
+The final G-drive metadata census also matched the baseline: `<GALLERY_ROOT>\五更百鬼` still has 35 direct work directories, 790 files and 8,267,590,983 bytes; `<INBOX_ROOT>\五更百鬼` still has exactly 21 files named `033.7z` through `053.7z` and 3,413,803,069 bytes. No production service was started.

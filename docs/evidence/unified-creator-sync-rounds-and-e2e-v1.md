@@ -65,10 +65,10 @@ The final isolated process was stopped after confirming its exact Node executabl
 Run from this worktree's `server/`, with a newly created OS-temp root and a free isolated 4401–4899 port. Supply installed dependencies explicitly; do not install or fall back during a test:
 
 ```powershell
-$node = 'C:\Users\brilliant\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'
+$node = 'C:\Users\ExampleUser\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'
 $env:ROSTER_E2E_7ZIP = 'C:\Program Files\NVIDIA Corporation\NVIDIA app\7z.exe'
-$env:ROSTER_E2E_PLAYWRIGHT = 'C:\Users\brilliant\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules\playwright'
-$env:ROSTER_E2E_PLUGIN_FIXTURE = 'C:\Users\brilliant\Documents\ChatGPT\插件\Script-task-display\CostuanArchiveManager\tests\helpers\page-fixtures.cjs'
+$env:ROSTER_E2E_PLAYWRIGHT = 'C:\Users\ExampleUser\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules\playwright'
+$env:ROSTER_E2E_PLUGIN_FIXTURE = 'C:\Users\ExampleUser\Documents\ChatGPT\插件\Script-task-display\CostuanArchiveManager\tests\helpers\page-fixtures.cjs'
 # $fixtureRoot is an explicitly created, fresh OS-temp cosgallery-unified-e2e-* directory.
 & $node --import tsx test/fixtures/unified-creator-sync-runtime.mjs $fixtureRoot 4486 seed
 # In another terminal with the same explicit dependency variables:

@@ -169,14 +169,14 @@ The same read-only snapshot procedure was executed before and after development.
 | Stage 3 settings + allowlist hash | `91b7f241dab8ecb14f906a7ca8aee7949254f6c7f8f156bcde9cf113d52b119e` |
 | LocalIngestJob count / row hash | 74 / `b31901f2069f625237a1aceedded5501556fc5b39b3364548f2b3d10d706f74c` |
 | Download Task count / row hash | 604 / `27f8c27243cdf1a76b7be15de7cc587d29c33d9e754abcc8293670a9127cc86a` |
-| `G:\cos图集` root mtime UTC | `2026-08-31T20:11:21.1686403Z` |
-| `G:\cos待入库` root mtime UTC | `2026-09-03T07:22:12.4039023Z` |
+| `<GALLERY_ROOT>` root mtime UTC | `2026-08-31T20:11:21.1686403Z` |
+| `<INBOX_ROOT>` root mtime UTC | `2026-09-03T07:22:12.4039023Z` |
 | inbox direct creator dirs | 29, 0 reparse directories |
 | inbox direct-dir metadata hash | `d98422e3ba344b64603916f05f50685b1044e6fa2eaf2c8a9bdadf70af57ce5d` |
 
 All 74 existing Jobs retained `attemptCount=1`: 72 are passed/recycled and 2 are warning/recycled. Download Tasks remain 90 ingested and 514 staged. The six completed creator samples (果咩酱w, 阿包也是兔娘, rua阮阮, 糖果果Candy, 是一只废喵了, 弥美Mime) retained identical creator and Job row hashes and were never run.
 
-No production Job was created, no Download Task or setting was updated, and no production scan, extraction, ingest, reconciliation, recycle action, or media read was started. `G:\cos图集` and `G:\cos待入库` were metadata-read only. The Script repository remained on `84a95ffef1c03d4cb1cfa7006a1c0e9eab5ec9c6`, clean, with CostuanArchiveManager `0.6.10`.
+No production Job was created, no Download Task or setting was updated, and no production scan, extraction, ingest, reconciliation, recycle action, or media read was started. `<GALLERY_ROOT>` and `<INBOX_ROOT>` were metadata-read only. The Script repository remained on `84a95ffef1c03d4cb1cfa7006a1c0e9eab5ec9c6`, clean, with CostuanArchiveManager `0.6.10`.
 
 ## Explicitly unchanged
 

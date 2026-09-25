@@ -168,7 +168,7 @@ identical:
 | 五更百鬼 | 31 | 707 | 7,580,295,878 | `4B5570FF73C7D1B106CAD75210901F196E4058D10FC48E31B4E4F6F0912D24E4` |
 | 眼酱大魔王w | 289 | 3,228 | 18,235,557,646 | `F3D9F9D8972D05B83CDF2528E720395BD214B48A8B2B26F47AC086B533CC117E` |
 
-The root modification timestamps of `G:\cos图集` and `G:\cos待入库` were also unchanged.
+The root modification timestamps of `<GALLERY_ROOT>` and `<INBOX_ROOT>` were also unchanged.
 
 ## Verification
 

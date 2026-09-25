@@ -30,9 +30,10 @@ describe('Costuan mixed-numbering metadata import', () => {
     seedCreators(database,[{name:'SongHana',preference:'liked',rating:'R15'}]);
     const {id}=database.prepare('SELECT id FROM archive_catalog_creators WHERE normalized_name=?').get('songhana') as {id:number};
     const service=new ArchiveCatalogService(database);
-    const record={creatorName:'SongHana',aliases:[],costuan:{postId:'623',title:songHanaTitle,collectionCount:23,
+    // Synthetic article identity; the host intentionally exercises the real host check, never network access.
+    const record={creatorName:'SongHana',aliases:[],costuan:{postId:'fixture-mixed-numbering',title:songHanaTitle,collectionCount:23,
       resourceDirectoryText:songHanaDirectory,works:parseCostuanDirectoryText(songHanaDirectory),
-      identityEvidence:{version:1,pageUrl:'https://www.costuan.com/623.html',creatorTags:[{name:'Song Hana',url:'https://www.costuan.com/tag/142'}]},
+      identityEvidence:{version:1,pageUrl:'https://www.costuan.com/fixture-mixed-numbering.html',creatorTags:[{name:'Song Hana',url:'https://www.costuan.com/tag/142'}]},
       directoryVerification:{complete:true,checkedAt:'2026-09-20T00:00:00Z',parsedWorkCount:23}
     }};
     const validated=service.validateCompleteCostuanDirectory(record,id);

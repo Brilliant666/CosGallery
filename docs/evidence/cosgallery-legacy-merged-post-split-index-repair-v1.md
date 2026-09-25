@@ -115,7 +115,7 @@ The current schema records the effective rating but not its provenance. Therefor
 
 The consistent source copy was:
 
-`C:\Users\brilliant\AppData\Local\Temp\cosgallery-legacy-split-20260905-135935\production-copy.sqlite`
+`C:\Users\ExampleUser\AppData\Local\Temp\cosgallery-legacy-split-20260905-135935\production-copy.sqlite`
 
 It had migration `000016`, `quick_check=ok`, zero foreign-key violations, 638 Scan Runs, and the same protected business-row hashes as production.
 
@@ -208,9 +208,9 @@ Filesystem metadata snapshots before and after were identical:
 
 | Root | Directories | Files | Bytes | Snapshot hash |
 | --- | ---: | ---: | ---: | --- |
-| `G:\cos图集` | 3,805 | 117,117 | 1,178,278,080,637 | `fc6fa58a47e167fc28eaf09d0972e3924e109bcc5fde01a0ef74f5ce2675c809` |
-| `G:\cos待入库` | 29 | 19 | 5,196,209,855 | `ec3488035154baf6114378eb2c7d95f3306fb70c21dfda65ac3ee7d0937526b0` |
-| `G:\cos处理中` | 82 | 832 | 10,390,615,277 | `ef9090f359c05c29d4ead3d9a3fea75295759cc3803e2c8aca765e5d2ba3bf39` |
+| `<GALLERY_ROOT>` | 3,805 | 117,117 | 1,178,278,080,637 | `fc6fa58a47e167fc28eaf09d0972e3924e109bcc5fde01a0ef74f5ce2675c809` |
+| `<INBOX_ROOT>` | 29 | 19 | 5,196,209,855 | `ec3488035154baf6114378eb2c7d95f3306fb70c21dfda65ac3ee7d0937526b0` |
+| `<PROCESSING_ROOT>` | 82 | 832 | 10,390,615,277 | `ef9090f359c05c29d4ead3d9a3fea75295759cc3803e2c8aca765e5d2ba3bf39` |
 
 The existing safety backup `gallery-before-yanjiang-348-363-reconciliation-20260905-123438.sqlite` remains present and unchanged. The user-reported 4141 process was already absent at task start (`NO_LISTENER_4141`, reported PID 56136 not running); the task did not start, stop, or restart production. Script remains on clean main `84a95ffef1c03d4cb1cfa7006a1c0e9eab5ec9c6`.
 
