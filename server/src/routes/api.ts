@@ -50,6 +50,8 @@ import { LIBRARY_REBUILD_REQUIRED_MESSAGE, scannerService } from '../services/sc
 import { storageService } from '../services/storage-service.js';
 import { watcherService } from '../services/watcher-service.js';
 import { serveDerivativeForImage } from './lazy-derivatives.js';
+import { logRequestFailure, sendUnexpectedError } from '../middleware/http-errors.js';
+import { buildInfo } from '../build-info.js';
 
 const router = express.Router();
 
@@ -650,9 +652,10 @@ router.get('/health', (_request, response) => {
   response.json({
     ok: true,
     timestamp: new Date().toISOString(),
+    build: buildInfo,
     storage: {
       available: storageState.libraryAvailable,
-      reason: storageState.reason,
+      reason: storageState.libraryAvailable ? null : 'Configured library storage is unavailable.',
       usingInMemoryDatabase: storageState.usingInMemoryDatabase
     }
   });
@@ -1573,7 +1576,7 @@ router.get(
   requireCapability('canManageLibrary', 'Admin access is required.'),
   (_request, response) => {
     response.setHeader('Cache-Control', 'no-store');
-    response.json({ archivePassword: localIngestSettingsService.getEditableArchivePassword() });
+    response.status(410).json({ code: 'PASSWORD_READ_RETIRED', message: 'Saved archive passwords cannot be read. Use settings to view configuration status or explicitly replace or clear the password.' });
   }
 );
 
@@ -2073,9 +2076,11 @@ router.post(
     try {
       archiveCatalog = await new ArchiveCatalogPipelineService().refreshAfterGalleryScan();
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      logRequestFailure(response, error);
       response.status(500).json({
-        message: `图库媒体扫描已完成，但账本核对或缺失任务刷新失败：${detail}`,
+        code: 'CATALOG_REFRESH_FAILED',
+        message: '图库媒体扫描已完成，但账本核对或缺失任务刷新失败。',
+        requestId: response.locals.requestId,
         lastScan
       });
       return;
@@ -2087,8 +2092,8 @@ router.post(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to run a manual scan and refresh the archive catalog.';
-    const status = /rebuild required/i.test(message) ? 409 : 500;
-    response.status(status).json({ message });
+    if (/rebuild required/i.test(message)) response.status(409).json({ code: 'LIBRARY_REBUILD_REQUIRED', message: LIBRARY_REBUILD_REQUIRED_MESSAGE });
+    else sendUnexpectedError(response, error);
   }
 });
 
@@ -2134,8 +2139,8 @@ router.post(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to regenerate thumbnails.';
-    const status = /rebuild required/i.test(message) ? 409 : 500;
-    response.status(status).json({ message });
+    if (/rebuild required/i.test(message)) response.status(409).json({ code: 'LIBRARY_REBUILD_REQUIRED', message: LIBRARY_REBUILD_REQUIRED_MESSAGE });
+    else sendUnexpectedError(response, error);
   } finally {
     await watcherService.start();
   }
@@ -2156,9 +2161,7 @@ router.post(
       status: await galleryService.preparePlacesGeodata()
     });
   } catch (error) {
-    response.status(500).json({
-      message: error instanceof Error ? error.message : 'Unable to prepare offline place data.'
-    });
+    sendUnexpectedError(response, error);
   }
 });
 
@@ -2184,8 +2187,7 @@ router.post('/admin/settings/carousels-as-folders', requireCapability('canAccess
     const stats = galleryService.setTreatCarouselsAsFolders(body.treatCarouselsAsFolders);
     response.json(stats);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to update carousels mode.';
-    response.status(500).json({ message });
+    sendUnexpectedError(response, error);
   }
 });
 
@@ -2200,8 +2202,7 @@ router.post('/admin/settings/carousels-migration-decision', requireCapability('c
     const stats = galleryService.setCarouselsMigrationDecision(body.decision);
     response.json(stats);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to update carousels migration decision.';
-    response.status(500).json({ message });
+    sendUnexpectedError(response, error);
   }
 });
 

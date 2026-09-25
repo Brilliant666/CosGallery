@@ -141,8 +141,8 @@ function nowIso(): string {
 
 export function normalizeArchiveInboxRoot(value: string): string {
   const normalized = value.trim().replace(/[\\/]+$/u, '');
-  if (!normalized) throw new Error('待入库根目录不能为空。');
-  if (normalized.length > 500) throw new Error('待入库根目录过长。');
+  if (!normalized) throw new RequestInputError('待入库根目录不能为空。');
+  if (normalized.length > 500) throw new RequestInputError('待入库根目录过长。');
   return normalized;
 }
 
@@ -221,17 +221,17 @@ export class ArchiveDownloadTaskService {
       : null;
     if (creatorIds !== null) {
       if (creatorIds.length === 0) {
-        throw new Error('博主定向缺失任务规划不允许空 creatorIds。');
+        throw new RequestInputError('博主定向缺失任务规划不允许空 creatorIds。');
       }
       if (creatorIds.some((creatorId) => !Number.isSafeInteger(creatorId) || creatorId <= 0)) {
-        throw new Error('博主定向缺失任务规划收到无效 creatorId。');
+        throw new RequestInputError('博主定向缺失任务规划收到无效 creatorId。');
       }
       const placeholders = creatorIds.map(() => '?').join(', ');
       const rows = this.database.prepare(
         `SELECT id FROM archive_catalog_creators WHERE id IN (${placeholders})`
       ).all(...creatorIds) as Array<{ id: number }>;
       if (rows.length !== creatorIds.length) {
-        throw new Error('博主定向缺失任务规划包含不存在的 creatorId。');
+        throw new RequestInputError('博主定向缺失任务规划包含不存在的 creatorId。');
       }
     }
     const creatorParameters = creatorIds ?? [];
@@ -336,7 +336,7 @@ export class ArchiveDownloadTaskService {
   /** Explicit Stage3 review recovery settles only its original task, never a creator-wide plan. */
   reconcileReviewedLocalTask(taskId: number, creatorId: number): number {
     if (![taskId, creatorId].every(value => Number.isSafeInteger(value) && value > 0)) {
-      throw new Error('审核恢复需要精确的下载任务和博主身份。');
+      throw new RequestInputError('审核恢复需要精确的下载任务和博主身份。');
     }
     this.database.exec('BEGIN IMMEDIATE');
     try {
@@ -350,12 +350,12 @@ export class ArchiveDownloadTaskService {
          WHERE tasks.id=? AND works.creator_id=? AND collections.creator_id=works.creator_id
            AND tasks.provider='baidu' AND source_works.is_active=1 AND collections.is_active=1 AND creators.is_active=1`
       ).get(taskId, creatorId) as { source_work_id: number; status: ArchiveDownloadTaskStatus } | undefined;
-      if (!task) throw new Error('审核恢复的任务、来源或博主关系已变化。');
+      if (!task) throw new RequestInputError('审核恢复的任务、来源或博主关系已变化。');
       if (task.status === 'claimed' || task.status === 'downloading') {
-        throw new Error('审核恢复的下载任务已被领取或正在下载，保留活动 claim。');
+        throw new RequestInputError('审核恢复的下载任务已被领取或正在下载，保留活动 claim。');
       }
       if (!['pending', 'failed', 'staged', 'downloaded', 'ingested'].includes(task.status)) {
-        throw new Error('审核恢复不能修改当前下载任务状态。');
+        throw new RequestInputError('审核恢复不能修改当前下载任务状态。');
       }
       const local = this.database.prepare(
         `SELECT 1 AS present
@@ -369,7 +369,7 @@ export class ArchiveDownloadTaskService {
            AND NOT ${acquisitionHeldSql('source_works')}
          LIMIT 1`
       ).get(task.source_work_id, creatorId);
-      if (!local) throw new Error('审核恢复的来源尚未关联到可用的精确本地作品，或存在人工决定需保留。');
+      if (!local) throw new RequestInputError('审核恢复的来源尚未关联到可用的精确本地作品，或存在人工决定需保留。');
       if (task.status === 'ingested') {
         this.database.exec('COMMIT');
         return 0;
@@ -382,7 +382,7 @@ export class ArchiveDownloadTaskService {
          SET status='ingested', completed_at=COALESCE(completed_at, ?), updated_at=?
          WHERE id=? AND source_work_id=? AND status IN ('pending','failed','staged','downloaded')`
       ).run(nowIso(), nowIso(), taskId, task.source_work_id);
-      if (Number(result.changes) !== 1) throw new Error('审核恢复的任务状态已变化，未完成精确对账。');
+      if (Number(result.changes) !== 1) throw new RequestInputError('审核恢复的任务状态已变化，未完成精确对账。');
       this.database.exec('COMMIT');
       return 1;
     } catch (error) {
@@ -515,13 +515,13 @@ export class ArchiveDownloadTaskService {
 
   claim(options: { workerId: string; limit?: number; seedTaskId?: number }): ArchiveDownloadTask[] {
     const workerId = options.workerId.trim().slice(0, 120);
-    if (!workerId) throw new Error('下载工作端标识不能为空。');
+    if (!workerId) throw new RequestInputError('下载工作端标识不能为空。');
     const limit = Math.min(500, Math.max(1, options.limit ?? 1));
     const timestamp = nowIso();
     const ids: number[] = [];
 
     if (options.seedTaskId !== undefined) {
-      if (!Number.isSafeInteger(options.seedTaskId) || options.seedTaskId <= 0) throw new Error('指定暂存任务 ID 无效，不能扩大领取范围。');
+      if (!Number.isSafeInteger(options.seedTaskId) || options.seedTaskId <= 0) throw new RequestInputError('指定暂存任务 ID 无效，不能扩大领取范围。');
       const target = this.database.prepare(`SELECT works.creator_id, tasks.provider,
           ${acquisitionHeldSql('source_works')} AS acquisition_held,
           creators.is_active AS creator_active, source_works.is_active AS source_active, collections.is_active AS collection_active,
@@ -533,10 +533,10 @@ export class ArchiveDownloadTaskService {
         JOIN archive_catalog_creators creators ON creators.id=works.creator_id
         JOIN archive_catalog_collections collections ON collections.id=source_works.collection_id
         WHERE tasks.id=?`).get(options.seedTaskId) as {creator_id:number;provider:string;creator_active:number;source_active:number;collection_active:number;delivery_ready:number;acquisition_held:number}|undefined;
-      if (!target) throw new Error('指定暂存任务不存在。');
-      if(target.acquisition_held) throw new Error('指定任务已有本地接受决定或待复核，不能再次领取。');
+      if (!target) throw new RequestInputError('指定暂存任务不存在。');
+      if(target.acquisition_held) throw new RequestInputError('指定任务已有本地接受决定或待复核，不能再次领取。');
       if (!target.creator_active || !target.source_active || !target.collection_active || !target.delivery_ready) {
-        throw new Error('指定暂存任务的博主已停用或来源目录不可用，请先核验 Stage 1。');
+        throw new RequestInputError('指定暂存任务的博主已停用或来源目录不可用，请先核验 Stage 1。');
       }
       this.reconcileAlreadyLocalTasks(target.provider,[target.creator_id]);
     } else {
@@ -591,10 +591,10 @@ export class ArchiveDownloadTaskService {
         return [];
       }
       if (!['pending', 'failed', 'claimed'].includes(seed.status)) {
-        throw new Error(`下载任务 ${seed.id} 当前状态为 ${seed.status}，不能组成博主批次。`);
+        throw new RequestInputError(`下载任务 ${seed.id} 当前状态为 ${seed.status}，不能组成博主批次。`);
       }
       if (seed.status === 'claimed' && seed.claimed_by && seed.claimed_by !== workerId) {
-        throw new Error('下载任务已由其他工作端领取。');
+        throw new RequestInputError('下载任务已由其他工作端领取。');
       }
 
       const rows = this.database.prepare(
@@ -652,12 +652,12 @@ export class ArchiveDownloadTaskService {
   }): ArchiveDownloadTask | null {
     const current = this.get(id);
     if (!current) return null;
-    if(current.acquisitionState !== 'required' && ['pending','claimed','downloading'].includes(patch.status) && patch.status!==current.status) throw new Error('本地接受决定阻止重新获取；需明确复核，历史回执仍可正常提交。');
+    if(current.acquisitionState !== 'required' && ['pending','claimed','downloading'].includes(patch.status) && patch.status!==current.status) throw new RequestInputError('本地接受决定阻止重新获取；需明确复核，历史回执仍可正常提交。');
     if (patch.status !== current.status && !ALLOWED_TRANSITIONS[current.status].has(patch.status)) {
-      throw new Error(`下载任务不能从 ${current.status} 变更为 ${patch.status}。`);
+      throw new RequestInputError(`下载任务不能从 ${current.status} 变更为 ${patch.status}。`);
     }
     if (current.claimedBy && patch.workerId && current.claimedBy !== patch.workerId) {
-      throw new Error('下载任务已由其他工作端领取。');
+      throw new RequestInputError('下载任务已由其他工作端领取。');
     }
     const timestamp = nowIso();
     const startedAt = patch.status === 'downloading' && !current.startedAt ? timestamp : current.startedAt;
@@ -761,3 +761,4 @@ export class ArchiveDownloadTaskService {
               )`;
   }
 }
+import { RequestInputError } from '../utils/request-input-error.js';

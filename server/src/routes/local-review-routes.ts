@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { LocalReviewWebService, localReviewTargetSchema } from '../services/local-review-web-service.js';
+import { LocalReviewError, LocalReviewWebService, localReviewTargetSchema } from '../services/local-review-web-service.js';
 
 /** Mounted by the parent router behind canManageLibrary and the existing CSRF middleware. */
 export function createLocalReviewRouter(service?: LocalReviewWebService) {
@@ -24,9 +24,10 @@ export function createLocalReviewRouter(service?: LocalReviewWebService) {
     const body = z.object({ requestKey: key }).strict().parse(req.body);
     res.status(202).json(current().retry(key.parse(req.params.id), body.requestKey));
   });
-  router.use((error: unknown, _req: import('express').Request, res: import('express').Response, _next: import('express').NextFunction) => {
-    res.status(error instanceof z.ZodError ? 400 : 409).json({ ok: false, code: 'LOCAL_REVIEW_BLOCKED',
-      message: error instanceof Error ? error.message : String(error) });
+  router.use((error: unknown, _req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
+    if (error instanceof z.ZodError) { res.status(400).json({ ok: false, code: 'INVALID_REQUEST', message: 'Invalid review input.' }); return; }
+    if (!(error instanceof LocalReviewError)) { next(error); return; }
+    res.status(409).json({ ok: false, code: 'LOCAL_REVIEW_BLOCKED', message: error.message });
   });
   return router;
 }
