@@ -142,6 +142,23 @@ function ratingBadgeClass(value: ContentRating | null) {
   return 'bg-[#6b7280]';
 }
 
+async function correctOutOfRangePage(resultTotal: number) {
+  const lastPage = Math.max(1, Math.ceil(resultTotal / PAGE_SIZE));
+  if (page.value <= lastPage) return false;
+  // Old fifty-per-page links and a shrinking result set can point beyond the end.
+  // Do not publish/cache their empty response or add an unusable history entry.
+  delete reading.libraryPages[cacheKey()];
+  navigationIntent = 'page';
+  const nextQuery = { ...route.query };
+  if (lastPage > 1) nextQuery.page = String(lastPage);
+  else delete nextQuery.page;
+  await router.replace({
+    name: 'library',
+    query: nextQuery
+  });
+  return true;
+}
+
 async function loadCreators(scroll: 'restore' | 'top' | 'preserve') {
   const token = ++requestToken;
   generation = reading.generation;
@@ -149,6 +166,8 @@ async function loadCreators(scroll: 'restore' | 'top' | 'preserve') {
   error.value = '';
   const cached = reading.libraryPages[cacheKey()];
   if (cached) {
+    if (await correctOutOfRangePage(cached.total)) return;
+    if (token !== requestToken) return;
     creators.value = cached.items;
     total.value = cached.total;
     loading.value = false;
@@ -158,6 +177,8 @@ async function loadCreators(scroll: 'restore' | 'top' | 'preserve') {
   }
   try {
     const payload = await fetchCosGalleryCreators(rating.value === 'all' ? undefined : rating.value, query.value, page.value, PAGE_SIZE, preference.value === 'all' ? undefined : preference.value);
+    if (token !== requestToken) return;
+    if (await correctOutOfRangePage(payload.total)) return;
     if (token !== requestToken) return;
     creators.value = payload.items;
     total.value = payload.total;

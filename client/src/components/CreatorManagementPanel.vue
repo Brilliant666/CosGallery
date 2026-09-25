@@ -1,5 +1,5 @@
 <template>
-  <dialog ref="surface" class="creator-panel" aria-modal="true" aria-labelledby="creator-panel-title" @cancel.stop.prevent="emit('close')" @click.capture="routeInternalLink">
+  <dialog ref="surface" class="creator-panel" aria-modal="true" aria-labelledby="creator-panel-title" @cancel.stop.prevent="emit('close')" @keydown.capture="handleEscape" @click.capture="routeInternalLink">
     <header class="panel-heading">
       <div><p class="eyebrow">博主资料</p><h2 id="creator-panel-title">{{ creatorId === null ? '新增博主' : detail?.name ?? '正在读取…' }}</h2>
         <div v-if="detail" class="identity-tags"><span>{{ detail.rating ?? '待分类' }}</span><span>{{ preferenceLabel(detail.preference) }}</span><span>{{ detail.isActive ? '启用' : '已停用' }}</span></div>
@@ -134,6 +134,17 @@ async function previewDeletion(){if(!detail.value)return;if(dirtyTabs.value.leng
 async function deleteCreator(){const preview=deletion.value;if(dirtyTabs.value.length||!preview?.eligible||preview.blockers.length||!preview.confirmationToken||detail.value?.id!==preview.creatorId)return;const turn=generation;let deleted=false;await mutate(async()=>{const result=await api.deleteUnusedManagedCreator(preview.creatorId,preview.confirmationToken);if(disposed||turn!==generation)return;if(!result.deleted||result.creatorId!==preview.creatorId)throw Error('删除结果尚未确认，请重新检查，不会自动重试。');saved();deleted=true;});if(deleted&&!disposed&&turn===generation)emit('deleted');if(error.value)error.value+=' 请重新检查删除条件，不会自动重试删除。';}
 async function sourcePlanned(ids:number[]){emit('source-planned',ids);if(props.creatorId===null)return;const id=props.creatorId,turn=generation;try{const result=await fetchArchiveCatalogCreator(id);if(!disposed&&turn===generation)detail.value=result;}catch(reason){if(turn===generation)showError(reason);}}
 function routeInternalLink(event:MouseEvent){if(!router||event.defaultPrevented||event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;const anchor=(event.target as Element)?.closest<HTMLAnchorElement>('a[href]');if(!anchor||anchor.target||anchor.hasAttribute('download'))return;const url=new URL(anchor.href,location.href);if(url.origin!==location.origin)return;event.preventDefault();void router.push(url.pathname+url.search+url.hash);}
+function handleEscape(event:KeyboardEvent){
+  if(event.key!=='Escape'||event.isComposing||event.defaultPrevented)return;
+  const dialog=event.target instanceof Element?event.target.closest('dialog'):null;
+  if(dialog!==surface.value&&dialog!==leaveDialog.value)return;
+  // Repeated native dialog close requests can become non-cancelable without a
+  // fresh user activation. Handle the key before that default action, so the
+  // browser cannot close the parent behind its unsaved-changes confirmation.
+  event.preventDefault();event.stopPropagation();
+  if(event.repeat)return;
+  if(leaveDialog.value?.open)resolveLeave(false);else emit('close');
+}
 function requestLeave():Promise<boolean>{if(auth.ready&&!auth.capabilities.canAccessSettings)return Promise.resolve(true);if(busy.value||sourcePanel.value?.isBusy){notice.value='当前操作正在提交，请等待结果后再切换。';return Promise.resolve(false);}if(!dirtyTabs.value.length)return Promise.resolve(true);if(leaveResolve)return Promise.resolve(false);return new Promise(resolve=>{leaveResolve=resolve;leaveDialog.value?.showModal();});}
 function resolveLeave(value:boolean){const resolve=leaveResolve;leaveResolve=null;leaveDialog.value?.close();resolve?.(value);}
 function returnToSave(){chooseTab(dirtyTabs.value[0]??'profile');resolveLeave(false);}

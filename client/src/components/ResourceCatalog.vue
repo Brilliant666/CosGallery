@@ -15,7 +15,6 @@
           @compositionend="creatorComposing = false"
           @keydown.enter="creatorEnter" /></label>
       <button type="button" data-test="view-all" :aria-pressed="!creatorId && hasScope" :disabled="!creatorId && hasScope" @click="selectAll">全部博主</button>
-      <strong v-if="creatorId" class="current-creator">当前博主：{{ payload?.creator?.canonicalName ?? `博主 #${creatorId}` }}</strong>
     </form>
     <ul v-if="choices.length" class="choices" aria-label="博主搜索结果">
       <li
@@ -30,6 +29,7 @@
     </ul>
     <p v-if="searchNotice" role="status">{{ searchNotice }}</p>
     </div>
+    <p v-if="creatorId" class="current-creator"><strong>当前博主：{{ payload?.creator?.canonicalName ?? `博主 #${creatorId}` }}</strong></p>
     <div class="catalog-toolbar">
     <template v-if="payload">
       <strong class="scope-count">完整目录 {{ payload.summary.totalWorks }} 套</strong>
@@ -818,6 +818,12 @@ summary { cursor: pointer; }
 .filter-fields { padding-top: 0.75rem; }
 .stats {
   line-height: 1.8;
+}
+@media (max-width: 767px) {
+  .catalog-toolbar { position:relative; }
+  .export-panel { position:static; }
+  .menu.exports { left:0; right:auto; min-width:0; width:20rem; max-width:100%; box-sizing:border-box; }
+  .menu.exports label, .menu.exports select { min-width:0; max-width:100%; }
 }
 @media (max-width: 600px) {
   .resource-catalog {

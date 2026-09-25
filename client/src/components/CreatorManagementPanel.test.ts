@@ -65,6 +65,34 @@ describe('creator management panel lifecycle and save scopes',()=>{
     expect(w.emitted('close')).toBeUndefined();expect(w.vm.dirtyTabs).toEqual(['profile']);
     await w.get('.creator-panel').trigger('cancel');expect(w.emitted('close')).toEqual([[]]);
   });
+  it('handles consecutive Escape keys before native dialog closing and preserves the dirty parent',async()=>{
+    const w=panel('profile');await flushPromises();await w.get('.profile-form input').setValue('Draft');
+    let leaving:Promise<boolean>|undefined;
+    for(let index=0;index<6;index++){
+      const target=index%2===0?w.get('.profile-form input'):w.get('.leave-dialog button');
+      const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});
+      target.element.dispatchEvent(event);await flushPromises();expect(event.defaultPrevented).toBe(true);
+      if(index%2===0){
+        expect(w.emitted('close')).toHaveLength(Math.floor(index/2)+1);
+        // The owning view uses this same leave guard for the emitted close.
+        leaving=w.vm.requestLeave();await flushPromises();expect(w.get('.leave-dialog').element.open).toBe(true);
+      }else{expect(await leaving).toBe(false);expect(w.get('.leave-dialog').element.open).toBe(false);}
+      expect(w.get('.creator-panel').element.open).toBe(true);
+      expect(w.get('.profile-form input').element.value).toBe('Draft');expect(w.vm.dirtyTabs).toEqual(['profile']);
+    }
+    const finalLeave=w.vm.requestLeave();await flushPromises();await button(w,'放弃更改并继续').trigger('click');expect(await finalLeave).toBe(true);
+    expect(api.saveManagedCreatorProfile).not.toHaveBeenCalled();
+  });
+  it('does not repeat close requests for a held Escape key or intercept another nested dialog',async()=>{
+    const w=panel('profile');await flushPromises();
+    const held=new KeyboardEvent('keydown',{key:'Escape',repeat:true,bubbles:true,cancelable:true});w.get('.profile-form input').element.dispatchEvent(held);
+    expect(held.defaultPrevented).toBe(true);expect(w.emitted('close')).toBeUndefined();
+    const composing=new KeyboardEvent('keydown',{key:'Escape',isComposing:true,bubbles:true,cancelable:true});w.get('.profile-form input').element.dispatchEvent(composing);
+    expect(composing.defaultPrevented).toBe(false);expect(w.emitted('close')).toBeUndefined();
+    const nested=document.createElement('dialog'),input=document.createElement('input');nested.append(input);w.get('.creator-panel').element.append(nested);
+    const event=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});input.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);expect(w.emitted('close')).toBeUndefined();nested.remove();
+  });
   it('stages name, classification and manual aliases then submits one atomic profile save',async()=>{
     const value=structuredClone(creator);value.aliases.push({id:'manual-old',alias:'Previous alias',source:'manual',editable:true});chooseIdentity(value);
     const w=panel('profile');await flushPromises();const form=w.get('.profile-form');await form.get('input').setValue('Renamed');await form.findAll('select')[0]!.setValue('kept');await form.findAll('select')[1]!.setValue('R15');

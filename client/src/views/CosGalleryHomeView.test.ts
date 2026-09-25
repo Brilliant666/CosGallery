@@ -17,6 +17,17 @@ vi.mock('vue-router', async (importOriginal) => {
   return { ...await importOriginal<typeof import('vue-router')>(), onBeforeRouteLeave: vi.fn(), onBeforeRouteUpdate: vi.fn(), useRoute: () => routerState.route, useRouter: () => ({ replace: routerState.replace, push: routerState.push }) };
 });
 
+type CreatorPage = Awaited<ReturnType<typeof fetchCosGalleryCreators>>;
+function creatorPage(total: number, page: number): CreatorPage {
+  return { total, page, limit: 60, hasMore: page * 60 < total,
+    summary: { all: total, R15: 0, R18: total, unclassified: 0, unlinked: 0, inactive: 0 },
+    items: total && page <= Math.ceil(total / 60) ? [{
+      key: 'creator:1', identityType: 'creator', id: 1, slug: 'one', name: 'Last valid page creator',
+      canonicalCreatorId: 1, canonicalName: 'Last valid page creator', contentRating: 'R18',
+      linkStatus: 'linked', rosterStatus: 'active', workCount: 1, folderIds: [10], folderNames: ['one'], aliases: []
+    }] : [] };
+}
+
 describe('managed gallery classifications', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -107,6 +118,72 @@ describe('managed gallery classifications', () => {
     await flushPromises();
     expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined, '', 1, 60, undefined);
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it('replaces a legacy out-of-range page without flashing an empty result or dropping filters', async () => {
+    routerState.route.query = { rating: 'R18', preference: 'kept', q: '别名', page: '2' };
+    routerState.route.fullPath = '/library?rating=R18&preference=kept&q=别名&page=2';
+    let resolveLast!: (value: CreatorPage) => void;
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValueOnce(creatorPage(54, 2))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveLast = resolve; }));
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+    expect(routerState.replace).toHaveBeenCalledExactlyOnceWith({ name: 'library', query: { rating: 'R18', preference: 'kept', q: '别名' } });
+    expect(routerState.push).not.toHaveBeenCalled();
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18', '别名', 1, 60, 'kept');
+    expect(wrapper.text()).toContain('正在加载博主目录');
+    expect(wrapper.text()).not.toContain('没有符合当前条件');
+    resolveLast(creatorPage(54, 1));
+    await flushPromises();
+    expect(wrapper.text()).toContain('54 位博主');
+    expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain('没有符合当前条件');
+    wrapper.unmount();
+  });
+  it.each([{ total: 123, expected: 3 }, { total: 0, expected: 1 }])('bounds a stale page for total $total to page $expected', async ({ total, expected }) => {
+    routerState.route.query = { rating: 'R18', page: '9' };
+    routerState.route.fullPath = '/library?rating=R18&page=9';
+    vi.mocked(fetchCosGalleryCreators).mockImplementation(async (_rating, _query, requestedPage) => creatorPage(total, requestedPage!));
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+    expect(routerState.replace).toHaveBeenCalledTimes(1);
+    expect(routerState.route.query).toEqual({ rating: 'R18', ...(expected > 1 ? { page: String(expected) } : {}) });
+    expect(fetchCosGalleryCreators).toHaveBeenCalledTimes(2);
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18', '', expected, 60, undefined);
+    expect(wrapper.text()).toContain(total ? '第 3 / 3 页' : '没有符合当前条件');
+    wrapper.unmount();
+  });
+  it('rejects an invalid cached page and restores only the corrected page data', async () => {
+    const reading = useCreatorReadingStore();
+    routerState.route.query = { rating: 'R18', page: '2' };
+    routerState.route.fullPath = '/library?rating=R18&page=2';
+    reading.libraryPages['library:60:/library?rating=R18&page=2'] = { items: [], total: 54, scrollY: 900 };
+    reading.libraryPages['library:60:/library?rating=R18'] = { items: creatorPage(54, 1).items, total: 54, scrollY: 1200 };
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+    expect(routerState.replace).toHaveBeenCalledTimes(1);
+    expect(reading.libraryPages['library:60:/library?rating=R18&page=2']).toBeUndefined();
+    expect(fetchCosGalleryCreators).not.toHaveBeenCalled();
+    expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(true);
+    expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 0 });
+    wrapper.unmount();
+  });
+  it('does not let a late out-of-range response replace a newer filter route', async () => {
+    routerState.route.query = { rating: 'R18', page: '9' };
+    routerState.route.fullPath = '/library?rating=R18&page=9';
+    let resolveOld!: (value: CreatorPage) => void;
+    vi.mocked(fetchCosGalleryCreators).mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockResolvedValue(creatorPage(61, 1));
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+    routerState.route.query = { rating: 'R15' };
+    routerState.route.fullPath = '/library?rating=R15';
+    await flushPromises();
+    resolveOld(creatorPage(54, 9));
+    await flushPromises();
+    expect(routerState.replace).not.toHaveBeenCalled();
+    expect(routerState.route.query).toEqual({ rating: 'R15' });
+    expect(wrapper.text()).toContain('61 位博主');
     wrapper.unmount();
   });
   it('restores return positions, but choosing all uses the cached data without its old scroll and repeated all is inert', async () => {
