@@ -39,6 +39,7 @@ import type {
   CollectionMembershipRecord,
   CollectionSummaryRecord,
   FeedImage,
+  FeedPost,
   FolderImageOrder,
   NestedFolderTitleFormat,
   FolderRecord,
@@ -86,7 +87,8 @@ interface FeedCapsuleDefinition {
   momentDate?: MomentDateMetadata;
   minimumImageCount: number;
   count: () => number;
-  list: (page: number, limit: number) => FeedImage[];
+  // Candidate rows only; hydrate complete media after the final cover/page selection.
+  list: (page: number, limit: number) => FeedPost[];
 }
 
 interface CalendarDateParts {
@@ -925,12 +927,12 @@ function buildTrashPaginatedPayload(items: TrashImage[], page: number, limit: nu
   };
 }
 
-function sliceItemsForPage(items: FeedImage[], page: number, limit: number): FeedImage[] {
+function sliceItemsForPage(items: FeedPost[], page: number, limit: number): FeedPost[] {
   const offset = (page - 1) * limit;
   return items.slice(offset, offset + limit);
 }
 
-function filterExcludedFeedItems(items: FeedImage[], excludedImageIds: Set<number>): FeedImage[] {
+function filterExcludedFeedItems(items: FeedPost[], excludedImageIds: Set<number>): FeedPost[] {
   if (excludedImageIds.size === 0) {
     return items;
   }
@@ -938,7 +940,7 @@ function filterExcludedFeedItems(items: FeedImage[], excludedImageIds: Set<numbe
   return items.filter((item) => !excludedImageIds.has(item.id));
 }
 
-function limitHighlightItems(items: FeedImage[], minimumImageCount: number, excludedImageIds: Set<number>): FeedImage[] {
+function limitHighlightItems(items: FeedPost[], minimumImageCount: number, excludedImageIds: Set<number>): FeedPost[] {
   const cappedItems = items.slice(0, HIGHLIGHT_CAPSULE_MAX_ITEMS);
   if (excludedImageIds.size === 0) {
     return cappedItems;
@@ -950,7 +952,7 @@ function limitHighlightItems(items: FeedImage[], minimumImageCount: number, excl
 
 function buildStaticCapsuleDefinition(
   capsule: Pick<FeedCapsuleDefinition, 'id' | 'title' | 'subtitle' | 'dateContext' | 'minimumImageCount'>,
-  items: FeedImage[]
+  items: FeedPost[]
 ): FeedCapsuleDefinition {
   const cappedItems = items.slice(0, HIGHLIGHT_CAPSULE_MAX_ITEMS);
 
@@ -961,19 +963,19 @@ function buildStaticCapsuleDefinition(
   };
 }
 
-function listDiversifiedModeItems(
+function listDiversifiedModeItems<T extends FeedImage>(
   total: number,
   page: number,
   limit: number,
-  loadBatch: (offset: number, limit: number) => FeedImage[]
-): FeedImage[] {
+  loadBatch: (offset: number, limit: number) => T[]
+): T[] {
   if (total === 0) {
     return [];
   }
 
   const targetCount = Math.min(total, page * limit);
   const candidateLimit = Math.min(total, Math.max(targetCount * 12, 720), MAX_DIVERSIFIED_CANDIDATES);
-  const candidates: FeedImage[] = [];
+  const candidates: T[] = [];
   let offset = 0;
 
   while (offset < candidateLimit) {
@@ -1006,7 +1008,7 @@ function toCalendarDateParts(date: Date): CalendarDateParts {
   };
 }
 
-function getRecentBatchHighlightItems(candidates: FeedImage[], excludedImageIds: Set<number>): FeedImage[] {
+function getRecentBatchHighlightItems(candidates: FeedPost[], excludedImageIds: Set<number>): FeedPost[] {
   const bursts = groupFeedBursts(candidates)
     .filter((burst) => burst.items.length >= 2)
     .slice(0, HIGHLIGHT_BATCH_COUNT * 2);
@@ -1060,7 +1062,7 @@ function buildMomentRailDefinition(now = new Date()): FeedRailDefinition {
         },
         minimumImageCount: 1,
         count: () => imageRepository.countByMonthDayKeys(onThisDayKeys, currentYear),
-        list: (page, limit) => imageRepository.listByMonthDayKeys(onThisDayKeys, currentYear, page, limit)
+        list: (page, limit) => imageRepository.listByMonthDayKeys(onThisDayKeys, currentYear, page, limit, { hydrateMedia: false })
       },
       {
         id: 'this-week-previous-years',
@@ -1074,7 +1076,7 @@ function buildMomentRailDefinition(now = new Date()): FeedRailDefinition {
         },
         minimumImageCount: 2,
         count: () => imageRepository.countByMonthDayKeys(weekKeys, currentYear),
-        list: (page, limit) => imageRepository.listByMonthDayKeys(weekKeys, currentYear, page, limit)
+        list: (page, limit) => imageRepository.listByMonthDayKeys(weekKeys, currentYear, page, limit, { hydrateMedia: false })
       },
       {
         id: 'from-last-year',
@@ -1089,7 +1091,7 @@ function buildMomentRailDefinition(now = new Date()): FeedRailDefinition {
         },
         minimumImageCount: 1,
         count: () => imageRepository.countByEffectiveTimeRange(lastYearStart.getTime(), lastYearEnd.getTime()),
-        list: (page, limit) => imageRepository.listByEffectiveTimeRange(lastYearStart.getTime(), lastYearEnd.getTime(), page, limit)
+        list: (page, limit) => imageRepository.listByEffectiveTimeRange(lastYearStart.getTime(), lastYearEnd.getTime(), page, limit, { hydrateMedia: false })
       }
     ]
   };
@@ -1098,25 +1100,25 @@ function buildMomentRailDefinition(now = new Date()): FeedRailDefinition {
 function buildHighlightRailDefinition(now = new Date()): FeedRailDefinition {
   // Both reads used the same stable time/id order and offset. Reuse its prefix
   // for overlap exclusion instead of querying and hydrating the first 18 twice.
-  const recentCandidates = imageRepository.listRecentCandidates(0, HIGHLIGHT_BATCH_CANDIDATE_LIMIT);
+  const recentCandidates = imageRepository.listRecentCandidates(0, HIGHLIGHT_BATCH_CANDIDATE_LIMIT, { hydrateMedia: false });
   const excludedImageIds = new Set(recentCandidates.slice(0, HIGHLIGHT_FEED_OVERLAP_WINDOW).map(item => item.id));
   const rediscoverCutoff = now.getTime() - REDISCOVER_MIN_AGE_MS;
   const dailySeed = createDailySeed(now);
   const highlightFetchLimit = HIGHLIGHT_CAPSULE_MAX_ITEMS + HIGHLIGHT_FEED_OVERLAP_WINDOW;
   const recentBatchItems = getRecentBatchHighlightItems(recentCandidates, excludedImageIds);
   const forgottenFavoriteItems = limitHighlightItems(
-    likeRepository.listLikedOlderThan(1, highlightFetchLimit, rediscoverCutoff),
+    likeRepository.listLikedOlderThan(1, highlightFetchLimit, rediscoverCutoff, { hydrateMedia: false }),
     1,
     excludedImageIds
   );
   const deepCutItems = limitHighlightItems(
     listDiversifiedModeItems(imageRepository.countRediscover(rediscoverCutoff), 1, highlightFetchLimit, (offset, batchLimit) =>
-      imageRepository.listRediscoverCandidates(offset, batchLimit, rediscoverCutoff)
+      imageRepository.listRediscoverCandidates(offset, batchLimit, rediscoverCutoff, { hydrateMedia: false })
     ),
     1,
     excludedImageIds
   );
-  const luckyDipItems = limitHighlightItems(imageRepository.listRandom(1, highlightFetchLimit, dailySeed), 1, excludedImageIds);
+  const luckyDipItems = limitHighlightItems(imageRepository.listRandom(1, highlightFetchLimit, dailySeed, { hydrateMedia: false }), 1, excludedImageIds);
   const recentBatchCount = groupFeedBursts(recentBatchItems).length;
 
   return {
@@ -1172,34 +1174,39 @@ function buildHighlightRailDefinition(now = new Date()): FeedRailDefinition {
 function materializeRailDefinition(definition: FeedRailDefinition) {
   const usedCoverImageIds = new Set<number>();
 
+  const capsules = definition.capsules
+    .map((capsule) => {
+      const imageCount = capsule.count();
+      if (imageCount < capsule.minimumImageCount) {
+        return null;
+      }
+
+      const coverCandidates = capsule.list(1, RAIL_COVER_CANDIDATE_LIMIT);
+      const coverImage = coverCandidates.find((image) => !usedCoverImageIds.has(image.id)) ?? coverCandidates[0];
+      if (!coverImage) {
+        return null;
+      }
+
+      usedCoverImageIds.add(coverImage.id);
+
+      return {
+        id: capsule.id,
+        title: capsule.title,
+        subtitle: capsule.subtitle,
+        dateContext: capsule.dateContext,
+        momentDate: capsule.momentDate,
+        imageCount,
+        coverImage
+      };
+    })
+    .filter((capsule): capsule is NonNullable<typeof capsule> => capsule !== null);
+
+  // Selection only reads id/folder/time. Load full media for all final covers
+  // together, rather than hydrating every candidate or querying each cover.
+  postRepository.hydratePostItems(capsules.map(capsule => capsule.coverImage));
   return {
     ...definition,
-    capsules: definition.capsules
-      .map((capsule) => {
-        const imageCount = capsule.count();
-        if (imageCount < capsule.minimumImageCount) {
-          return null;
-        }
-
-        const coverCandidates = capsule.list(1, RAIL_COVER_CANDIDATE_LIMIT);
-        const coverImage = coverCandidates.find((image) => !usedCoverImageIds.has(image.id)) ?? coverCandidates[0];
-        if (!coverImage) {
-          return null;
-        }
-
-        usedCoverImageIds.add(coverImage.id);
-
-        return {
-          id: capsule.id,
-          title: capsule.title,
-          subtitle: capsule.subtitle,
-          dateContext: capsule.dateContext,
-          momentDate: capsule.momentDate,
-          imageCount,
-          coverImage: mapFeedImage(coverImage)
-        };
-      })
-      .filter((capsule): capsule is NonNullable<typeof capsule> => capsule !== null)
+    capsules: capsules.map(capsule => ({ ...capsule, coverImage: mapFeedImage(capsule.coverImage) }))
   };
 }
 
@@ -1620,7 +1627,7 @@ export const galleryService = {
       railDescription: rail.description,
       railSingularLabel: rail.singularLabel,
       moment: capsule,
-      ...buildPaginatedPayload(mapFeedItems(definition.list(page, limit)), page, limit, total)
+      ...buildPaginatedPayload(mapFeedItems(postRepository.hydratePostItems(definition.list(page, limit))), page, limit, total)
     };
   },
 

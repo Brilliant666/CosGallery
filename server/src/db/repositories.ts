@@ -45,6 +45,11 @@ import type {
 
 import type { DatabaseSync } from 'node:sqlite';
 
+export interface FeedReadOptions {
+  // Candidate selection may defer media, but API results must be batch-hydrated before returning.
+  hydrateMedia?: boolean;
+}
+
 const database = new Proxy({} as DatabaseSync, {
   get(_target, prop) {
     const conn = databaseManager.connection as any;
@@ -1729,7 +1734,7 @@ export const postRepository = {
     );
   },
 
-  listRecentCandidates(offset: number, limit: number): FeedPost[] {
+  listRecentCandidates(offset: number, limit: number, options: FeedReadOptions = {}): FeedPost[] {
     const posts = database.prepare(
       `
       ${BASE_POST_SELECT_SQL}
@@ -1739,7 +1744,9 @@ export const postRepository = {
       `
     ).all(limit, offset) as unknown as FeedPost[];
 
-    return this.hydratePostItems(posts);
+    return options.hydrateMedia === false
+      ? posts.map((post) => ({ ...post, mediaItems: [] }))
+      : this.hydratePostItems(posts);
   },
 
   countRediscover(cutoffTimestamp: number): number {
@@ -1752,7 +1759,7 @@ export const postRepository = {
     );
   },
 
-  listRediscoverCandidates(offset: number, limit: number, cutoffTimestamp: number): FeedPost[] {
+  listRediscoverCandidates(offset: number, limit: number, cutoffTimestamp: number, options: FeedReadOptions = {}): FeedPost[] {
     const posts = database.prepare(
       `
       ${BASE_POST_SELECT_SQL}
@@ -1767,10 +1774,12 @@ export const postRepository = {
       `
     ).all(cutoffTimestamp, limit, offset) as unknown as FeedPost[];
 
-    return this.hydratePostItems(posts);
+    return options.hydrateMedia === false
+      ? posts.map((post) => ({ ...post, mediaItems: [] }))
+      : this.hydratePostItems(posts);
   },
 
-  listRandom(page: number, limit: number, seed: number): FeedPost[] {
+  listRandom(page: number, limit: number, seed: number, options: FeedReadOptions = {}): FeedPost[] {
     const offset = (page - 1) * limit;
     const posts = database.prepare(
       `
@@ -1781,7 +1790,9 @@ export const postRepository = {
       `
     ).all(seed, limit, offset) as unknown as FeedPost[];
 
-    return this.hydratePostItems(posts);
+    return options.hydrateMedia === false
+      ? posts.map((post) => ({ ...post, mediaItems: [] }))
+      : this.hydratePostItems(posts);
   },
 
   listVisibleVideoCandidates(): ReelCandidate[] {
@@ -1913,7 +1924,7 @@ export const postRepository = {
     );
   },
 
-  listByMonthDayKeys(monthDayKeys: string[], maxYearExclusive: number, page: number, limit: number): FeedPost[] {
+  listByMonthDayKeys(monthDayKeys: string[], maxYearExclusive: number, page: number, limit: number, options: FeedReadOptions = {}): FeedPost[] {
     if (monthDayKeys.length === 0) {
       return [];
     }
@@ -1932,7 +1943,9 @@ export const postRepository = {
       `
     ).all(...monthDayKeys, maxYearExclusive, limit, offset) as unknown as FeedPost[];
 
-    return this.hydratePostItems(posts);
+    return options.hydrateMedia === false
+      ? posts.map((post) => ({ ...post, mediaItems: [] }))
+      : this.hydratePostItems(posts);
   },
 
   countByEffectiveTimeRange(startTimestamp: number, endTimestamp: number): number {
@@ -1952,7 +1965,7 @@ export const postRepository = {
     );
   },
 
-  listByEffectiveTimeRange(startTimestamp: number, endTimestamp: number, page: number, limit: number): FeedPost[] {
+  listByEffectiveTimeRange(startTimestamp: number, endTimestamp: number, page: number, limit: number, options: FeedReadOptions = {}): FeedPost[] {
     const offset = (page - 1) * limit;
 
     const posts = database.prepare(
@@ -1965,7 +1978,9 @@ export const postRepository = {
       `
     ).all(startTimestamp, endTimestamp, limit, offset) as unknown as FeedPost[];
 
-    return this.hydratePostItems(posts);
+    return options.hydrateMedia === false
+      ? posts.map((post) => ({ ...post, mediaItems: [] }))
+      : this.hydratePostItems(posts);
   },
 
   listPlacePosts(placeId: number, page: number, limit: number): FeedPost[] {
@@ -3069,20 +3084,20 @@ export const imageRepository = {
     return postRepository.countVisibleSearch(query);
   },
 
-  listRecentCandidates(offset: number, limit: number): FeedImage[] {
-    return postRepository.listRecentCandidates(offset, limit);
+  listRecentCandidates(offset: number, limit: number, options: FeedReadOptions = {}): FeedPost[] {
+    return postRepository.listRecentCandidates(offset, limit, options);
   },
 
   countRediscover(cutoffTimestamp: number): number {
     return postRepository.countRediscover(cutoffTimestamp);
   },
 
-  listRediscoverCandidates(offset: number, limit: number, cutoffTimestamp: number): FeedImage[] {
-    return postRepository.listRediscoverCandidates(offset, limit, cutoffTimestamp);
+  listRediscoverCandidates(offset: number, limit: number, cutoffTimestamp: number, options: FeedReadOptions = {}): FeedPost[] {
+    return postRepository.listRediscoverCandidates(offset, limit, cutoffTimestamp, options);
   },
 
-  listRandom(page: number, limit: number, seed: number): FeedImage[] {
-    return postRepository.listRandom(page, limit, seed);
+  listRandom(page: number, limit: number, seed: number, options: FeedReadOptions = {}): FeedPost[] {
+    return postRepository.listRandom(page, limit, seed, options);
   },
 
   listVisibleVideoCandidates(): ReelCandidate[] {
@@ -3097,16 +3112,16 @@ export const imageRepository = {
     return postRepository.countByMonthDayKeys(monthDayKeys, maxYearExclusive);
   },
 
-  listByMonthDayKeys(monthDayKeys: string[], maxYearExclusive: number, page: number, limit: number): FeedImage[] {
-    return postRepository.listByMonthDayKeys(monthDayKeys, maxYearExclusive, page, limit);
+  listByMonthDayKeys(monthDayKeys: string[], maxYearExclusive: number, page: number, limit: number, options: FeedReadOptions = {}): FeedPost[] {
+    return postRepository.listByMonthDayKeys(monthDayKeys, maxYearExclusive, page, limit, options);
   },
 
   countByEffectiveTimeRange(startTimestamp: number, endTimestamp: number): number {
     return postRepository.countByEffectiveTimeRange(startTimestamp, endTimestamp);
   },
 
-  listByEffectiveTimeRange(startTimestamp: number, endTimestamp: number, page: number, limit: number): FeedImage[] {
-    return postRepository.listByEffectiveTimeRange(startTimestamp, endTimestamp, page, limit);
+  listByEffectiveTimeRange(startTimestamp: number, endTimestamp: number, page: number, limit: number, options: FeedReadOptions = {}): FeedPost[] {
+    return postRepository.listByEffectiveTimeRange(startTimestamp, endTimestamp, page, limit, options);
   },
 
   listFolderImages(
@@ -3579,7 +3594,7 @@ export const likeRepository = {
     return postRepository.hydratePostItems(posts);
   },
 
-  listLikedOlderThan(page: number, limit: number, cutoffTimestamp: number): FeedImage[] {
+  listLikedOlderThan(page: number, limit: number, cutoffTimestamp: number, options: FeedReadOptions = {}): FeedPost[] {
     const offset = (page - 1) * limit;
     const posts = database.prepare(
       `
@@ -3622,7 +3637,9 @@ export const likeRepository = {
       `
     ).all(cutoffTimestamp, limit, offset) as unknown as FeedPost[];
 
-    return postRepository.hydratePostItems(posts);
+    return options.hydrateMedia === false
+      ? posts.map((post) => ({ ...post, mediaItems: [] }))
+      : postRepository.hydratePostItems(posts);
   },
 
   listRecentCandidates(offset: number, limit: number, cutoffTimestamp: number): FeedImage[] {
