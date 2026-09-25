@@ -27,7 +27,7 @@ CosGallery 基于 [Foldergram](https://github.com/foldergram/foldergram)，沿�
 
 ## 本机快速开始
 
-推荐使用已验证的 **Node.js 24、pnpm 10.28.0** 与本机源码构建。CI 仍使用 Node.js 22；推荐环境不等于其他版本均不支持。视频处理需要 FFmpeg / FFprobe，Costuan 归档处理另需配置 7-Zip。完整步骤见[安装](docs/installation.md)。
+推荐使用已验证的 **Node.js 24、pnpm 10.28.0** 与本机源码构建。CI 同时验证 Node.js 22 和 24，支持范围以根目录 `package.json` 的 `engines` 为准。视频处理需要 FFmpeg / FFprobe，Costuan 归档处理另需配置 7-Zip。完整步骤见[安装](docs/installation.md)。
 
 ```powershell
 git clone https://github.com/Brilliant666/CosGallery.git

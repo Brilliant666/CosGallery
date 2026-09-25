@@ -84,7 +84,7 @@ D:/CosGalleryData/
 
 Costuan 默认等待区名称由图库的同级目录派生，默认稳定时间为 5 秒、嵌套解压深度为 2、入库后回收选项默认开启。默认 7-Zip 路径带有历史 Windows 环境值，新安装应在设置中改为实际工具，不依赖它自动发现。
 
-解压密码支持网页编辑；没有本地决定时可读取 `LOCAL_INGEST_ARCHIVE_PASSWORD` 环境值。本地替换优先，明确清空会同时禁止环境回退；仅打开或未修改保存不会改写有效密码。完整规则见[密码设置](/local-ingest-password-settings)。
+解压密码支持网页只写不读的配置；没有本地决定时，服务端可使用 `LOCAL_INGEST_ARCHIVE_PASSWORD` 环境值，界面不读回或预填该值。本地替换优先，明确清空会同时禁止环境回退；仅打开或未修改保存不会改写有效密码。完整规则见[密码设置](/local-ingest-password-settings)。
 
 ## 启动时的四种不同工作
 
