@@ -20,6 +20,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await stop?.(); stop = undefined;
+  vi.restoreAllMocks();
   vi.unstubAllEnvs(); vi.resetModules();
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -39,8 +40,12 @@ it('disabled scheduling and status reads create no backup directory', async () =
 });
 
 it('enabled startup creates one real daily point and coalesces concurrent and not-due checks', async () => {
+  const interval = vi.spyOn(globalThis, 'setInterval');
   const api = await adapter();
   api.startAutomaticRecoveryPoints();
+  api.startAutomaticRecoveryPoints();
+  expect(interval).toHaveBeenCalledTimes(1);
+  expect(interval).toHaveBeenCalledWith(expect.any(Function), 15 * 60_000);
   await Promise.all([api.checkAutomaticRecoveryPoint(), api.checkAutomaticRecoveryPoint()]);
   await api.stopAutomaticRecoveryPoints();
   const service = api.createApplicationRecoveryService();

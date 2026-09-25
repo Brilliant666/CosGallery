@@ -26,7 +26,7 @@ description: 完整 SQLite、必要配置与密钥的一致性恢复点，以及
 | --- | --- | --- |
 | `BACKUP_ROOT` | 当前应用仓库根目录的 `data_backup` | 相对值以代码确定的仓库根解析，不依赖启动 shell 的 cwd。 |
 | `BACKUP_AUTO_ENABLED` | `false` | 日常自动恢复点开关；未开启时仍可手动创建及执行必要的操作前保护。 |
-| `BACKUP_INTERVAL_HOURS` | `24` | 至少 24 小时；服务开启时检查到期，下次启动可补当前恢复点。 |
+| `BACKUP_INTERVAL_HOURS` | `24` | 至少 24 小时；启动时检查一次，运行中每 15 分钟检查到期，下次启动可补当前恢复点，不逐日补历史。 |
 | `BACKUP_RETAIN_DAILY` | `7` | 最近的日常恢复点保留目标。 |
 | `BACKUP_RETAIN_WEEKLY` | `4` | 另外保留最近各周代表恢复点；同一份可同时满足日常和周保留目标。 |
 | `APP_ENV_FILE` | 仓库根 `.env` | 实际加载并收集的环境配置文件；隔离运行明确指定自己的文件。 |

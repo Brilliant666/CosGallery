@@ -177,7 +177,9 @@ export function startAutomaticRecoveryPoints(): void {
     console.error('[server] Automatic recovery point failed; see backup status.');
   }); };
   check();
-  timer = setInterval(check, 60_000);
+  // Daily recovery points do not need minute-level polling. Keep the startup
+  // check, but bound repeated status reads and failure retries to 15 minutes.
+  timer = setInterval(check, 15 * 60_000);
   timer.unref();
 }
 
