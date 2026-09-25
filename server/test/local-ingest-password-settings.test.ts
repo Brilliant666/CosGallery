@@ -34,9 +34,9 @@ describe('saved local ingest password and scoped allowlist settings', () => {
   it('preserves environment fallback until explicit local replacement; restarts decrypt ciphertext without exposing secrets', () => {
     vi.stubEnv('LOCAL_INGEST_ARCHIVE_PASSWORD', 'old-environment-secret');
     const f = fixture();
-    expect(f.service.get()).toMatchObject({ archivePasswordConfigured: true, archivePasswordSource: 'environment' });
+    expect(f.service.get()).toMatchObject({ archivePasswordConfigured: true, archivePasswordSource: 'environment', archivePasswordOverride: 'inherit' });
     const view = f.service.save({ ...f.settings, allowlist: ['One'], archivePassword: 'new-中文-secret' });
-    expect(view).toMatchObject({ archivePasswordConfigured: true, archivePasswordSource: 'local' });
+    expect(view).toMatchObject({ archivePasswordConfigured: true, archivePasswordSource: 'local', archivePasswordOverride: 'local' });
     expect(JSON.stringify(view)).not.toContain('new-中文-secret');
     expect(JSON.stringify([...f.values])).not.toContain('new-中文-secret');
     expect(JSON.stringify([...f.values])).not.toContain('old-environment-secret');
@@ -45,13 +45,18 @@ describe('saved local ingest password and scoped allowlist settings', () => {
     const stored = f.values.get(LOCAL_INGEST_PASSWORD_SETTING_KEY);
     f.service.save({ ...f.settings, archivePassword: '' });
     expect(f.values.get(LOCAL_INGEST_PASSWORD_SETTING_KEY)).toBe(stored);
+    f.service.save({ ...f.settings, fileStableSeconds: 42 });
+    expect(f.values.get(LOCAL_INGEST_PASSWORD_SETTING_KEY)).toBe(stored);
   });
 
   it('explicit clearing suppresses environment fallback across restart and allows a later replacement', () => {
     vi.stubEnv('LOCAL_INGEST_ARCHIVE_PASSWORD', 'environment-secret');
     const f = fixture();
     f.service.save({ ...f.settings, clearArchivePassword: true });
-    expect(f.restart().get()).toMatchObject({ archivePasswordConfigured: false, archivePasswordSource: 'none' });
+    expect(f.restart().get()).toMatchObject({ archivePasswordConfigured: false, archivePasswordSource: 'none', archivePasswordOverride: 'cleared' });
+    const disabled = f.values.get(LOCAL_INGEST_PASSWORD_SETTING_KEY);
+    f.service.save({ ...f.settings, archivePassword: '' });
+    expect(f.values.get(LOCAL_INGEST_PASSWORD_SETTING_KEY)).toBe(disabled);
     expect(() => f.restart().getArchivePassword()).toThrow('Archive password is not configured');
     f.service.save({ ...f.settings, archivePassword: 'replacement' });
     expect(f.restart().getArchivePassword()).toBe('replacement');

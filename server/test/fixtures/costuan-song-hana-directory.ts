@@ -1,4 +1,5 @@
-// Public article text, observed 2026-09-20 at https://www.costuan.com/623.html.
+// Static parser regression derived from a mixed-numbering directory observed 2026-09-20.
+// Original article URL removed; documentation placeholder: https://source.example.invalid/collection/mixed-numbering.
 // No share links, account data or live website access is needed by these tests.
 export const songHanaTitle = '韩国Song Hana(송하나)写真图片包合集[23套][持续更新]';
 export const songHanaDirectory = [

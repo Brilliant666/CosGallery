@@ -6,6 +6,7 @@
       class="sidebar__brand relative inline-flex items-center justify-center w-12 h-12 p-[0.3rem] rounded-[1rem] color-inherit transition-[background-color,transform,opacity] duration-180 hover:bg-surface-hover hover:-translate-y-px"
       to="/"
       :aria-label="t('nav.foldergramHome')"
+      :title="buildIdentity"
     >
       <span
         class="pointer-events-none absolute top-[0.16rem] left-1/2 -translate-x-1/2 text-[0.42rem] leading-none tracking-[0.08em] text-muted"
@@ -453,6 +454,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
 
   const { t } = useI18n()
   const appVersion = __APP_VERSION__
+  const buildIdentity = `${__BUILD_INFO__.product} ${appVersion} · ${__BUILD_INFO__.commit?.slice(0, 12) ?? 'unverified'}${__BUILD_INFO__.dirty ? ' (modified build)' : ''}`
   const appStore = useAppStore()
   const authStore = useAuthStore()
   const likesStore = useLikesStore()

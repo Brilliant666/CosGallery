@@ -17,7 +17,7 @@ beforeEach(() => {
   vi.stubEnv('APP_ENV_FILE', path.join(root, 'isolated.env'));
   vi.stubEnv('APP_RUN_CONFIG_FILE', path.join(root, 'isolated.run.xml'));
 });
-afterEach(() => { vi.doUnmock('../src/config/env.js'); vi.unstubAllEnvs(); vi.resetModules(); fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.doUnmock('../src/config/env.js'); vi.doUnmock('../src/build-info.js'); vi.unstubAllEnvs(); vi.resetModules(); fs.rmSync(root, { recursive: true, force: true }); });
 
 async function useIsolatedSources() {
   vi.stubEnv('BACKUP_ROOT', path.join(root, 'data_backup'));
@@ -27,6 +27,20 @@ async function useIsolatedSources() {
     .map(key => `${key}='${process.env[key]}'`).join('\n'));
   return env;
 }
+
+it.each([
+  [null, null, 'unbuilt'],
+  ['a'.repeat(40), false, 'a'.repeat(40)],
+  ['b'.repeat(40), true, `${'b'.repeat(40)}-dirty`],
+  ['c'.repeat(40), null, `${'c'.repeat(40)}-unverified`]
+])('records artifact identity %s / dirty %s without runtime Git', async (commit, dirty, expected) => {
+  vi.doMock('../src/build-info.js', () => ({ buildInfo: { commit, dirty } }));
+  await useIsolatedSources();
+  // The synthetic repository deliberately has no .git: only the loaded artifact
+  // manifest can provide the asserted identity, not the invoking checkout.
+  const { createApplicationRecoveryService } = await import('../src/services/application-recovery-service.js');
+  expect(createApplicationRecoveryService().config.codeVersion).toBe(expected);
+});
 
 it('treats unused IDE configuration as not applicable when files and code defaults cover the instance', async () => {
   vi.stubEnv('APP_RUN_CONFIG_FILE', undefined);

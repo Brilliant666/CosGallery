@@ -166,6 +166,20 @@ describe.sequential('roster first-collection HTTP contract',()=>{
     expect(snapshot()).toBe(before);
   });
 
+  it('reports validly shaped but impossible read scopes as business input errors without writes',async()=>{
+    const before=snapshot();
+    const cases=[
+      {endpoint:'/creator-sync/roster?page=9007199254740991&limit=100',code:'PAGINATION_RANGE_INVALID',message:'分页范围过大。'},
+      {endpoint:'/download-task-page?creatorId=999999999',code:'CREATOR_SCOPE_NOT_FOUND',message:'规范博主不存在，不能将查询失败显示为 0 条。'}
+    ];
+    for(const item of cases)for(const [prefix,requestHeaders] of [[admin,{}],[bridge,bridgeHeaders]] as const) {
+      const result=await requestTestApp(app,'GET',prefix+item.endpoint,requestHeaders);
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({code:item.code,message:item.message,requestId:expect.any(String)});
+    }
+    expect(snapshot()).toBe(before);
+  });
+
   it('viewer cannot enumerate selection candidates or plan explicit tasks',async()=>{
     const {authService}=await import('../src/services/auth-service.js');
     authService.setAdminPassword('synthetic-admin-pass');authService.setViewerAccess('password','synthetic-viewer-pass');

@@ -466,7 +466,7 @@ export class ArchiveMetadataTaskService {
 
   claim(options: { workerId: string; source?: string; limit?: number; taskIds?: number[];rounds?:Array<{taskId:number;checkRoundId:string}> }): ArchiveMetadataTask[] {
     const workerId = options.workerId.trim().slice(0, 120);
-    if (!workerId) throw new Error('采集工作端标识不能为空。');
+    if (!workerId) throw new RequestInputError('采集工作端标识不能为空。');
     const source = options.source ?? 'costuan';
     const limit = Math.min(500, Math.max(1, options.limit ?? 100));
     const timestamp = nowIso();
@@ -689,11 +689,11 @@ export class ArchiveMetadataTaskService {
 
   private requireClaim(id: number, workerId: string, expectedAttempt?:number): ArchiveMetadataTask {
     const current = this.get(id);
-    if (!current) throw new Error('博主元数据采集任务不存在。');
+    if (!current) throw new RequestInputError('博主元数据采集任务不存在。');
     this.requireActive(current.creatorId);
     this.requireAttempt(current,expectedAttempt);
-    if (current.status !== 'claimed') throw new Error(`采集任务当前状态为 ${current.status}，不能提交结果。`);
-    if (current.claimedBy !== workerId) throw new Error('采集任务已由其他工作端领取。');
+    if (current.status !== 'claimed') throw new RequestInputError(`采集任务当前状态为 ${current.status}，不能提交结果。`);
+    if (current.claimedBy !== workerId) throw new RequestInputError('采集任务已由其他工作端领取。');
     return current;
   }
 
@@ -757,3 +757,4 @@ export class ArchiveMetadataTaskService {
             JOIN archive_catalog_creators creators ON creators.id = tasks.creator_id`;
   }
 }
+import { RequestInputError } from '../utils/request-input-error.js';

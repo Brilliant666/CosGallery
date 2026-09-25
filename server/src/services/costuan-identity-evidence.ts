@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RequestInputError } from '../utils/request-input-error.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { parseCostuanDirectoryText, parseCostuanNumbering, WEIBO_SUPPLEMENT_LABELS, hasCostuanWeiboSupplementDeclaration } from './costuan-numbering-service.js';
 
@@ -35,7 +36,7 @@ export function checkedIdentityEvidence(input: unknown, postId: string) {
   const parsed = costuanIdentityEvidenceSchema.safeParse(input);
   if (!parsed.success || costuanUrl(parsed.data.pageUrl)?.pathname !== `/${postId}.html`
     || parsed.data.creatorTags.some(tag => !/^\/tag\/\d+$/.test(costuanUrl(tag.url)?.pathname ?? ''))) {
-    throw new Error('身份页面证据无效：文章地址或本篇标签链接与指定 Costuan 合集不符；保留暂停，需人工检查。');
+    throw new RequestInputError('身份页面证据无效：文章地址或本篇标签链接与指定 Costuan 合集不符；保留暂停，需人工检查。', 'COSTUAN_IDENTITY_INVALID');
   }
   return parsed.data;
 }
@@ -64,7 +65,7 @@ export function directoryCreatorNames(text: string): string[] {
 export function completeIdentityDirectory(text: string | undefined, title: string, validateName?: (name: string) => boolean,
   options: { allowUnnamedEntries?: boolean } = {}): string {
   const count = Number(title.normalize('NFKC').match(/\[(\d+)\s*套[^\]]*\]/u)?.[1]);
-  const fail = (reason = '未取得有效目录或标题声明数量') => new Error(`来源目录校验未通过：${reason}；保留暂停，需人工检查。`);
+  const fail = (reason = '未取得有效目录或标题声明数量') => new RequestInputError(`来源目录校验未通过：${reason}；保留暂停，需人工检查。`, 'COSTUAN_DIRECTORY_INVALID');
   if (!text?.trim() || text.length > 2_000_000 || !Number.isInteger(count) || count < 1 || count > 10000) throw fail();
   const names = new Map<string, string>(), orders = new Set<number>(), schemes = new Set<string>();
   for (const raw of text.split(/\r?\n/u)) {
@@ -98,7 +99,7 @@ export function completeIdentityDirectory(text: string | undefined, title: strin
   if (orders.size !== count) throw fail(`标题声明 ${count} 套，有效编号 ${orders.size} 套；缺少编号：${Array.from({length:count},(_,i)=>i+1).filter(n=>!orders.has(n)).slice(0,20).join('、')}`);
   if (schemes.size !== 1) throw fail('目录混用了 NO 与 VOL 编号体系');
   if (validateName) {
-    for (const name of names.values()) if (!validateName(name)) throw new Error(`目录身份核验未通过：名称“${name}”无法唯一对应当前博主，或不属于本篇标题的受限名称变体；保留暂停，需人工检查。`);
+    for (const name of names.values()) if (!validateName(name)) throw new RequestInputError(`目录身份核验未通过：名称“${name}”无法唯一对应当前博主，或不属于本篇标题的受限名称变体；保留暂停，需人工检查。`, 'COSTUAN_IDENTITY_INVALID');
   } else if (names.size !== 1 && !(options.allowUnnamedEntries && names.size === 0)) throw fail(`目录名称写法不一致：${[...names.values()].join('、')}`);
   // No name was observed: never fabricate a directory identity from the title.
   return [...names.values()][0] ?? '';

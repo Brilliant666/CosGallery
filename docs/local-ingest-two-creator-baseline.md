@@ -7,14 +7,14 @@
 
 ## 安全范围
 
-- 允许扫描和处理：`G:\cos待入库\火龙果羊`、`G:\cos待入库\女主K`
-- 正式目标：`G:\cos图集\火龙果羊`、`G:\cos图集\女主K`
+- 允许扫描和处理：`<INBOX_ROOT>\火龙果羊`、`<INBOX_ROOT>\女主K`
+- 正式目标：`<GALLERY_ROOT>\火龙果羊`、`<GALLERY_ROOT>\女主K`
 - 不处理其他待入库博主，不修改任何既有作品目录。
 - 基线阶段未解压真实文件，也未写入正式图库。
 
 ## 仓库基线
 
-- 仓库：`C:\Users\brilliant\Documents\ChatGPT\插件\Foldergram-CosGallery`
+- 仓库：`C:\CosGallery`
 - 原始分支：`main`
 - 原始 HEAD：`ef4e46b`（`feat: add local creator metadata acquisition workflow`）
 - 远端：`origin = https://github.com/Brilliant666/CosGallery.git`
@@ -24,7 +24,7 @@
 
 ## 数据库基线
 
-- 实际 SQLite：`C:\Users\brilliant\Documents\ChatGPT\插件\Foldergram-CosGallery\data\db\gallery.sqlite`
+- 实际 SQLite：`C:\CosGallery\data\db\gallery.sqlite`
 - 大小：125,476,864 bytes
 - `PRAGMA quick_check`：`ok`
 - 已应用迁移：`000001`、`000002`、`000004`、`000005`、`000007`、`000008`、`000009`、`000010`、`000011`、`000012`
@@ -87,6 +87,6 @@
 
 ## 首批验收选择
 
-1. 黄金样本：`G:\cos待入库\火龙果羊\007.7z`（存在、稳定、唯一映射、目标不存在）。
-2. 独立样本优先选择：`G:\cos待入库\女主K\048.7z`，因为它比 `047.7z` 更小；最终仍以外层测试和预检结果为准。
+1. 黄金样本：`<INBOX_ROOT>\火龙果羊\007.7z`（存在、稳定、唯一映射、目标不存在）。
+2. 独立样本优先选择：`<INBOX_ROOT>\女主K\048.7z`，因为它比 `047.7z` 更小；最终仍以外层测试和预检结果为准。
 3. 两份首样本通过后，再处理同一 allowlist 中的 `008.7z` 和 `047.7z`。

@@ -152,7 +152,7 @@ describe.sequential('web precise review of original Stage3 jobs', () => {
     expect(() => f.web.target({ kind: 'stage3', jobId: 1 }, 2)).toThrow('不属于');
     expect((await f.post(`/sessions/${sessionId}/execute`, { requestKey: 'bad', confirmed: true, note: 'precise',
       choices: [{ relativePath: '坏图.jpg', action: 'quarantine', reason: 'damaged' }] })).status).toBe(409);
-    expect((await f.confirm(sessionId, [{ relativePath: '../escape.jpg', action: 'quarantine', reason: 'damaged' }])).status).toBe(409);
+    expect((await f.confirm(sessionId, [{ relativePath: '../escape.jpg', action: 'quarantine', reason: 'damaged' }])).status).toBe(400);
     expect((await f.confirm(sessionId, [{ relativePath: '正常 [1].jpg', action: 'quarantine', reason: 'damaged' }])).status).toBe(409);
     expect(f.web.get(sessionId).status).toBe('ready');
   });

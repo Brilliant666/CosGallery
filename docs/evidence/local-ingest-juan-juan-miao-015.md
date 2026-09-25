@@ -1,4 +1,6 @@
-# 倦倦喵 015 本地入库证据
+# 样例博主C 015 本地入库证据
+
+> 脱敏后的历史验收摘要：博主/作品名、业务 ID、机器路径和文件指纹为匿名标记；数量、行为与验收结论保持。标记不可用于执行命令或定位真实资源，Git 历史未改写。
 
 记录时间：2026-09-02（Asia/Shanghai）
 
@@ -6,24 +8,24 @@
 
 | 字段 | 结果 |
 | --- | --- |
-| creator | 倦倦喵（creator ID `93`） |
-| LocalIngestJob | `5` |
-| source work | `912`，`NO.015`，鱼骨胸衣 |
-| archive download task | `1014` |
-| local work | `14689` |
+| creator | 样例博主C（creator ID `creator-C`） |
+| LocalIngestJob | `job-C` |
+| source work | `source-C`，`NO.015`，示例作品C |
+| archive download task | `download-C` |
+| local work | `local-C` |
 | 源文件名 | `015.7z` |
 | 源归档原始大小 | `571,207,651` bytes |
-| SHA-256 | `17585F59D65CB591B82E96A087B3095302B9AF6150220C9AF496DDE8EC965466` |
+| SHA-256 | 原始文件指纹已脱敏；原核验结论保留 |
 | 外层归档格式 | 7z |
 | 第一层输出 | `015.7zz` |
 | 内层原名 → 工作名 | `015.7zz` → `015.7z`，改名仅发生于 job 处理目录 |
 | 最终内容 | 40 图片、1 视频、41 媒体、0 TXT/HTML 广告、0 未知文件 |
-| 正式目录 | `G:\cos图集\倦倦喵\倦倦喵 – NO.015 鱼骨胸衣[40P1V-544M]` |
-| 定向复扫 | run `25`，`completed`；索引 40 图片、1 视频、41 post items |
-| source/local 关联 | source work `912` 与 local work `14689` 通过同一 canonical work 关联；local copy 为 `倦倦喵 – NO.015 鱼骨胸衣[40P1V-544M]` |
-| 缺失差集 | `missingDifferenceCleared=true`；task `1014` 已为 `ingested` |
+| 正式目录 | `<GALLERY_ROOT>\样例博主C\样例博主C – NO.015 示例作品C[40P1V-544M]` |
+| 定向复扫 | run `scan-C`，`completed`；索引 40 图片、1 视频、41 post items |
+| source/local 关联 | source work `source-C` 与 local work `local-C` 通过同一 canonical work 关联；local copy 为 `样例博主C – NO.015 示例作品C[40P1V-544M]` |
+| 缺失差集 | `missingDifferenceCleared=true`；task `download-C` 已为 `ingested` |
 | 源归档清理 | `sourceArchiveRecycled=true`；原路径已不存在 |
-| 处理目录清理 | `processingDirectoryRecycled=true`；`G:\cos处理中\5` 已不存在 |
+| 处理目录清理 | `processingDirectoryRecycled=true`；`<PROCESSING_ROOT>\job-C` 已不存在 |
 | 最终状态 | `status=ingested`、`phase=done`、`validationStatus=passed`、`cleanupStatus=recycled` |
 | attemptCount | `1` |
 | completedAt | `2026-09-02T08:16:22.546Z` |

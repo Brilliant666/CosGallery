@@ -2,9 +2,9 @@
 
 ## 本轮边界
 
-本轮只在独立工作树和临时 SQLite/临时目录中修改、构建和测试。没有运行生产扫描、生产 LocalIngest、回收站操作、Costuan/百度网盘任务，也没有修改 `G:\cos图集`、`G:\cos待入库`、`G:\cos处理中` 或生产数据库业务记录。
+本轮只在独立工作树和临时 SQLite/临时目录中修改、构建和测试。没有运行生产扫描、生产 LocalIngest、回收站操作、Costuan/百度网盘任务，也没有修改 `<GALLERY_ROOT>`、`<INBOX_ROOT>`、`<PROCESSING_ROOT>` 或生产数据库业务记录。
 
-生产服务继续使用 `main@a1c3fee034d8518c26cc11ff216f2ab313202464`，进程为 PID `20568`，启动时间为 `2026-09-05 09:13:10 +08:00`。生产数据库为 `C:\Users\brilliant\Documents\ChatGPT\插件\Foldergram-CosGallery\data\db\gallery.sqlite`，迁移版本 `000016`，只读 `quick_check=ok`。
+生产服务继续使用 `main@a1c3fee034d8518c26cc11ff216f2ab313202464`，进程为 PID `20568`，启动时间为 `2026-09-05 09:13:10 +08:00`。生产数据库为 `C:\CosGallery\data\db\gallery.sqlite`，迁移版本 `000016`，只读 `quick_check=ok`。
 
 ## 当前生产事实
 
@@ -18,7 +18,7 @@
 
 这与用户截图时点一致，但实现和测试没有硬编码这些数量。
 
-当前保存的 Stage 3 allowlist 正好是本次列出的 18 位博主；正式图库、待入库和处理中目录分别为 `G:\cos图集`、`G:\cos待入库`、`G:\cos处理中`，`recycleAfterIngest=true`。
+当前保存的 Stage 3 allowlist 正好是本次列出的 18 位博主；正式图库、待入库和处理中目录分别为 `<GALLERY_ROOT>`、`<INBOX_ROOT>`、`<PROCESSING_ROOT>`，`recycleAfterIngest=true`。
 
 ### 眼酱大魔王w：16 条待对账
 

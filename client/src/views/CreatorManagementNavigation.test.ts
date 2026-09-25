@@ -58,6 +58,26 @@ describe('management panel real router context and draft guards',()=>{
     const {w,router}=await setup();await w.get('.profile-form input').setValue('A draft');void router.push({query:{...router.currentRoute.value.query,manageCreator:'2',manageTab:'overview'}});await flushPromises();await button(w,'取消跳转').trigger('click');await flushPromises();expect(router.currentRoute.value.query.manageCreator).toBe('1');expect(w.get('.profile-form input').element.value).toBe('A draft');
     void router.push({query:{...router.currentRoute.value.query,manageCreator:'2',manageTab:'overview'}});await flushPromises();await button(w,'放弃更改并继续').trigger('click');await flushPromises();expect(router.currentRoute.value.query.manageCreator).toBe('2');expect(w.get('.creator-panel h2').text()).toBe('Beta');expect(w.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
   });
+  it('closes management context on catalog navigation, keeps scope and restores only on browser Back',async()=>{
+    const {w,router}=await setup('manageCreator=1&manageTab=overview&rosterPage=2&rosterPreference=liked&creatorId=2#catalog');
+    await w.get('.creator-panel .quick-links button').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({workspace:'resources',creatorId:'1',rosterPage:'2',rosterPreference:'liked'});
+    expect(router.currentRoute.value.query.manageCreator).toBeUndefined();expect(router.currentRoute.value.query.manageTab).toBeUndefined();expect(router.currentRoute.value.hash).toBe('#catalog');
+    expect(w.find('.creator-panel').exists()).toBe(false);
+    await w.get('[data-test=workspace-roster]').trigger('click');await flushPromises();
+    expect(w.find('.creator-panel').exists()).toBe(false);expect(router.currentRoute.value.query.creatorId).toBe('1');
+    router.back();await flushPromises();expect(router.currentRoute.value.query.workspace).toBe('resources');expect(w.find('.creator-panel').exists()).toBe(false);
+    router.back();await flushPromises();expect(router.currentRoute.value.query.manageCreator).toBe('1');expect(w.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
+  });
+  it('keeps dirty catalog navigation pending until the user explicitly discards and does not reopen on roster return',async()=>{
+    const {w,router}=await setup();await w.get('.profile-form input').setValue('Unsaved name');await w.get('#creator-tab-overview').trigger('click');await flushPromises();
+    await w.get('.creator-panel .quick-links button').trigger('click');await flushPromises();
+    expect(w.get('.leave-dialog').element.open).toBe(true);await button(w,'取消跳转').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query.manageCreator).toBe('1');await w.get('#creator-tab-profile').trigger('click');await flushPromises();expect(w.get('.profile-form input').element.value).toBe('Unsaved name');await w.get('#creator-tab-overview').trigger('click');await flushPromises();
+    await w.get('.creator-panel .quick-links button').trigger('click');await flushPromises();await button(w,'放弃更改并继续').trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({workspace:'resources',creatorId:'1'});expect(router.currentRoute.value.query.manageCreator).toBeUndefined();
+    await w.get('[data-test=workspace-roster]').trigger('click');await flushPromises();expect(w.find('.creator-panel').exists()).toBe(false);expect(api.saveManagedCreatorProfile).not.toHaveBeenCalled();
+  });
   it('routes internal local-admission links through the dirty guard, but does not capture modifier/new-tab clicks',async()=>{
     const {w,router}=await setup();await w.get('.profile-form input').setValue('Draft');await w.get('#creator-tab-directories').trigger('click');await flushPromises();expect(router.currentRoute.value.query.manageTab).toBe('directories');const link=w.get('a[href="/creator-admission/local/1"]');
     await link.trigger('click',{ctrlKey:true});await flushPromises();expect(w.get('.leave-dialog').element.open).toBe(false);expect(router.currentRoute.value.path).toBe('/archive-catalog');

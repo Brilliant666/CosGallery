@@ -6,8 +6,8 @@ This change separates canonical creator identity from physical gallery folders w
 
 The production baseline was captured before implementation. SQLite was at migration `000016`, `quick_check` returned `ok`, and `foreign_key_check` returned no rows. All 588 LocalIngestJobs were `ingested/done`; 2,323 active local works were linked with no unmatched or ambiguous rows. Creator 166 (`lunana`) had two valid physical-folder bridges:
 
-- bridge 8 / Folder 1 / `G:\cos图集\lunananya`: 9 visible works;
-- bridge 1004 / Folder 2290 / `G:\cos图集\lunana`: 41 visible works.
+- bridge 8 / Folder 1 / `<GALLERY_ROOT>\lunananya`: 9 visible works;
+- bridge 1004 / Folder 2290 / `<GALLERY_ROOT>\lunana`: 41 visible works.
 
 The two folders already belonged to the same canonical creator. Neither folder nor any contained work was changed by development or isolated validation.
 
@@ -39,7 +39,7 @@ On a migrated production copy:
 - every pre-existing business row stayed unchanged before the explicit preference save;
 - creator 166 initially reported both valid candidates and `selection-required`;
 - saving bridge 1004 changed only creator 166's preference field and `updated_at`;
-- a read-only new-work plan resolved to `G:\cos图集\lunana`;
+- a read-only new-work plan resolved to `<GALLERY_ROOT>\lunana`;
 - all 588 historic Job targets passed persisted-target validation without rewrite;
 - My Gallery produced one `creator:166` card with 50 works;
 - searches for `lunana` and `lunananya` each returned that same card;

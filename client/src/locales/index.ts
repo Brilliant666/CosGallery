@@ -6,7 +6,7 @@ import zh from './zh.json';
 
 export const SUPPORTED_LOCALES = ['en', 'es', 'zh'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
-export const DEFAULT_LOCALE: SupportedLocale = 'en';
+export const DEFAULT_LOCALE: SupportedLocale = 'zh';
 
 const messages: Record<SupportedLocale, typeof en> = {
   en,
@@ -49,7 +49,7 @@ export function resolvePreferredLocale(...candidates: Array<string | null | unde
 
 export function syncDocumentLanguage(locale: SupportedLocale) {
   if (typeof document !== 'undefined') {
-    document.documentElement.lang = locale;
+    document.documentElement.lang = locale === 'zh' ? 'zh-CN' : locale;
   }
 }
 

@@ -6,7 +6,7 @@
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <p v-if="notice" role="status">{{ notice }}</p>
       <div class="actions"><button type="button" :disabled="loading || busy" @click="refresh">刷新资料</button><button type="button" :disabled="busy" @click="manualOpen = !manualOpen">{{ manualOpen ? '收起登记' : '手工登记来源资料' }}</button></div>
-      <form v-if="manualOpen" class="evidence-form" aria-label="手工登记来源资料" @submit.prevent="save">
+      <form v-if="manualOpen" class="evidence-form" aria-label="手工登记来源资料" @submit.prevent="save" @keydown="preventManualImplicitSubmit">
         <p class="hint">可登记 Costuan、ecytt、sndiary 等实际来源，不访问网站。不填写 Cookie、登录令牌、提取码或密码；受保护的分享凭据继续使用原通道。</p>
         <fieldset :disabled="busy || !!pendingSave">
           <label>来源平台<input v-model="draft.platform" required maxlength="60" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]*" placeholder="实际平台标识，如 ecytt、sndiary、costuan" /></label>
@@ -121,6 +121,11 @@ const completenessLabel = (state: string) => state === 'partial' ? '部分资料
 const entryLabel = (state: string) => ({ candidate: '单套候选 · 未映射', range: '范围 / 合集 · 内部待确认', unknown: '未解释文本', conflict: '条目冲突' }[state] ?? state);
 const formatTime = (value: string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false }); };
 const key = (creatorId = props.creator.id) => `cosgallery:source-evidence:pending:${creatorId}`;
+function preventManualImplicitSubmit(event: KeyboardEvent) {
+  // Only suppress the input's implicit submit, not IME confirmation, textarea
+  // line breaks or keyboard activation of the explicit save button.
+  if (event.key === 'Enter' && event.target instanceof HTMLInputElement && !event.isComposing && event.keyCode !== 229) event.preventDefault();
+}
 function persist() {
   try {
     if (pendingSave.value || pendingIdentity.value || pendingLink.value || pendingMapping.value) sessionStorage.setItem(key(), JSON.stringify({ save: pendingSave.value, identity: pendingIdentity.value, link: pendingLink.value, mapping: pendingMapping.value }));

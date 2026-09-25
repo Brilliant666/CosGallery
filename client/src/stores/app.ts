@@ -79,14 +79,6 @@ function getStoredLocalePreference(): SupportedLocale | null {
   return resolveSupportedLocale(window.localStorage.getItem(LOCALE_STORAGE_KEY));
 }
 
-function getBrowserLocaleCandidates(): string[] {
-  if (typeof navigator === 'undefined') {
-    return [];
-  }
-
-  return [...(Array.isArray(navigator.languages) ? navigator.languages : []), navigator.language];
-}
-
 function resolveSavedDefaultLocale(locale: string | null | undefined): SupportedLocale | null {
   return resolveSupportedLocale(locale);
 }
@@ -170,7 +162,9 @@ export const useAppStore = defineStore('app', {
         return;
       }
 
-      this.setLocale(resolvePreferredLocale(...getBrowserLocaleCandidates()), { persist: false });
+      // A fresh profile starts in Chinese, matching the initial HTML. Explicit
+      // local preferences and the saved application default still take priority.
+      this.setLocale(DEFAULT_LOCALE, { persist: false });
     },
 
     initializeLastOpenedFolder() {

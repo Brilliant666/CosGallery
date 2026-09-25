@@ -12,7 +12,7 @@ description: 从 CosGallery 源码安装本机服务，区分运行环境、媒�
 | 项目 | 当前要求与验证范围 |
 | --- | --- |
 | Git | 用于取得本仓库及记录版本。 |
-| Node.js | 推荐 Node 24，当前 Windows 本地入库与发布验证使用该版本。仓库使用 `node:sqlite`；现有 GitHub Verify 使用 Node 22。根及工作区 `package.json` 未声明统一的 `engines` 约束，不能据此承诺所有旧版本可用，也不能说只有 Node 24 能运行。 |
+| Node.js | 推荐 Node 24.21.0，当前 Windows 本地入库与发布验证使用该版本。仓库使用 `node:sqlite`；GitHub Verify 同时验证 Node 22 和 24。根 `package.json` 的 `engines` 声明支持 `>=22.16.0 <23` 或 `>=24.0.0 <25`，不承诺其他版本可用。 |
 | pnpm | 使用根 `package.json` 指定的 `10.28.0`，依赖由 `pnpm-lock.yaml` 锁定。本文不将 npm 安装视为等价验证路径。 |
 | FFmpeg / FFprobe | 视频元数据、缩略图、预览及动画 AVIF 处理需要；通过 PATH 或配置中的完整路径提供。 |
 | 7-Zip | Costuan 压缩包入库需要，在网页“入库设置与环境工具”中配置可执行文件。已解压图集的本地入库不需要先重新压缩。 |

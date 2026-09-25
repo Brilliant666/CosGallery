@@ -14,6 +14,7 @@ import { hasCurrentDerivative, imageDerivativeVersion, derivativeSourceVersion, 
 import { resolveOriginalPath } from '../utils/media-paths.js';
 import { applyDerivativeErrorHeaders, applyNoStoreMediaHeaders, applyProtectedMediaHeaders } from '../utils/media-response.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
+import { sendUnexpectedError } from '../middleware/http-errors.js';
 
 // Singleflight is per actual output, independent of the URL used to request it.
 const inflightGenerations = new Map<string, Promise<void>>();
@@ -139,12 +140,12 @@ async function serveKnownDerivative(
     if (!current) throw new DerivativeRecordNotFoundError();
     if (!await tryServeCurrent()) throw new DerivativeVersionChangedError();
   } catch (error) {
-    if (response.headersSent) return;
+    if (response.headersSent || response.destroyed || response.writableEnded || request.aborted || isConnectionTerminationError(error)) return;
     if (error instanceof DerivativeRecordNotFoundError) sendError(response, 404, 'Derivative not found.');
     else if (error instanceof Error && 'status' in error && error.status === 416) sendError(response, 416, 'Requested media range is not satisfiable.');
     else if (error instanceof SourceIndexOutdatedError) sendError(response, 409, error.message, error.code);
     else if (error instanceof DerivativeVersionChangedError) sendError(response, 409, 'Media changed during generation; refresh the gallery.', 'DERIVATIVE_VERSION_CHANGED');
-    else sendError(response, 500, error instanceof Error ? error.message : 'Failed to generate derivative.');
+    else { applyDerivativeErrorHeaders(response); sendUnexpectedError(response, error); }
   }
 }
 

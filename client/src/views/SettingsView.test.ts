@@ -153,6 +153,8 @@ describe('SettingsView', () => {
     setActivePinia(createPinia());
     vi.restoreAllMocks();
     window.localStorage.clear();
+    // These fixtures model an existing English app preference, not a fresh profile.
+    useAppStore().setLocale('en', { persist: false });
     scrollIntoViewSpy.mockReset();
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,

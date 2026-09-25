@@ -73,7 +73,7 @@
 
 运行时 allowlist 在 Costuan入库主页面独立管理和保存，不在环境设置弹窗内随其他配置一起覆盖。
 
-解压密码可在设置弹窗直接查看和修改。已保存本地配置优先于环境值；尚无本地配置时可使用 `LOCAL_INGEST_ARCHIVE_PASSWORD`。明确清空并保存后不再回退环境值。普通状态接口不返回密码，专用读取接口要求管理权限；本地密文存入数据库，独立 key 文件位于 `DATA_ROOT/private/local-ingest-archive-password.key`。备份恢复需同时保护数据库和该文件，不打印或提交密钥。详见[解压密码设置](local-ingest-password-settings.md)。
+解压密码在设置弹窗中只写不读：只显示状态和有效来源，不回传或预填已有密码。留空或保存其他设置保持原值，输入新密码后保存才替换；单独勾选明确清除并保存后停用密码及环境回退。已保存本地配置优先于环境值；尚无本地决定时可使用 `LOCAL_INGEST_ARCHIVE_PASSWORD`。旧专用读取接口已退役；本地密文存入数据库，独立 key 文件位于 `DATA_ROOT/private/local-ingest-archive-password.key`。备份恢复需同时保护数据库和该文件，不打印或提交密钥。详见[解压密码设置](local-ingest-password-settings.md)。
 
 V1 不支持在运行时切换正式图库根目录。管理页会显示：“V1 正式图库根目录由 GALLERY_ROOT 启动配置决定，修改后需要重启服务。”API 也会拒绝与启动配置不一致的 `libraryRoot`，因此 LocalIngest 写入根与 Scanner 扫描根不会分裂。
 

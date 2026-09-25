@@ -558,6 +558,7 @@ describe('resource catalog', () => {
     const w = mount(ResourceCatalog, { props: { creatorId: 1 } }); await flushPromises();
     const rowElement = w.get('.catalog-row');
     expect(rowElement.attributes('aria-expanded')).toBe('false');
+    expect(rowElement.get('.detail-indicator').text()).toBe('›');
     w.get('.row-actions a').element.addEventListener('click', event => event.preventDefault());
     await w.get('.row-actions a').trigger('click');
     await button(w, '复制单条').trigger('click'); await flushPromises();
@@ -568,6 +569,7 @@ describe('resource catalog', () => {
     selection.mockRestore();
     await rowElement.trigger('keydown', { key: 'Enter' }); await flushPromises();
     expect(rowElement.attributes('aria-expanded')).toBe('true');
+    expect(rowElement.get('.detail-indicator').text()).toBe('⌄');
     expect(w.get(`#${rowElement.attributes('aria-controls')}`).exists()).toBe(true);
     expect(api.fetchResourceDetail).toHaveBeenCalledTimes(2);
     await rowElement.trigger('keydown', { key: ' ' });

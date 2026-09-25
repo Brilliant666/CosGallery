@@ -18,7 +18,7 @@ CostuanArchiveManager
   └─ 匹配持续更新合集、采集 works[]、记录百度交付目录
        ↓
 CosGallery 图库账本
-  └─ 与只读 G:\cos图集 按博主和 Costuan 序号核对
+  └─ 与只读 <GALLERY_ROOT> 按博主和 Costuan 序号核对
        ↓
 缺失作品任务
   └─ 生成“Costuan 平台已知但本地未收录”的图集
@@ -26,12 +26,12 @@ CosGallery 图库账本
 CostuanArchiveManager 自动暂存
   └─ 我的网盘/cos待入库/<博主 ID>/<序号>.7z
        ↓
-人工或外部工具下载到 G:\cos待入库\<博主 ID>
+人工或外部工具下载到 <INBOX_ROOT>\<博主 ID>
        ↓
 CosGallery LocalIngestJob
   └─ 稳定检查、精确映射、安全双层解压、媒体预览
        ↓
-G:\cos图集\<博主 ID>\<作品>
+<GALLERY_ROOT>\<博主 ID>\<作品>
   └─ 定向复扫、账本关联、差集清除、回收站清理
 ```
 
@@ -64,7 +64,7 @@ G:\cos图集\<博主 ID>\<作品>
 
 ## 当前人工边界
 
-百度网盘只是当前 Costuan 的一种交付方式。链路仍由人工或现有下载工具把博主目录下载到 `G:\cos待入库`；从本地文件稳定开始，后续入库由 CosGallery 接管。
+百度网盘只是当前 Costuan 的一种交付方式。链路仍由人工或现有下载工具把博主目录下载到 `<INBOX_ROOT>`；从本地文件稳定开始，后续入库由 CosGallery 接管。
 
 仍需人工处理：
 

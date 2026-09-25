@@ -30,7 +30,6 @@ import {
   fetchLocalIngestJobs,
   fetchLocalIngestOperation,
   fetchLocalIngestSettings,
-  fetchLocalIngestArchivePassword,
   planArchiveDownloadTasks,
   planArchiveMetadataTasks,
   retryLocalIngestCleanup,
@@ -56,7 +55,6 @@ vi.mock('../api/gallery', () => ({
   fetchLocalIngestJobs: vi.fn(),
   fetchLocalIngestOperation: vi.fn(),
   fetchLocalIngestSettings: vi.fn(),
-  fetchLocalIngestArchivePassword: vi.fn(),
   retryLocalIngestCleanup: vi.fn(),
   runLocalIngestBatch: vi.fn(),
   runLocalIngestJob: vi.fn(),
@@ -271,7 +269,6 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(fetchLocalIngestJobs).mockReset();
     vi.mocked(fetchLocalIngestOperation).mockReset();
     vi.mocked(fetchLocalIngestSettings).mockReset();
-    vi.mocked(fetchLocalIngestArchivePassword).mockReset();
     vi.mocked(retryLocalIngestCleanup).mockReset();
     vi.mocked(runLocalIngestBatch).mockReset();
     vi.mocked(runLocalIngestJob).mockReset();
@@ -368,7 +365,6 @@ describe('ArchiveCatalogView', () => {
     vi.mocked(fetchArchiveBridgeStatus).mockResolvedValue({ configured: false });
     vi.mocked(fetchLocalIngestInboxCreators).mockResolvedValue(inboxCreatorsResult);
     vi.mocked(fetchLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, allowlist: [...localIngestSettings.allowlist] });
-    vi.mocked(fetchLocalIngestArchivePassword).mockResolvedValue({ archivePassword: 'fixture-password' });
     vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard());
     vi.mocked(fetchLocalIngestOperation).mockResolvedValue(idleLocalIngestOperation);
     vi.mocked(saveLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, allowlist: [...localIngestSettings.allowlist] });
@@ -556,7 +552,9 @@ describe('ArchiveCatalogView', () => {
     catalog.vm.$emit('resolved', 36); await flushPromises();
     expect(sessionStorage.getItem(key)).toBe('36');
     catalog.vm.$emit('all'); await flushPromises();
-    expect(router.currentRoute.value.query).toMatchObject({ scope: 'all', manageCreator: '12', manageTab: 'profile' });
+    expect(router.currentRoute.value.query).toMatchObject({ scope: 'all' });
+    expect(router.currentRoute.value.query.manageCreator).toBeUndefined();
+    expect(router.currentRoute.value.query.manageTab).toBeUndefined();
     await router.push('/archive-catalog?workspace=resources'); await flushPromises();
     auth.role = 'viewer'; auth.capabilities.canManageLibrary = false;
     await flushPromises();
@@ -898,12 +896,12 @@ describe('ArchiveCatalogView', () => {
     await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
     await wrapper.get('[data-test="local-ingest-inbox-root"]').setValue('D:/draft');
     await wrapper.get('[data-test="local-ingest-password"]').setValue('unsaved-secret');
-    expect(wrapper.get('[data-test="local-ingest-password"]').attributes('type')).toBe('text');
+    expect(wrapper.get('[data-test="local-ingest-password"]').attributes('type')).toBe('password');
     await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
     expect(saveLocalIngestSettings).not.toHaveBeenCalled();
     await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
     expect((wrapper.get('[data-test="local-ingest-inbox-root"]').element as HTMLInputElement).value).toBe(localIngestSettings.inboxRoot);
-    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('');
     await wrapper.get('[data-test="local-ingest-password"]').setValue('another-secret');
     await wrapper.get('[data-test="workspace-source"]').trigger('click');
     await flushPromises();
@@ -911,44 +909,36 @@ describe('ArchiveCatalogView', () => {
     await wrapper.get('[data-test="workspace-ingest"]').trigger('click');
     await flushPromises();
     await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
-    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('');
   });
 
-  it('reads the current password only when settings open and ignores responses for a closed dialog', async () => {
-    let resolveOld!: (value: { archivePassword: string }) => void;
-    vi.mocked(fetchLocalIngestArchivePassword).mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+  it('opens an empty replacement field and resets explicit clear intent on close', async () => {
     const wrapper = await mountCostuan('ingest');
     await flushPromises();
-    expect(fetchLocalIngestArchivePassword).not.toHaveBeenCalled();
     await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
-    expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).toHaveProperty('disabled');
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('');
+    await wrapper.get('[data-test="clear-ingest-password"]').setValue(true);
     expect(wrapper.get('[data-test="local-ingest-password"]').attributes()).toHaveProperty('disabled');
     await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
     await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
     await flushPromises();
-    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
-    resolveOld({ archivePassword: 'stale-value' });
-    await flushPromises();
-    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('');
+    expect((wrapper.get('[data-test="clear-ingest-password"]').element as HTMLInputElement).checked).toBe(false);
     expect(wrapper.get('[data-test="ingest-password-status"]').text()).toBe('解压密码：已配置');
     expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).not.toHaveProperty('disabled');
   });
 
-  it('keeps save disabled after a password read failure and allows retry without clearing the saved password', async () => {
-    vi.mocked(fetchLocalIngestArchivePassword).mockRejectedValueOnce(new Error('private failure detail'));
+  it.each([
+    ['environment', 'inherit', '服务端环境配置（无本地覆盖）'],
+    ['local', 'local', '本机保存的密码（本地覆盖）'],
+    ['none', 'cleared', '已明确清除，环境密码回退已停用']
+  ] as const)('shows only status and source for %s / %s', async (source, override, label) => {
+    vi.mocked(fetchLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, archivePasswordSource: source, archivePasswordOverride: override });
     const wrapper = await mountCostuan('ingest');
     await flushPromises();
     await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).toHaveProperty('disabled');
-    expect(wrapper.get('[role="alert"]').text()).toContain('当前解压密码读取失败');
-    expect(wrapper.text()).not.toContain('private failure detail');
-    await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
-    expect(saveLocalIngestSettings).not.toHaveBeenCalled();
-    await wrapper.get('[data-test="retry-ingest-password"]').trigger('click');
-    await flushPromises();
-    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
-    expect(wrapper.get('[data-test="save-local-ingest"]').attributes()).not.toHaveProperty('disabled');
+    expect(wrapper.get('[data-test="ingest-settings-dialog"]').text()).toContain(label);
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('');
   });
 
   it('omits untouched passwords and only explicitly sends replacement or clear decisions', async () => {
@@ -972,6 +962,12 @@ describe('ArchiveCatalogView', () => {
     await wrapper.get('[data-test="local-ingest-password"]').setValue('');
     await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
     await flushPromises();
+    expect(saveLocalIngestSettings).toHaveBeenLastCalledWith(editableSettings);
+    await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    await wrapper.get('[data-test="local-ingest-password"]').setValue('unused-replacement');
+    await wrapper.get('[data-test="clear-ingest-password"]').setValue(true);
+    await wrapper.get('[data-test="save-local-ingest"]').trigger('click');
+    await flushPromises();
     expect(saveLocalIngestSettings).toHaveBeenLastCalledWith({ ...editableSettings, clearArchivePassword: true });
     expect(scanLocalIngestInbox).not.toHaveBeenCalled();
     expect(runLocalIngestBatch).not.toHaveBeenCalled();
@@ -993,7 +989,6 @@ describe('ArchiveCatalogView', () => {
       expect(wrapper.get('[data-test="open-ingest-settings"]').attributes()).toHaveProperty('disabled');
     }
     vi.mocked(fetchLocalIngestSettings).mockResolvedValue({ ...localIngestSettings, inboxRoot: 'D:/saved', archivePasswordConfigured: false, allowlist: ['服务端最新名单'] });
-    vi.mocked(fetchLocalIngestArchivePassword).mockResolvedValue({ archivePassword: '' });
     resolveSave({ ...localIngestSettings, inboxRoot: 'D:/saved' });
     await flushPromises();
     if (!returnEarly) {
@@ -1019,7 +1014,7 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.get('[data-test="ingest-settings-dialog"]').text()).toContain('无法保存入库设置');
     await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
     await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
-    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('fixture-password');
+    expect((wrapper.get('[data-test="local-ingest-password"]').element as HTMLInputElement).value).toBe('');
   });
 
   it('labels a stale recovered job as resumable', async () => {

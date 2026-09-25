@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_LOCALE, i18n } from '../locales';
+import { i18n } from '../locales';
 import type { FeedItem } from '../types/api';
 import { useLikesStore } from './likes';
 
@@ -29,7 +29,7 @@ function createFeedItem(id: number): FeedItem {
 describe('useLikesStore localization', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-    i18n.global.locale.value = DEFAULT_LOCALE;
+    i18n.global.locale.value = 'en';
   });
 
   it('reacts to locale changes for shared and local saved-item labels', () => {

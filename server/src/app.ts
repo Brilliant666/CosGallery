@@ -14,6 +14,8 @@ import { apiRouter } from './routes/api.js';
 import { archiveBridgeRouter } from './routes/archive-bridge.js';
 import { authService } from './services/auth-service.js';
 import { lazyThumbnailsRouter, lazyPreviewsRouter } from './routes/lazy-derivatives.js';
+import { securityHeaders } from './middleware/security-headers.js';
+import { createHttpErrorHandler, requestIdentity } from './middleware/http-errors.js';
 
 export function applyApiNoStoreHeaders(response: Pick<express.Response, 'setHeader'>) {
   authService.setNoStoreHeaders(response as express.Response);
@@ -24,6 +26,11 @@ export function applyApiNoStoreHeaders(response: Pick<express.Response, 'setHead
 
 export function createApp() {
   const app = express();
+  app.disable('x-powered-by');
+  const clientDist = path.join(repositoryRoot, 'client', 'dist');
+  const clientHtml = path.join(clientDist, 'index.html');
+  app.use(requestIdentity);
+  app.use(securityHeaders(fs.existsSync(clientHtml) ? fs.readFileSync(clientHtml, 'utf8') : '', appConfig.nodeEnv === 'development'));
   app.use(denyRecoveryFileRequests());
   app.use(createTextCompression());
 
@@ -48,21 +55,13 @@ export function createApp() {
   app.use('/api', blockPublicDemoMutations, requireTrustedMutationRequest, requireApiAuthentication, apiRouter);
 
   if (appConfig.nodeEnv === 'production') {
-    const clientDist = path.join(repositoryRoot, 'client', 'dist');
     if (fs.existsSync(clientDist)) {
       mountClientDelivery(app, clientDist);
     }
   }
 
-  app.use((error: unknown, _request: express.Request, response: express.Response, next: express.NextFunction) => {
-    if (response.headersSent) {
-      next(error);
-      return;
-    }
-
-    const message = error instanceof Error ? error.message : 'Unexpected server error';
-    response.status(error instanceof ArchiveMetadataTaskError ? error.status : 400).json({ message });
-  });
+  app.use(createHttpErrorHandler(error => error instanceof ArchiveMetadataTaskError
+    ? { status: error.status, code: 'ARCHIVE_METADATA_TASK_REJECTED', message: error.message } : null));
 
   return app;
 }

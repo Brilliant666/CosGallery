@@ -116,9 +116,11 @@ describe.sequential('managed creator admin API', () => {
     db.connection.exec(`CREATE TRIGGER route_reject_profile BEFORE UPDATE OF canonical_name ON archive_catalog_creators
       WHEN NEW.id=${Number(creatorId)} BEGIN SELECT RAISE(ABORT,'isolated route write failure'); END`);
     const failed=await requestTestApp(app,'PUT',url+'/profile-settings',headers,body);
-    // The existing application error handler returns 400 for SQLite failures.
-    expect(failed.status).toBe(400);
-    expect(failed.body.message).toContain('isolated route write failure');
+    // Unexpected storage failures are server errors; the transaction still rolls back.
+    expect(failed.status).toBe(500);
+    expect(failed.body.code).toBe('INTERNAL_ERROR');
+    expect(failed.body.message).toBe('服务端发生异常，请根据请求编号排查。');
+    expect(JSON.stringify(failed.body)).not.toContain('isolated route write failure');
     const unchanged=await requestTestApp(app,'GET',url+'/editing-state');
     expect(unchanged.body.profileRevision).toBe(state.body.profileRevision);
     expect(unchanged.body.creator.name).toBe('Editor sample');

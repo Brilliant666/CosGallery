@@ -832,9 +832,10 @@ export interface LocalIngestSettings {
   allowlist: string[];
   archivePasswordConfigured: boolean;
   archivePasswordSource?: 'local' | 'environment' | 'none';
+  archivePasswordOverride?: 'inherit' | 'local' | 'cleared';
 }
 
-export type LocalIngestSettingsInput = Omit<LocalIngestSettings, 'allowlist' | 'archivePasswordConfigured' | 'archivePasswordSource'> & { allowlist?: string[]; archivePassword?: string; clearArchivePassword?: boolean };
+export type LocalIngestSettingsInput = Omit<LocalIngestSettings, 'allowlist' | 'archivePasswordConfigured' | 'archivePasswordSource' | 'archivePasswordOverride'> & { allowlist?: string[]; archivePassword?: string; clearArchivePassword?: boolean };
 
 export interface LocalIngestSettingsValidation {
   valid: boolean;

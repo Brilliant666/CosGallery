@@ -2,7 +2,7 @@
 
 ## 任务边界
 
-用户已主动删除两套作品中共 18 个不再保留的 JFIF 文件，并将保留内容手工放入正式图库。本任务不增加 JFIF 支持，不恢复、解码或展示已删除内容，也不移动、合并或重命名 `G:\cos图集\lunananya` 与 `G:\cos图集\lunana`。
+用户已主动删除两套作品中共 18 个不再保留的 JFIF 文件，并将保留内容手工放入正式图库。本任务不增加 JFIF 支持，不恢复、解码或展示已删除内容，也不移动、合并或重命名 `<GALLERY_ROOT>\lunananya` 与 `<GALLERY_ROOT>\lunana`。
 
 生产写入前的审计和实现验证均在只读磁盘现场与生产 SQLite 的独立副本中完成。隔离验证禁用了回收、压缩工具和正式目录提交，只允许读取真实媒体并写临时数据库及临时派生目录。
 
@@ -14,17 +14,17 @@
 - Job：总数 588；586 条 `ingested/done`，Job 489、525 为 `awaiting_review/validating`，`UNKNOWN_FILE_TYPE`，`attemptCount=1`。
 - 规范身份：只有一个有效 Creator，ID `166`，规范名 `lunana`；明确别名包含 `lunana` 和 `lunananya`。
 - 目录桥接：`lunananya` 为 Local Creator Folder ID `8` / Gallery Folder ID `1`；`lunana` 为 Local Creator Folder ID `1004` / Gallery Folder ID `2290`。两者均明确关联 Creator `166`，不存在第二个重复 Creator。
-- `G:\cos图集\lunananya`：9 个直接作品目录，257 个文件，2,081,417,636 bytes；数据库已有 9 个有效 Local Work。
-- `G:\cos图集\lunana`：41 个直接作品目录，1,196 个文件，7,690,753,552 bytes；审计时数据库只有此前的 39 个有效 Local Work，手工放入的 NO.010、NO.046 尚未索引。
+- `<GALLERY_ROOT>\lunananya`：9 个直接作品目录，257 个文件，2,081,417,636 bytes；数据库已有 9 个有效 Local Work。
+- `<GALLERY_ROOT>\lunana`：41 个直接作品目录，1,196 个文件，7,690,753,552 bytes；审计时数据库只有此前的 39 个有效 Local Work，手工放入的 NO.010、NO.046 尚未索引。
 
 ## 两条人工放置作品
 
 | Job | Source Work | Download Task | 正式目标 | 来源声明 | 实际保留媒体 | 用户删除证据 |
 | ---: | ---: | ---: | --- | --- | --- | --- |
-| 489 | 438 | 1027 | `G:\cos图集\lunana\lunana NO.010 黑馆晴奈 [37P-268MB]` | 37P / 268MB | 37 JPG / 266,312,793 bytes | `g (1).jfif`～`g (9).jfif` |
-| 525 | 474 | 1063 | `G:\cos图集\lunana\lunananya NO.046 自拍&杂图 [40P1V-91MB]` | 40P + 1V / 91MB | 31 JPG + 1 MP4 / 81,149,048 bytes | ` (32).jfif`～` (40).jfif`（文件名保留原始前导空格） |
+| 489 | 438 | 1027 | `<GALLERY_ROOT>\lunana\lunana NO.010 黑馆晴奈 [37P-268MB]` | 37P / 268MB | 37 JPG / 266,312,793 bytes | `g (1).jfif`～`g (9).jfif` |
+| 525 | 474 | 1063 | `<GALLERY_ROOT>\lunana\lunananya NO.046 自拍&杂图 [40P1V-91MB]` | 40P + 1V / 91MB | 31 JPG + 1 MP4 / 81,149,048 bytes | ` (32).jfif`～` (40).jfif`（文件名保留原始前导空格） |
 
-两项目标目录均只含可读取媒体，无压缩包、TXT、HTML、临时文件、其他未知文件或符号链接。任务原源包仍在 `G:\cos待入库\lunana`，processing 目录仍在 `G:\cos处理中\489`、`525`，其中只保留历史 marker 与第一层内包；原先的 level-2 内容已因用户移动而为空。
+两项目标目录均只含可读取媒体，无压缩包、TXT、HTML、临时文件、其他未知文件或符号链接。任务原源包仍在 `<INBOX_ROOT>\lunana`，processing 目录仍在 `<PROCESSING_ROOT>\489`、`525`，其中只保留历史 marker 与第一层内包；原先的 level-2 内容已因用户移动而为空。
 
 ## 最小修复
 
@@ -59,7 +59,7 @@
 
 ## 目录写入策略审查
 
-当前 Stage 3 的新作品目标仍由 `creator_name`（规范名）拼接，因此 Creator `166` 的默认新写入目录会是 `G:\cos图集\lunana`。读取与扫描已经支持 `lunana`、`lunananya` 两个明确桥接目录，且定向扫描不会失活同 Creator 的另一个有效目录。
+当前 Stage 3 的新作品目标仍由 `creator_name`（规范名）拼接，因此 Creator `166` 的默认新写入目录会是 `<GALLERY_ROOT>\lunana`。读取与扫描已经支持 `lunana`、`lunananya` 两个明确桥接目录，且定向扫描不会失活同 Creator 的另一个有效目录。
 
 长期最小修正建议是为 Creator 增加显式的 preferred ingest folder 关系，并要求它必须指向该 Creator 的一个 active Local Creator Folder；未配置或存在多个候选时关闭式请求人工选择。本任务不实现该配置，不擅自把历史目录或新目录设为长期默认，也不开展目录迁移。
 

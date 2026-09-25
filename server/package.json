@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/scripts/migrate.ts && tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../scripts/write-build-info.mjs server",
     "migrate": "tsx src/scripts/migrate.ts",
     "migrate:prod": "node dist/scripts/migrate.js",
     "start": "node dist/scripts/migrate.js && node dist/index.js",

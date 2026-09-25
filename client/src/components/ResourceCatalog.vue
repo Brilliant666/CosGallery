@@ -47,7 +47,8 @@
           </select></label>
           <button :disabled="exportDisabled" @click="exportAll('copy')">复制目录</button>
           <button :disabled="exportDisabled" @click="exportAll('txt')">导出 TXT</button>
-          <button :disabled="exportDisabled" @click="exportAll('csv')">导出 CSV</button>
+          <button :disabled="exportDisabled" aria-describedby="csv-export-note" @click="exportAll('csv')">导出 CSV</button>
+          <p id="csv-export-note" class="hint">CSV 会附带同版本 metadata.json，请保留两份文件。</p>
         </div>
       </div>
       <div class="menu-anchor"><button :aria-expanded="moreOpen" aria-controls="resource-more" @click="moreOpen = !moreOpen; exportOpen = false">更多</button>
@@ -152,7 +153,7 @@
             <template v-for="item in payload.items" :key="item.workId"
               ><tr class="catalog-row" tabindex="0" :aria-expanded="expanded === item.workId" :aria-controls="`resource-detail-${item.workId}`" :aria-label="`${item.title}，${expanded === item.workId ? '收起' : '展开'}详情`" @click="rowClick($event, item.workId)" @keydown.enter.self.prevent="toggleDetail(item.workId)" @keydown.space.self.prevent="toggleDetail(item.workId)">
                 <td v-if="!creatorId"><button @click.stop="selectCreator(item.creatorId)">{{ item.creatorName }}</button></td>
-                <td class="number-cell"><strong>{{ item.no ?? '未编排' }}</strong></td><td class="title-cell">{{ item.title }}</td>
+                <td class="number-cell"><strong>{{ item.no ?? '未编排' }}</strong></td><td class="title-cell"><span class="detail-indicator" aria-hidden="true" :title="expanded === item.workId ? '收起详情' : '展开详情'">{{ expanded === item.workId ? '⌄' : '›' }}</span>{{ item.title }}</td>
                 <td :title="date(item.sortTimestamp)">{{ shortDate(item.sortTimestamp) }} <span v-if="item.sortEstimate" class="estimate-badge" data-test="sort-estimate" title="按来源顺序估算的排序时间，详细依据见展开详情">估算</span></td>
                 <td>
                   {{ content(item) }}<small v-if="item.statisticsBasis === 'last-indexed'"
@@ -694,6 +695,7 @@ onBeforeUnmount(() => {
 .catalog-row:focus-visible { outline:2px solid var(--color-accent,#007bcb); outline-offset:-2px; }
 .number-cell { white-space:nowrap; }
 .title-cell { min-width:12rem; max-width:28rem; overflow-wrap:anywhere; }
+.detail-indicator { display:inline-block; width:1.1em; font-size:1.2em; font-weight:600; color:var(--color-muted); }
 .exception-badge { display:block; color:#a24710; font-size:0.8rem; }
 .filtered-count { margin-left:auto; font-size:0.85rem; white-space:nowrap; }
 h2,

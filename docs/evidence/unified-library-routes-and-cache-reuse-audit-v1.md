@@ -60,12 +60,12 @@ cache, read-only original-media access and the existing built server:
 
 | Setting | Effective value |
 | --- | --- |
-| Worktree/CWD | `C:\Users\brilliant\Documents\ChatGPT\插件\Foldergram-CosGallery-unified-library` |
+| Worktree/CWD | `C:\CosGallery-unified-library` |
 | DATA_ROOT | `<worktree>\data\library-audit\runtime` |
 | Database | `<DATA_ROOT>\db\gallery.sqlite` |
 | THUMBNAILS_DIR | `<DATA_ROOT>\thumbnails` |
 | PREVIEWS_DIR | `<DATA_ROOT>\previews` |
-| GALLERY_ROOT | `G:/cos图集` (originals read only) |
+| GALLERY_ROOT | `<GALLERY_ROOT>` (originals read only) |
 | DERIVATIVE_MODE | `lazy` |
 | IMAGE_DETAIL_SOURCE | `preview` |
 | SCAN_DERIVATIVE_CONCURRENCY | `4` |
@@ -74,10 +74,10 @@ cache, read-only original-media access and the existing built server:
 | Port/origin | `http://127.0.0.1:4245` |
 | Process | Node `24.19.0`, isolated `data/library-audit/launch.cjs` importing `server/dist/index.js` |
 
-Node executable: `C:\Users\brilliant\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe`.
+Node executable: `C:\Users\ExampleUser\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe`.
 The launcher is started with this executable from the above worktree, with
 environment established before app imports. Production declared paths are
-under `C:\Users\brilliant\Documents\ChatGPT\插件\Foldergram-CosGallery\data`:
+under `C:\CosGallery\data`:
 `db\gallery.sqlite`, `thumbnails`, `previews`; production runtime was absent.
 The copy was made using SQLite online backup, including committed WAL state.
 
