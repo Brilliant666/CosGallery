@@ -221,11 +221,11 @@ describe('useAppStore locale preferences', () => {
 
     expect(store.locale).toBe('zh');
     expect(i18n.global.locale.value).toBe('zh');
-    expect(document.documentElement.lang).toBe('zh');
+    expect(document.documentElement.lang).toBe('zh-CN');
     expect(window.localStorage.getItem('foldergram-locale')).toBe('zh');
   });
 
-  it('falls back to English when stored and browser locales are unsupported', () => {
+  it('falls back to Chinese when the stored locale is unsupported', () => {
     window.localStorage.setItem('foldergram-locale', 'fr');
     setNavigatorLocales(['de-DE'], 'de-DE');
 
@@ -234,19 +234,19 @@ describe('useAppStore locale preferences', () => {
 
     expect(store.locale).toBe(DEFAULT_LOCALE);
     expect(i18n.global.locale.value).toBe(DEFAULT_LOCALE);
-    expect(document.documentElement.lang).toBe(DEFAULT_LOCALE);
+    expect(document.documentElement.lang).toBe('zh-CN');
     expect(window.localStorage.getItem('foldergram-locale')).toBeNull();
   });
 
-  it('uses a supported browser locale when no saved locale exists', () => {
+  it('starts a fresh profile in Chinese even when the browser prefers Spanish', () => {
     setNavigatorLocales(['es-ES'], 'es-ES');
 
     const store = useAppStore();
     store.initializeLocale();
 
-    expect(store.locale).toBe('es');
-    expect(i18n.global.locale.value).toBe('es');
-    expect(document.documentElement.lang).toBe('es');
+    expect(store.locale).toBe('zh');
+    expect(i18n.global.locale.value).toBe('zh');
+    expect(document.documentElement.lang).toBe('zh-CN');
     expect(window.localStorage.getItem('foldergram-locale')).toBeNull();
   });
 
@@ -258,7 +258,7 @@ describe('useAppStore locale preferences', () => {
 
     expect(store.locale).toBe('zh');
     expect(i18n.global.locale.value).toBe('zh');
-    expect(document.documentElement.lang).toBe('zh');
+    expect(document.documentElement.lang).toBe('zh-CN');
     expect(window.localStorage.getItem('foldergram-locale')).toBeNull();
   });
 
@@ -268,7 +268,7 @@ describe('useAppStore locale preferences', () => {
 
     expect(store.locale).toBe('zh');
     expect(i18n.global.locale.value).toBe('zh');
-    expect(document.documentElement.lang).toBe('zh');
+    expect(document.documentElement.lang).toBe('zh-CN');
     expect(window.localStorage.getItem('foldergram-locale')).toBe('zh');
   });
 
@@ -282,7 +282,7 @@ describe('useAppStore locale preferences', () => {
 
     expect(store.locale).toBe('zh');
     expect(i18n.global.locale.value).toBe('zh');
-    expect(document.documentElement.lang).toBe('zh');
+    expect(document.documentElement.lang).toBe('zh-CN');
     expect(window.localStorage.getItem('foldergram-locale')).toBeNull();
   });
 
@@ -295,7 +295,7 @@ describe('useAppStore locale preferences', () => {
 
     expect(store.locale).toBe('zh');
     expect(i18n.global.locale.value).toBe('zh');
-    expect(document.documentElement.lang).toBe('zh');
+    expect(document.documentElement.lang).toBe('zh-CN');
     expect(window.localStorage.getItem('foldergram-locale')).toBeNull();
   });
 
@@ -311,6 +311,20 @@ describe('useAppStore locale preferences', () => {
     expect(i18n.global.locale.value).toBe('es');
     expect(document.documentElement.lang).toBe('es');
     expect(window.localStorage.getItem('foldergram-locale')).toBe('es');
+  });
+
+  it('honors an explicitly saved English app default without persisting a browser override', () => {
+    const store = useAppStore();
+    store.initializeLocale();
+    expect(store.locale).toBe('zh');
+    store.syncLocaleFromAuthStatus('en');
+    expect(store.locale).toBe('en');
+    expect(document.documentElement.lang).toBe('en');
+    expect(window.localStorage.getItem('foldergram-locale')).toBeNull();
+    store.setLocale('es');
+    expect(window.localStorage.getItem('foldergram-locale')).toBe('es');
+    store.syncLocaleFromAuthStatus('zh');
+    expect(store.locale).toBe('es');
   });
 
   it('keeps the browser local override ahead of the auth-status app default locale', () => {

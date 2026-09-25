@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 
-import { DEFAULT_LOCALE, i18n } from '../locales';
+import { i18n } from '../locales';
 import type { AppStatus, ScanProgress } from '../types/api';
 import { useAppStore } from '../stores/app';
 import { useFeedStore } from '../stores/feed';
@@ -131,7 +131,7 @@ describe('HomeView', () => {
       queueMicrotask(() => callback(0));
       return 1;
     });
-    i18n.global.locale.value = DEFAULT_LOCALE;
+    i18n.global.locale.value = 'en';
     Object.defineProperty(window, 'innerWidth', {
       configurable: true,
       writable: true,

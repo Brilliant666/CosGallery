@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import en from './en.json';
-import { DEFAULT_LOCALE, resolvePreferredLocale, resolveSupportedLocale } from './index';
+import { DEFAULT_LOCALE, createFoldergramI18n, resolvePreferredLocale, resolveSupportedLocale, syncDocumentLanguage } from './index';
 
 type LocaleTree = Record<string, LocaleTree | string>;
 
@@ -41,7 +41,7 @@ describe('locale validation', () => {
     }
   });
 
-  it('normalizes supported locales and falls back to English', () => {
+  it('normalizes supported locales and falls back to Chinese', () => {
     expect(resolveSupportedLocale('en')).toBe('en');
     expect(resolveSupportedLocale('en-US')).toBe('en');
     expect(resolveSupportedLocale('es')).toBe('es');
@@ -53,5 +53,16 @@ describe('locale validation', () => {
     expect(resolvePreferredLocale('fr-FR', 'es-MX')).toBe('es');
     expect(resolvePreferredLocale('fr-FR', 'zh-CN')).toBe('zh');
     expect(resolvePreferredLocale('fr-FR')).toBe(DEFAULT_LOCALE);
+  });
+
+  it('starts in Chinese and keeps the document language aligned with runtime changes', () => {
+    expect(DEFAULT_LOCALE).toBe('zh');
+    expect(createFoldergramI18n().global.locale.value).toBe('zh');
+    syncDocumentLanguage('zh');
+    expect(document.documentElement.lang).toBe('zh-CN');
+    syncDocumentLanguage('en');
+    expect(document.documentElement.lang).toBe('en');
+    syncDocumentLanguage('es');
+    expect(document.documentElement.lang).toBe('es');
   });
 });

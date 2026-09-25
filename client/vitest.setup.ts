@@ -1,7 +1,7 @@
 import { config } from '@vue/test-utils';
 import { afterEach } from 'vitest';
 
-import { DEFAULT_LOCALE, i18n, syncDocumentLanguage } from './src/locales';
+import { i18n, syncDocumentLanguage } from './src/locales';
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -83,10 +83,13 @@ Object.defineProperty(globalThis, 'scrollTo', {
   value: () => {}
 });
 
+// Most component fixtures assert English copy explicitly. Keep their test locale
+// fixed; startup/default-language behavior is covered by locale and app-store tests.
+i18n.global.locale.value = 'en';
 config.global.plugins = [...(config.global.plugins ?? []), i18n];
 
 afterEach(() => {
   window.localStorage.clear();
-  i18n.global.locale.value = DEFAULT_LOCALE;
-  syncDocumentLanguage(DEFAULT_LOCALE);
+  i18n.global.locale.value = 'en';
+  syncDocumentLanguage('en');
 });
