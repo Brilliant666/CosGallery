@@ -47,6 +47,21 @@ describe('compact creator-scoped source evidence panel', () => {
     expect(wrapper.text()).toContain('来源资料已保存');
     expect(api.confirmSourceEvidenceIdentity).not.toHaveBeenCalled(); expect(api.linkSourceEvidenceWork).not.toHaveBeenCalled();
   });
+  it('blocks input Enter implicit saves while preserving IME, multiline entry and explicit button submission', async () => {
+    const wrapper = await openDetail(); const form = await fillManual(wrapper);
+    const enter = (target: Element, options: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...options });
+      target.dispatchEvent(event); return event.defaultPrevented;
+    };
+    for (const input of form.findAll('input')) expect(enter(input.element)).toBe(true);
+    expect(enter(form.get('input').element, { isComposing: true })).toBe(false);
+    expect(enter(form.get('input').element, { keyCode: 229 })).toBe(false);
+    for (const textarea of form.findAll('textarea')) expect(enter(textarea.element)).toBe(false);
+    expect(enter(form.get('button[type=submit]').element)).toBe(false);
+    expect(api.saveSourceEvidence).not.toHaveBeenCalled();
+    form.element.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: form.get('button[type=submit]').element as HTMLButtonElement })); await flushPromises();
+    expect(api.saveSourceEvidence).toHaveBeenCalledTimes(1);
+  });
   it('preserves unknown save receipt across return and retransmits the exact original request', async () => {
     const wrapper = await openDetail(); const form = await fillManual(wrapper);
     vi.mocked(api.saveSourceEvidence).mockRejectedValueOnce(new Error('Response lost'));

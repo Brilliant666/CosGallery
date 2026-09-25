@@ -102,12 +102,17 @@ watch(
 );
 function selectWorkspace(value:Workspace) {
   if (value===workspace.value) return;
-  if (router && route) void router.push({query:{...route.query,workspace:value},hash:route.hash});
+  if (router && route) void router.push({query:{...closedManagementQuery(),workspace:value},hash:route.hash});
   else {workspace.value=value;if(value==='roster')rosterVisited.value=true;}
+}
+function closedManagementQuery() {
+  // Close only the new navigation entry. Browser Back can still restore the
+  // previous management URL; the roster's existing dirty guard owns leaving it.
+  return { ...route.query, manageCreator: undefined, manageTab: undefined };
 }
 function openResourceCatalog(id: number | null) {
   if (router && route) {
-    void router.push({ query: { ...route.query, workspace: 'resources', creatorId: id === null ? undefined : String(id), scope: undefined } });
+    void router.push({ query: { ...closedManagementQuery(), workspace: 'resources', creatorId: id === null ? undefined : String(id), scope: undefined }, hash: route.hash });
   } else {
     resourceCreatorId.value = id;
     resourceGlobalScope.value = false;
@@ -115,7 +120,7 @@ function openResourceCatalog(id: number | null) {
   }
 }
 function openAllResources() {
-  if (router && route) void router.push({ query: { ...route.query, workspace: 'resources', creatorId: undefined, scope: 'all' } });
+  if (router && route) void router.push({ query: { ...closedManagementQuery(), workspace: 'resources', creatorId: undefined, scope: 'all' }, hash: route.hash });
   else { resourceCreatorId.value = null; resourceGlobalScope.value = true; workspace.value = 'resources'; }
 }
 

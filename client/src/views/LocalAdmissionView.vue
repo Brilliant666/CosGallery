@@ -197,7 +197,7 @@ watch(()=>route.params.creatorId,async()=>{
   confirmChecked.value=false;adsChecked.value=false;error.value='';notice.value='';
   for(const key of Object.keys(actions))delete actions[key];
   for(const key of Object.keys(selectedWorks))delete selectedWorks[key];
-  if(!Number.isSafeInteger(creatorId.value)||creatorId.value<=0){error.value='请从博主库选择一位规范博主进入本地导入';return;}
+  if(!Number.isSafeInteger(creatorId.value)||creatorId.value<=0){error.value='当前链接缺少有效的博主，请进入“博主入库 → 本地图集”重新选择博主与目录';return;}
   sourceEvidenceId.value=Number(route.query.sourceEvidenceId)>0?Number(route.query.sourceEvidenceId):null;
   try {
     const result=await api.fetchAdmissionSettings();if(current!==generation||disposed)return;

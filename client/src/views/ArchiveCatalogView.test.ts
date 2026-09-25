@@ -552,7 +552,9 @@ describe('ArchiveCatalogView', () => {
     catalog.vm.$emit('resolved', 36); await flushPromises();
     expect(sessionStorage.getItem(key)).toBe('36');
     catalog.vm.$emit('all'); await flushPromises();
-    expect(router.currentRoute.value.query).toMatchObject({ scope: 'all', manageCreator: '12', manageTab: 'profile' });
+    expect(router.currentRoute.value.query).toMatchObject({ scope: 'all' });
+    expect(router.currentRoute.value.query.manageCreator).toBeUndefined();
+    expect(router.currentRoute.value.query.manageTab).toBeUndefined();
     await router.push('/archive-catalog?workspace=resources'); await flushPromises();
     auth.role = 'viewer'; auth.capabilities.canManageLibrary = false;
     await flushPromises();
