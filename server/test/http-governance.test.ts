@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { contentSecurityPolicy, securityHeaders } from '../src/middleware/security-headers.js';
 import { createHttpErrorHandler, publicErrorText, requestIdentity } from '../src/middleware/http-errors.js';
 import { requestTestApp } from './http-test-utils.js';
+import { LocalIngestPathError } from '../src/utils/local-ingest-paths.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -21,10 +22,28 @@ function appWithFailure(error: unknown) {
 }
 
 describe('HTTP error boundary', () => {
-  it('scrubs paths and secret assignments from existing business error descriptions', () => {
-    expect(publicErrorText('Failed at C:\\private\\db.sqlite')).toBe('Failed at [local path]');
-    expect(publicErrorText('Failed at /tmp/private.sqlite')).toBe('Failed at [local path]');
-    expect(publicErrorText('password=sample token:sample Cookie=sample')).not.toContain('sample');
+  it.each([
+    'Failed at C:\\private\\db.sqlite', 'Failed at /srv/private/db.sqlite',
+    'Failed at /tmp/private.sqlite', 'Failed at \\\\private\\share',
+    'Authorization: Bearer synthetic-token', 'Cookie:first=synthetic;second=also-private',
+    'password="two word secret"', '{"access_token":"synthetic-token"}'
+  ])('suppresses the whole sensitive error description: %s', message => {
+    expect(publicErrorText(message)).toBe('Request could not be completed. See the error code and request ID.');
+  });
+
+  it.each(['ROOT_NOT_ABSOLUTE', 'ROOTS_OVERLAP'])('keeps known local path input failure %s as 400 with its code', async code => {
+    const response = await requestTestApp(appWithFailure(new LocalIngestPathError(code, 'Invalid input path at /srv/private/root')), 'GET', '/failure');
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe(code);
+    expect(response.body.requestId).toBe(response.headers.get('x-request-id'));
+    expect(JSON.stringify(response.body)).not.toContain('/srv');
+  });
+
+  it('does not scrub normal management path data', async () => {
+    const app = express();
+    app.use(requestIdentity);
+    app.get('/', (_req, res) => { res.json({ message: 'Settings loaded', libraryRoot: '/srv/gallery' }); });
+    expect((await requestTestApp(app, 'GET', '/')).body).toEqual({ message: 'Settings loaded', libraryRoot: '/srv/gallery' });
   });
   it('does not serialize unknown errors or log secrets and provides a correlated id', async () => {
     const logger = vi.spyOn(console, 'error').mockImplementation(() => {});

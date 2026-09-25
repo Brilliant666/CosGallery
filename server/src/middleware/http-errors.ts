@@ -3,6 +3,7 @@ import type { ErrorRequestHandler, RequestHandler, Response } from 'express';
 import { ZodError } from 'zod';
 import { log } from '../services/log-service.js';
 import { RequestInputError } from '../utils/request-input-error.js';
+import { LocalIngestPathError } from '../utils/local-ingest-paths.js';
 
 export const requestIdentity: RequestHandler = (_request, response, next) => {
   // Never trust an unbounded caller-controlled request id or log request secrets.
@@ -23,11 +24,13 @@ export const requestIdentity: RequestHandler = (_request, response, next) => {
 };
 
 export function publicErrorText(message: string): string {
-  return message
-    .replace(/\b[A-Za-z]:[\\/][^\r\n"'<>|，；]*/g, '[local path]')
-    .replace(/\\\\[^\s"'<>]+/g, '[local path]')
-    .replace(/\/(?:home|Users|tmp|var|etc|mnt|opt|private)\/[^\r\n"'<>|，；]*/g, '[local path]')
-    .replace(/\b(password|passwd|pwd|cookie|authorization|token|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]');
+  // Do not redact only a token: Bearer values, cookie lists, quoted strings and
+  // paths with spaces have no reliable delimiter. Suppress the whole error
+  // description; stable code/requestId remain available for diagnosis.
+  const credentials = /\b(?:password|passwd|pwd|cookie|authorization|(?:access[_-]?|refresh[_-]?)?token|secret|api[_-]?key)["']?\s*[:=]|\bBearer\s+\S+/i;
+  const absolutePath = /\b[A-Za-z]:[\\/]|\\\\|(?:^|[^A-Za-z0-9])\/(?!\/)[^\s]/;
+  return credentials.test(message) || absolutePath.test(message)
+    ? 'Request could not be completed. See the error code and request ID.' : message;
 }
 
 const descriptions: Record<number, [string, string]> = {
@@ -67,7 +70,8 @@ export function createHttpErrorHandler(known?: (error: unknown) => { status: num
       response.destroy();
       return;
     }
-    const business = error instanceof RequestInputError ? { status: error.status, message: error.message, code: error.code } : known?.(error);
+    const business = error instanceof RequestInputError || error instanceof LocalIngestPathError
+      ? { status: 400, message: error.message, code: error.code } : known?.(error);
     if (business) {
       if (business.status >= 500) logRequestFailure(response, error, business.status);
       response.status(business.status).json({
