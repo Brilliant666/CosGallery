@@ -4,12 +4,20 @@
   "version": "1.2.2",
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.16.0 <23 || >=24.0.0 <25",
+    "pnpm": "10.28.0"
+  },
   "workspaces": [
     "server",
     "client",
     "docs"
   ],
   "scripts": {
+    "lint": "node scripts/check-governance.mjs",
+    "format:check": "prettier --check scripts/build-info.mjs scripts/build-info.test.mjs scripts/write-build-info.mjs scripts/check-governance.mjs .github/dependabot.yml SECURITY.md",
+    "format:governance": "prettier --write scripts/build-info.mjs scripts/build-info.test.mjs scripts/write-build-info.mjs scripts/check-governance.mjs .github/dependabot.yml SECURITY.md",
+    "test:build-info": "node --test scripts/build-info.test.mjs",
     "dev": "concurrently -k \"node scripts/run-workspace-script.mjs server dev\" \"node scripts/run-workspace-script.mjs client dev\" \"node scripts/run-workspace-script.mjs docs dev\"",
     "dev:server": "node scripts/run-workspace-script.mjs server dev",
     "dev:client": "node scripts/run-workspace-script.mjs client dev",
@@ -28,6 +36,7 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "cross-env": "^10.0.0"
+    "cross-env": "^10.0.0",
+    "prettier": "3.8.1"
   }
 }

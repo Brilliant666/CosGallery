@@ -14,6 +14,9 @@ importers:
       cross-env:
         specifier: ^10.0.0
         version: 10.1.0
+      prettier:
+        specifier: 3.8.1
+        version: 3.8.1
 
   client:
     dependencies:
@@ -2277,6 +2280,11 @@ packages:
 
   preact@10.29.0:
     resolution: {integrity: sha512-wSAGyk2bYR1c7t3SZ3jHcM6xy0lcBcDel6lODcs9ME6Th++Dx2KU+6D3HD8wMMKGA8Wpw7OMd3/4RGzYRpzwRg==}
+
+  prettier@3.8.1:
+    resolution: {integrity: sha512-UOnG6LftzbdaHZcKoPFtOcCKztrQ57WkHDeRD9t/PTQtmT0NHSeWWepj6pS0z/N7+08BHFDQVUrfmfMRcZwbMg==}
+    engines: {node: '>=14'}
+    hasBin: true
 
   property-information@7.1.0:
     resolution: {integrity: sha512-TwEZ+X+yCJmYfL7TPUOcvBZ4QfoT5YenQiJuX//0th53DE6w0xxLEtfK3iyryQFddXuvkIk51EEgrJQ0WJkOmQ==}
@@ -4922,6 +4930,8 @@ snapshots:
       source-map-js: 1.2.1
 
   preact@10.29.0: {}
+
+  prettier@3.8.1: {}
 
   property-information@7.1.0: {}
 

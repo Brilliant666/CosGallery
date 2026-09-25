@@ -7,6 +7,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 import UnoCSS from 'unocss/vite';
 import vue from '@vitejs/plugin-vue';
 import { vite as vidstack } from 'vidstack/plugins';
+import { createBuildInfo } from '../scripts/build-info.mjs';
 
 const appPackage = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf-8')
@@ -73,6 +74,7 @@ export function recoveryFileProtection(backupRoot: string): Plugin {
 }
 
 export default defineConfig(async ({ command, mode }) => {
+  const buildInfo = createBuildInfo();
   const env = loadEnv(mode, repositoryRoot, '');
   const backupRoot = path.resolve(repositoryRoot, env.BACKUP_ROOT ?? 'data_backup');
   const devServerPort = Number.parseInt(env.DEV_SERVER_PORT ?? '4140', 10);
@@ -85,11 +87,13 @@ export default defineConfig(async ({ command, mode }) => {
     envDir: repositoryRoot,
     define: {
       __APP_VERSION__: JSON.stringify(appPackage.version),
+      __BUILD_INFO__: JSON.stringify(buildInfo),
       __VUE_I18N_FULL_INSTALL__: JSON.stringify(true),
       __VUE_I18N_LEGACY_API__: JSON.stringify(false),
       __INTLIFY_PROD_DEVTOOLS__: JSON.stringify(false)
     },
     plugins: [
+      { name: 'cosgallery-build-identity', generateBundle() { this.emitFile({ type: 'asset', fileName: 'build-info.json', source: JSON.stringify(buildInfo, null, 2) }); } },
       recoveryFileProtection(backupRoot),
       UnoCSS(),
       vidstack({
