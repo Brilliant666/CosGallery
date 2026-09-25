@@ -205,20 +205,24 @@ describe.sequential('LocalIngest operation API exclusivity', () => {
     expect(localIngestSettingsService.get().allowlist).toEqual(['Creator Alpha']);
   });
 
-  it('reads the effective archive password only for the explicit management editor, including unset and disabled states', async () => {
+  it('retires password reads in every configuration state without weakening existing access checks', async () => {
     const { localIngestSettingsService } = await import('../src/services/local-ingest-settings-service.js');
     vi.stubEnv('LOCAL_INGEST_ARCHIVE_PASSWORD', 'synthetic-editor-password');
     const read = () => requestApp(app, 'GET', '/api/admin/local-ingest/archive-password');
     const environment = await read();
-    expect(environment.status).toBe(200);
+    expect(environment.status).toBe(410);
     expect(environment.headers.get('cache-control')).toContain('no-store');
-    expect(environment.body).toEqual({ archivePassword: 'synthetic-editor-password' });
+    expect(environment.body.code).toBe('PASSWORD_READ_RETIRED');
+    expect(JSON.stringify(environment.body)).not.toContain('synthetic-editor-password');
+    const status = await requestApp(app, 'GET', '/api/admin/local-ingest/settings');
+    expect(status.body).toMatchObject({ archivePasswordSource: 'environment', archivePasswordOverride: 'inherit' });
+    expect(JSON.stringify(status.body)).not.toContain('synthetic-editor-password');
     // A read is available during a scan, but does not acquire/change its operation.
     expect((await requestApp(app, 'GET', '/api/admin/local-ingest/operation')).body.state).toBe('scanning');
     localIngestSettingsService.save({ ...localIngestSettingsService.get(), archivePassword: 'updated-archive-password' });
-    expect((await read()).body).toEqual({ archivePassword: 'updated-archive-password' });
+    expect((await read()).body).toEqual(environment.body);
     localIngestSettingsService.save({ ...localIngestSettingsService.get(), clearArchivePassword: true });
-    expect((await read()).body).toEqual({ archivePassword: '' });
+    expect((await read()).body).toEqual(environment.body);
 
     const { authService } = await import('../src/services/auth-service.js');
     authService.setAdminPassword('test-admin-password');

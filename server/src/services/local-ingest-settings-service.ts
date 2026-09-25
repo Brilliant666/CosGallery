@@ -35,6 +35,7 @@ export type LocalIngestSettingsView = LocalIngestSettings & {
   allowlist: string[];
   archivePasswordConfigured: boolean;
   archivePasswordSource?: 'environment' | 'local' | 'none';
+  archivePasswordOverride: 'inherit' | 'local' | 'cleared';
 };
 
 export type LocalIngestPathCheck = {
@@ -188,14 +189,14 @@ export class LocalIngestSettingsService {
     private readonly passwordStore = new LocalIngestPasswordStore(path.join(appConfig.dataRoot, 'private'))
   ) {}
 
-  private passwordState(): { password: string | null; source: 'environment' | 'local' | 'none' } {
+  private passwordState(): { password: string | null; source: 'environment' | 'local' | 'none'; override: 'inherit' | 'local' | 'cleared' } {
     const stored = this.repository.get(LOCAL_INGEST_PASSWORD_SETTING_KEY);
     if (stored !== null) {
       const password = this.passwordStore.decrypt(stored);
-      return { password, source: password ? 'local' : 'none' };
+      return { password, source: password ? 'local' : 'none', override: password ? 'local' : 'cleared' };
     }
     const password = configuredArchivePassword();
-    return { password, source: password ? 'environment' : 'none' };
+    return { password, source: password ? 'environment' : 'none', override: 'inherit' };
   }
 
   get(): LocalIngestSettingsView {
@@ -204,7 +205,8 @@ export class LocalIngestSettingsService {
       ...parseStoredSettings(this.repository.get(LOCAL_INGEST_SETTINGS_SETTING_KEY), this.expectedGalleryRoot),
       allowlist: parseStoredAllowlist(this.repository.get(LOCAL_INGEST_ALLOWLIST_SETTING_KEY)),
       archivePasswordConfigured: password.password !== null,
-      archivePasswordSource: password.source
+      archivePasswordSource: password.source,
+      archivePasswordOverride: password.override
     };
   }
 
@@ -214,11 +216,6 @@ export class LocalIngestSettingsService {
       throw new Error('Archive password is not configured');
     }
     return password;
-  }
-
-  // Explicit management editor read; keep ordinary settings/list responses small.
-  getEditableArchivePassword(): string {
-    return this.passwordState().password ?? '';
   }
 
   save(input: LocalIngestSettings & { allowlist?: string[]; quarantineRoot?: string; archivePassword?: string; clearArchivePassword?: boolean }): LocalIngestSettingsView {

@@ -175,12 +175,11 @@
         </div>
       </div>
       <div class="mt-4 rounded-xl border border-border bg-bg p-3">
-        <label class="grid gap-2 text-sm font-semibold">解压密码<span class="text-xs font-normal text-muted">{{ passwordSourceLabel }}</span>
-          <input v-model="passwordDraft" data-test="local-ingest-password" type="text" autocomplete="off" :disabled="stage3WriteLocked || !passwordLoaded" class="h-11 rounded-xl border border-border bg-surface px-3 text-sm" />
+        <label class="grid gap-2 text-sm font-semibold">替换解压密码<span class="text-xs font-normal text-muted">{{ passwordSourceLabel }}</span>
+          <input v-model="passwordDraft" data-test="local-ingest-password" type="password" autocomplete="new-password" placeholder="留空保持原值，不读取已有密码" :disabled="stage3WriteLocked || clearPasswordDraft" class="h-11 rounded-xl border border-border bg-surface px-3 text-sm" />
         </label>
-        <p v-if="passwordLoading" role="status" class="text-xs text-muted">正在读取当前解压密码…</p>
-        <p v-if="passwordError" role="alert" class="text-sm text-red-700">{{ passwordError }} <button type="button" data-test="retry-ingest-password" class="underline" @click="loadIngestPassword">重新读取</button></p>
-        <p class="mb-0 text-xs text-muted">可直接查看和修改当前解压密码；清空后保存即不使用密码。取消不会改变已保存配置。</p>
+        <label class="mt-3 flex items-center gap-2 text-sm"><input v-model="clearPasswordDraft" data-test="clear-ingest-password" type="checkbox" :disabled="stage3WriteLocked" />明确清除密码，并停用环境密码回退</label>
+        <p class="mb-0 text-xs text-muted">已有密码只显示配置状态，不回传或预填。输入新密码后保存才替换；留空或保存其他设置保持原值。只有勾选明确清除后保存才停用密码；取消不改变配置。</p>
       </div>
       <h3 class="mt-5 mb-2 text-sm font-semibold">环境检查</h3>
       <div class="mt-4 flex flex-wrap gap-2">
@@ -189,7 +188,7 @@
       </div>
       <p class="text-xs text-muted">验证环境检查目录及工具草稿和已保存的密码状态，不发送或验证未保存的密码。回收站测试会按已保存配置创建并回收测试文件，不处理图集。</p>
       <p v-if="localIngestNotice" role="status" class="text-sm">{{ localIngestNotice }}</p>
-      <div class="ingest-dialog-actions"><button type="button" data-test="cancel-ingest-settings" :disabled="localIngestRequestBusy" @click="closeIngestSettings">取消</button><button type="button" data-test="save-local-ingest" :disabled="stage3WriteLocked || !passwordLoaded" @click="saveLocalIngestConfig">保存设置</button></div>
+      <div class="ingest-dialog-actions"><button type="button" data-test="cancel-ingest-settings" :disabled="localIngestRequestBusy" @click="closeIngestSettings">取消</button><button type="button" data-test="save-local-ingest" :disabled="stage3WriteLocked" @click="saveLocalIngestConfig">保存设置</button></div>
       </section></div>
       <div class="mt-4" v-if="localIngestSettings">        <div class="grid gap-2">
           <div class="rounded-xl border border-border bg-bg p-3"><label class="grid gap-2 text-sm font-semibold">当前允许处理的博主 · {{ localIngestSettings.allowlist.length }} 位<textarea data-test="local-ingest-allowlist" v-model="localIngestAllowlistText" :disabled="stage3WriteLocked" rows="3" placeholder="每行一位博主" class="w-full rounded-xl border border-border bg-surface p-3 text-sm font-normal" /></label><div v-if="localIngestAllowlistDirty" class="mt-2 flex flex-wrap items-center gap-3"><p role="status" class="m-0 text-xs text-amber-700">名单尚未保存，扫描和批量运行暂不可用。</p><button type="button" data-test="save-ingest-allowlist" :disabled="stage3WriteLocked" @click="saveIngestAllowlist">保存名单</button><button type="button" data-test="cancel-ingest-allowlist" :disabled="stage3WriteLocked" @click="resetAllowlistDraft">取消修改</button></div></div>
@@ -282,7 +281,6 @@ import {
   fetchLocalIngestJobs,
   fetchLocalIngestOperation,
   fetchLocalIngestSettings,
-  fetchLocalIngestArchivePassword,
   retryLocalIngestCleanup,
   runLocalIngestBatch,
   runLocalIngestJob,
@@ -339,49 +337,20 @@ const settingsNeedRefresh = ref(false);
 const localIngestAllowlistText = ref('');
 const settingsDraft = ref<LocalIngestSettings | null>(null);
 const passwordDraft = ref('');
-const originalPassword = ref('');
-const passwordLoading = ref(false);
-const passwordLoaded = ref(false);
-const passwordError = ref('');
-let passwordLoadGeneration = 0;
-const passwordSourceLabel = computed(() => localIngestSettings.value?.archivePasswordSource === 'local' ? '当前来源：本机保存的密码' : localIngestSettings.value?.archivePasswordSource === 'environment' ? '当前来源：服务端环境配置' : localIngestSettings.value?.archivePasswordConfigured ? '当前来源：服务端配置' : '当前未配置密码');
+const clearPasswordDraft = ref(false);
+const passwordSourceLabel = computed(() => localIngestSettings.value?.archivePasswordOverride === 'cleared' ? '已明确清除，环境密码回退已停用' : localIngestSettings.value?.archivePasswordSource === 'local' ? '当前来源：本机保存的密码（本地覆盖）' : localIngestSettings.value?.archivePasswordSource === 'environment' ? '当前来源：服务端环境配置（无本地覆盖）' : localIngestSettings.value?.archivePasswordConfigured ? '当前来源：服务端配置' : '当前未配置密码（无本地覆盖）');
 
 function openIngestSettings() {
   if (!localIngestSettings.value || localIngestRequestBusy.value || settingsNeedRefresh.value) return;
   settingsDraft.value = { ...localIngestSettings.value, allowlist: [...localIngestSettings.value.allowlist] };
   localIngestNotice.value = '';
-  void loadIngestPassword();
-}
-async function loadIngestPassword() {
-  if (!stageActive('ingest') || !settingsDraft.value) return;
-  const generation = ++passwordLoadGeneration;
-  const lifecycle = lifecycleGeneration;
   passwordDraft.value = '';
-  originalPassword.value = '';
-  passwordLoaded.value = false;
-  passwordLoading.value = true;
-  passwordError.value = '';
-  try {
-    const result = await fetchLocalIngestArchivePassword();
-    if (!currentRead('ingest', lifecycle) || generation !== passwordLoadGeneration || !settingsDraft.value) return;
-    passwordDraft.value = result.archivePassword;
-    originalPassword.value = result.archivePassword;
-    passwordLoaded.value = true;
-  } catch {
-    if (!currentRead('ingest', lifecycle) || generation !== passwordLoadGeneration || !settingsDraft.value) return;
-    passwordError.value = '当前解压密码读取失败，暂不能保存设置。';
-  } finally {
-    if (generation === passwordLoadGeneration) passwordLoading.value = false;
-  }
+  clearPasswordDraft.value = false;
 }
 function closeIngestSettings() {
-  ++passwordLoadGeneration;
   settingsDraft.value = null;
   passwordDraft.value = '';
-  originalPassword.value = '';
-  passwordLoaded.value = false;
-  passwordLoading.value = false;
-  passwordError.value = '';
+  clearPasswordDraft.value = false;
 }
 function resetAllowlistDraft() {
   localIngestAllowlistText.value = localIngestSettings.value?.allowlist.join('\n') ?? '';
@@ -772,13 +741,12 @@ async function settleStage3Request(kind: LocalIngestOperation['kind'], refresh: 
 
 function currentLocalIngestSettings(): LocalIngestSettingsInput {
   if (!settingsDraft.value || !localIngestSettings.value) throw new Error('Costuan入库配置尚未加载');
-  const { allowlist: _allowlist, archivePasswordConfigured: _configured, archivePasswordSource: _source, ...editableSettings } = settingsDraft.value;
+  const { allowlist: _allowlist, archivePasswordConfigured: _configured, archivePasswordSource: _source, archivePasswordOverride: _override, ...editableSettings } = settingsDraft.value;
   return {
     ...editableSettings,
     maxExtractionDepth: 2 as const,
-    ...(passwordLoaded.value && passwordDraft.value !== originalPassword.value
-      ? passwordDraft.value ? { archivePassword: passwordDraft.value } : { clearArchivePassword: true }
-      : {})
+    ...(clearPasswordDraft.value ? { clearArchivePassword: true }
+      : passwordDraft.value ? { archivePassword: passwordDraft.value } : {})
   };
 }
 
@@ -848,7 +816,7 @@ function cancelInboxCreatorDiscovery() {
 }
 
 async function saveLocalIngestConfig() {
-  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value || !settingsDraft.value || !passwordLoaded.value) return;
+  if (!stageActive('ingest') || stage3WriteLocked.value || !localIngestSettings.value || !settingsDraft.value) return;
   const generation = lifecycleGeneration;
   localIngestRequestBusy.value = true;
   settingsNeedRefresh.value = true;

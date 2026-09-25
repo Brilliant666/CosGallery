@@ -8,21 +8,23 @@ replacement cannot be submitted together. Passwords are not trimmed; newline,
 NUL and values over 1,024 characters are rejected.
 
 If no local decision exists, `LOCAL_INGEST_ARCHIVE_PASSWORD` remains the fallback.
-Ordinary settings/list APIs expose only `archivePasswordConfigured` and
-`archivePasswordSource` (`environment`, `local`, `none`). The explicit management-only
-`GET /api/admin/local-ingest/archive-password` endpoint returns the effective
-archive password (or an empty string) with `Cache-Control: no-store` when the
-settings editor opens. This is an editable archive configuration, not a masked API
-credential. Ciphertext and encryption keys are never returned. Changing
+Settings/list APIs expose only `archivePasswordConfigured`,
+`archivePasswordSource` (`environment`, `local`, `none`) and
+`archivePasswordOverride` (`inherit`, `local`, `cleared`). The legacy management
+`GET /api/admin/local-ingest/archive-password` endpoint is retired: it returns
+410 `PASSWORD_READ_RETIRED` with `Cache-Control: no-store`, never the password.
+Ciphertext and encryption keys are never returned. Changing
 the password does not scan, extract, execute a job or rewrite job history.
 Environment validation checks the saved effective password, not an unsaved
 password input. All settings mutations use the existing management capability,
 same-origin mutation protections and Stage 3 operation exclusivity.
 
-The editor displays the current value and only submits a password change when
-edited; opening or saving unchanged environment-backed settings does not create a
-local override. Clearing an existing value explicitly disables the saved password
-and environment fallback. Canceling/closing discards the draft. The value is not
+The editor never fetches or prefills the existing value. The empty replacement
+field preserves the current decision; a non-empty new value replaces it. Only
+the separate explicit-clear checkbox disables the saved password and environment
+fallback. Opening settings, emptying the replacement input, or saving other
+settings does not clear the password or create an override. Canceling/closing
+discards both replacement and clear intent. The value is not
 placed in URLs, ordinary status payloads, logs or exported reports.
 
 The local secret is AES-256-GCM authenticated ciphertext in the existing
