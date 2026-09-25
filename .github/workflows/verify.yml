@@ -51,7 +51,7 @@ jobs:
         run: pnpm --dir server test
 
       - name: Check governance and build metadata
-        run: pnpm lint && pnpm format:check && pnpm test:build-info
+        run: pnpm lint && pnpm format:check && pnpm test:build-info && pnpm test:workspace-runner
 
       - name: Run client tests
         run: pnpm --dir client test

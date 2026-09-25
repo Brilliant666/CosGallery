@@ -39,6 +39,8 @@ data/      默认运行数据位置（不是测试夹具目录）
 
 维护 CLI 仍存在，例如 `pnpm --dir server local-folder-admission --help`、`pnpm --dir server local-ingest --help`。它们与网页复用服务，但**普通网页入库不要求调用 CLI**；不能把从别处复制来的 scope、plan 或 JSON 当作当前范围的授权。
 
+根目录命令请从 `pnpm run <script>`（或表中的 pnpm 简写）执行。工作区转发器使用调用方的 `npm_execpath`，并沿用当前 Node 执行包管理器；不要脱离包管理器上下文直接运行该内部脚本。此方式避免 Windows `node --run` 在含中文的工作目录中查找 `package.json` 失败。启动 pnpm 前应确认当前终端 `node --version` 符合项目支持范围；仅用绝对 Node 路径启动 pnpm，并不会自动替换终端 PATH 中另一个旧 Node。转发器仅给子进程前置当前 Node 目录，不修改系统 PATH。参数可以用 `pnpm run test:client -- <测试文件>` 传入，退出码与终止信号继续向上传递。
+
 ## 开发端口与隔离
 
 默认开发前端使用 4141～4144 中的空闲端口，后端 4140，文档站 4145。production 默认后端 4141，同时提供配套 `client/dist`。开发前端代理 `/api`、`/thumbnails`、`/previews` 到开发后端。
