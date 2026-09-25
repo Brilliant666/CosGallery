@@ -2300,14 +2300,15 @@ export const galleryService = {
     const storiesMigration = getStoriesMigrationStatus();
     const treatCarouselsAsFolders = getTreatCarouselsAsFolders();
     const carouselsMigration = getCarouselsMigrationStatus();
-    const indexedPosts = storageState.libraryAvailable ? imageRepository.countFeed() : 0;
+    const postCounts = storageState.libraryAvailable ? imageRepository.countVisiblePostSummary() : { posts: 0, carousels: 0 };
+    const indexedPosts = postCounts.posts;
 
     return {
       folders: storageState.libraryAvailable ? folderRepository.count() : 0,
       indexedImages: indexedPosts,
       indexedPosts,
       indexedMediaAssets: storageState.libraryAvailable ? imageRepository.countVisibleMediaAssets() : 0,
-      indexedCarousels: storageState.libraryAvailable ? imageRepository.countVisibleCarousels() : 0,
+      indexedCarousels: postCounts.carousels,
       indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleSingleVideos() : 0,
       scan: this.getScanProgress(),
       storage: {
@@ -2363,7 +2364,8 @@ export const galleryService = {
     const rebuildRequired = appSettingsRepository.get(LIBRARY_REBUILD_REQUIRED_SETTING_KEY) === '1';
     const lastSuccessfulGalleryRoot = appSettingsRepository.get(LAST_SUCCESSFUL_GALLERY_ROOT_SETTING_KEY);
     const pendingDerivativeMigrationRows = storageState.libraryAvailable ? imageRepository.countPendingDerivativeMigrationRows() : 0;
-    const indexedPosts = storageState.libraryAvailable ? imageRepository.countFeed() : 0;
+    const postCounts = storageState.libraryAvailable ? imageRepository.countVisiblePostSummary() : { posts: 0, carousels: 0 };
+    const indexedPosts = postCounts.posts;
     const defaultHomeFeedMode = getDefaultHomeFeedMode();
     const defaultLocale = getDefaultLocale();
     const defaultReelsFeedMode = getDefaultReelsFeedMode();
@@ -2380,7 +2382,7 @@ export const galleryService = {
       indexedImages: indexedPosts,
       indexedPosts,
       indexedMediaAssets: storageState.libraryAvailable ? imageRepository.countVisibleMediaAssets() : 0,
-      indexedCarousels: storageState.libraryAvailable ? imageRepository.countVisibleCarousels() : 0,
+      indexedCarousels: postCounts.carousels,
       indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleSingleVideos() : 0,
       deletedImages: storageState.libraryAvailable ? imageRepository.countDeleted() : 0,
       thumbnailCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.thumbnailsDir, 'thumbnail') : 0,

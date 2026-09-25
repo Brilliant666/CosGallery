@@ -1662,6 +1662,17 @@ export const postRepository = {
     ).get() as { count: number }).count);
   },
 
+  countVisiblePostSummary(): { posts: number; carousels: number } {
+    // Status needs both counts: apply the identical cover/primary-copy rules once.
+    // Media assets and single videos intentionally retain their separate scope.
+    const row = database.prepare(
+      `SELECT COUNT(*) AS posts,
+              COALESCE(SUM(CASE WHEN post_type = 'carousel' THEN 1 ELSE 0 END), 0) AS carousels
+       FROM posts WHERE ${VISIBLE_POST_WHERE_UNSCOPED_SQL}`
+    ).get() as { posts: number; carousels: number };
+    return { posts: Number(row.posts), carousels: Number(row.carousels) };
+  },
+
   countVisibleSingleVideos(): number {
     return Number((database.prepare(
       `SELECT COUNT(*) AS count
@@ -3044,6 +3055,10 @@ export const imageRepository = {
 
   countVisibleCarousels(): number {
     return postRepository.countVisibleCarousels();
+  },
+
+  countVisiblePostSummary(): { posts: number; carousels: number } {
+    return postRepository.countVisiblePostSummary();
   },
 
   countVisibleSingleVideos(): number {

@@ -125,9 +125,9 @@ describe.sequential('viewer-safe status payload', () => {
   });
 
   it('computes the identical indexedImages/indexedPosts count only once per admin request', () => {
-    const count = vi.spyOn(imageRepository, 'countFeed').mockReturnValue(17);
+    const count = vi.spyOn(imageRepository, 'countVisiblePostSummary').mockReturnValue({ posts: 17, carousels: 12 });
     try {
-      expect(galleryService.getStats()).toMatchObject({ indexedImages: 17, indexedPosts: 17 });
+      expect(galleryService.getStats()).toMatchObject({ indexedImages: 17, indexedPosts: 17, indexedCarousels: 12 });
       expect(count).toHaveBeenCalledTimes(1);
     } finally { count.mockRestore(); }
   });
