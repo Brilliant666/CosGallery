@@ -1,6 +1,7 @@
 import type express from 'express';
 
 import { appConfig } from '../config/env.js';
+import { parseRequestAuthority } from './request-host.js';
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
@@ -30,50 +31,16 @@ function normalizePort(protocol: string, port: string): string {
 }
 
 function normalizeOrigin(origin: string): URL | null {
+  if (!/^https?:\/\//.test(origin) || /\s/.test(origin)) return null;
   try {
     const parsedOrigin = new URL(origin);
-    if (parsedOrigin.protocol !== 'http:' && parsedOrigin.protocol !== 'https:') {
+    if ((parsedOrigin.protocol !== 'http:' && parsedOrigin.protocol !== 'https:')
+      || parsedOrigin.username || parsedOrigin.password || parsedOrigin.pathname !== '/'
+      || parsedOrigin.search || parsedOrigin.hash) {
       return null;
     }
 
     return parsedOrigin;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeForwardedProto(forwardedProto: string | undefined): string | undefined {
-  if (!forwardedProto) {
-    return undefined;
-  }
-
-  const firstValue = forwardedProto
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .find((value) => value.length > 0);
-
-  if (!firstValue) {
-    return undefined;
-  }
-
-  if (firstValue === 'http' || firstValue === 'http:') {
-    return 'http:';
-  }
-
-  if (firstValue === 'https' || firstValue === 'https:') {
-    return 'https:';
-  }
-
-  return undefined;
-}
-
-function parseAuthority(authority: string, protocol = 'http:'): { hostname: string; port: string } | null {
-  try {
-    const parsed = new URL(`${protocol}//${authority}`);
-    return {
-      hostname: normalizeHostname(parsed.hostname),
-      port: normalizePort(parsed.protocol, parsed.port)
-    };
   } catch {
     return null;
   }
@@ -91,7 +58,7 @@ function getAllowedPortSet(): Set<string> {
   return allowedPorts;
 }
 
-export function isAllowedLocalOrigin(origin: string, requestHost?: string, forwardedProto?: string): boolean {
+export function isAllowedLocalOrigin(origin: string, requestHost?: string, servingProtocol = 'http'): boolean {
   const parsedOrigin = normalizeOrigin(origin);
   if (!parsedOrigin) {
     return false;
@@ -105,12 +72,17 @@ export function isAllowedLocalOrigin(origin: string, requestHost?: string, forwa
   const port = normalizePort(parsedOrigin.protocol, parsedOrigin.port);
 
   if (appConfig.nodeEnv === 'production') {
-    const parsedRequestHost = requestHost ? parseAuthority(requestHost, normalizeForwardedProto(forwardedProto) ?? parsedOrigin.protocol) : null;
+    const parsedRequestHost = requestHost ? parseRequestAuthority(requestHost, servingProtocol) : null;
     if (!parsedRequestHost) {
       return false;
     }
 
-    return hostname === parsedRequestHost.hostname && port === parsedRequestHost.port;
+    const protocol = servingProtocol === 'https' ? 'https:' : 'http:';
+    // Forwarded headers are client input; only the direct serving authority is
+    // implicit trust. Reverse proxies use explicit CSRF_TRUSTED_ORIGINS.
+    return parsedOrigin.protocol === protocol
+      && hostname === normalizeHostname(parsedRequestHost.hostname)
+      && port === normalizePort(protocol, parsedRequestHost.port);
   }
 
   if (!LOOPBACK_HOSTS.has(hostname)) {
@@ -121,8 +93,11 @@ export function isAllowedLocalOrigin(origin: string, requestHost?: string, forwa
 }
 
 function getRefererOrigin(referer: string): string | null {
+  if (!/^https?:\/\//.test(referer) || /\s/.test(referer)) return null;
   try {
-    return new URL(referer).origin;
+    const parsed = new URL(referer);
+    if (parsed.username || parsed.password || !['http:', 'https:'].includes(parsed.protocol)) return null;
+    return parsed.origin;
   } catch {
     return null;
   }
@@ -144,16 +119,30 @@ export function requireTrustedMutationRequest(
   }
 
   const origin = request.get('origin');
-  const requestHost = request.get('x-forwarded-host') ?? request.get('host') ?? undefined;
-  const forwardedProto = request.get('x-forwarded-proto') ?? undefined;
-  if (origin && !isAllowedLocalOrigin(origin, requestHost, forwardedProto)) {
+  const requestHost = request.get('host') ?? undefined;
+  if (origin !== undefined && !isAllowedLocalOrigin(origin, requestHost, request.protocol)) {
     response.status(403).json({ message: 'Forbidden' });
     return;
   }
 
   const referer = request.get('referer');
   const refererOrigin = referer ? getRefererOrigin(referer) : null;
-  if (!origin && refererOrigin && !isAllowedLocalOrigin(refererOrigin, requestHost, forwardedProto)) {
+  if (referer !== undefined && (!refererOrigin
+    || !isAllowedLocalOrigin(refererOrigin, requestHost, request.protocol)
+    || origin !== undefined && normalizeOrigin(origin)?.origin !== refererOrigin)) {
+    response.status(403).json({ message: 'Forbidden' });
+    return;
+  }
+
+  // CLI clients may omit browser metadata, but still need intent and the
+  // downstream authentication/capability checks. Browser metadata must not
+  // downgrade malformed or suppressed cross-site provenance to CLI trust.
+  // Node's fetch sends Mode:cors without Site/Origin; that alone is not browser
+  // provenance. Browsers cannot send the intent header cross-origin without a
+  // CORS preflight, which the ordinary API does not grant.
+  const fetchMode = request.get('sec-fetch-mode');
+  if (origin === undefined && referer === undefined
+    && (request.get('sec-fetch-site') !== undefined || fetchMode !== undefined && fetchMode !== 'cors')) {
     response.status(403).json({ message: 'Forbidden' });
     return;
   }

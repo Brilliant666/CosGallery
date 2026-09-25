@@ -66,7 +66,7 @@
 - `libraryRoot`（只读，严格等于进程启动时的 `GALLERY_ROOT`）
 - `inboxRoot`
 - `processingRoot`
-- `sevenZipPath`
+- `sevenZipPath`（只读，由 `LOCAL_INGEST_SEVEN_ZIP_PATH` 启动配置指定；网页不能更换程序）
 - `fileStableSeconds`
 - `recycleAfterIngest`
 - 固定为 2 的 `maxExtractionDepth`

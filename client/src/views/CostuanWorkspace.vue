@@ -164,7 +164,8 @@
           <input v-model="settingsDraft.processingRoot" data-test="local-ingest-processing-root" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">7-Zip 路径
-          <input v-model="settingsDraft.sevenZipPath" data-test="local-ingest-sevenzip" :disabled="stage3WriteLocked" :title="stage3LockReason" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />
+          <input :value="settingsDraft.sevenZipPath" data-test="local-ingest-sevenzip" :disabled="stage3WriteLocked" :title="stage3LockReason" readonly aria-readonly="true" placeholder="尚未配置" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-muted disabled:cursor-not-allowed disabled:opacity-60" />
+          <small class="font-normal leading-5 text-muted">由本机 LOCAL_INGEST_SEVEN_ZIP_PATH 启动配置指定；修改或更新工具后需重启服务。网页仅验证已配置工具。</small>
         </label>
         <label class="grid gap-1.5 text-xs font-semibold text-muted">文件稳定秒数
           <input v-model.number="settingsDraft.fileStableSeconds" data-test="local-ingest-stable-seconds" :disabled="stage3WriteLocked" :title="stage3LockReason" type="number" min="1" max="3600" class="h-11 rounded-xl border border-border bg-bg px-3.5 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60" />

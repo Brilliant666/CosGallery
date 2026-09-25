@@ -8,6 +8,7 @@ import UnoCSS from 'unocss/vite';
 import vue from '@vitejs/plugin-vue';
 import { vite as vidstack } from 'vidstack/plugins';
 import { createBuildInfo } from '../scripts/build-info.mjs';
+import { developmentFileAllow, developmentFileDeny, privateDevelopmentFiles, resolveDevelopmentHost } from './dev-server-security';
 
 const appPackage = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf-8')
@@ -49,28 +50,7 @@ async function resolveDevClientPort(basePort: number, host: string): Promise<num
 }
 
 export function recoveryFileProtection(backupRoot: string): Plugin {
-  const backupName = path.basename(backupRoot).toLowerCase();
-  return {
-    name: 'deny-private-recovery-files',
-    configureServer(server) {
-      server.middlewares.use((request, response, next) => {
-        const rawPath = (request.url ?? '').split('?')[0]!;
-        // Preserve the existing proxy routes, including legitimate media/folder names.
-        if (/^\/(?:api|thumbnails|previews)(?:\/|$)/i.test(rawPath)) { next(); return; }
-        let pathname: string;
-        try { pathname = decodeURIComponent(rawPath).replace(/\\/g, '/').toLowerCase(); }
-        catch { response.statusCode = 400; response.end(); return; }
-        const backupUrl = pathname === `/${backupName}` || pathname.startsWith(`/${backupName}/`)
-          || pathname.startsWith('/@fs/') && pathname.includes(backupRoot.replace(/\\/g, '/').toLowerCase());
-        if (backupUrl || pathname.split('/').some(segment => segment === 'data_backup'
-          || segment === 'private' || segment === '.run' || /^\.env(?:\.|$)/.test(segment)
-          || /\.(?:key|pem|pfx|p12)$/.test(segment))) {
-          response.statusCode = 404; response.end(); return;
-        }
-        next();
-      });
-    }
-  };
+  return privateDevelopmentFiles([backupRoot]);
 }
 
 export default defineConfig(async ({ command, mode }) => {
@@ -79,7 +59,7 @@ export default defineConfig(async ({ command, mode }) => {
   const backupRoot = path.resolve(repositoryRoot, env.BACKUP_ROOT ?? 'data_backup');
   const devServerPort = Number.parseInt(env.DEV_SERVER_PORT ?? '4140', 10);
   const devClientPort = Number.parseInt(env.DEV_CLIENT_PORT ?? '4141', 10);
-  const devHost = '0.0.0.0';
+  const devHost = resolveDevelopmentHost(env.DEV_CLIENT_HOST);
   const isVitest = process.env.VITEST === 'true';
   const resolvedDevClientPort = command === 'serve' && !isVitest ? await resolveDevClientPort(devClientPort, devHost) : devClientPort;
 
@@ -94,7 +74,11 @@ export default defineConfig(async ({ command, mode }) => {
     },
     plugins: [
       { name: 'cosgallery-build-identity', generateBundle() { this.emitFile({ type: 'asset', fileName: 'build-info.json', source: JSON.stringify(buildInfo, null, 2) }); } },
-      recoveryFileProtection(backupRoot),
+      privateDevelopmentFiles([
+        backupRoot,
+        ...['DATA_ROOT', 'GALLERY_ROOT', 'DB_DIR', 'THUMBNAILS_DIR', 'PREVIEWS_DIR']
+          .map(key => path.resolve(repositoryRoot, env[key] || 'data'))
+      ]),
       UnoCSS(),
       vidstack({
         include: /src\/components\//
@@ -115,17 +99,18 @@ export default defineConfig(async ({ command, mode }) => {
     server: {
       fs: {
         strict: true,
-        deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/data_backup/**',
-          '**/private/**', '**/.run/**', '**/*.{key,pfx,p12}', `${backupRoot.replace(/\\/g, '/')}/**`]
+        allow: developmentFileAllow(configDirectory, path.resolve(repositoryRoot, 'node_modules')),
+        deny: [...developmentFileDeny, `${backupRoot.replace(/\\/g, '/')}/**`]
       },
       host: devHost,
       port: resolvedDevClientPort,
       proxy: {
-        '/api': `http://localhost:${devServerPort}`,
-        '/thumbnails': `http://localhost:${devServerPort}`,
-        '/previews': `http://localhost:${devServerPort}`
+        '^/api(?:/|$)': `http://127.0.0.1:${devServerPort}`,
+        '^/thumbnails(?:/|$)': `http://127.0.0.1:${devServerPort}`,
+        '^/previews(?:/|$)': `http://127.0.0.1:${devServerPort}`
       }
     },
+    preview: { host: devHost },
     test: {
       environment: 'jsdom',
       setupFiles: './vitest.setup.ts',

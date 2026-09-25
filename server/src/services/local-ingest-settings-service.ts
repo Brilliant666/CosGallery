@@ -14,14 +14,15 @@ import {
   assertLocalIngestRootPolicySync,
   normalizeAbsoluteLocalIngestPath
 } from '../utils/local-ingest-paths.js';
-import { runProcessWithTimeout } from '../utils/run-process.js';
+import { trustedSevenZip } from '../utils/trusted-seven-zip.js';
+import { RequestInputError } from '../utils/request-input-error.js';
 import { LocalIngestPasswordStore, LOCAL_INGEST_PASSWORD_SETTING_KEY } from './local-ingest-password-store.js';
 
 const localIngestSettingsSchema = z.object({
   libraryRoot: z.string().trim().min(1),
   inboxRoot: z.string().trim().min(1),
   processingRoot: z.string().trim().min(1),
-  sevenZipPath: z.string().trim().min(1),
+  sevenZipPath: z.string().trim().max(500),
   fileStableSeconds: z.number().int().min(1).max(3600),
   recycleAfterIngest: z.boolean(),
   maxExtractionDepth: z.literal(2)
@@ -63,8 +64,6 @@ export type LocalIngestSettingsValidation = {
 
 export type LocalIngestSettingsRepository = Pick<typeof appSettingsRepository, 'get' | 'setMany'>;
 
-const DEFAULT_SEVEN_ZIP_PATH = 'C:\\Program Files\\NVIDIA Corporation\\NVIDIA app\\7z.exe';
-
 function deriveSiblingRoot(name: string, galleryRoot = appConfig.galleryRoot): string {
   const parsed = path.parse(galleryRoot);
   if (parsed.root && galleryRoot !== parsed.root) {
@@ -78,7 +77,7 @@ export function defaultLocalIngestSettings(galleryRoot = appConfig.galleryRoot):
     libraryRoot: galleryRoot,
     inboxRoot: deriveSiblingRoot('cos待入库', galleryRoot),
     processingRoot: deriveSiblingRoot('cos处理中', galleryRoot),
-    sevenZipPath: DEFAULT_SEVEN_ZIP_PATH,
+    sevenZipPath: trustedSevenZip.executable,
     fileStableSeconds: 5,
     recycleAfterIngest: true,
     maxExtractionDepth: 2 as const
@@ -86,12 +85,15 @@ export function defaultLocalIngestSettings(galleryRoot = appConfig.galleryRoot):
 }
 
 function normalizeSettings(settings: LocalIngestSettings, expectedGalleryRoot = appConfig.galleryRoot): LocalIngestSettings {
+  if (settings.sevenZipPath !== trustedSevenZip.executable) {
+    throw new RequestInputError('7-Zip路径由LOCAL_INGEST_SEVEN_ZIP_PATH启动配置指定，网页不能修改。', 'SEVEN_ZIP_STARTUP_OWNED');
+  }
   const normalized = {
     ...settings,
     libraryRoot: normalizeAbsoluteLocalIngestPath(settings.libraryRoot, 'libraryRoot'),
     inboxRoot: normalizeAbsoluteLocalIngestPath(settings.inboxRoot, 'inboxRoot'),
     processingRoot: normalizeAbsoluteLocalIngestPath(settings.processingRoot, 'processingRoot'),
-    sevenZipPath: path.normalize(settings.sevenZipPath.trim()),
+    sevenZipPath: trustedSevenZip.executable,
     maxExtractionDepth: 2 as const
   };
   assertLocalIngestRootPolicySync(normalized, expectedGalleryRoot);
@@ -104,7 +106,7 @@ function parseStoredSettings(raw: string | null, expectedGalleryRoot = appConfig
     const stored = localIngestSettingsSchema.parse(JSON.parse(raw));
     // libraryRoot became startup-owned in V1. Preserve the user's other legacy
     // settings while projecting the effective scanner root into the view.
-    return normalizeSettings({ ...stored, libraryRoot: expectedGalleryRoot }, expectedGalleryRoot);
+    return normalizeSettings({ ...stored, libraryRoot: expectedGalleryRoot, sevenZipPath: trustedSevenZip.executable }, expectedGalleryRoot);
   } catch {
     return normalizeSettings(defaultLocalIngestSettings(expectedGalleryRoot), expectedGalleryRoot);
   }
@@ -136,7 +138,7 @@ function configuredArchivePassword(): string | null {
 
 async function validateSevenZip(executablePath: string): Promise<LocalIngestSettingsValidation['sevenZip']> {
   try {
-    const result = await runProcessWithTimeout(executablePath, ['i'], 10_000);
+    const result = await trustedSevenZip.run(executablePath, ['i'], 10_000);
     if (result.code !== 0) {
       return { valid: false, version: null, error: '7-Zip returned a non-zero exit code' };
     }
