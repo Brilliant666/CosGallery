@@ -14,7 +14,7 @@
 
 `pnpm lint` 检查 manifest JSON、脚本语法及 diff 空白；`pnpm format:check` 只检查列明的新治理文件，`pnpm format:governance` 只格式化这些文件。不全仓库重排、不安装本机 hooks。
 
-Dependabot 对 npm 每周、Actions 每月提出有限更新 PR，不自动合并。维护者和漏洞沟通见 [SECURITY.md](../SECURITY.md)。GitHub main 规则属于远端管理设置，需先确认实际权限和用户选择，不以个人维护者无法满足的第二人审批作为默认条件。
+Dependabot 对 npm 每周、Actions 每月提出有限更新 PR，不自动合并。维护者和漏洞沟通见 [SECURITY.md](https://github.com/Brilliant666/CosGallery/blob/chore/recovery-runtime-and-repository-governance-v1/SECURITY.md)。GitHub main 规则属于远端管理设置，需先确认实际权限和用户选择，不以个人维护者无法满足的第二人审批作为默认条件。
 
 原 GHCR tag 自动发布暂停。容器 workflow 仅支持手工构建检查，`push:false`、无 packages 写权限和登录；本轮不发布 tag/镜像、不部署容器。现存 Docker/compose 是上游遗留链路（包括上游镜像引用），**不作为已验收的 CosGallery 部署方式**。不应直接使用 compose 拉取上游镜像替代本项目候选。
 
