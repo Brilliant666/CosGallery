@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
@@ -9,6 +9,7 @@ import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogQueryService } from './archive-catalog-query-service.js';
 import { normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
 import { inspectCreatorDeletion } from './managed-creator-deletion.js';
+import { LocalIngestDestinationService } from './local-ingest-destination-service.js';
 
 const name = z.string().transform(value => value.normalize('NFKC').trim()).pipe(z.string().min(1).max(255))
   .refine(value => normalizeCreatorIdentity(value).length > 0, '名称必须包含有效字符');
@@ -30,6 +31,18 @@ export const deleteManagedCreatorSchema = z.object({
 }).strict();
 export const managedFolderLinkSchema = z.object({ creatorId: z.number().int().positive() }).strict();
 export const managedFolderRatingSchema = z.object({ contentRating: rating }).strict();
+const revision = z.string().regex(/^[a-f0-9]{64}$/u);
+export const managedProfileSettingsSchema = z.object({
+  name, preference, rating, manualAliases: z.array(name).max(100),
+  confirmDistinct: z.boolean().default(false), expectedRevision: revision
+}).strict();
+export const managedDirectorySettingsSchema = z.object({
+  linkedFolderIds: z.array(z.number().int().positive()).max(1000),
+  preferredLocalCreatorFolderId: z.number().int().positive().nullable().optional(),
+  preferredGalleryFolderId: z.number().int().positive().nullable().optional(),
+  expectedRevision: revision
+}).strict().refine(value => (value.preferredLocalCreatorFolderId !== undefined)
+  !== (value.preferredGalleryFolderId !== undefined), '请选择一种首选目录身份');
 
 export class ManagedCreatorError extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string,
@@ -87,6 +100,132 @@ export class ManagedCreatorService {
       (creator_id,alias,normalized_alias,source,created_at,updated_at) VALUES (?,?,?,?,?,?)
       ON CONFLICT(creator_id,source,normalized_alias) DO NOTHING`)
       .run(id, alias, normalizeCreatorIdentity(alias), source, timestamp, timestamp);
+  }
+
+  private editingFacts(id: number) {
+    const creator = this.database.prepare(`SELECT id,canonical_name,preference,effective_rating,is_active,
+      seed_source,seed_source_creator_id,preferred_local_creator_folder_id FROM archive_catalog_creators WHERE id=?`).get(id);
+    if (!creator) throw new ManagedCreatorError(404, 'CREATOR_NOT_FOUND', '博主不存在');
+    const aliases = this.database.prepare(`SELECT alias,normalized_alias,source FROM archive_catalog_creator_aliases
+      WHERE creator_id=? ORDER BY source,normalized_alias`).all(id);
+    const folders = this.database.prepare(`SELECT local.id,local.creator_id,local.root_path,local.relative_path,
+      local.absolute_path,local.is_active,local.match_status,local.gallery_folder_id,folders.folder_path,folders.role
+      FROM archive_catalog_local_creator_folders local LEFT JOIN folders ON folders.id=local.gallery_folder_id
+      WHERE local.creator_id=? ORDER BY local.id`).all(id);
+    const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    const { preferred_local_creator_folder_id: preferred, ...profile } = creator;
+    return {
+      profileRevision: hash({ profile, aliases }),
+      directoriesRevision: hash({ id, active: creator.is_active, preferred, folders }),
+      preferredLocalCreatorFolderId: preferred as number | null,
+      linkedFolderIds: [...new Set(folders.filter(folder => folder.is_active === 1 && folder.gallery_folder_id !== null)
+        .map(folder => Number(folder.gallery_folder_id)))].sort((a, b) => a - b)
+    };
+  }
+
+  private assertRevision(expected: string, actual: string) {
+    if (expected !== actual) throw new ManagedCreatorError(409, 'CREATOR_EDIT_CONFLICT',
+      '该保存范围已被其他操作修改。草稿未保存，请重新读取当前资料后核对。');
+  }
+
+  async editingState(id: number) {
+    // File availability is advisory. No transaction is held across filesystem IO;
+    // detect database changes before returning a revision paired with that detail.
+    const before = this.editingFacts(id);
+    const destination = await new LocalIngestDestinationService(this.database, this.galleryRoot).getPreference(id);
+    return this.transaction(() => {
+      const facts = this.editingFacts(id);
+      this.assertRevision(before.profileRevision, facts.profileRevision);
+      this.assertRevision(before.directoriesRevision, facts.directoriesRevision);
+      return { creator: this.requireCreator(id), ...facts, destination };
+    });
+  }
+
+  saveProfile(id: number, input: unknown) {
+    const data = managedProfileSettingsSchema.parse(input);
+    return this.transaction(() => {
+      this.assertRevision(data.expectedRevision, this.editingFacts(id).profileRevision);
+      const current = this.requireCreator(id);
+      const wanted = new Map(data.manualAliases.map(alias => [normalizeCreatorIdentity(alias), alias]));
+      const existing = this.database.prepare(`SELECT normalized_alias,alias FROM archive_catalog_creator_aliases
+        WHERE creator_id=? AND source='manual'`).all(id) as Array<{ normalized_alias: string; alias: string }>;
+      this.checkCandidates([
+        ...(data.name !== current.name ? [data.name] : []),
+        ...[...wanted].filter(([normalized]) => !existing.some(row => row.normalized_alias === normalized)).map(([, alias]) => alias)
+      ], id, data.confirmDistinct);
+      if (data.name !== current.name) this.addAliasRow(id, current.name, 'manual-history');
+      for (const row of existing) if (!wanted.has(row.normalized_alias)) {
+        this.database.prepare(`DELETE FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual' AND normalized_alias=?`)
+          .run(id, row.normalized_alias);
+      }
+      for (const [normalized, alias] of wanted) {
+        const old = existing.find(row => row.normalized_alias === normalized);
+        if (!old) this.addAliasRow(id, alias);
+        else if (old.alias !== alias) this.database.prepare(`UPDATE archive_catalog_creator_aliases SET alias=?,updated_at=?
+          WHERE creator_id=? AND source='manual' AND normalized_alias=?`).run(alias, new Date().toISOString(), id, normalized);
+      }
+      if (data.name !== current.name || data.preference !== current.preference || data.rating !== current.rating) {
+        this.database.prepare(`UPDATE archive_catalog_creators SET canonical_name=?,normalized_name=?,preference=?,effective_rating=?,updated_at=? WHERE id=?`)
+          .run(data.name, normalizeCreatorIdentity(data.name), data.preference, data.rating, new Date().toISOString(), id);
+      }
+      return { creator: this.requireCreator(id), ...this.editingFacts(id) };
+    }, true);
+  }
+
+  async saveDirectories(id: number, input: unknown) {
+    const data = managedDirectorySettingsSchema.parse(input);
+    const initial = this.editingFacts(id);
+    this.assertRevision(data.expectedRevision, initial.directoriesRevision);
+    const desired = [...new Set(data.linkedFolderIds)].sort((a, b) => a - b);
+    const wantedPreferredGallery = data.preferredGalleryFolderId;
+    const preferredRow = data.preferredLocalCreatorFolderId == null ? null : this.database.prepare(
+      'SELECT gallery_folder_id FROM archive_catalog_local_creator_folders WHERE id=?').get(data.preferredLocalCreatorFolderId);
+    if (data.preferredLocalCreatorFolderId != null && (!preferredRow || preferredRow.gallery_folder_id === null)) {
+      throw new ManagedCreatorError(409, 'INGEST_DESTINATION_NOT_OWNED', '所选首选目录不存在');
+    }
+    const preferredGallery = wantedPreferredGallery === undefined
+      ? (preferredRow?.gallery_folder_id as number | null ?? null) : wantedPreferredGallery;
+    if (preferredGallery !== null && !desired.includes(preferredGallery)) {
+      throw new ManagedCreatorError(409, 'INGEST_DESTINATION_NOT_OWNED', '首选目录必须属于保存后的关联目录');
+    }
+    // Validate disk availability before reserving SQLite's writer. Inside the
+    // transaction the exact folder facts are checked again, never reinterpreted.
+    const destinationService = new LocalIngestDestinationService(this.database, this.galleryRoot);
+    const checked = preferredGallery === null ? null : await destinationService.inspectGalleryFolder(preferredGallery);
+    if (checked && !checked.valid) throw new ManagedCreatorError(409, 'INGEST_DESTINATION_UNAVAILABLE',
+      `所选目录不可用：${checked.unavailableReason}`);
+    return this.transaction(() => {
+      this.assertRevision(data.expectedRevision, this.editingFacts(id).directoriesRevision);
+      if (checked && !destinationService.matchesInspectedGalleryFolder(checked)) {
+        throw new ManagedCreatorError(409, 'CREATOR_EDIT_CONFLICT', '首选目录关系已经变化，请重新读取后核对');
+      }
+      const changed = desired.length !== initial.linkedFolderIds.length
+        || desired.some((folder, index) => folder !== initial.linkedFolderIds[index])
+        || (preferredGallery !== null && preferredGallery !== this.database.prepare(
+          'SELECT gallery_folder_id FROM archive_catalog_local_creator_folders WHERE id=?').get(initial.preferredLocalCreatorFolderId)?.gallery_folder_id)
+        || (preferredGallery === null && initial.preferredLocalCreatorFolderId !== null);
+      if (changed) this.assertNoActiveDirectoryWork(id);
+      for (const folderId of desired) if (!initial.linkedFolderIds.includes(folderId)) this.linkFolderRow(folderId, id);
+      // Resolve the bridge only after all proposed links have passed domain checks.
+      const preferred = preferredGallery === null ? null : this.database.prepare(`SELECT id FROM archive_catalog_local_creator_folders
+        WHERE creator_id=? AND gallery_folder_id=? AND is_active=1 AND match_status='matched'`).all(id, preferredGallery);
+      if (preferred !== null && preferred.length !== 1) throw new ManagedCreatorError(409,
+        'INGEST_DESTINATION_NOT_OWNED', '首选目录需要唯一、有效的博主关联');
+      const preferredId = preferred === null ? null : Number(preferred[0]!.id);
+      if (preferredId !== initial.preferredLocalCreatorFolderId) this.database.prepare(`UPDATE archive_catalog_creators
+        SET preferred_local_creator_folder_id=?,updated_at=? WHERE id=?`).run(preferredId, new Date().toISOString(), id);
+      for (const folderId of initial.linkedFolderIds) if (!desired.includes(folderId)) this.unlinkFolderRow(folderId);
+      return { creator: this.requireCreator(id), ...this.editingFacts(id) };
+    }, true);
+  }
+
+  private assertNoActiveDirectoryWork(id: number) {
+    const active = this.database.prepare(`SELECT 1 FROM local_ingest_jobs WHERE creator_id=?
+      AND status IN ('queued','running','reconciling') LIMIT 1`).get(id);
+    const admission = this.database.prepare(`SELECT 1 FROM local_admission_web_batches WHERE creator_id=?
+      AND state IN ('queued','running') LIMIT 1`).get(id);
+    if (active || admission) throw new ManagedCreatorError(409, 'LOCAL_INGEST_OPERATION_ACTIVE',
+      '该博主有活动入库任务，请等待任务结束再修改目录设置');
   }
 
   create(input: unknown) {
@@ -195,7 +334,10 @@ export class ManagedCreatorService {
   /** folderId always means the gallery folders.id, never a name or catalog row ID. */
   linkFolder(folderId: number, input: unknown) {
     const { creatorId } = managedFolderLinkSchema.parse(input);
-    return this.transaction(() => {
+    return this.transaction(() => this.linkFolderRow(folderId, creatorId), true);
+  }
+
+  private linkFolderRow(folderId: number, creatorId: number) {
       this.requireCreator(creatorId);
       const folder = this.query.listLocalFolders().find(item => item.id === folderId);
       if (!folder) throw new ManagedCreatorError(404, 'LOCAL_FOLDER_NOT_FOUND', '本地博主目录不存在');
@@ -240,22 +382,26 @@ export class ManagedCreatorService {
           timestamp, timestamp, timestamp, folderId);
       }
       return this.requireCreator(creatorId);
-    }, true);
   }
 
   unlinkFolder(folderId: number, input: unknown) {
     managedConfirmationSchema.parse(input);
-    return this.transaction(() => {
+    return this.transaction(() => this.unlinkFolderRow(folderId), true);
+  }
+
+  private unlinkFolderRow(folderId: number) {
       const folder = this.query.listLocalFolders().find(item => item.id === folderId);
       if (!folder) throw new ManagedCreatorError(404, 'LOCAL_FOLDER_NOT_FOUND', '本地博主目录不存在');
       if (folder.creatorId === null || folder.catalogFolderId === null) {
         throw new ManagedCreatorError(409, 'CREATOR_NOT_LINKED', '目录尚未关联博主');
       }
+      if (this.database.prepare(`SELECT 1 FROM archive_catalog_creators WHERE preferred_local_creator_folder_id=?`)
+        .get(folder.catalogFolderId)) throw new ManagedCreatorError(409, 'INGEST_DESTINATION_REFERENCED',
+          '目录仍被用作首选入库目录，请在目录设置中一并调整首选');
       this.database.prepare(`UPDATE archive_catalog_local_creator_folders SET creator_id=NULL,
         match_status='unmatched',match_method='manual-unlinked',updated_at=? WHERE id=?`)
         .run(new Date().toISOString(), folder.catalogFolderId);
       return { folderId, creatorId: null };
-    });
   }
 
   updateFolderRating(folderId: number, input: unknown) {

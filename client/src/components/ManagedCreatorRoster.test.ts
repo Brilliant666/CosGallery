@@ -2,353 +2,89 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ManagedCreatorRoster from './ManagedCreatorRoster.vue';
 import { fetchArchiveCatalog, fetchArchiveCatalogCreator } from '../api/gallery';
+import { fetchAdmissionBatches } from '../api/local-admission';
 import * as api from '../api/managed-creators';
 import { RequestError } from '../api/http';
-import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload, LocalIngestDestinationPreference } from '../types/api';
-
+import { useAuthStore } from '../stores/auth';
+import { pinia } from '../stores/pinia';
+import type { ArchiveCatalogCreatorDetail, ArchiveCatalogCreatorsPayload } from '../types/api';
+import { creator,payload,destination,editingState,savedState,unusedCreator,deferred } from './creator-panel-test-fixtures';
 vi.mock('../api/gallery',()=>({fetchArchiveCatalog:vi.fn(),fetchArchiveCatalogCreator:vi.fn()}));
-vi.mock('../api/managed-creators',()=>({createManagedCreator:vi.fn(),updateManagedCreator:vi.fn(),addManagedAlias:vi.fn(),deleteManagedAlias:vi.fn(),setManagedCreatorActive:vi.fn(),previewManagedCreatorDeletion:vi.fn(),deleteUnusedManagedCreator:vi.fn(),linkManagedFolder:vi.fn(),unlinkManagedFolder:vi.fn(),fetchIngestDestination:vi.fn(),setIngestDestination:vi.fn()}));
-const creator:ArchiveCatalogCreatorDetail={id:1,name:'Alpha',isActive:true,seedSource:'hentaiclub',seedSourceCreatorId:'historical',createdAt:'fixed',updatedAt:'2026-09-04',deactivatedAt:null,
-  preference:'liked',rating:'R18',aliasCount:1,sourceCount:1,localFolderCount:1,sourceCollections:0,remoteWorks:0,localWorks:1,matchedWorks:1,missingWorks:0,unresolvedLocalWorks:0,latestSourceObservation:null,
-  aliases:[{id:'source-alias',alias:'Alpha',source:'hentaiclub',editable:false}],sources:[{source:'hentaiclub',sourceCreatorId:'historical',displayName:'Alpha',url:null,firstSeenAt:'first',lastSeenAt:'last'}],collections:[],missing:[],unresolved:[],
-  impact:{sources:1,collections:0,remoteWorks:0,localWorks:1,unfinishedDownloadTasks:0,localFolders:1},
-  localFolders:[{id:11,catalogFolderId:9,name:'Directory',folderPath:'Directory',creatorId:1,matchStatus:'matched',matchMethod:'manual',workCount:1}],
-  unlinkedLocalFolders:[{id:12,catalogFolderId:null,name:'Unknown',folderPath:'Unknown',creatorId:null,matchStatus:'unmatched',matchMethod:null,workCount:1}]};
-const payload:ArchiveCatalogCreatorsPayload={summary:{creators:593,activeCreators:593,inactiveCreators:0,unsetPreference:0,unclassified:0,creatorsWithoutLocalWorks:560,unlinkedLocalFolders:1,liked:201,kept:392,r15:259,r18:334,creatorsWithSources:35,creatorsWithLocalWorks:33,sourceCollections:35,remoteWorks:2342,localWorks:1836,matchedWorks:1836,missingWorks:1,unresolvedCreatorFolders:0,unresolvedLocalWorks:0},items:[creator],page:1,limit:50,total:593,hasMore:true};
-const destination:LocalIngestDestinationPreference={creatorId:1,creatorName:'Alpha',preferredLocalCreatorFolderId:null,mode:'single-linked',resolvedLocalCreatorFolderId:9,resolvedGalleryFolderId:11,resolvedCreatorDirectory:'G:\\cos图集\\Directory',message:'未显式选择；自动沿用唯一有效的已关联目录',candidates:[{localCreatorFolderId:9,galleryFolderId:11,name:'Directory',folderPath:'Directory',absolutePath:'G:\\cos图集\\Directory',workCount:1,valid:true,unavailableReason:null}]};
+vi.mock('../api/local-admission',()=>({fetchAdmissionBatches:vi.fn()}));
+vi.mock('../api/managed-creators',()=>({createManagedCreator:vi.fn(),fetchManagedCreatorEditingState:vi.fn(),saveManagedCreatorProfile:vi.fn(),saveManagedCreatorDirectories:vi.fn(),updateManagedCreator:vi.fn(),addManagedAlias:vi.fn(),deleteManagedAlias:vi.fn(),setManagedCreatorActive:vi.fn(),previewManagedCreatorDeletion:vi.fn(),deleteUnusedManagedCreator:vi.fn(),linkManagedFolder:vi.fn(),unlinkManagedFolder:vi.fn(),fetchIngestDestination:vi.fn(),setIngestDestination:vi.fn()}));
 const button=(wrapper:ReturnType<typeof mount>,text:string)=>wrapper.findAll('button').find(b=>b.text()===text)!;
-const unusedCreator:ArchiveCatalogCreatorDetail={...creator,isActive:false,seedSource:'manual',seedSourceCreatorId:'manual:1',aliases:[],sources:[],localFolders:[],localFolderCount:0,sourceCount:0,localWorks:0,matchedWorks:0,impact:{sources:0,collections:0,remoteWorks:0,localWorks:0,unfinishedDownloadTasks:0,localFolders:0}};
-const deletionPreview:api.ManagedCreatorDeletionPreview={creatorId:1,name:'Alpha',eligible:true,blockers:[],confirmationToken:'preview-v1',removableAliases:2};
+const mountRoster=()=>mount(ManagedCreatorRoster,{global:{stubs:{FirstCollectionSelector:true,SourceEvidencePanel:true}}});
 describe('managed roster UI',()=>{
   enableAutoUnmount(afterEach);
-  afterEach(() => { vi.useRealTimers(); });
+  afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();});
   beforeEach(()=>{
-    vi.clearAllMocks();
-    HTMLDialogElement.prototype.showModal=function(){this.open=true;};
-    HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new Event('close'));};
-    vi.mocked(fetchArchiveCatalog).mockResolvedValue(structuredClone(payload));
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(creator));
-    vi.mocked(api.fetchIngestDestination).mockResolvedValue(structuredClone(destination));
-    vi.mocked(api.setIngestDestination).mockResolvedValue(structuredClone(destination));
-    for(const fn of [api.createManagedCreator,api.updateManagedCreator,api.addManagedAlias,api.deleteManagedAlias,api.setManagedCreatorActive,api.linkManagedFolder]) vi.mocked(fn).mockResolvedValue(structuredClone(creator));
-    vi.mocked(api.unlinkManagedFolder).mockResolvedValue({folderId:11,creatorId:null});
-    vi.mocked(api.previewManagedCreatorDeletion).mockResolvedValue(structuredClone(deletionPreview));
-    vi.mocked(api.deleteUnusedManagedCreator).mockResolvedValue({deleted:true,creatorId:1});
+    vi.resetAllMocks();useAuthStore(pinia).$reset();useAuthStore(pinia).ready=true;
+    HTMLDialogElement.prototype.show=function(){this.open=true;};HTMLDialogElement.prototype.showModal=function(){this.open=true;};HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new Event('close'));};
+    vi.mocked(fetchArchiveCatalog).mockResolvedValue(structuredClone(payload));vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(creator));
+    vi.mocked(fetchAdmissionBatches).mockResolvedValue({items:[],total:0,page:1,pageSize:20,hasMore:false});
+    vi.mocked(api.fetchManagedCreatorEditingState).mockResolvedValue(editingState());vi.mocked(api.fetchIngestDestination).mockResolvedValue(structuredClone(destination));
+    vi.mocked(api.createManagedCreator).mockResolvedValue(structuredClone(creator));vi.mocked(api.saveManagedCreatorProfile).mockResolvedValue(savedState());vi.mocked(api.saveManagedCreatorDirectories).mockResolvedValue(savedState());
   });
-  it('opens the ledger without management forms or writes',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    expect(w.get('.creator-card').text()).toContain('平台作品');
-    expect(w.get('.creator-card').text()).toContain('已关联');
-    await button(w,'查看账本').trigger('click');await flushPromises();
-    expect(w.get('dialog').text()).toContain('作品账本');
-    expect(w.find('.roster-edit').exists()).toBe(false);
-    expect(w.get('dialog').text()).not.toContain('添加别名');
-    expect(api.updateManagedCreator).not.toHaveBeenCalled();
-    await button(w,'关闭').trigger('click');
-    await button(w,'管理资料').trigger('click');await flushPromises();
-    expect(w.find('.roster-edit').exists()).toBe(true);
+  it('has two card actions and opens the modal read-only overview without writes or execution components',async()=>{
+    const w=mountRoster();await flushPromises();expect(w.get('.creator-card').text()).toContain('平台作品');expect(w.get('.creator-card').text()).toContain('已关联');
+    expect(w.get('.card-actions').findAll('button').map(item=>item.text())).toEqual(['资源目录','管理资料']);expect(w.get('.card-actions').findAll('a')).toHaveLength(0);
+    await button(w,'管理资料').trigger('click');await flushPromises();expect(w.get('.creator-panel').attributes('aria-modal')).toBe('true');expect(w.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
+    expect(w.find('.profile-form').exists()).toBe(false);expect(w.find('source-evidence-panel-stub').exists()).toBe(false);expect(api.fetchManagedCreatorEditingState).not.toHaveBeenCalled();expect(api.saveManagedCreatorProfile).not.toHaveBeenCalled();expect(w.emitted('plan-downloads')).toBeUndefined();
+    await button(w,'关闭').trigger('click');await flushPromises();expect(w.find('.creator-panel').exists()).toBe(false);
   });
   it('uses paging and immediate combined filters, not an all-roster render',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    expect(fetchArchiveCatalog).toHaveBeenCalledWith(expect.objectContaining({page:1,limit:50,active:'active'}));
-    expect(w.findAll('.creator-card')).toHaveLength(1);expect(w.text()).toContain('593');
-    const filters=w.get('.roster-filters');await filters.get('input').setValue('alias');
-    await filters.findAll('select')[0].setValue('unset');await filters.findAll('select')[1].setValue('unclassified');
-    await filters.findAll('select')[2].setValue('inactive');await filters.trigger('submit');await flushPromises();
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'alias',preference:'unset',rating:'unclassified',active:'inactive',limit:50}));
-    await button(w,'下一页').trigger('click');await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:2}));
+    const w=mountRoster();await flushPromises();expect(fetchArchiveCatalog).toHaveBeenCalledWith(expect.objectContaining({page:1,limit:50,active:'active'}));expect(w.findAll('.creator-card')).toHaveLength(1);expect(w.text()).toContain('593');
+    const filters=w.get('.roster-filters');await filters.get('input').setValue('alias');await filters.findAll('select')[0]!.setValue('unset');await filters.findAll('select')[1]!.setValue('unclassified');await filters.findAll('select')[2]!.setValue('inactive');await filters.trigger('submit');await flushPromises();
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'alias',preference:'unset',rating:'unclassified',active:'inactive',limit:50}));await button(w,'下一页').trigger('click');await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:2}));
   });
-  it('returns to the rendered list top on successful paging, but not background refresh or failed paging',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    const list=w.get('.creator-cards').element as HTMLElement;
-    const scroll=vi.fn();
-    list.scrollIntoView=scroll;
-    list.getClientRects=()=>[new DOMRect()] as unknown as DOMRectList;
-    await button(w,'下一页').trigger('click');await flushPromises();
-    expect(scroll).toHaveBeenCalledWith({block:'start',behavior:'auto'});
-    await button(w,'上一页').trigger('click');await flushPromises();
-    expect(scroll).toHaveBeenCalledTimes(2);
-    await w.vm.refresh();await flushPromises();
-    expect(scroll).toHaveBeenCalledTimes(2);
-    vi.mocked(fetchArchiveCatalog).mockRejectedValueOnce(new Error('Unavailable'));
-    await button(w,'下一页').trigger('click');await flushPromises();
-    expect(scroll).toHaveBeenCalledTimes(2);
+  it('returns to list top on successful paging, but not background refresh or failed paging',async()=>{
+    const w=mountRoster();await flushPromises();const list=w.get('.creator-cards').element as HTMLElement;const scroll=vi.fn();list.scrollIntoView=scroll;list.getClientRects=()=>[new DOMRect()] as unknown as DOMRectList;
+    await button(w,'下一页').trigger('click');await flushPromises();expect(scroll).toHaveBeenCalledWith({block:'start',behavior:'auto'});await button(w,'上一页').trigger('click');await flushPromises();expect(scroll).toHaveBeenCalledTimes(2);
+    await w.vm.refresh();await flushPromises();expect(scroll).toHaveBeenCalledTimes(2);vi.mocked(fetchArchiveCatalog).mockRejectedValueOnce(new Error('Unavailable'));await button(w,'下一页').trigger('click');await flushPromises();expect(scroll).toHaveBeenCalledTimes(2);
   });
   it('immediately applies all five selects, resets pagination, and resets filters once',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    await button(w,'下一页').trigger('click');await flushPromises();
-    const selects=w.get('.roster-filters').findAll('select');
-    const values=['liked','R18','inactive','yes','no'];
-    for(let index=0;index<values.length;index++) {
-      const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
-      await selects[index]!.setValue(values[index]);await flushPromises();
-      expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count+1);
-      expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1}));
-    }
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({preference:'liked',rating:'R18',active:'inactive',hasLocal:'yes',hasSource:'no'}));
-    const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
-    await button(w,'重置筛选').trigger('click');await flushPromises();
-    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count+1);
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith({page:1,limit:50,query:'',active:'active',preference:undefined,rating:undefined,hasLocal:undefined,hasSource:undefined,state:undefined});
-    expect(w.text()).toContain('筛选结果');
+    const w=mountRoster();await flushPromises();await button(w,'下一页').trigger('click');await flushPromises();const selects=w.get('.roster-filters').findAll('select'),values=['liked','R18','inactive','yes','no'];
+    for(let index=0;index<values.length;index++){const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;await selects[index]!.setValue(values[index]);await flushPromises();expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count+1);expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1}));}
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({preference:'liked',rating:'R18',active:'inactive',hasLocal:'yes',hasSource:'no'}));const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;await button(w,'重置筛选').trigger('click');await flushPromises();expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count+1);
+    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith({page:1,limit:50,query:'',active:'active',preference:undefined,rating:undefined,hasLocal:undefined,hasSource:undefined,state:undefined});expect(w.text()).toContain('筛选结果');
   });
-  it('preserves the ledger state filters in the unified roster',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    const state=w.get('.roster-filters').findAll('select')[5]!;
-    for(const value of ['missing','complete','no-local','no-source','unresolved']) {
-      await state.setValue(value);await flushPromises();
-      expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({state:value,page:1}));
-    }
-    await button(w,'重置筛选').trigger('click');await flushPromises();
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({state:undefined}));
+  it('preserves ledger state filters and absent-source check subgroups',async()=>{
+    const w=mountRoster();await flushPromises();const selects=w.get('.roster-filters').findAll('select');for(const state of ['missing','complete','no-local','no-source','unresolved']){await selects[5]!.setValue(state);await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({state,page:1}));}
+    await button(w,'下一页').trigger('click');await flushPromises();for(const hasSource of ['no-unchecked','no-not-found','no','yes']){await selects[4]!.setValue(hasSource);await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1,hasSource}));}
+    expect(selects[4]!.text()).toContain('无来源记录 · 尚无检查任务');expect(selects[4]!.text()).toContain('无来源记录 · 最近检查未找到合集');await button(w,'重置筛选').trigger('click');await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({state:undefined}));
   });
-  it('requests absent-source check subgroups from the server and resets pagination',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    await button(w,'下一页').trigger('click');await flushPromises();
-    const select=w.get('.roster-filters').findAll('select')[4]!;
-    for(const value of ['no-unchecked','no-not-found','no','yes']) {
-      await select.setValue(value);await flushPromises();
-      expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1,hasSource:value}));
-    }
-    expect(select.text()).toContain('无来源记录 · 尚无检查任务');
-    expect(select.text()).toContain('无来源记录 · 最近检查未找到合集');
-  });
-  it('shows collection, missing and unresolved details without planning until explicitly requested',async()=>{
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...structuredClone(creator), remoteWorks:2,missingWorks:1,unresolvedLocalWorks:1,
-      collections:[{id:20,source:'costuan',sourceCollectionId:'20',title:'Alpha collection',url:'https://www.costuan.com/20.html',declaredWorkCount:2,observedAt:'2026-09-01T00:00:00Z',deliveries:[{provider:'baidu',type:'share',status:'verified',sourceFolderName:'020',destinationPath:'/cos待入库/Alpha',transferredAt:null}]}],
-      missing:[{workId:30,source:'costuan',sourceCollectionId:'20',sourceOrder:2,sourceOrderLabel:'NO.002',title:'Second work'}],
-      unresolved:[{folderName:'Uncertain album',relativePath:'Alpha/Uncertain album',parsedSourceOrder:null,status:'ambiguous'}]});
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    expect(w.text()).toContain('Alpha collection');expect(w.text()).toContain('NO.002 · Second work');expect(w.text()).toContain('Alpha/Uncertain album');expect(w.text()).toContain('匹配存在歧义');
-    expect(w.get('a[href="https://www.costuan.com/20.html"]').attributes('rel')).toContain('noopener');
-    expect(w.emitted('plan-downloads')).toBeUndefined();expect(api.updateManagedCreator).not.toHaveBeenCalled();
-    await button(w,'只生成此博主任务').trigger('click');
-    expect(w.emitted('plan-downloads')).toEqual([[1]]);expect(w.get('dialog').element.open).toBe(false);
+  it('shows collections, missing and unresolved read-only, planning only from the source tab',async()=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...structuredClone(creator),remoteWorks:2,missingWorks:1,unresolvedLocalWorks:1,collections:[{id:20,source:'costuan',sourceCollectionId:'20',title:'Alpha collection',url:'https://www.costuan.com/20.html',declaredWorkCount:2,observedAt:'2026-09-01T00:00:00Z',deliveries:[]}],missing:[{workId:30,source:'costuan',sourceCollectionId:'20',sourceOrder:2,sourceOrderLabel:'NO.002',title:'Second work'}],unresolved:[{folderName:'Uncertain album',relativePath:'Alpha/Uncertain album',parsedSourceOrder:null,status:'ambiguous'}]});
+    const w=mountRoster();await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();expect(w.text()).toContain('Alpha collection');expect(w.text()).toContain('NO.002 · Second work');expect(w.text()).toContain('Alpha/Uncertain album');expect(w.text()).toContain('对应存在歧义');expect(w.get('a[href="https://www.costuan.com/20.html"]').attributes('rel')).toContain('noopener');expect(w.emitted('plan-downloads')).toBeUndefined();expect(button(w,'生成此博主的缺失获取任务')).toBeUndefined();
+    await button(w,'来源与补齐').trigger('click');await flushPromises();await button(w,'生成此博主的缺失获取任务').trigger('click');expect(w.emitted('plan-downloads')).toEqual([[1]]);
   });
   it('debounces typing, flushes Enter once, and applies clearing immediately',async()=>{
-    vi.useFakeTimers();
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    const input=w.get('.roster-filters input');
-    await input.setValue('a');await vi.advanceTimersByTimeAsync(200);
-    await input.setValue('alpha');await vi.advanceTimersByTimeAsync(299);
-    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(2);
-    await input.setValue('beta');await input.trigger('keydown',{key:'Enter'});
-    await w.get('.roster-filters').trigger('submit');await vi.advanceTimersByTimeAsync(300);
-    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(3);
-    await input.setValue('');expect(fetchArchiveCatalog).toHaveBeenCalledTimes(4);
-    await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(4);
+    vi.useFakeTimers();const w=mountRoster();await flushPromises();const input=w.get('.roster-filters input');await input.setValue('a');await vi.advanceTimersByTimeAsync(200);await input.setValue('alpha');await vi.advanceTimersByTimeAsync(299);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(1);await vi.advanceTimersByTimeAsync(1);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(2);
+    await input.setValue('beta');await input.trigger('keydown',{key:'Enter'});await w.get('.roster-filters').trigger('submit');await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(3);await input.setValue('');expect(fetchArchiveCatalog).toHaveBeenCalledTimes(4);await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(4);
   });
-  it('waits for IME composition and cancels delayed searches on select changes and unmount',async()=>{
-    vi.useFakeTimers();
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    const input=w.get('.roster-filters input');
-    await input.trigger('compositionstart');await input.setValue('中文');
-    await input.trigger('keydown',{key:'Enter',isComposing:true});await vi.advanceTimersByTimeAsync(500);
-    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(1);
-    await input.trigger('compositionend');await vi.advanceTimersByTimeAsync(300);
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'中文'}));
-    await input.setValue('新名称');await w.get('.roster-filters select').setValue('liked');
-    const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'新名称',preference:'liked'}));
-    await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
-    await input.setValue('unmounted');w.unmount();await vi.advanceTimersByTimeAsync(300);
-    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
+  it('waits for IME and cancels delayed searches on select changes and unmount',async()=>{
+    vi.useFakeTimers();const w=mountRoster();await flushPromises();const input=w.get('.roster-filters input');await input.trigger('compositionstart');await input.setValue('中文');await input.trigger('keydown',{key:'Enter',isComposing:true});await vi.advanceTimersByTimeAsync(500);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(1);await input.trigger('compositionend');await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'中文'}));
+    await input.setValue('新名称');await w.get('.roster-filters select').setValue('liked');const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({query:'新名称',preference:'liked'}));await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);await input.setValue('unmounted');w.unmount();await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
   });
-  it('applies a pending search on page one when paging is clicked during the debounce',async()=>{
-    vi.useFakeTimers();
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    await button(w,'下一页').trigger('click');await flushPromises();
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:2,query:''}));
-    await w.get('.roster-filters input').setValue('new filter');
-    await button(w,'下一页').trigger('click');await flushPromises();
-    expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1,query:'new filter'}));
-    expect(w.get('.roster-paging').text()).toContain('第 1 页');
-    const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
-    await vi.advanceTimersByTimeAsync(300);
-    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
+  it('applies a pending search on page one when paging during debounce',async()=>{
+    vi.useFakeTimers();const w=mountRoster();await flushPromises();await button(w,'下一页').trigger('click');await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:2,query:''}));await w.get('.roster-filters input').setValue('new filter');await button(w,'下一页').trigger('click');await flushPromises();expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:1,query:'new filter'}));expect(w.get('.roster-paging').text()).toContain('第 1 页');const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;await vi.advanceTimersByTimeAsync(300);expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
   });
-  it('prevents old requests from replacing new rows, totals, errors, or loading state',async()=>{
-    const pending:Array<{resolve:(value:ArchiveCatalogCreatorsPayload)=>void;reject:(error:Error)=>void}>=[];
-    vi.mocked(fetchArchiveCatalog).mockImplementation(()=>new Promise((resolve,reject)=>pending.push({resolve,reject})));
-    const w=mount(ManagedCreatorRoster);
-    await w.get('.roster-filters select').setValue('liked');
-    pending[0]!.resolve({...payload,total:100,items:[{...creator,name:'Old'}]});await flushPromises();
-    expect(button(w,'下一页').attributes('disabled')).toBeDefined();
-    pending[1]!.resolve({...payload,total:7,items:[{...creator,name:'Newest'}]});await flushPromises();
-    expect(w.get('.creator-cards').text()).toContain('Newest');expect(w.get('.roster-paging').text()).toContain('筛选结果 7 位');
-    await w.get('.roster-filters select').setValue('kept');
-    await w.get('.roster-filters select').setValue('unset');
-    pending[3]!.resolve({...payload,total:2,items:[{...creator,name:'Final'}]});await flushPromises();
-    pending[2]!.reject(new Error('stale error'));await flushPromises();
-    expect(w.get('.creator-cards').text()).toContain('Final');expect(w.get('.roster-paging').text()).toContain('筛选结果 2 位');
-    expect(w.text()).not.toContain('stale error');expect(button(w,'下一页').attributes('disabled')).toBeUndefined();
+  it('prevents old requests replacing rows, total, errors or loading state',async()=>{
+    const pending:ReturnType<typeof deferred<ArchiveCatalogCreatorsPayload>>[]=[];vi.mocked(fetchArchiveCatalog).mockImplementation(()=>{const request=deferred<ArchiveCatalogCreatorsPayload>();pending.push(request);return request.promise;});const w=mountRoster();await w.get('.roster-filters select').setValue('liked');pending[0]!.resolve({...payload,total:100,items:[{...creator,name:'Old'}]});await flushPromises();expect(button(w,'下一页').attributes('disabled')).toBeDefined();pending[1]!.resolve({...payload,total:7,items:[{...creator,name:'Newest'}]});await flushPromises();expect(w.get('.creator-cards').text()).toContain('Newest');expect(w.get('.roster-paging').text()).toContain('筛选结果 7 位');
+    await w.get('.roster-filters select').setValue('kept');await w.get('.roster-filters select').setValue('unset');pending[3]!.resolve({...payload,total:2,items:[{...creator,name:'Final'}]});await flushPromises();pending[2]!.reject(new Error('stale error'));await flushPromises();expect(w.get('.creator-cards').text()).toContain('Final');expect(w.get('.roster-paging').text()).toContain('筛选结果 2 位');expect(w.text()).not.toContain('stale error');expect(button(w,'下一页').attributes('disabled')).toBeUndefined();
   });
-  it('creates a nullable creator only on explicit save and prevents duplicate submissions',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'新增博主').trigger('click');
-    expect(api.createManagedCreator).not.toHaveBeenCalled();
-    await w.get('.roster-edit input').setValue('New');
-    let resolve!:(value:ArchiveCatalogCreatorDetail)=>void;
-    vi.mocked(api.createManagedCreator).mockReturnValue(new Promise(r=>{resolve=r;}));
-    await w.get('.roster-edit').trigger('submit');await w.get('.roster-edit').trigger('submit');
-    expect(api.createManagedCreator).toHaveBeenCalledTimes(1);expect(api.createManagedCreator).toHaveBeenCalledWith({name:'New',preference:null,rating:null,confirmDistinct:false});
-    resolve(structuredClone(creator));await flushPromises();expect(w.emitted('changed')).toHaveLength(1);
+  it('creates only on explicit save and prevents duplicate submissions',async()=>{
+    const w=mountRoster();await flushPromises();await button(w,'新增博主').trigger('click');await flushPromises();expect(api.createManagedCreator).not.toHaveBeenCalled();await w.get('.profile-form input').setValue('New');const result=deferred<ArchiveCatalogCreatorDetail>();vi.mocked(api.createManagedCreator).mockReturnValue(result.promise);await w.get('.profile-form').trigger('submit');await w.get('.profile-form').trigger('submit');expect(api.createManagedCreator).toHaveBeenCalledExactlyOnceWith({name:'New',preference:null,rating:null,confirmDistinct:false});result.resolve(structuredClone(creator));await flushPromises();expect(w.emitted('changed')).toHaveLength(1);expect(w.find('.profile-form').exists()).toBe(false);expect(w.get('.creator-panel h2').text()).toBe('Alpha');expect(w.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
   });
-  it('keeps dialog edits pending until explicit save',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();
-    await button(w,'管理资料').trigger('click');await flushPromises();
-    const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;
-    await w.get('.roster-edit input').setValue('Renamed');
-    await w.get('.roster-edit select').setValue('kept');await flushPromises();
-    expect(api.updateManagedCreator).not.toHaveBeenCalled();
-    expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);
-    await w.get('.roster-edit').trigger('submit');await flushPromises();
-    expect(api.updateManagedCreator).toHaveBeenCalledWith(1,expect.objectContaining({name:'Renamed',preference:'kept'}));
+  it('shows collision candidates and requires separate distinct-person confirmation before retry',async()=>{
+    const w=mountRoster();await flushPromises();await button(w,'新增博主').trigger('click');await flushPromises();await w.get('.profile-form input').setValue('Alpha');vi.mocked(api.createManagedCreator).mockRejectedValueOnce(new RequestError('Identity conflict',409,{candidates:[{id:1,name:'Alpha'}]}));await w.get('.profile-form').trigger('submit');await flushPromises();expect(w.get('[role=alert]').text()).toContain('Identity conflict');expect(w.get('.warning').text()).toContain('#1 Alpha');await w.get('.warning input[type=checkbox]').setValue(true);await w.get('.profile-form').trigger('submit');await flushPromises();expect(api.createManagedCreator).toHaveBeenLastCalledWith(expect.objectContaining({confirmDistinct:true}));
   });
-  it('shows collision candidates and requires a separate confirmation before retry',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'新增博主').trigger('click');
-    await w.get('.roster-edit input').setValue('Alpha');
-    vi.mocked(api.createManagedCreator).mockRejectedValueOnce(new RequestError('Identity conflict',409,{candidates:[{id:1,name:'Alpha'}]}));
-    await w.get('.roster-edit').trigger('submit');await flushPromises();
-    expect(w.get('[role=alert]').text()).toContain('Identity conflict');expect(w.get('.collision').text()).toContain('#1 Alpha');
-    await w.get('.collision input[type=checkbox]').setValue(true);await w.get('.roster-edit').trigger('submit');await flushPromises();
-    expect(api.createManagedCreator).toHaveBeenLastCalledWith(expect.objectContaining({confirmDistinct:true}));
+  it('keeps edits until save and refreshes the same roster page without moving it',async()=>{
+    const w=mountRoster();await flushPromises();await button(w,'下一页').trigger('click');await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();await button(w,'资料').trigger('click');await flushPromises();const count=vi.mocked(fetchArchiveCatalog).mock.calls.length;await w.get('.profile-form input').setValue('Renamed');await w.get('.profile-form select').setValue('kept');await flushPromises();expect(api.saveManagedCreatorProfile).not.toHaveBeenCalled();expect(fetchArchiveCatalog).toHaveBeenCalledTimes(count);await w.get('.profile-form').trigger('submit');await flushPromises();expect(api.saveManagedCreatorProfile).toHaveBeenCalledWith(1,expect.objectContaining({name:'Renamed',preference:'kept',expectedRevision:'profile-1'}));expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({page:2}));expect(api.updateManagedCreator).not.toHaveBeenCalled();
   });
-  it('keeps historical sources readonly, supports aliases and explicit directory linking',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    expect(w.text()).not.toContain('历史种子');expect(w.text()).not.toContain('已退役');
-    expect(w.text()).toContain('稳定 ID #1 · 启用');expect(w.text()).toContain('暂无其他别名');
-    expect(w.text()).toContain('暂无作品来源');expect(w.findAll('button').some(b=>b.text()==='删除别名')).toBe(false);
-    const forms=w.findAll('.inline-form');await forms[0].get('input').setValue('New alias');await forms[0].trigger('submit');await flushPromises();
-    expect(api.addManagedAlias).toHaveBeenCalledWith(1,'New alias',false);
-    await forms[1].get('select').setValue('12');await forms[1].trigger('submit');await flushPromises();expect(api.linkManagedFolder).toHaveBeenCalledWith(12,1);
-    await button(w,'解除关联').trigger('click');expect(api.unlinkManagedFolder).not.toHaveBeenCalled();
-    await button(w,'确认变更').trigger('click');await flushPromises();expect(api.unlinkManagedFolder).toHaveBeenCalledWith(11);
-  });
-  it('hides legacy provenance but preserves distinct aliases and current source links without mutations',async()=>{
-    const value=structuredClone(creator);
-    value.aliases.push({id:'old-name',alias:'Old Alpha',source:'hentaiclub',editable:false});
-    value.sources.push({source:'costuan',sourceCreatorId:'collection:588',displayName:'Alpha',url:'https://www.costuan.com/588.html',firstSeenAt:'first',lastSeenAt:'last'});
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(value);
-    const before=JSON.stringify(value);
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    expect(w.get('.current-sources').text()).toContain('Costuan');
-    expect(w.get('.current-sources').text()).not.toContain('historical');
-    expect(w.get('.current-sources a').attributes('href')).toBe('https://www.costuan.com/588.html');
-    expect(w.get('.alias-list').text()).toContain('Old Alpha');
-    expect(w.get('.alias-list').findAll('li')).toHaveLength(1);
-    expect(JSON.stringify(value)).toBe(before);
-    expect(api.deleteManagedAlias).not.toHaveBeenCalled();expect(api.updateManagedCreator).not.toHaveBeenCalled();
-  });
-  it('saves and clears an explicit bridge ID without triggering linking or task actions',async()=>{
-    const multiple:LocalIngestDestinationPreference={
-      ...destination,mode:'selection-required',resolvedLocalCreatorFolderId:null,resolvedGalleryFolderId:null,resolvedCreatorDirectory:null,
-      message:'存在多个有效本地目录；请先选择首选入库目录',
-      candidates:[
-        destination.candidates[0]!,
-        {localCreatorFolderId:1004,galleryFolderId:2290,name:'lunana',folderPath:'lunana',absolutePath:'G:\\cos图集\\lunana',workCount:41,valid:true,unavailableReason:null}
-      ]
-    };
-    const explicit:LocalIngestDestinationPreference={
-      ...multiple,preferredLocalCreatorFolderId:1004,mode:'explicit',resolvedLocalCreatorFolderId:1004,resolvedGalleryFolderId:2290,
-      resolvedCreatorDirectory:'G:\\cos图集\\lunana',message:'使用显式选择的本地目录'
-    };
-    vi.mocked(api.fetchIngestDestination).mockResolvedValueOnce(structuredClone(multiple));
-    vi.mocked(api.setIngestDestination).mockResolvedValueOnce(structuredClone(explicit)).mockResolvedValueOnce(structuredClone(multiple));
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    const destinationForm=w.findAll('.inline-form')[2]!;
-    await destinationForm.get('select').setValue('1004');
-    await destinationForm.trigger('submit');await flushPromises();
-    expect(api.setIngestDestination).toHaveBeenCalledWith(1,1004);
-    expect(w.text()).toContain('G:\\cos图集\\lunana');
-    expect(api.linkManagedFolder).not.toHaveBeenCalled();
-    expect(api.createManagedCreator).not.toHaveBeenCalled();
-
-    await destinationForm.get('select').setValue('');
-    await destinationForm.trigger('submit');await flushPromises();
-    expect(api.setIngestDestination).toHaveBeenLastCalledWith(1,null);
-  });
-  it('shows impact before deactivation and never queues work on restore',async()=>{
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    await button(w,'停用').trigger('click');expect(api.setManagedCreatorActive).not.toHaveBeenCalled();expect(w.text()).toContain('未完成下载任务 0');
-    vi.mocked(api.setManagedCreatorActive).mockResolvedValueOnce({...creator,isActive:false});
-    await button(w,'确认变更').trigger('click');await flushPromises();expect(api.setManagedCreatorActive).toHaveBeenCalledWith(1,false);
-    await button(w,'恢复').trigger('click');await button(w,'确认变更').trigger('click');await flushPromises();expect(api.setManagedCreatorActive).toHaveBeenLastCalledWith(1,true);
-    expect(w.text()).not.toMatch(/上传 JSON|重新导入|硬删除/);
-  });
-  it.each([{seedSource:'manual',isActive:true},{seedSource:'hentaiclub',isActive:false},{seedSource:'costuan',isActive:false}])('does not offer deletion for $seedSource active=$isActive',async state=>{
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue({...unusedCreator,...state});
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    expect(w.find('[data-test=unused-creator-deletion]').exists()).toBe(false);
-    expect(api.previewManagedCreatorDeletion).not.toHaveBeenCalled();expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
-  });
-  it('offers deletion only in inactive manual creator management, previews blockers and never deletes while blocked',async()=>{
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
-    vi.mocked(api.previewManagedCreatorDeletion).mockResolvedValue({...deletionPreview,eligible:false,blockers:[{code:'works',label:'本地作品',count:2},{code:'plans',label:'接纳计划',count:1}]});
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'查看账本').trigger('click');await flushPromises();
-    expect(w.find('[data-test=unused-creator-deletion]').exists()).toBe(false);
-    await button(w,'关闭').trigger('click');await button(w,'管理资料').trigger('click');await flushPromises();
-    expect(api.previewManagedCreatorDeletion).not.toHaveBeenCalled();
-    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
-    expect(api.previewManagedCreatorDeletion).toHaveBeenCalledExactlyOnceWith(1);
-    expect(w.get('[data-test=creator-deletion-preview]').text()).toContain('本地作品 · 2');
-    expect(w.get('[data-test=creator-deletion-preview]').text()).toContain('接纳计划 · 1');
-    expect(w.find('[data-test=confirm-creator-deletion]').exists()).toBe(false);
-    await button(w,'取消删除').trigger('click');expect(w.find('[data-test=creator-deletion-preview]').exists()).toBe(false);
-    expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
-  });
-  it('requires an explicit confirmation after preview and refreshes the same filtered roster after one delete',async()=>{
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
-    let finish!:(value:{deleted:true;creatorId:number})=>void;
-    vi.mocked(api.deleteUnusedManagedCreator).mockReturnValue(new Promise(resolve=>{finish=resolve;}));
-    const w=mount(ManagedCreatorRoster);await flushPromises();await w.get('.roster-filters').findAll('select')[2]!.setValue('inactive');await flushPromises();
-    await button(w,'管理资料').trigger('click');await flushPromises();
-    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
-    expect(w.get('[data-test=unused-creator-deletion]').text()).toContain('停用会保留身份');
-    expect(w.get('[data-test=creator-deletion-preview]').text()).toContain('2 条可删除别名');
-    expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
-    await w.get('[data-test=confirm-creator-deletion]').trigger('click');await w.get('[data-test=confirm-creator-deletion]').trigger('click');
-    expect(api.deleteUnusedManagedCreator).toHaveBeenCalledExactlyOnceWith(1,'preview-v1');
-    vi.mocked(fetchArchiveCatalog).mockResolvedValue({...payload,items:[],total:0,hasMore:false});
-    finish({deleted:true,creatorId:1});await flushPromises();
-    expect(w.get('dialog').element.open).toBe(false);expect(w.find('[data-test=unused-creator-deletion]').exists()).toBe(false);
-    expect(w.findAll('.creator-card')).toHaveLength(0);expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({active:'inactive'}));
-    expect(w.emitted('changed')).toHaveLength(1);expect(w.text()).toContain('未删除文件、作品或任务');
-    expect(api.setManagedCreatorActive).not.toHaveBeenCalled();expect(api.unlinkManagedFolder).not.toHaveBeenCalled();
-  });
-  it('discards a stale or failed deletion preview and requires a fresh explicit check before retry',async()=>{
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
-    vi.mocked(api.deleteUnusedManagedCreator).mockRejectedValueOnce(new RequestError('引用已变化，不能使用旧确认',409));
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();await w.get('[data-test=confirm-creator-deletion]').trigger('click');await flushPromises();
-    expect(w.get('[role=alert]').text()).toContain('引用已变化');expect(w.get('[role=alert]').text()).toContain('重新检查删除条件');
-    expect(w.get('dialog').element.open).toBe(true);expect(w.find('[data-test=confirm-creator-deletion]').exists()).toBe(false);
-    expect(api.deleteUnusedManagedCreator).toHaveBeenCalledTimes(1);
-    vi.mocked(api.previewManagedCreatorDeletion).mockResolvedValue({...deletionPreview,confirmationToken:'preview-v2'});
-    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
-    expect(api.deleteUnusedManagedCreator).toHaveBeenCalledTimes(1);
-    await w.get('[data-test=confirm-creator-deletion]').trigger('click');await flushPromises();
-    expect(api.deleteUnusedManagedCreator).toHaveBeenLastCalledWith(1,'preview-v2');
-  });
-  it('invalidates deletion preview when creator metadata changes and preserves manual-name conflict handling',async()=>{
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
-    vi.mocked(api.updateManagedCreator).mockRejectedValueOnce(new RequestError('停用身份仍参与重名检查',409,{candidates:[{id:9,name:'Other'}]}));
-    await w.get('.roster-edit input').setValue('Other');await w.get('.roster-edit').trigger('submit');await flushPromises();
-    expect(w.find('[data-test=creator-deletion-preview]').exists()).toBe(false);expect(w.get('[role=alert]').text()).toContain('停用身份仍参与重名检查');
-    expect(w.text()).toContain('允许同名');expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
-  });
-  it('does not retain a failed preview or publish its late result after closing details',async()=>{
-    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));
-    vi.mocked(api.previewManagedCreatorDeletion).mockRejectedValueOnce(new Error('检查暂不可用'));
-    const w=mount(ManagedCreatorRoster);await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();
-    await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();
-    expect(w.get('[role=alert]').text()).toContain('检查暂不可用');expect(w.find('[data-test=confirm-creator-deletion]').exists()).toBe(false);
-    let finish!:(value:api.ManagedCreatorDeletionPreview)=>void;
-    vi.mocked(api.previewManagedCreatorDeletion).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
-    await w.get('[data-test=preview-creator-deletion]').trigger('click');await w.get('dialog').trigger('close');
-    finish(deletionPreview);await flushPromises();
-    expect(w.find('[data-test=creator-deletion-preview]').exists()).toBe(false);expect(api.deleteUnusedManagedCreator).not.toHaveBeenCalled();
+  it('closes the deleted panel and refreshes the same filtered roster without executing unrelated mutations',async()=>{
+    vi.mocked(fetchArchiveCatalogCreator).mockResolvedValue(structuredClone(unusedCreator));vi.mocked(api.fetchManagedCreatorEditingState).mockResolvedValue(editingState(unusedCreator));vi.mocked(api.previewManagedCreatorDeletion).mockResolvedValue({creatorId:1,name:'Alpha',eligible:true,blockers:[],confirmationToken:'approved',removableAliases:0});vi.mocked(api.deleteUnusedManagedCreator).mockResolvedValue({deleted:true,creatorId:1});
+    const w=mountRoster();await flushPromises();await w.get('.roster-filters').findAll('select')[2]!.setValue('inactive');await flushPromises();await button(w,'管理资料').trigger('click');await flushPromises();await button(w,'资料').trigger('click');await flushPromises();await w.get('[data-test=preview-creator-deletion]').trigger('click');await flushPromises();vi.mocked(fetchArchiveCatalog).mockResolvedValue({...payload,items:[],total:0,hasMore:false});await w.get('[data-test=confirm-creator-deletion]').trigger('click');await flushPromises();
+    expect(w.find('.creator-panel').exists()).toBe(false);expect(w.findAll('.creator-card')).toHaveLength(0);expect(fetchArchiveCatalog).toHaveBeenLastCalledWith(expect.objectContaining({active:'inactive'}));expect(w.text()).toContain('未删除作品或文件');expect(w.emitted('changed')).toHaveLength(1);expect(api.deleteUnusedManagedCreator).toHaveBeenCalledExactlyOnceWith(1,'approved');expect(api.unlinkManagedFolder).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,8 @@
 | 文档 | 适用范围 |
 | --- | --- |
 | [架构](how-it-works.md)、[安全与备份](security.md) | 主业务数据、派生目录、文件与恢复材料 |
+| [应用恢复点](application-recovery-points.md) | 一致性数据库、配置/key、保留策略及隔离恢复步骤 |
+| [旧文件夹删除退役](legacy-folder-delete-retirement.md) | 旧永久删除入口的 410、调用者与有限隔离复现 |
 | [本地接纳 CLI](local-folder-admission.md) | 维护人员的精确计划 / checkpoint 契约；普通用户走网页 |
 | [本地版本复用](local-first-source-reuse.md) | 严格对应、版本接受、撤销及活动任务保护 |
 | [目录失效与更新](resource-catalog-invalidation.md) | 派生表、触发器、代次及后台发布 |

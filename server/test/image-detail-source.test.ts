@@ -107,7 +107,8 @@ describe.sequential('IMAGE_DETAIL_SOURCE config', () => {
     const compatibleMp4 = createIndexedMedia(folder, 'compatible.mp4', 3000, 'original', 5000);
 
     const detail = galleryService.getImageDetail(compatibleMp4.id);
-    expect(detail?.previewUrl).toBe('/previews/vids2/compatible.mp4');
+    const { imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+    expect(detail?.previewUrl).toBe(`/previews/vids2/compatible.mp4?v=${imageDerivativeVersion(compatibleMp4, 'preview')}`);
     expect(detail?.originalUrl).toBe(`/api/originals/${compatibleMp4.id}`);
     expect(detail?.playbackStrategy).toBe('original');
   });

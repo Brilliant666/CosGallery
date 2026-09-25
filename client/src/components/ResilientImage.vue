@@ -14,6 +14,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { diagnoseMediaFailure, mediaAccessKey, reportMediaLoadIssue } from '../utils/media-load-diagnostics';
 
 const props = withDefaults(
   defineProps<{
@@ -42,6 +43,8 @@ const loaded = ref(false);
 const hiddenUntilRetry = ref(false);
 const usingFallback = ref(false);
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let generation = 0;
+let terminalDerivativeError = false;
 
 const activeSrc = computed(() => {
   if (usingFallback.value && props.fallbackSrc && props.fallbackSrc !== props.src) {
@@ -72,6 +75,8 @@ function clearRetryTimer() {
 }
 
 function resetState() {
+  generation += 1;
+  terminalDerivativeError = false;
   clearRetryTimer();
   attempt.value = 0;
   loaded.value = false;
@@ -80,7 +85,7 @@ function resetState() {
 }
 
 function scheduleRetry() {
-  if (!props.src || retryTimer) {
+  if (!props.src || retryTimer || terminalDerivativeError) {
     return;
   }
 
@@ -103,6 +108,15 @@ function handleLoad() {
 
 function handleError() {
   loaded.value = false;
+  const source = activeSrc.value;
+  const currentGeneration = generation, access = mediaAccessKey();
+  void diagnoseMediaFailure(source).then(code => {
+    if (!code || generation !== currentGeneration || access !== mediaAccessKey()) return;
+    terminalDerivativeError = true;
+    clearRetryTimer();
+    if (!usingFallback.value) hiddenUntilRetry.value = true;
+    reportMediaLoadIssue(source!, code);
+  });
 
   if (!usingFallback.value && props.fallbackSrc && props.fallbackSrc !== props.src) {
     clearRetryTimer();
@@ -112,7 +126,7 @@ function handleError() {
     return;
   }
 
-  const canRetry = props.retryWhile || attempt.value < props.maxRetries;
+  const canRetry = !terminalDerivativeError && (props.retryWhile || attempt.value < props.maxRetries);
   if (!canRetry) {
     hiddenUntilRetry.value = true;
     return;
@@ -132,5 +146,5 @@ watch(
   }
 );
 
-onBeforeUnmount(clearRetryTimer);
+onBeforeUnmount(() => { generation += 1; clearRetryTimer(); });
 </script>

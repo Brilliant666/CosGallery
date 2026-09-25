@@ -83,7 +83,9 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const button = (w: ReturnType<typeof mount>, text: string) =>
-  w.findAll('button').find((b) => b.text() === text)!;
+  text === '展开详情' || text === '收起'
+    ? w.get('.catalog-row')
+    : w.findAll('button').find((b) => b.text() === text)!;
 describe('resource catalog', () => {
   enableAutoUnmount(afterEach);
   beforeEach(() => {
@@ -109,24 +111,27 @@ describe('resource catalog', () => {
     });
   });
   afterEach(() => vi.useRealTimers());
-  it('defaults to a picker without requesting global data and resolves names/aliases explicitly', async () => {
+  it('defaults to global data and uses a lightweight explicit name/alias picker', async () => {
     const w = mount(ResourceCatalog, { props: { creatorId: null } });
     await flushPromises();
-    expect(api.fetchResourceCatalog).not.toHaveBeenCalled();
+    expect(api.fetchResourceCatalog).toHaveBeenCalledWith(null, expect.any(Object), 1, undefined);
     expect(api.exportResourceCatalog).not.toHaveBeenCalled();
-    expect(w.find('table').exists()).toBe(false);
-    expect(w.find('.filters').exists()).toBe(false);
-    expect(w.text()).toContain('请选择一位博主');
-    await button(w, '查看全部作品').trigger('click');
-    expect(w.emitted('all')).toEqual([[]]);
+    expect(w.find('table').exists()).toBe(true);
+    expect(w.find('.filters').exists()).toBe(true);
+    expect(w.get('[data-test="view-all"]').attributes('disabled')).toBeDefined();
+    expect(w.find('#resource-creator-picker').exists()).toBe(false);
     expect(api.fetchResourceDetail).not.toHaveBeenCalled();
     expect(api.findResourceCreators).not.toHaveBeenCalled();
     await w.get('.creator-search input').setValue('别名');
     await w.get('.creator-search').trigger('submit');
     await flushPromises();
     expect(api.findResourceCreators).toHaveBeenCalledWith('别名');
-    await button(w, '#2 别名对应博主').trigger('click');
+    expect(w.text()).not.toContain('查找博主');
+    expect(w.get('.choices').text()).not.toContain('#2');
+    await button(w, '别名对应博主').trigger('click');
     expect(w.emitted('select')).toEqual([[2]]);
+    expect(w.find('.choices').exists()).toBe(false);
+    expect((w.get('.creator-search input').element as HTMLInputElement).value).toBe('');
   });
   it('clearing selection isolates late global results and performs no new global read', async () => {
     const slow = deferred<api.ResourcePage>();
@@ -136,12 +141,15 @@ describe('resource catalog', () => {
     await flushPromises();
     slow.resolve({ ...page(), creator: null });
     await flushPromises();
-    expect(w.text()).not.toContain('全部博主');
+    expect(w.get('[data-test="view-all"]').attributes('aria-pressed')).toBe('false');
+    expect(w.get('.current-creator').text()).toContain('当前博主');
+    await w.get('[data-test="view-all"]').trigger('click');
+    expect(w.emitted('all')).toEqual([[]]);
     await w.setProps({ creatorId: null });
     await flushPromises();
     expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(2);
     expect(w.find('table').exists()).toBe(false);
-    expect(w.text()).toContain('请选择一位博主');
+    expect(w.text()).toContain('全部博主');
   });
   it('keeps secondary controls collapsed without hiding read-model failures', async () => {
     const p = page();
@@ -149,8 +157,8 @@ describe('resource catalog', () => {
     vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
     const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
     await flushPromises();
-    expect(w.get('.filter-panel').attributes('open')).toBeUndefined();
-    expect(w.get('.export-panel').attributes('open')).toBeUndefined();
+    expect(w.get('.filters').isVisible()).toBe(true);
+    expect(w.get('#resource-export').isVisible()).toBe(false);
     expect(w.text()).toContain('目录更新失败');
     expect(button(w, '导出 CSV').attributes('disabled')).toBeDefined();
   });
@@ -337,6 +345,98 @@ describe('resource catalog', () => {
     expect(api.fetchResourceDetail).toHaveBeenCalledWith(1, 22, 'r1', undefined);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(row.text);
   });
+  it('ignores blank and composing Enter, searches only on committed Enter without changing scope', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    const input = w.get('.creator-search input');
+    await input.setValue('   ');
+    await input.trigger('keydown', { key: 'Enter' });
+    await w.get('.creator-search').trigger('submit');
+    expect(api.findResourceCreators).not.toHaveBeenCalled();
+    await input.setValue('神');
+    await input.trigger('compositionstart');
+    await input.trigger('keydown', { key: 'Enter', isComposing: true });
+    await w.get('.creator-search').trigger('submit');
+    expect(api.findResourceCreators).not.toHaveBeenCalled();
+    await input.trigger('compositionend');
+    await input.trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    expect(api.findResourceCreators).toHaveBeenCalledExactlyOnceWith('神');
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(1);
+    expect(w.emitted('select')).toBeUndefined();
+    expect(w.emitted('all')).toBeUndefined();
+  });
+  it('dismisses with Escape or outside pointer/focus, and never reopens merely on focus', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 }, attachTo: document.body });
+    await flushPromises();
+    const input = w.get('.creator-search input');
+    await input.setValue('神');
+    for (const cancel of ['escape', 'pointer', 'focus']) {
+      await input.trigger('keydown', { key: 'Enter' });
+      await flushPromises();
+      expect(w.find('.choices').exists()).toBe(true);
+      if (cancel === 'escape') {
+        const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+        input.element.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+      else if (cancel === 'pointer') document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      else await w.get('.filters input').trigger('focusin');
+      await flushPromises();
+      expect(w.find('.choices').exists()).toBe(false);
+      expect((input.element as HTMLInputElement).value).toBe('神');
+      await input.trigger('focus');
+      expect(w.find('.choices').exists()).toBe(false);
+    }
+    expect(api.findResourceCreators).toHaveBeenCalledTimes(3);
+    expect(w.emitted('select')).toBeUndefined();
+    expect(w.emitted('all')).toBeUndefined();
+    expect(api.fetchResourceCatalog).toHaveBeenCalledTimes(1);
+  });
+  it.each(['edit', 'escape', 'outside', 'all', 'scope', 'unmount'])('ignores a late search after %s', async (action) => {
+    const pending = deferred<Awaited<ReturnType<typeof api.findResourceCreators>>>();
+    vi.mocked(api.findResourceCreators).mockReturnValueOnce(pending.promise);
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 }, attachTo: document.body });
+    await flushPromises();
+    const input = w.get('.creator-search input');
+    await input.setValue('神');
+    await w.get('.creator-search').trigger('submit');
+    expect(w.text()).toContain('正在查找博主');
+    if (action === 'edit') await input.setValue('');
+    if (action === 'escape') await input.trigger('keydown', { key: 'Escape' });
+    if (action === 'outside') document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    if (action === 'all') await w.get('[data-test="view-all"]').trigger('click');
+    if (action === 'scope') await w.setProps({ creatorId: 2 });
+    if (action === 'unmount') w.unmount();
+    pending.resolve({ items: [{ id: 2, canonicalName: '迟到的博主', enabled: true, preference: null }], total: 1 });
+    await flushPromises();
+    expect(w.find('.choices').exists()).toBe(false);
+    if (action !== 'unmount') expect(w.text()).not.toContain('正在查找博主');
+    if (action === 'edit') expect(w.emitted('all')).toBeUndefined();
+  });
+  it('reports empty/error searches locally and shows IDs only for ambiguous names', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } });
+    await flushPromises();
+    const input = w.get('.creator-search input');
+    await input.setValue('神');
+    vi.mocked(api.findResourceCreators).mockResolvedValueOnce({ items: [], total: 0 });
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises();
+    expect(w.text()).toContain('没有符合名称或别名的博主');
+    vi.mocked(api.findResourceCreators).mockRejectedValueOnce(new Error('搜索暂时失败'));
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises();
+    expect(w.get('.creator-picker [role="status"]').text()).toBe('搜索暂时失败');
+    expect(w.find('[role="alert"]').exists()).toBe(false);
+    const items = [2, 3].map(id => ({ id, canonicalName: '同名博主', enabled: true, preference: null }));
+    vi.mocked(api.findResourceCreators).mockResolvedValueOnce({ items, total: 3 });
+    await input.trigger('keydown', { key: 'Enter' }); await flushPromises();
+    expect(w.get('.choices').text()).toContain('身份 #2');
+    expect(w.get('.choices').text()).toContain('身份 #3');
+    expect(w.text()).toContain('共 3 位，请缩小搜索范围');
+    await w.get('.choices button').trigger('click');
+    expect(w.emitted('select')).toEqual([[2]]);
+    expect(w.find('.choices').exists()).toBe(false);
+    expect(w.text()).not.toContain('请缩小搜索范围');
+  });
   it('global rows keep their own creator links and global revision on detail reads', async () => {
     const p = page(2);
     p.creator = null;
@@ -349,8 +449,8 @@ describe('resource catalog', () => {
     await button(w, '展开详情').trigger('click');
     await flushPromises();
     expect(api.fetchResourceDetail).toHaveBeenCalledWith(2, 22, 'r2', 'all');
-    await button(w, '更换博主').trigger('click');
-    expect(w.emitted('select')).toEqual([[null]]);
+    expect(w.get('[data-test="view-all"]').attributes('aria-pressed')).toBe('true');
+    expect(w.get('[data-test="view-all"]').attributes('disabled')).toBeDefined();
   });
   it('discloses incomplete initialization, blocks export, and polls a new revision without overlapping requests', async () => {
     vi.useFakeTimers();
@@ -431,5 +531,60 @@ describe('resource catalog', () => {
     expect(names).toEqual(['CosGallery-1-r1.csv', 'CosGallery-1-r1.metadata.json']);
     expect(create).toHaveBeenCalledTimes(2);
     click.mockRestore();
+  });
+  it('keeps scope counts while applying visible exception/source/search filters and preserves zero selected states', async () => {
+    const p = page(); p.summary.unlinkedWorks = 70; p.total = 12;
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValue(p);
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } }); await flushPromises();
+    expect(w.get('.scope-count').text()).toBe('完整目录 101 套');
+    expect(w.get('.filtered-count').text()).toBe('当前筛选 12 套');
+    expect(w.find('.filters input[type="checkbox"]').exists()).toBe(false);
+    expect(w.find('.status-tags button').exists()).toBe(false);
+    await w.get('[data-test="local-state"]').setValue('exception'); await flushPromises();
+    expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(1, expect.objectContaining({ localState: 'exception', source: 'all' }), 1, 'r1');
+    await w.get('[data-test="source-filter"]').setValue('unlinked'); await flushPromises();
+    expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(1, expect.objectContaining({ localState: 'exception', source: 'unlinked' }), 1, 'r1');
+    const zero = page(); zero.summary.unavailableWorks = 0; zero.total = 0; zero.items = [];
+    vi.mocked(api.fetchResourceCatalog).mockResolvedValueOnce(zero);
+    expect(w.get('[data-test="combined-filters"]').text()).toBe('同时满足：只看异常 · 未关联来源');
+    await w.get('[data-test="local-state"]').setValue('unavailable'); await flushPromises();
+    expect((w.get('[data-test="local-state"]').element as HTMLSelectElement).value).toBe('unavailable');
+    expect(w.get('.status-tags').text()).toContain('主副本不可用 0');
+    expect(w.text()).toContain('当前筛选没有作品');
+    await button(w, '清除筛选').trigger('click'); await flushPromises();
+    expect(api.fetchResourceCatalog).toHaveBeenLastCalledWith(1, expect.objectContaining({ localState: 'all', source: 'all', q: '' }), 1, 'r1');
+  });
+  it('supports keyboard details and keeps row actions and selected text from expanding', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } }); await flushPromises();
+    const rowElement = w.get('.catalog-row');
+    expect(rowElement.attributes('aria-expanded')).toBe('false');
+    w.get('.row-actions a').element.addEventListener('click', event => event.preventDefault());
+    await w.get('.row-actions a').trigger('click');
+    await button(w, '复制单条').trigger('click'); await flushPromises();
+    expect(rowElement.attributes('aria-expanded')).toBe('false');
+    expect(api.fetchResourceDetail).toHaveBeenCalledTimes(1);
+    const selection = vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => 'selected title' } as Selection);
+    await rowElement.trigger('click'); expect(rowElement.attributes('aria-expanded')).toBe('false');
+    selection.mockRestore();
+    await rowElement.trigger('keydown', { key: 'Enter' }); await flushPromises();
+    expect(rowElement.attributes('aria-expanded')).toBe('true');
+    expect(w.get(`#${rowElement.attributes('aria-controls')}`).exists()).toBe(true);
+    expect(api.fetchResourceDetail).toHaveBeenCalledTimes(2);
+    await rowElement.trigger('keydown', { key: ' ' });
+    expect(rowElement.attributes('aria-expanded')).toBe('false');
+    expect(w.get('.catalog-row').text()).not.toContain('0V');
+  });
+  it('invalid explicit scope never reads all and a late export cannot download into a new page', async () => {
+    const invalid = mount(ResourceCatalog, { props: { creatorId: null, globalScope: false, scopeError: '无效博主链接' } });
+    await flushPromises(); expect(api.fetchResourceCatalog).not.toHaveBeenCalled();
+    expect(invalid.get('[role="alert"]').text()).toBe('无效博主链接'); invalid.unmount();
+    const pending = deferred<{ text: string; metadata: Record<string, unknown> | null }>();
+    vi.mocked(api.exportResourceCatalog).mockReturnValueOnce(pending.promise);
+    const w = mount(ResourceCatalog, { props: { creatorId: 1 } }); await flushPromises();
+    await button(w, '复制目录').trigger('click');
+    await button(w, '下一页').trigger('click'); await flushPromises();
+    pending.resolve({ text: 'late export', metadata: null }); await flushPromises();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(w.text()).not.toContain('已复制');
   });
 });

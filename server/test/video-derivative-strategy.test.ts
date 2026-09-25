@@ -158,6 +158,7 @@ describe.sequential('video derivative strategy', () => {
           .toFile(outputPath);
       }
 
+      if (!args.includes('png')) await fs.writeFile(args.at(-1)!, 'synthetic video output');
       return { stdout: '', stderr: '' };
     });
 
@@ -218,7 +219,7 @@ function expectedVideoScaleFilter(): string {
 }
 
 function createExecFileAsyncMock(payload: unknown) {
-  return async (command: string) => {
+  return async (command: string, args: string[]) => {
     if (command === 'ffprobe') {
       return {
         stdout: JSON.stringify(payload),
@@ -226,6 +227,7 @@ function createExecFileAsyncMock(payload: unknown) {
       };
     }
 
+    await fs.writeFile(args.at(-1)!, 'synthetic ffmpeg output');
     return {
       stdout: '',
       stderr: ''

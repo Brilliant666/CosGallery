@@ -3,7 +3,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import UnoCSS from 'unocss/vite';
 import vue from '@vitejs/plugin-vue';
 import { vite as vidstack } from 'vidstack/plugins';
@@ -47,8 +47,34 @@ async function resolveDevClientPort(basePort: number, host: string): Promise<num
   throw new Error(`No available Vite client port found in range ${basePort}-${basePort + DEV_CLIENT_PORT_RANGE_SIZE - 1}.`);
 }
 
+export function recoveryFileProtection(backupRoot: string): Plugin {
+  const backupName = path.basename(backupRoot).toLowerCase();
+  return {
+    name: 'deny-private-recovery-files',
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const rawPath = (request.url ?? '').split('?')[0]!;
+        // Preserve the existing proxy routes, including legitimate media/folder names.
+        if (/^\/(?:api|thumbnails|previews)(?:\/|$)/i.test(rawPath)) { next(); return; }
+        let pathname: string;
+        try { pathname = decodeURIComponent(rawPath).replace(/\\/g, '/').toLowerCase(); }
+        catch { response.statusCode = 400; response.end(); return; }
+        const backupUrl = pathname === `/${backupName}` || pathname.startsWith(`/${backupName}/`)
+          || pathname.startsWith('/@fs/') && pathname.includes(backupRoot.replace(/\\/g, '/').toLowerCase());
+        if (backupUrl || pathname.split('/').some(segment => segment === 'data_backup'
+          || segment === 'private' || segment === '.run' || /^\.env(?:\.|$)/.test(segment)
+          || /\.(?:key|pem|pfx|p12)$/.test(segment))) {
+          response.statusCode = 404; response.end(); return;
+        }
+        next();
+      });
+    }
+  };
+}
+
 export default defineConfig(async ({ command, mode }) => {
   const env = loadEnv(mode, repositoryRoot, '');
+  const backupRoot = path.resolve(repositoryRoot, env.BACKUP_ROOT ?? 'data_backup');
   const devServerPort = Number.parseInt(env.DEV_SERVER_PORT ?? '4140', 10);
   const devClientPort = Number.parseInt(env.DEV_CLIENT_PORT ?? '4141', 10);
   const devHost = '0.0.0.0';
@@ -64,6 +90,7 @@ export default defineConfig(async ({ command, mode }) => {
       __INTLIFY_PROD_DEVTOOLS__: JSON.stringify(false)
     },
     plugins: [
+      recoveryFileProtection(backupRoot),
       UnoCSS(),
       vidstack({
         include: /src\/components\//
@@ -82,6 +109,11 @@ export default defineConfig(async ({ command, mode }) => {
       }
     },
     server: {
+      fs: {
+        strict: true,
+        deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/data_backup/**',
+          '**/private/**', '**/.run/**', '**/*.{key,pfx,p12}', `${backupRoot.replace(/\\/g, '/')}/**`]
+      },
       host: devHost,
       port: resolvedDevClientPort,
       proxy: {

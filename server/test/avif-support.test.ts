@@ -210,7 +210,7 @@ describe.sequential('AVIF derivative strategy', () => {
 });
 
 function createExecFileAsyncMock(payload: unknown) {
-  return async (command: string) => {
+  return async (command: string, args: string[]) => {
     if (command === 'ffprobe') {
       return {
         stdout: JSON.stringify(payload),
@@ -218,6 +218,7 @@ function createExecFileAsyncMock(payload: unknown) {
       };
     }
 
+    await fs.writeFile(args.at(-1)!, 'synthetic ffmpeg output');
     return {
       stdout: '',
       stderr: ''

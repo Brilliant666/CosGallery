@@ -1028,13 +1028,6 @@ export interface PostContentRatingMutationResult {
   contentRating: ContentRating;
 }
 
-export interface DeleteFolderResult {
-  slug: string;
-  deletedImageCount: number;
-  deletedFolderCount: number;
-  deletedSourceFolder: boolean;
-}
-
 export interface LikeMutationResult {
   id: number;
   liked: boolean;

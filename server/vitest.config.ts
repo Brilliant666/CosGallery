@@ -14,7 +14,10 @@ export default defineConfig({
     env: {
       // Tests that do not install a more specific fixture still default to an
       // isolated temp root, never the repository's production ./data folder.
-      DATA_ROOT: isolatedDefaultDataRoot
+      DATA_ROOT: isolatedDefaultDataRoot,
+      APP_ENV_FILE: path.join(isolatedDefaultDataRoot, 'test.env'),
+      APP_RUN_CONFIG_FILE: path.join(isolatedDefaultDataRoot, 'test.run.xml'),
+      BACKUP_ROOT: path.join(isolatedDefaultDataRoot, 'recovery-points')
     },
     fileParallelism: false,
     maxWorkers: 1,

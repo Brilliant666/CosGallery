@@ -62,6 +62,8 @@ export interface PlaceRecord {
 }
 
 export interface FolderSummaryRecord extends FolderRecord {
+  summary_avatar_source_version?: string;
+  summary_avatar_media_type?: string;
   content_rating: ContentRating;
   image_count: number;
   post_count: number;
@@ -275,6 +277,8 @@ export interface FolderSharePasswordRecord {
 }
 
 export interface PostMediaItem {
+  /** Internal projection, removed by API mapping. */
+  derivativeSourceVersion?: string;
   imageId: number;
   position: number;
   filename: string;
@@ -294,6 +298,8 @@ export interface PostMediaItem {
 }
 
 export interface FeedImage {
+  /** Internal projection, removed by API mapping. */
+  derivativeSourceVersion?: string;
   id: number;
   folderId: number;
   folderSlug: string;

@@ -1,10 +1,16 @@
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { setActivePinia } from 'pinia';
 import ArchiveCatalogView from './ArchiveCatalogView.vue';
 import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
 import * as gallery from '../api/gallery';
 import * as managed from '../api/managed-creators';
 import type { ArchiveCatalogCreatorDetail } from '../types/api';
+import { pinia } from '../stores/pinia';
+import { useAuthStore } from '../stores/auth';
+import { editingState } from '../components/creator-panel-test-fixtures';
+
+vi.mock('../api/local-admission', () => ({ fetchAdmissionBatches: vi.fn(async () => ({ items: [], total: 0, page: 1, pageSize: 20, hasMore: false })) }));
 
 vi.mock('../components/FirstCollectionSelector.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('../components/Stage2CreatorQueue.vue', () => ({ default: { template: '<div />', methods: { refresh: async () => {} } } }));
@@ -22,12 +28,17 @@ vi.mock('../api/gallery', async (original) => ({ ...await original<typeof galler
 }));
 vi.mock('../api/managed-creators', async (original) => ({ ...await original<typeof managed>(),
   fetchIngestDestination: vi.fn(async () => ({ preferredLocalCreatorFolderId: null, candidates: [] })),
-  updateManagedCreator: vi.fn()
+  updateManagedCreator: vi.fn(), fetchManagedCreatorEditingState: vi.fn(),
+  saveManagedCreatorProfile: vi.fn(), saveManagedCreatorDirectories: vi.fn()
 }));
 enableAutoUnmount(afterEach);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  setActivePinia(pinia);
+  useAuthStore(pinia).$reset();
+  useAuthStore(pinia).ready = true;
+  HTMLDialogElement.prototype.show = function () { this.open = true; };
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
 });
@@ -52,8 +63,9 @@ it('refreshes the real roster from changed backend facts while retaining its pag
     total: 60, page: params?.page ?? 1, limit: params?.limit ?? 50, hasMore: params?.page !== 2
   }));
   vi.mocked(gallery.fetchArchiveCatalogCreator).mockResolvedValue(creator);
+  vi.mocked(managed.fetchManagedCreatorEditingState).mockResolvedValue(editingState(creator));
 
-  const wrapper = mount(ArchiveCatalogView);
+  const wrapper = mount(ArchiveCatalogView, { global: { plugins: [pinia] } });
   await flushPromises();
   const roster = wrapper.getComponent(ManagedCreatorRoster);
   await roster.get('.roster-filters select').setValue('liked');
@@ -66,7 +78,11 @@ it('refreshes the real roster from changed backend facts while retaining its pag
   expect(wrapper.find('[data-test="workspace-ingest"]').exists()).toBe(false);
   await roster.get('button[aria-label="管理 Alpha"]').trigger('click');
   await flushPromises();
-  await roster.get('.roster-edit input').setValue('Unsaved name');
+  expect(roster.get('#creator-tab-overview').attributes('aria-selected')).toBe('true');
+  expect(roster.find('.profile-form').exists()).toBe(false);
+  await roster.get('#creator-tab-profile').trigger('click');
+  await flushPromises();
+  await roster.get('.profile-form input').setValue('Unsaved name');
   completed = true;
   await roster.vm.refresh();
   await flushPromises();
@@ -77,10 +93,13 @@ it('refreshes the real roster from changed backend facts while retaining its pag
   expect(gallery.fetchArchiveCatalog).toHaveBeenCalledWith(expect.objectContaining({ page: 2, preference: 'liked', limit: 50 }));
   const listRequests = vi.mocked(gallery.fetchArchiveCatalog).mock.calls.filter(([params]) => params?.limit === 50);
   expect(listRequests.at(-1)?.[0]).toMatchObject({ page: 2, preference: 'liked' });
-  expect((roster.get('.roster-edit input').element as HTMLInputElement).value).toBe('Unsaved name');
-  expect((roster.get('dialog').element as HTMLDialogElement).open).toBe(true);
+  expect((roster.get('.profile-form input').element as HTMLInputElement).value).toBe('Unsaved name');
+  expect((roster.get('.creator-panel').element as HTMLDialogElement).open).toBe(true);
   expect(gallery.fetchArchiveCatalogCreator).toHaveBeenCalledTimes(1);
+  expect(managed.fetchManagedCreatorEditingState).toHaveBeenCalledExactlyOnceWith(1);
   expect(managed.updateManagedCreator).not.toHaveBeenCalled();
+  expect(managed.saveManagedCreatorProfile).not.toHaveBeenCalled();
+  expect(managed.saveManagedCreatorDirectories).not.toHaveBeenCalled();
   expect(gallery.scanLocalIngestInbox).not.toHaveBeenCalled();
   expect(gallery.planArchiveDownloadTasks).not.toHaveBeenCalled();
   expect(gallery.runLocalIngestBatch).not.toHaveBeenCalled();

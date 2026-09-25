@@ -515,7 +515,6 @@ CREATE TABLE IF NOT EXISTS local_ingest_file_observations (
   CHECK (observed_size >= 0)
 );
 
-CREATE INDEX IF NOT EXISTS idx_folders_slug ON folders(slug);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_folder_path ON folders(folder_path);
 CREATE INDEX IF NOT EXISTS idx_folders_role ON folders(role);
 CREATE INDEX IF NOT EXISTS idx_folders_story_owner_role ON folders(story_owner_folder_id, role, folder_path COLLATE NOCASE);
@@ -537,7 +536,6 @@ CREATE INDEX IF NOT EXISTS idx_images_folder_visible_sort ON images(folder_id, i
 CREATE INDEX IF NOT EXISTS idx_images_folder_media_visible_sort ON images(folder_id, media_type, is_deleted, is_trashed, sort_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_images_media_visible_sort ON images(media_type, is_deleted, is_trashed, sort_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_images_trashed_listing ON images(is_trashed, is_deleted, trashed_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_images_relative_path ON images(relative_path);
 CREATE INDEX IF NOT EXISTS idx_images_thumbnail_path ON images(thumbnail_path);
 CREATE INDEX IF NOT EXISTS idx_images_preview_path ON images(preview_path);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_images_asset_key ON images(asset_key) WHERE asset_key IS NOT NULL;
@@ -547,16 +545,12 @@ CREATE INDEX IF NOT EXISTS idx_posts_folder_visible_sort ON posts(folder_id, is_
 CREATE INDEX IF NOT EXISTS idx_posts_visible_sort ON posts(is_deleted, is_trashed, sort_timestamp DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_type_visibility ON posts(post_type, is_deleted, is_trashed);
 CREATE INDEX IF NOT EXISTS idx_posts_place_visibility ON posts(place_id, is_deleted, is_trashed, sort_timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_posts_source_path ON posts(source_path);
 CREATE INDEX IF NOT EXISTS idx_posts_trashed_listing ON posts(is_trashed, is_deleted, trashed_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_content_rating_visible_sort ON posts(content_rating, is_deleted, is_trashed, sort_timestamp DESC, id DESC);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_post_items_image_id ON post_items(image_id);
-CREATE INDEX IF NOT EXISTS idx_post_items_post_id ON post_items(post_id, position);
 CREATE INDEX IF NOT EXISTS idx_creator_rating_sources_folder ON creator_rating_sources(folder_id, is_manual, rating);
 CREATE INDEX IF NOT EXISTS idx_creator_rating_sources_source ON creator_rating_sources(source, source_creator_id);
 
-CREATE INDEX IF NOT EXISTS idx_places_slug ON places(slug);
 CREATE INDEX IF NOT EXISTS idx_places_display_name ON places(display_name);
 CREATE INDEX IF NOT EXISTS idx_places_geonames_id ON places(geonames_id);
 CREATE INDEX IF NOT EXISTS idx_folder_scan_state_updated_at ON folder_scan_state(updated_at DESC);
@@ -591,9 +585,7 @@ CREATE INDEX IF NOT EXISTS idx_archive_decisions_local_work ON archive_catalog_w
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_local_works_folder ON archive_catalog_local_works(local_creator_folder_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_import_runs_source ON archive_catalog_import_runs(source, imported_at DESC);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_download_tasks_status ON archive_catalog_download_tasks(status, provider, id);
-CREATE INDEX IF NOT EXISTS idx_archive_catalog_download_tasks_source_work ON archive_catalog_download_tasks(source_work_id, provider);
 CREATE INDEX IF NOT EXISTS idx_archive_catalog_metadata_tasks_status ON archive_catalog_metadata_tasks(status, source, id);
-CREATE INDEX IF NOT EXISTS idx_archive_catalog_metadata_tasks_creator ON archive_catalog_metadata_tasks(creator_id, source);
 CREATE INDEX IF NOT EXISTS idx_local_ingest_jobs_status ON local_ingest_jobs(status, phase, id);
 CREATE INDEX IF NOT EXISTS idx_local_ingest_jobs_creator ON local_ingest_jobs(creator_id, status, id);
 CREATE INDEX IF NOT EXISTS idx_local_ingest_jobs_archive_hash ON local_ingest_jobs(source_archive_sha256, source_work_id);

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { IMAGE_DERIVATIVE_EXTENSION, VIDEO_PREVIEW_EXTENSION } from './derivative-spec.js';
 
 import type { MediaType } from '../types/models.js';
 import { normalizePath } from './path-utils.js';
@@ -36,11 +37,11 @@ export function getMediaTypeFromExtension(extension: string): MediaType {
 }
 
 export function getThumbnailRelativePath(relativePath: string): string {
-  return replaceExtension(relativePath, '.webp');
+  return replaceExtension(relativePath, IMAGE_DERIVATIVE_EXTENSION);
 }
 
 export function getPreviewRelativePath(relativePath: string, mediaType: MediaType): string {
-  return replaceExtension(relativePath, mediaType === 'video' ? '.mp4' : '.webp');
+  return replaceExtension(relativePath, mediaType === 'video' ? VIDEO_PREVIEW_EXTENSION : IMAGE_DERIVATIVE_EXTENSION);
 }
 
 export function getDerivativeRelativePath(relativePath: string): string {

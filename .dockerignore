@@ -8,6 +8,11 @@ client/dist
 server/dist
 coverage
 data
+data_backup
+**/data_backup
+.env.*
+**/private
+**/*.key
 gallery
 thumbnails
 previews

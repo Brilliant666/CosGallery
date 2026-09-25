@@ -9,9 +9,10 @@ import { getRelativePathWithinRoot, isSameOrWithinPath, normalizePath } from '..
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const repositoryRoot = path.resolve(moduleDirectory, '../../..');
+export const environmentFile = path.resolve(repositoryRoot, process.env.APP_ENV_FILE ?? '.env');
 
 if (process.env.NODE_ENV !== 'test') {
-  dotenv.config({ path: path.join(repositoryRoot, '.env') });
+  dotenv.config({ path: environmentFile });
 }
 
 const envSchema = z.object({
@@ -23,6 +24,12 @@ const envSchema = z.object({
   DATA_DIR: z.string().optional(),
   GALLERY_ROOT: z.string().optional(),
   DB_DIR: z.string().optional(),
+  BACKUP_ROOT: z.string().trim().min(1).optional(),
+  APP_RUN_CONFIG_FILE: z.string().trim().min(1).optional(),
+  BACKUP_AUTO_ENABLED: z.enum(['true', 'false', '1', '0']).default('false'),
+  BACKUP_INTERVAL_HOURS: z.coerce.number().int().min(24).default(24),
+  BACKUP_RETAIN_DAILY: z.coerce.number().int().min(1).max(365).default(7),
+  BACKUP_RETAIN_WEEKLY: z.coerce.number().int().min(1).max(104).default(4),
   THUMBNAILS_DIR: z.string().optional(),
   PREVIEWS_DIR: z.string().optional(),
   FFMPEG_PATH: z.string().trim().min(1).optional(),
@@ -43,11 +50,16 @@ const envSchema = z.object({
 });
 
 const parsed = envSchema.parse(process.env);
+// Names only: recovery compares supported process overrides without exporting values.
+export const supportedEnvironmentKeys = [...Object.keys(envSchema.shape), 'APP_ENV_FILE', 'LOCAL_INGEST_ARCHIVE_PASSWORD'];
+type ParsedEnvironment = z.infer<typeof envSchema>;
+const productionPortDefault = 4141, developmentPortDefault = 4140, clientPortDefault = 4141;
+const ffmpegDefault = 'ffmpeg', ffprobeDefault = 'ffprobe';
 const isProduction = parsed.NODE_ENV === 'production';
-const devClientPort = parsed.DEV_CLIENT_PORT ?? 4141;
+const devClientPort = parsed.DEV_CLIENT_PORT ?? clientPortDefault;
 const serverPort = isProduction
-  ? parsed.SERVER_PORT ?? 4141
-  : parsed.DEV_SERVER_PORT ?? 4140;
+  ? parsed.SERVER_PORT ?? productionPortDefault
+  : parsed.DEV_SERVER_PORT ?? developmentPortDefault;
 const devClientPorts = Array.from({ length: 4 }, (_, index) => devClientPort + index);
 
 function resolveFromRoot(value: string): string {
@@ -100,18 +112,59 @@ function parseConfiguredOrigins(value: string | undefined): string[] {
   );
 }
 
-const dataRoot = resolveConfiguredPath(parsed.DATA_ROOT ?? parsed.DATA_DIR, resolveFromRoot('./data'));
-const galleryRoot = resolveConfiguredPath(parsed.GALLERY_ROOT, path.join(dataRoot, 'gallery'));
-const dbDir = resolveConfiguredPath(parsed.DB_DIR, path.join(dataRoot, 'db'));
+function storagePaths(environment: ParsedEnvironment) {
+  const dataRoot = resolveConfiguredPath(environment.DATA_ROOT ?? environment.DATA_DIR, resolveFromRoot('./data'));
+  return {
+    dataRoot,
+    galleryRoot: resolveConfiguredPath(environment.GALLERY_ROOT, path.join(dataRoot, 'gallery')),
+    dbDir: resolveConfiguredPath(environment.DB_DIR, path.join(dataRoot, 'db')),
+    backupRoot: resolveConfiguredPath(environment.BACKUP_ROOT, path.join(repositoryRoot, 'data_backup')),
+    thumbnailsDir: resolveConfiguredPath(environment.THUMBNAILS_DIR, path.join(dataRoot, 'thumbnails')),
+    previewsDir: resolveConfiguredPath(environment.PREVIEWS_DIR, path.join(dataRoot, 'previews'))
+  };
+}
+const { dataRoot, galleryRoot, dbDir, backupRoot, thumbnailsDir, previewsDir } = storagePaths(parsed);
 const geodataDir = path.join(dataRoot, 'geodata');
-const thumbnailsDir = resolveConfiguredPath(parsed.THUMBNAILS_DIR, path.join(dataRoot, 'thumbnails'));
-const previewsDir = resolveConfiguredPath(parsed.PREVIEWS_DIR, path.join(dataRoot, 'previews'));
 const scanErrorReportDir = path.join(dataRoot, 'scan-errors');
 const logVerbose = parseBooleanFlag(parsed.LOG_VERBOSE);
 const publicDemoMode = parseBooleanFlag(parsed.PUBLIC_DEMO_MODE);
 const cosGalleryMode = parseBooleanFlag(parsed.COS_GALLERY_MODE);
 const csrfTrustedOrigins = parseConfiguredOrigins(parsed.CSRF_TRUSTED_ORIGINS);
 const galleryExcludedFolders = parseExcludedFolderRulesFromEnv(parsed.GALLERY_EXCLUDED_FOLDERS);
+
+/** Compare recovery materials using the application's existing schema/defaults,
+ * not a second loader or a dump of the process environment. */
+export function isEnvironmentValueRestorable(key: string, value: string, materials: Record<string, string>): boolean {
+  if (key === 'LOCAL_INGEST_ARCHIVE_PASSWORD') return materials[key] === value;
+  if (!(key in envSchema.shape)) return materials[key] === value;
+  // Derive the baseline only from captured materials and existing defaults.
+  // Uncaptured process overrides must not prove one another recoverable.
+  const baseline = envSchema.safeParse(materials);
+  const candidate = envSchema.safeParse({ ...parsed, [key]: value });
+  if (!baseline.success || !candidate.success) return false;
+  const effective = (environment: ParsedEnvironment): unknown => {
+    const paths = storagePaths(environment);
+    switch (key) {
+      case 'DATA_ROOT': case 'DATA_DIR': return paths.dataRoot;
+      case 'GALLERY_ROOT': return paths.galleryRoot;
+      case 'DB_DIR': return paths.dbDir;
+      case 'BACKUP_ROOT': return paths.backupRoot;
+      case 'THUMBNAILS_DIR': return paths.thumbnailsDir;
+      case 'PREVIEWS_DIR': return paths.previewsDir;
+      // Select the relevant port in the actual runtime mode; NODE_ENV itself
+      // is checked independently, so a missing mode cannot hide a port gap.
+      case 'SERVER_PORT': return parsed.NODE_ENV === 'production' ? environment.SERVER_PORT ?? productionPortDefault : undefined;
+      case 'DEV_SERVER_PORT': return parsed.NODE_ENV !== 'production' ? environment.DEV_SERVER_PORT ?? developmentPortDefault : undefined;
+      case 'DEV_CLIENT_PORT': return environment.DEV_CLIENT_PORT ?? clientPortDefault;
+      case 'FFMPEG_PATH': return environment.FFMPEG_PATH ?? ffmpegDefault;
+      case 'FFPROBE_PATH': return environment.FFPROBE_PATH ?? ffprobeDefault;
+      case 'LOG_VERBOSE': case 'PUBLIC_DEMO_MODE': case 'COS_GALLERY_MODE': return parseBooleanFlag(environment[key]);
+      case 'BACKUP_AUTO_ENABLED': case 'LOCAL_INGEST_STARTUP_SCAN': return environment[key] === 'true' || environment[key] === '1';
+      default: return environment[key as keyof ParsedEnvironment];
+    }
+  };
+  return effective(baseline.data) === effective(candidate.data);
+}
 
 const derivativeDirectoriesOverlap =
   isSameOrWithinPath(thumbnailsDir, previewsDir) || isSameOrWithinPath(previewsDir, thumbnailsDir);
@@ -155,11 +208,20 @@ export const appConfig = {
   dataRoot,
   galleryRoot,
   dbDir,
+  backupRoot,
+  backupRootExplicit: parsed.BACKUP_ROOT !== undefined,
+  runConfigurationFile: parsed.APP_RUN_CONFIG_FILE ? resolveFromRoot(parsed.APP_RUN_CONFIG_FILE) : null,
+  backupAutomatic: {
+    enabled: parsed.BACKUP_AUTO_ENABLED === 'true' || parsed.BACKUP_AUTO_ENABLED === '1',
+    intervalHours: parsed.BACKUP_INTERVAL_HOURS,
+    retainDaily: parsed.BACKUP_RETAIN_DAILY,
+    retainWeekly: parsed.BACKUP_RETAIN_WEEKLY
+  },
   geodataDir,
   thumbnailsDir,
   previewsDir,
-  ffmpegPath: parsed.FFMPEG_PATH ?? 'ffmpeg',
-  ffprobePath: parsed.FFPROBE_PATH ?? 'ffprobe',
+  ffmpegPath: parsed.FFMPEG_PATH ?? ffmpegDefault,
+  ffprobePath: parsed.FFPROBE_PATH ?? ffprobeDefault,
   ffmpegVideoEncoder: parsed.FFMPEG_VIDEO_ENCODER,
   scanErrorReportDir,
   managedGalleryRelativeIgnores,

@@ -1,4 +1,5 @@
 import { databaseManager } from './database.js';
+import { createUnchangedReadCache } from './unchanged-read-cache.js';
 import { effectivePostSortSql } from './work-sort-sql.js';
 import { SHARE_SESSION_SECRET_SETTING_KEY } from '../constants/app-setting-keys.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
@@ -259,6 +260,7 @@ const BASE_POST_SELECT_SQL = `
     images.media_type AS mediaType,
     images.duration_ms AS durationMs,
     images.is_animated AS isAnimated,
+    printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
     images.thumbnail_path AS thumbnailUrl,
     images.preview_path AS previewUrl,
     images.playback_strategy AS playbackStrategy,
@@ -350,6 +352,8 @@ const FOLDER_SUMMARY_SELECT_SQL = `
     ) AS latest_image_mtime_ms,
     CASE WHEN ${HAS_AVATAR_STORY_SQL} THEN 1 ELSE 0 END AS has_avatar_story,
     ${FOLDER_SUMMARY_AVATAR_IMAGE_ID_SQL} AS summary_avatar_image_id,
+    (SELECT printf('%lld:%lld', a.file_size, round(a.mtime_ms)) FROM images a WHERE a.id = (${FOLDER_SUMMARY_AVATAR_IMAGE_ID_SQL})) AS summary_avatar_source_version,
+    (SELECT a.media_type FROM images a WHERE a.id = (${FOLDER_SUMMARY_AVATAR_IMAGE_ID_SQL})) AS summary_avatar_media_type,
     ${FOLDER_SUMMARY_AVATAR_THUMBNAIL_PATH_SQL} AS summary_avatar_thumbnail_path
   FROM folders
 `;
@@ -380,7 +384,7 @@ const ALL_FOLDER_SUMMARIES_SQL = `
     JOIN images img ON img.id=pi.image_id GROUP BY p.folder_id
   ), story_owners AS (
     SELECT DISTINCT story_folders.story_owner_folder_id AS folder_id
-    FROM folders story_folders JOIN images story_images ON story_images.folder_id=story_folders.id
+    FROM folders story_folders CROSS JOIN images story_images ON story_images.folder_id=story_folders.id
     WHERE story_folders.role IN ('story_root','story_capsule')
       AND story_images.is_deleted=0 AND story_images.is_trashed=0
   ), ranked_covers AS (
@@ -390,8 +394,8 @@ const ALL_FOLDER_SUMMARIES_SQL = `
           WHEN 'cover.jpg' THEN 1 WHEN 'cover.jpeg' THEN 2 WHEN 'cover.png' THEN 3
           WHEN 'cover.webp' THEN 4 WHEN 'cover.avif' THEN 5 WHEN 'cover.gif' THEN 6 ELSE 7 END,
         images.id ASC) AS rank
-    FROM images JOIN folders ON folders.id=images.folder_id AND folders.role='normal'
-    WHERE images.is_deleted=0 AND images.is_trashed=0 AND LOWER(images.filename) IN (${COVER_FILENAME_SQL})
+    FROM folders CROSS JOIN images ON images.folder_id=folders.id
+    WHERE folders.role='normal' AND images.is_deleted=0 AND images.is_trashed=0 AND LOWER(images.filename) IN (${COVER_FILENAME_SQL})
   ), ranked_fallbacks AS (
     SELECT p.folder_id, pi.image_id,
       ROW_NUMBER() OVER (PARTITION BY p.folder_id ORDER BY p.sort_timestamp DESC,p.id DESC) AS rank
@@ -414,6 +418,8 @@ const ALL_FOLDER_SUMMARIES_SQL = `
     media_times.latest_image_mtime_ms,
     CASE WHEN story_owners.folder_id IS NULL THEN 0 ELSE 1 END AS has_avatar_story,
     avatar_ids.image_id AS summary_avatar_image_id,
+    CASE WHEN avatar_image.id IS NOT NULL THEN printf('%lld:%lld', avatar_image.file_size, round(avatar_image.mtime_ms)) END AS summary_avatar_source_version,
+    avatar_image.media_type AS summary_avatar_media_type,
     avatar_image.thumbnail_path AS summary_avatar_thumbnail_path
   FROM folders
   LEFT JOIN post_totals ON post_totals.folder_id=folders.id
@@ -716,6 +722,9 @@ export interface UpsertCityPlaceInput {
   confidence?: number | null;
 }
 
+const readFolderSummaries = createUnchangedReadCache<FolderSummaryRecord[]>();
+const readPendingDerivativeCount = createUnchangedReadCache<number>();
+
 export const folderRepository = {
   getAll(): FolderRecord[] {
     return database.prepare('SELECT * FROM folders ORDER BY folder_path COLLATE NOCASE ASC').all() as unknown as FolderRecord[];
@@ -726,9 +735,9 @@ export const folderRepository = {
   },
 
   getAllSummaries(): FolderSummaryRecord[] {
-    return database
+    return readFolderSummaries(databaseManager.connection, () => database
       .prepare(ALL_FOLDER_SUMMARIES_SQL)
-      .all() as unknown as FolderSummaryRecord[];
+      .all() as unknown as FolderSummaryRecord[]);
   },
 
   getBySlug(slug: string): FolderRecord | undefined {
@@ -1002,7 +1011,7 @@ export const placeRepository = {
         `
         SELECT places.*, COUNT(posts.id) AS post_count
         FROM places
-        INNER JOIN posts ON posts.place_id = places.id
+        CROSS JOIN posts ON posts.place_id = places.id
         INNER JOIN folders ON folders.id = posts.folder_id
         WHERE ${VISIBLE_POST_WHERE_SQL}
         GROUP BY places.id
@@ -1466,6 +1475,7 @@ export const postRepository = {
           img.media_type AS mediaType,
           img.duration_ms AS durationMs,
           img.is_animated AS isAnimated,
+          printf('%lld:%lld', img.file_size, round(img.mtime_ms)) AS derivativeSourceVersion,
           img.thumbnail_path AS thumbnailUrl,
           img.preview_path AS previewUrl,
           img.relative_path AS relativePath,
@@ -1489,6 +1499,7 @@ export const postRepository = {
         mediaType: MediaType;
         durationMs: number | null;
         isAnimated: number | null;
+        derivativeSourceVersion: string;
         thumbnailUrl: string;
         previewUrl: string;
         relativePath: string;
@@ -1512,6 +1523,7 @@ export const postRepository = {
         mediaType: row.mediaType,
         durationMs: row.durationMs,
         isAnimated: row.isAnimated === 1,
+        derivativeSourceVersion: row.derivativeSourceVersion,
         thumbnailUrl: row.thumbnailUrl,
         previewUrl: row.previewUrl,
         originalUrl: `/api/originals/${row.imageId}`,
@@ -1537,6 +1549,7 @@ export const postRepository = {
         post.mediaType = first.mediaType;
         post.durationMs = first.durationMs;
         post.isAnimated = first.isAnimated;
+        post.derivativeSourceVersion = first.derivativeSourceVersion;
         post.thumbnailUrl = first.thumbnailUrl;
         post.previewUrl = first.previewUrl;
       }
@@ -1779,6 +1792,7 @@ export const postRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -1976,6 +1990,7 @@ export const postRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -2044,6 +2059,7 @@ export const postRepository = {
         images.relative_path AS relativePath,
         images.mime_type AS mimeType,
         images.file_size AS fileSize,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3114,6 +3130,7 @@ export const imageRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3153,6 +3170,7 @@ export const imageRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3305,7 +3323,9 @@ export const imageRepository = {
   },
 
   countPendingDerivativeMigrationRows(): number {
-    return Number(
+    // Preserve the exact legacy all-row/case/whitespace contract. Reuse only
+    // while SQLite proves the database unchanged, including external writers.
+    return readPendingDerivativeCount(databaseManager.connection, () => Number(
       (
         database
           .prepare(
@@ -3325,7 +3345,7 @@ export const imageRepository = {
           )
           .get() as { count: number }
       ).count
-    );
+    ));
   },
 
   countMissingTimestampMetadataByFolder(folderId: number): number {
@@ -3517,6 +3537,7 @@ export const likeRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3529,7 +3550,7 @@ export const likeRepository = {
         places.kind AS placeKind,
         places.is_approximate AS placeIsApproximate
       FROM likes
-      INNER JOIN posts ON posts.id = likes.post_id
+      CROSS JOIN posts ON posts.id = likes.post_id
       INNER JOIN folders ON folders.id = posts.folder_id
       JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
       JOIN images ON images.id = post_items.image_id
@@ -3562,6 +3583,7 @@ export const likeRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3574,7 +3596,7 @@ export const likeRepository = {
         places.kind AS placeKind,
         places.is_approximate AS placeIsApproximate
       FROM likes
-      INNER JOIN posts ON posts.id = likes.post_id
+      CROSS JOIN posts ON posts.id = likes.post_id
       INNER JOIN folders ON folders.id = posts.folder_id
       JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
       JOIN images ON images.id = post_items.image_id
@@ -3606,6 +3628,7 @@ export const likeRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,
@@ -3787,7 +3810,7 @@ export const collectionRepository = {
           (
             SELECT COUNT(*)
             FROM collection_items
-            INNER JOIN posts ON posts.id = collection_items.post_id
+            CROSS JOIN posts ON posts.id = collection_items.post_id
             JOIN post_items pi ON pi.post_id = posts.id AND pi.position = 1
             JOIN images ON images.id = pi.image_id
             INNER JOIN folders ON folders.id = posts.folder_id
@@ -3974,6 +3997,7 @@ export const collectionRepository = {
         images.media_type AS mediaType,
         images.duration_ms AS durationMs,
         images.is_animated AS isAnimated,
+        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
         images.thumbnail_path AS thumbnailUrl,
         images.preview_path AS previewUrl,
         images.playback_strategy AS playbackStrategy,

@@ -113,4 +113,91 @@ describe.sequential('real lazy image derivatives in isolated storage', () => {
       expect(await response.json()).toEqual({ message: 'Derivative not found.' });
     }
   });
+
+  it('changes only changed media URLs and rejects obsolete versions instead of caching new pixels under them', async () => {
+    const previous = repos.imageRepository.getByThumbnailPath('Synthetic/swatch.webp')!;
+    const post = repos.postRepository.findByImageId(previous.id)!;
+    const oldDetail = gallery.getImageDetail(post.id)!;
+    const oldBytes = Buffer.from(await (await fetch(new URL(oldDetail.thumbnailUrl, origin))).arrayBuffer());
+    await sharp({ create: { width: 1010, height: 1510, channels: 3, background: '#ee2211' } }).png().toFile(previous.absolute_path);
+    const stat = await fs.stat(previous.absolute_path);
+    manager.connection.prepare('UPDATE images SET file_size = ?, mtime_ms = ?, checksum_or_fingerprint = ? WHERE id = ?')
+      .run(stat.size, stat.mtimeMs, 'changed-fixture', previous.id);
+    const nextDetail = gallery.getImageDetail(post.id)!;
+    expect(nextDetail.thumbnailUrl).not.toBe(oldDetail.thumbnailUrl);
+    expect(nextDetail.previewUrl).not.toBe(oldDetail.previewUrl);
+    const stale = await fetch(new URL(oldDetail.thumbnailUrl, origin));
+    expect(stale.status).toBe(409);
+    expect(stale.headers.get('cache-control')).toBe('no-store');
+    const current = await fetch(new URL(nextDetail.thumbnailUrl, origin));
+    expect(current.status).toBe(200);
+    const currentBytes = Buffer.from(await current.arrayBuffer());
+    expect(currentBytes).not.toEqual(oldBytes);
+    expect(await sharp(currentBytes).metadata()).toMatchObject({ format: 'webp', width: 640 });
+    manager.connection.prepare('UPDATE images SET caption = ?, sort_timestamp = ? WHERE id = ?').run('display only', 999, previous.id);
+    expect(gallery.getImageDetail(post.id)!.thumbnailUrl).toBe(nextDetail.thumbnailUrl);
+    const output = path.join(config.thumbnailsDir, previous.thumbnail_path);
+    const generatedAt = (await fs.stat(output)).mtimeMs;
+    const retry = await fetch(new URL(nextDetail.thumbnailUrl, origin));
+    expect(retry.status).toBe(200);
+    await retry.arrayBuffer();
+    expect((await fs.stat(output)).mtimeMs).toBe(generatedAt);
+    const legacy = await fetch(new URL(nextDetail.thumbnailUrl.split('?')[0]!, origin));
+    expect(legacy.status).toBe(200);
+    expect(legacy.headers.get('cache-control')).toBe('private, no-store');
+    await legacy.arrayBuffer();
+  });
+
+  it('counts only published derivative media, including legacy cache, excluding sidecars and actual temporary names', async () => {
+    const before = gallery.getStats();
+    const thumb = path.join(config.thumbnailsDir, 'count-fixture');
+    const preview = path.join(config.previewsDir, 'count-fixture');
+    await fs.mkdir(path.join(thumb, 'nested'), { recursive: true });
+    await fs.mkdir(preview, { recursive: true });
+    const uuid = '12345678-1234-4234-8234-123456789abc';
+    for (const [dir, names] of [[thumb, ['old.webp', 'nested/tmp-legitimate.webp', 'old.webp.version.json', `old.webp.version.json.${uuid}.tmp`, `.new.${uuid}.tmp.webp`, '.gitkeep', 'other.txt', 'invalid.mp4']], [preview, ['old.webp', 'old.mp4', 'a-tmp.mp4', `.new.${uuid}.tmp.mp4`, 'old.mp4.version.json', 'other.jpg']]] as const) {
+      for (const name of names) await fs.writeFile(path.join(dir, name), 'fixture');
+    }
+    const during = gallery.getStats();
+    expect(during.thumbnailCount - before.thumbnailCount).toBe(2);
+    expect(during.previewCount - before.previewCount).toBe(3);
+    await fs.rename(path.join(thumb, `.new.${uuid}.tmp.webp`), path.join(thumb, 'new.webp'));
+    await fs.writeFile(path.join(thumb, 'new.webp.version.json'), '{}');
+    expect(gallery.getStats().thumbnailCount - during.thumbnailCount).toBe(1);
+  });
+
+  it('serves reliable indexed A without statting source B; absent or unstamped A reports pending index without publishing B', async () => {
+    const record = repos.imageRepository.getByThumbnailPath('Synthetic/swatch.webp')!;
+    const { imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+    const version = imageDerivativeVersion(record, 'thumbnail');
+    const url = `${origin}/thumbnails/${record.thumbnail_path}?v=${version}`;
+    const output = path.join(config.thumbnailsDir, record.thumbnail_path);
+    const oldBytes = await fs.readFile(output);
+    const oldStamp = await fs.readFile(`${output}.version.json`);
+    await sharp({ create: { width: 1005, height: 1405, channels: 3, background: '#112233' } }).png().toFile(record.absolute_path);
+    const reliable = await fetch(url);
+    expect(reliable.status).toBe(200);
+    expect(Buffer.from(await reliable.arrayBuffer())).toEqual(oldBytes);
+    await fs.rm(`${output}.version.json`);
+    const unknown = await fetch(url);
+    expect(unknown.status).toBe(409);
+    expect(await unknown.json()).toMatchObject({ code: 'SOURCE_INDEX_OUTDATED' });
+    expect(await fs.readFile(output)).toEqual(oldBytes);
+    await expect(fs.access(`${output}.version.json`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await fs.rm(output);
+    const missing = await fetch(url);
+    expect(missing.status).toBe(409);
+    expect(await missing.json()).toMatchObject({ code: 'SOURCE_INDEX_OUTDATED' });
+    await expect(fs.access(output)).rejects.toMatchObject({ code: 'ENOENT' });
+    // The controlled index update, not GET, restores generation.
+    const stat = await fs.stat(record.absolute_path);
+    manager.connection.prepare('UPDATE images SET file_size = ?, mtime_ms = ? WHERE id = ?').run(stat.size, stat.mtimeMs, record.id);
+    const obsolete = await fetch(url);
+    expect(await obsolete.json()).toMatchObject({ code: 'DERIVATIVE_VERSION_CHANGED' });
+    const current = repos.imageRepository.getByThumbnailPath(record.thumbnail_path)!;
+    const restored = await fetch(`${origin}/thumbnails/${record.thumbnail_path}?v=${imageDerivativeVersion(current, 'thumbnail')}`);
+    expect(restored.status).toBe(200);
+    expect(Buffer.from(await restored.arrayBuffer())).not.toEqual(oldBytes);
+    expect(await fs.readFile(`${output}.version.json`)).not.toEqual(oldStamp);
+  });
 });

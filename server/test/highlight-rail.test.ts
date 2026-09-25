@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createFingerprint,
@@ -51,12 +51,79 @@ describe.sequential('highlight rail selection', () => {
   });
 
   beforeEach(async () => {
+    vi.restoreAllMocks();
     maintenanceRepository.resetLibraryIndex();
     await Promise.all([
       fs.mkdir(appConfig.galleryRoot, { recursive: true }),
       fs.mkdir(appConfig.thumbnailsDir, { recursive: true }),
       fs.mkdir(appConfig.previewsDir, { recursive: true })
     ]);
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it('does not materialize date capsules when preferred highlights are available', async () => {
+    await createIndexedFolder('highlights-only', new Date(2025, 4, 31, 12).getTime(), 30);
+    const dates = vi.spyOn(imageRepository, 'countByMonthDayKeys');
+    const recent = vi.spyOn(imageRepository, 'listRecentCandidates');
+    expect(galleryService.listMoments().railKind).toBe('highlights');
+    expect(dates).not.toHaveBeenCalled();
+    expect(recent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the selected definition for direct capsule reading instead of rebuilding all highlights', async () => {
+    await createIndexedFolder('direct-highlight', new Date(2025, 4, 31, 12).getTime(), 30);
+    const candidates = vi.spyOn(imageRepository, 'listRandom');
+    expect(galleryService.getMomentFeed('highlight-lucky-dip', 1, 30)?.items.length).toBeGreaterThan(0);
+    expect(candidates).toHaveBeenCalledTimes(1);
+  });
+
+  it('computes Moments first when capture dates are reliable, without assembling Highlights', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 4, 31, 12));
+    await createIndexedFolder('reliable-captures', new Date(2025, 4, 31, 12).getTime(), 30, 'exif');
+    const random = vi.spyOn(imageRepository, 'listRandom');
+    const rail = galleryService.listMoments();
+    expect(rail.railKind).toBe('moments');
+    expect(rail.items.map(item=>item.id)).toEqual(['on-this-day','this-week-previous-years','from-last-year']);
+    expect(new Set(rail.items.map(item=>item.coverImage.id)).size).toBe(rail.items.length);
+    expect(random).not.toHaveBeenCalled();
+  });
+
+  it('falls back from preferred empty Moments, and reevaluates the date next read', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 0, 1, 12));
+    await createIndexedFolder('changing-day', new Date(2025, 4, 31, 12).getTime(), 30, 'exif');
+    expect(galleryService.listMoments().railKind).toBe('highlights');
+    vi.setSystemTime(new Date(2026, 4, 31, 12));
+    expect(galleryService.listMoments().railKind).toBe('moments');
+  });
+
+  it('falls back from empty Highlights to Moments, preserving the ordinary fixed-date result', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 4, 31, 12));
+    await createIndexedFolder('fallback-dates', new Date(2025, 4, 31, 12).getTime(), 30, 'exif');
+    const expected = galleryService.listMoments();
+    vi.spyOn(imageRepository,'countByTakenAtSource').mockReturnValue(0);
+    vi.spyOn(imageRepository,'listRecentCandidates').mockReturnValue([]);
+    vi.spyOn(imageRepository,'countRediscover').mockReturnValue(0);
+    vi.spyOn(imageRepository,'listRandom').mockReturnValue([]);
+    expect(galleryService.listMoments()).toEqual(expected);
+  });
+
+  it('preserves empty Highlights metadata and immediately reflects new indexed content', async () => {
+    expect(galleryService.listMoments()).toMatchObject({railKind:'highlights',items:[]});
+    await createIndexedFolder('new-content', new Date(2025, 4, 31, 12).getTime(), 2);
+    expect(galleryService.listMoments().items.length).toBeGreaterThan(0);
+  });
+
+  it('recomputes the local daily seed and sliding cutoff rather than caching time-based contents', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 4, 31, 12));
+    await createIndexedFolder('daily-seed', new Date(2025, 4, 31, 12).getTime(), 30);
+    const random = vi.spyOn(imageRepository,'listRandom');
+    const rediscover = vi.spyOn(imageRepository,'countRediscover');
+    galleryService.listMoments();
+    const firstCutoff=rediscover.mock.calls[0]![0];
+    expect(random.mock.calls[0]![2]).toBe(20260531);
+    vi.setSystemTime(new Date(2026, 5, 1, 12));galleryService.listMoments();
+    expect(random.mock.calls[1]![2]).toBe(20260601);
+    expect(rediscover.mock.calls[1]![0]-firstCutoff).toBe(24*60*60*1000);
   });
 
   it('keeps highlight covers and recent batch items out of the top recent feed window when enough alternatives exist', async () => {
@@ -86,7 +153,7 @@ describe.sequential('highlight rail selection', () => {
     }
   });
 
-  async function createIndexedFolder(relativeFolderPath: string, startTimestamp: number, imageCount: number): Promise<{
+  async function createIndexedFolder(relativeFolderPath: string, startTimestamp: number, imageCount: number, takenAtSource: 'mtime' | 'exif' = 'mtime'): Promise<{
     folder: FolderRecord;
   }> {
     const slug = relativeFolderPath.replaceAll('/', '-');
@@ -125,7 +192,7 @@ describe.sequential('highlight rail selection', () => {
         firstSeenAt: '2026-03-01T00:00:00.000Z',
         sortTimestamp: capturedAt,
         takenAt: capturedAt,
-        takenAtSource: 'mtime',
+        takenAtSource,
         exifJson: '{}',
         thumbnailPath: thumbnailRelativePath,
         previewPath: previewRelativePath

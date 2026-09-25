@@ -1,7 +1,6 @@
-import fs from 'node:fs/promises';
-
 import express from 'express';
 import pLimit from 'p-limit';
+import fs from 'node:fs/promises';
 
 import { appConfig } from '../config/env.js';
 import { imageRepository } from '../db/repositories.js';
@@ -10,341 +9,159 @@ import { log } from '../services/log-service.js';
 import { generatePreviewDerivative, generateThumbnailDerivative } from '../services/derivative-service.js';
 import { scannerService } from '../services/scanner-service.js';
 import { maintenanceOperationLock } from '../services/maintenance-operation-lock.js';
+import { withDerivativeOutputRead } from '../services/derivative-output-lock.js';
+import { hasCurrentDerivative, imageDerivativeVersion, derivativeSourceVersion, SourceIndexOutdatedError, type DerivativeKind } from '../utils/derivative-version.js';
 import { resolveOriginalPath } from '../utils/media-paths.js';
 import { applyDerivativeErrorHeaders, applyNoStoreMediaHeaders, applyProtectedMediaHeaders } from '../utils/media-response.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
 
-// In-memory map to deduplicate concurrent generation requests for the same derivative path.
+// Singleflight is per actual output, independent of the URL used to request it.
 const inflightGenerations = new Map<string, Promise<void>>();
 const generationLimit = pLimit(appConfig.scanDerivativeConcurrency);
-
 type SendDerivativeResult = 'sent' | 'aborted';
-
 class DerivativeRecordNotFoundError extends Error {}
+class DerivativeVersionChangedError extends Error {}
 
 function getRequestedPath(request: express.Request): string | null {
   const rawPath = request.params.path;
   const relativePath = Array.isArray(rawPath) ? rawPath.join('/') : rawPath ?? '';
-  const normalizedPath = normalizePath(relativePath).replace(/^\/+/, '');
-
-  return normalizedPath.length > 0 ? normalizedPath : null;
+  const normalized = normalizePath(relativePath).replace(/^\/+/, '');
+  return normalized.length > 0 ? normalized : null;
 }
 
 function resolveDerivativePath(rootDir: string, requestedPath: string): string | null {
-  try {
-    return safeJoin(rootDir, requestedPath);
-  } catch {
-    return null;
-  }
+  try { return safeJoin(rootDir, requestedPath); } catch { return null; }
 }
 
-function findCurrentImageRecord(
-  requestedPath: string,
-  kind: 'thumbnail' | 'preview',
-  expectedImageId?: number
-): ImageRecord | null {
-  const imageRecord = kind === 'thumbnail'
+function findCurrentImageRecord(requestedPath: string, kind: DerivativeKind, expectedId?: number): ImageRecord | null {
+  const record = kind === 'thumbnail'
     ? imageRepository.getByThumbnailPath(requestedPath)
     : imageRepository.getByPreviewPath(requestedPath);
-  if (!imageRecord || (expectedImageId !== undefined && imageRecord.id !== expectedImageId)) {
-    return null;
-  }
-  return imageRecord;
+  // Trashed media retain their existing recycle-bin preview contract. Deleted or
+  // unindexed/retained originals cannot enter ordinary generation.
+  if (!record || record.is_deleted || (expectedId !== undefined && record.id !== expectedId)) return null;
+  return record;
 }
 
-function sendDerivativeNotFound(response: express.Response): void {
+function sendError(response: express.Response, status: number, message: string, code?: string): void {
   applyDerivativeErrorHeaders(response);
-  response.status(404).json({ message: 'Derivative not found.' });
+  response.status(status).json({ message, ...(code ? { code } : {}) });
 }
 
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function queueLazyGeneration(
-  absoluteOutputPath: string,
-  requestedPath: string,
-  kind: 'thumbnail' | 'preview',
-  expectedImageId: number
-): Promise<void> {
-  const existingGeneration = inflightGenerations.get(absoluteOutputPath);
-  if (existingGeneration) return existingGeneration;
-
-  const generationWork = generationLimit(() => maintenanceOperationLock.runExclusive(async () => {
-    const imageRecord = findCurrentImageRecord(requestedPath, kind, expectedImageId);
-    if (!imageRecord) throw new DerivativeRecordNotFoundError('Derivative no longer has an indexed image record');
-
-    // A scan or rebuild may have generated the file while this request waited
-    // for the maintenance lock.
-    if (await pathExists(absoluteOutputPath)) return;
-
-    log.info('Lazy derivative generate', {
-      kind,
-      file: requestedPath,
-      source: imageRecord.relative_path
-    });
-
-    const sourcePath = resolveOriginalPath(imageRecord.relative_path);
+function queueLazyGeneration(output: string, requestedPath: string, kind: DerivativeKind, expectedId: number, expectedVersion: string): Promise<void> {
+  const pending = inflightGenerations.get(output);
+  if (pending) return pending;
+  const work = generationLimit(() => maintenanceOperationLock.runGeneration(async () => {
+    const record = findCurrentImageRecord(requestedPath, kind, expectedId);
+    if (!record) throw new DerivativeRecordNotFoundError();
+    const validate = () => {
+      const current = findCurrentImageRecord(requestedPath, kind, expectedId);
+      if (!current) throw new DerivativeRecordNotFoundError();
+      if (imageDerivativeVersion(current, kind) !== expectedVersion || current.relative_path !== record.relative_path) throw new DerivativeVersionChangedError();
+    };
+    validate();
+    if (await hasCurrentDerivative(output, imageDerivativeVersion(record, kind))) return;
+    const source = resolveOriginalPath(record.relative_path);
+    // Before AVIF inspection / codec work; the writer checks again after taking
+    // the output lease and before publication. Hot reliable A never stats B.
+    const sourceStat = await fs.stat(source);
+    validate();
+    if (derivativeSourceVersion(sourceStat.size, sourceStat.mtimeMs) !== derivativeSourceVersion(record.file_size, record.mtime_ms)) throw new SourceIndexOutdatedError();
+    log.info('Lazy derivative generate', { kind, file: requestedPath, source: record.relative_path });
+    const expectation = { expectedVersion, validate };
     if (kind === 'thumbnail') {
-      await generateThumbnailDerivative(sourcePath, imageRecord.relative_path, false, {
-        thumbnailPath: imageRecord.thumbnail_path
-      });
-      return;
+      await generateThumbnailDerivative(source, record.relative_path, false, { thumbnailPath: record.thumbnail_path }, expectation);
+    } else {
+      await generatePreviewDerivative(source, record.relative_path, false, { previewPath: record.preview_path }, expectation);
     }
-
-    await generatePreviewDerivative(sourcePath, imageRecord.relative_path, false, {
-      previewPath: imageRecord.preview_path
-    });
   }));
-  let trackedGeneration: Promise<void>;
-  trackedGeneration = generationWork.finally(() => {
-    if (inflightGenerations.get(absoluteOutputPath) === trackedGeneration) {
-      inflightGenerations.delete(absoluteOutputPath);
-    }
+  let tracked: Promise<void>;
+  tracked = work.finally(() => {
+    if (inflightGenerations.get(output) === tracked) inflightGenerations.delete(output);
   });
-  inflightGenerations.set(absoluteOutputPath, trackedGeneration);
-  return trackedGeneration;
+  inflightGenerations.set(output, tracked);
+  return tracked;
 }
 
 function isConnectionTerminationError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
+  if (!(error instanceof Error)) return false;
   const code = 'code' in error ? error.code : null;
   return code === 'ECONNABORTED' || code === 'ECONNRESET' || code === 'ERR_STREAM_PREMATURE_CLOSE';
 }
 
-function sendDerivativeFile(
-  response: express.Response,
-  absolutePath: string,
-  options?: { noStore?: boolean }
-): Promise<SendDerivativeResult> {
-  if (options?.noStore) {
-    applyNoStoreMediaHeaders(response);
-  } else {
-    applyProtectedMediaHeaders(response);
-  }
-
+function sendDerivativeFile(response: express.Response, output: string, options?: { noStore?: boolean }): Promise<SendDerivativeResult> {
+  // Historical unversioned links remain usable, but cannot cache mutable pixels
+  // forever. Share routes keep their stronger no-store option.
+  if (options?.noStore || !response.req?.query?.v) applyNoStoreMediaHeaders(response);
+  else applyProtectedMediaHeaders(response);
   return new Promise((resolve, reject) => {
-    response.sendFile(absolutePath, (error) => {
+    response.sendFile(output, error => {
       if (error) {
-        if (response.headersSent || isConnectionTerminationError(error)) {
-          resolve('aborted');
-          return;
-        }
-
-        reject(error);
-        return;
-      }
-
-      resolve('sent');
+        if (response.headersSent || isConnectionTerminationError(error)) resolve('aborted');
+        else reject(error);
+      } else resolve('sent');
     });
   });
 }
 
-async function serveOrGenerate(
-  request: express.Request,
-  response: express.Response,
-  rootDir: string,
-  kind: 'thumbnail' | 'preview'
+async function serveKnownDerivative(
+  request: express.Request, response: express.Response, requestedPath: string,
+  kind: DerivativeKind, expectedId?: number, options?: { noStore?: boolean }
 ): Promise<void> {
-  const requestedPath = getRequestedPath(request);
-  if (!requestedPath) {
-    applyDerivativeErrorHeaders(response);
-    response.status(400).json({ message: 'Invalid derivative path.' });
-    return;
+  const root = kind === 'thumbnail' ? appConfig.thumbnailsDir : appConfig.previewsDir;
+  const output = resolveDerivativePath(root, requestedPath);
+  if (!output) { sendError(response, 400, 'Invalid derivative path.'); return; }
+  const initial = findCurrentImageRecord(requestedPath, kind, expectedId);
+  if (!initial) { sendError(response, 404, 'Derivative not found.'); return; }
+  const version = imageDerivativeVersion(initial, kind);
+  if (request.query?.v !== undefined && request.query.v !== version) {
+    sendError(response, 409, 'Media version changed; refresh the gallery.', 'DERIVATIVE_VERSION_CHANGED'); return;
   }
 
-  const absoluteOutputPath = resolveDerivativePath(rootDir, requestedPath);
-  if (!absoluteOutputPath) {
-    applyDerivativeErrorHeaders(response);
-    response.status(400).json({ message: 'Invalid derivative path.' });
-    return;
-  }
+  const tryServeCurrent = () => withDerivativeOutputRead(output, async () => {
+    if (!await hasCurrentDerivative(output, version)) return false;
+    // Recheck after asynchronous cache I/O. Hold this output's read lease until
+    // sendFile finishes, so a newer generator cannot replace its bytes mid-send.
+    const current = findCurrentImageRecord(requestedPath, kind, initial.id);
+    if (!current) throw new DerivativeRecordNotFoundError();
+    if (imageDerivativeVersion(current, kind) !== version) throw new DerivativeVersionChangedError();
+    await sendDerivativeFile(response, output, options);
+    return true;
+  });
 
-  const initialImageRecord = findCurrentImageRecord(requestedPath, kind);
-  if (!initialImageRecord) {
-    sendDerivativeNotFound(response);
-    return;
-  }
-
-  // Fast path: file already exists.
   try {
-    await fs.access(absoluteOutputPath);
-    try {
-      const result = await sendDerivativeFile(response, absoluteOutputPath);
-      if (result === 'aborted') {
-        return;
-      }
-    } catch {
-      if (response.headersSent) {
-        return;
-      }
-
-      applyDerivativeErrorHeaders(response);
-      response.status(500).json({ message: 'Failed to serve derivative.' });
+    if (await tryServeCurrent()) return;
+    if (scannerService.isLibraryRebuildRequired()) {
+      sendError(response, 409, 'Library rebuild required before generating derivatives.'); return;
     }
-    return;
-  } catch {
-    // File does not exist — fall through to generation.
-  }
-
-  if (scannerService.isLibraryRebuildRequired()) {
-    applyDerivativeErrorHeaders(response);
-    response.status(409).json({ message: 'Library rebuild required before generating derivatives.' });
-    return;
-  }
-
-  const queuedGeneration = queueLazyGeneration(
-    absoluteOutputPath,
-    requestedPath,
-    kind,
-    initialImageRecord.id
-  );
-
-  try {
-    await queuedGeneration;
+    await queueLazyGeneration(output, requestedPath, kind, initial.id, version);
+    const current = findCurrentImageRecord(requestedPath, kind, initial.id);
+    if (!current) throw new DerivativeRecordNotFoundError();
+    if (!await tryServeCurrent()) throw new DerivativeVersionChangedError();
   } catch (error) {
-    if (response.headersSent) {
-      return;
-    }
-
-    if (error instanceof DerivativeRecordNotFoundError) {
-      sendDerivativeNotFound(response);
-      return;
-    }
-    const message = error instanceof Error ? error.message : 'Failed to generate derivative.';
-    applyDerivativeErrorHeaders(response);
-    response.status(500).json({ message });
-    return;
-  }
-
-  if (!findCurrentImageRecord(requestedPath, kind, initialImageRecord.id)) {
-    sendDerivativeNotFound(response);
-    return;
-  }
-
-  try {
-    const result = await sendDerivativeFile(response, absoluteOutputPath);
-    if (result === 'aborted') {
-      return;
-    }
-  } catch {
-    if (response.headersSent) {
-      return;
-    }
-
-    applyDerivativeErrorHeaders(response);
-    response.status(500).json({ message: 'Failed to serve derivative.' });
+    if (response.headersSent) return;
+    if (error instanceof DerivativeRecordNotFoundError) sendError(response, 404, 'Derivative not found.');
+    else if (error instanceof Error && 'status' in error && error.status === 416) sendError(response, 416, 'Requested media range is not satisfiable.');
+    else if (error instanceof SourceIndexOutdatedError) sendError(response, 409, error.message, error.code);
+    else if (error instanceof DerivativeVersionChangedError) sendError(response, 409, 'Media changed during generation; refresh the gallery.', 'DERIVATIVE_VERSION_CHANGED');
+    else sendError(response, 500, error instanceof Error ? error.message : 'Failed to generate derivative.');
   }
 }
 
 export async function serveDerivativeForImage(
-  response: express.Response,
-  imageRecord: ImageRecord,
-  kind: 'thumbnail' | 'preview',
-  options?: { noStore?: boolean }
+  response: express.Response, imageRecord: ImageRecord, kind: DerivativeKind, options?: { noStore?: boolean }
 ): Promise<void> {
   const requestedPath = kind === 'thumbnail' ? imageRecord.thumbnail_path : imageRecord.preview_path;
-  const rootDir = kind === 'thumbnail' ? appConfig.thumbnailsDir : appConfig.previewsDir;
-  const absoluteOutputPath = resolveDerivativePath(rootDir, requestedPath);
-  if (!absoluteOutputPath) {
-    applyDerivativeErrorHeaders(response);
-    response.status(400).json({ message: 'Invalid derivative path.' });
-    return;
-  }
-
-  const initialImageRecord = findCurrentImageRecord(requestedPath, kind, imageRecord.id);
-  if (!initialImageRecord) {
-    sendDerivativeNotFound(response);
-    return;
-  }
-
-  try {
-    await fs.access(absoluteOutputPath);
-    try {
-      const result = await sendDerivativeFile(response, absoluteOutputPath, options);
-      if (result === 'aborted') {
-        return;
-      }
-    } catch {
-      if (response.headersSent) {
-        return;
-      }
-
-      applyDerivativeErrorHeaders(response);
-      response.status(500).json({ message: 'Failed to serve derivative.' });
-    }
-    return;
-  } catch {
-    // File does not exist — fall through to generation.
-  }
-
-  if (scannerService.isLibraryRebuildRequired()) {
-    applyDerivativeErrorHeaders(response);
-    response.status(409).json({ message: 'Library rebuild required before generating derivatives.' });
-    return;
-  }
-
-  const generationPromise = queueLazyGeneration(
-    absoluteOutputPath,
-    requestedPath,
-    kind,
-    initialImageRecord.id
-  );
-
-  try {
-    await generationPromise;
-  } catch (error) {
-    if (response.headersSent) {
-      return;
-    }
-
-    if (error instanceof DerivativeRecordNotFoundError) {
-      sendDerivativeNotFound(response);
-      return;
-    }
-    const message = error instanceof Error ? error.message : 'Failed to generate derivative.';
-    applyDerivativeErrorHeaders(response);
-    response.status(500).json({ message });
-    return;
-  }
-
-  if (!findCurrentImageRecord(requestedPath, kind, initialImageRecord.id)) {
-    sendDerivativeNotFound(response);
-    return;
-  }
-
-  try {
-    const result = await sendDerivativeFile(response, absoluteOutputPath, options);
-    if (result === 'aborted') {
-      return;
-    }
-  } catch {
-    if (response.headersSent) {
-      return;
-    }
-
-    applyDerivativeErrorHeaders(response);
-    response.status(500).json({ message: 'Failed to serve derivative.' });
-  }
+  await serveKnownDerivative(response.req, response, requestedPath, kind, imageRecord.id, options);
 }
 
 const lazyThumbnailsRouter = express.Router();
 const lazyPreviewsRouter = express.Router();
-
-lazyThumbnailsRouter.get('/*path', async (request, response) => {
-  await serveOrGenerate(request, response, appConfig.thumbnailsDir, 'thumbnail');
-});
-
-lazyPreviewsRouter.get('/*path', async (request, response) => {
-  await serveOrGenerate(request, response, appConfig.previewsDir, 'preview');
-});
-
+for (const [router, kind] of [[lazyThumbnailsRouter, 'thumbnail'], [lazyPreviewsRouter, 'preview']] as const) {
+  router.get('/*path', async (request, response) => {
+    const requestedPath = getRequestedPath(request);
+    if (!requestedPath) { sendError(response, 400, 'Invalid derivative path.'); return; }
+    await serveKnownDerivative(request, response, requestedPath, kind);
+  });
+}
 export { lazyThumbnailsRouter, lazyPreviewsRouter };

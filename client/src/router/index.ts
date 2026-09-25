@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router';
+import { installRouteLoadRecovery } from '../utils/route-load-recovery';
 
 import HomeView from '../views/HomeView.vue';
 import PostView from '../views/PostView.vue';
@@ -16,21 +17,25 @@ import PlacesView from '../views/PlacesView.vue';
 import ReelsView from '../views/ReelsView.vue';
 import SharedFolderView from '../views/SharedFolderView.vue';
 import SharedPostView from '../views/SharedPostView.vue';
-import TrashView from '../views/TrashView.vue';
 import { useAppStore } from '../stores/app';
 import { useAuthStore } from '../stores/auth';
 import { pinia } from '../stores/pinia';
-import SettingsView from '../views/SettingsView.vue';
-import ArchiveCatalogView from '../views/ArchiveCatalogView.vue';
-import LocalAdmissionView from '../views/LocalAdmissionView.vue';
-import LocalAdmissionWorkspace from '../views/LocalAdmissionWorkspace.vue';
-import LocalReviewView from '../views/LocalReviewView.vue';
-import CreatorAdmissionView from '../views/CreatorAdmissionView.vue';
-import CostuanWorkspace from '../views/CostuanWorkspace.vue';
 import { admissionDefaultDestination, legacyCatalogDestination } from '../utils/creator-admission-navigation';
 import type { AuthCapabilities } from '../types/api';
 
 type RouteCapability = keyof AuthCapabilities;
+
+// Keep ordinary browsing in the entry; route-owned management modules load
+// only after navigation/permission guards. Component identity and KeepAlive
+// keys remain Vue Router's existing route components, not async wrappers.
+const TrashView = () => import('../views/TrashView.vue');
+const SettingsView = () => import('../views/SettingsView.vue');
+const ArchiveCatalogView = () => import('../views/ArchiveCatalogView.vue');
+const LocalAdmissionView = () => import('../views/LocalAdmissionView.vue');
+const LocalAdmissionWorkspace = () => import('../views/LocalAdmissionWorkspace.vue');
+const LocalReviewView = () => import('../views/LocalReviewView.vue');
+const CreatorAdmissionView = () => import('../views/CreatorAdmissionView.vue');
+const CostuanWorkspace = () => import('../views/CostuanWorkspace.vue');
 
 function shouldPreserveModalScroll(to: RouteLocationNormalized, from: RouteLocationNormalized) {
   const appStore = useAppStore(pinia);
@@ -239,6 +244,15 @@ export const router = createRouter({
     }
   ],
   scrollBehavior(to, from, savedPosition) {
+    if (to.name === 'library' && from.name === 'library') {
+      // The library owns filter/page navigation intent and its keyed reading
+      // positions, including Back/Forward between filter combinations.
+      return false;
+    }
+    if (to.path === '/archive-catalog' && from.path === to.path) {
+      // Changing the selected management panel/tab must not move its list.
+      return false;
+    }
     if (to.name === 'canonical-work-gallery' && from.name === to.name
       && to.params.creatorId === from.params.creatorId && to.params.postId === from.params.postId) {
       // The same grid stays mounted while its query-driven viewer opens/switches/closes.
@@ -310,3 +324,6 @@ router.beforeEach((to) => {
 
   return canAccessRoute(to) ? true : { name: 'home' };
 });
+
+// Register before app.use(router) starts the initial navigation, including deep links.
+export const routeLoadRecovery = installRouteLoadRecovery(router);

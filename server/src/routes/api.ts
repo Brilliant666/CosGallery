@@ -18,6 +18,7 @@ import { createResourceCatalogRouter } from './resource-catalog-routes.js';
 import { createSourceEvidenceRouter } from './source-evidence-routes.js';
 import { createLocalAdmissionWebRouter } from './local-admission-web-routes.js';
 import { createLocalReviewRouter } from './local-review-routes.js';
+import { createApplicationRecoveryRouter } from './application-recovery-routes.js';
 import {
   localIngestService,
   type LocalIngestJob,
@@ -64,6 +65,7 @@ function managedResponse(response: express.Response, action: () => unknown, stat
 }
 
 const managedAccess = requireCapability('canManageLibrary', 'Admin access is required.');
+router.use('/admin/recovery-points', requireCapability('canAccessSettings', 'Admin access is required.'), createApplicationRecoveryRouter());
 router.use('/admin/local-admission', managedAccess, createLocalAdmissionWebRouter());
 router.use('/admin/local-review', managedAccess, createLocalReviewRouter());
 router.use('/admin/archive-catalog/source-evidence', managedAccess, createSourceEvidenceRouter());
@@ -71,6 +73,20 @@ router.use('/admin/archive-catalog/resource-catalog', requireCapability('canAcce
 router.use('/admin/archive-catalog', requireCapability('canAccessSettings', 'Admin access is required.'), createCreatorSyncReadRouter());
 router.post('/admin/archive-catalog/creators', managedAccess, (request, response) => {
   managedResponse(response, () => new ManagedCreatorService().create(request.body), 201);
+});
+router.get('/admin/archive-catalog/creators/:id/editing-state', managedAccess, async (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  try { response.json(await new ManagedCreatorService().editingState(id)); }
+  catch (error) { managedResponse(response, () => { throw error; }); }
+});
+router.put('/admin/archive-catalog/creators/:id/profile-settings', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new ManagedCreatorService().saveProfile(id, request.body));
+});
+router.put('/admin/archive-catalog/creators/:id/directory-settings', managedAccess, async (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  await managedOperationResponse(response, '正在保存博主目录设置', () =>
+    new ManagedCreatorService().saveDirectories(id, request.body));
 });
 router.get('/admin/archive-catalog/creators/:id/deletion-preview', managedAccess, (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
@@ -288,8 +304,9 @@ const cosGalleryWorksQuerySchema = paginationQuerySchema.extend({
 });
 const cosGalleryCreatorsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(100).default(60),
   contentRating: z.enum(['R15', 'R18', 'unclassified', 'unlinked', 'inactive']).optional(),
+  preference: z.enum(['liked', 'kept']).optional(),
   q: z.string().trim().max(160).optional()
 });
 const canonicalCreatorWorkParamsSchema = z.object({
@@ -1052,20 +1069,11 @@ router.delete(
 );
 
 router.delete('/folders/:slug', requireCapability('canDeleteMedia', 'Admin access is required.'), async (request, response) => {
-  const params = slugSchema.parse(request.params);
-  const query = deleteFolderQuerySchema.parse(request.query);
-  const deleted = await galleryService.deleteFolder(params.slug, {
-    deleteSourceFolder: query.deleteSourceFolder
-  });
-
-  if (!deleted) {
-    response.status(404).json({ message: 'Folder not found' });
-    return;
-  }
-
-  response.json({
-    ok: true,
-    ...deleted
+  slugSchema.parse(request.params);
+  deleteFolderQuerySchema.parse(request.query);
+  response.status(410).json({
+    code: 'LEGACY_FOLDER_DELETE_RETIRED',
+    message: 'Legacy permanent folder deletion has been retired. No files or records were changed.'
   });
 });
 
@@ -1431,7 +1439,7 @@ router.get('/cos-gallery/works', (request, response) => {
 
 router.get('/cos-gallery/creators', (request, response) => {
   const query = cosGalleryCreatorsQuerySchema.parse(request.query);
-  response.json(galleryService.getCosGalleryCreators(query.page, query.limit, query.contentRating, query.q));
+  response.json(galleryService.getCosGalleryCreators(query.page, query.limit, query.contentRating, query.q, query.preference));
 });
 
 router.get('/cos-gallery/creators/:id', (request, response) => {

@@ -28,7 +28,6 @@ import type {
   StoriesModeSetting,
   ViewerAccessMode,
   DeleteImageResult,
-  DeleteFolderResult,
   FeedMode,
   FolderImageOrder,
   FolderImageOrderDefaultSetting,
@@ -318,10 +317,12 @@ export function fetchCosGalleryCreators(
   contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive',
   query?: string,
   page = 1,
-  limit = 50
+  limit = 60,
+  preference?: 'liked' | 'kept'
 ) {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (contentRating) params.set('contentRating', contentRating);
+  if (preference) params.set('preference', preference);
   if (query?.trim()) params.set('q', query.trim());
   return requestJson<import('../types/api').CosGalleryCreatorsPayload>(`/api/cos-gallery/creators?${params.toString()}`);
 }
@@ -632,18 +633,6 @@ export function restoreImage(id: number) {
 
 export function deleteImage(id: number) {
   return requestJson<DeleteImageResult>(`/api/posts/${id}`, {
-    method: 'DELETE'
-  });
-}
-
-export function deleteFolder(slug: string, options: { deleteSourceFolder?: boolean } = {}) {
-  const params = new URLSearchParams();
-  if (options.deleteSourceFolder) {
-    params.set('deleteSourceFolder', 'true');
-  }
-
-  const suffix = params.size > 0 ? `?${params.toString()}` : '';
-  return requestJson<DeleteFolderResult>(`/api/folders/${encodeURIComponent(slug)}${suffix}`, {
     method: 'DELETE'
   });
 }

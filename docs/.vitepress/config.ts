@@ -24,6 +24,7 @@ const productItems = [
 const referenceItems = [
   { text: '架构与数据', link: '/how-it-works' },
   { text: '安全与备份', link: '/security' },
+  { text: '应用恢复点', link: '/application-recovery-points' },
   { text: '开发', link: '/development' },
   { text: '排错', link: '/troubleshooting' },
   { text: '常见问题', link: '/faq' },

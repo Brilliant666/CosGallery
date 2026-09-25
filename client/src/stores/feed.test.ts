@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as galleryApi from '../api/gallery';
 import type { FeedItem } from '../types/api';
 import { useFeedStore } from './feed';
+import { useAuthStore } from './auth';
 
 function createFeedItem(id: number): FeedItem {
   return {
@@ -42,6 +43,20 @@ describe('feed store', () => {
     vi.restoreAllMocks();
   });
 
+  it('discards changed-access results without leaving the request slot occupied', async () => {
+    const pending = createDeferred<Awaited<ReturnType<typeof galleryApi.fetchFeed>>>();
+    vi.spyOn(galleryApi, 'fetchFeed').mockReturnValueOnce(pending.promise).mockResolvedValueOnce({
+      mode: 'recent', items: [createFeedItem(8)], page: 1, limit: 18, total: 1, hasMore: false
+    });
+    const store = useFeedStore(); store.initializeMode('recent');
+    const first = store.loadInitial();
+    useAuthStore().role = 'viewer';
+    pending.resolve({ mode: 'recent', items: [createFeedItem(7)], page: 1, limit: 18, total: 1, hasMore: false });
+    await first;
+    expect(store.items).toEqual([]); expect(store.loading).toBe(false);
+    await store.loadInitial(); expect(store.items.map(item => item.id)).toEqual([8]);
+  });
+
   it('loads the recent feed without a random seed', async () => {
     const fetchFeedSpy = vi.spyOn(galleryApi, 'fetchFeed').mockResolvedValue({
       mode: 'recent',
@@ -60,6 +75,25 @@ describe('feed store', () => {
     expect(fetchFeedSpy).toHaveBeenCalledWith(1, 18, 'recent', undefined);
     expect(feedStore.loadedMode).toBe('recent');
     expect(feedStore.items.map((item) => item.id)).toEqual([7]);
+  });
+
+  it('cannot repopulate or clear loading for a new access generation from an old request', async () => {
+    const old = createDeferred<Awaited<ReturnType<typeof galleryApi.fetchFeed>>>();
+    const fresh = createDeferred<Awaited<ReturnType<typeof galleryApi.fetchFeed>>>();
+    vi.spyOn(galleryApi, 'fetchFeed').mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    const store = useFeedStore();
+    store.initializeMode('recent');
+    const first = store.loadInitial();
+    store.resetForRebuild();
+    const second = store.loadInitial();
+    old.resolve({ mode: 'recent', items: [createFeedItem(1)], page: 1, limit: 18, total: 1, hasMore: false });
+    await first;
+    expect(store.items).toEqual([]);
+    expect(store.loading).toBe(true);
+    fresh.resolve({ mode: 'recent', items: [createFeedItem(2)], page: 1, limit: 18, total: 1, hasMore: false });
+    await second;
+    expect(store.items.map(item => item.id)).toEqual([2]);
+    expect(store.loading).toBe(false);
   });
 
   it('reloads initialized items when the active mode changed since the last fetch', async () => {

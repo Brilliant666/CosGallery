@@ -138,7 +138,11 @@ describe.sequential('thumbnail-only rebuild', () => {
     const previousThumbnailUrl = galleryService
       .getFeed(1, 10, 'recent')
       .items.find((item) => item.id === indexed.images[0]?.id)?.thumbnailUrl;
-    expect(previousThumbnailUrl).toContain(`?v=${previousScan.id}`);
+    const { imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+    const image = indexed.images[0]!;
+    expect(previousThumbnailUrl).toBe(`/thumbnails/${image.thumbnail_path}?v=${imageDerivativeVersion(image, 'thumbnail')}`);
+    const previousPreviewUrl = galleryService.getFeed(1, 10, 'recent').items.find(item => item.id === image.id)?.previewUrl;
+    expect(previousPreviewUrl).toBe(`/previews/${image.preview_path}?v=${imageDerivativeVersion(image, 'preview')}`);
 
     const previewContentsBefore = await Promise.all(indexed.previewPaths.map((previewPath) => fs.readFile(previewPath, 'utf8')));
     const scanRunCountBefore = getScanRunCount();
@@ -171,8 +175,11 @@ describe.sequential('thumbnail-only rebuild', () => {
     const refreshedFeedItem = galleryService
       .getFeed(1, 10, 'recent')
       .items.find((item) => item.id === indexed.images[0]?.id);
-    expect(refreshedFeedItem?.thumbnailUrl).toContain(`?v=${lastScan?.id}`);
-    expect(refreshedFeedItem?.previewUrl).toContain(`?v=${lastScan?.id}`);
+    expect(lastScan?.id).not.toBe(previousScan.id);
+    // A repair rebuild of the same source/recipe does not globally bust URLs.
+    // The byte-level thumbnail/untouched-preview checks above still apply.
+    expect(refreshedFeedItem?.thumbnailUrl).toBe(previousThumbnailUrl);
+    expect(refreshedFeedItem?.previewUrl).toBe(previousPreviewUrl);
   });
 
   it('reports missing indexed source files without deleting previews or indexed rows', async () => {

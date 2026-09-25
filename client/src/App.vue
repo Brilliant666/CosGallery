@@ -19,6 +19,8 @@
     </div>
   </AppShell>
   <AdminUnlockDialog v-if="authStore.unlockDialogOpen" />
+  <RouteLoadRecoveryDialog :recovery="routeLoadRecovery" />
+  <MediaLoadNotice />
 </template>
 
 <script setup lang="ts">
@@ -29,7 +31,9 @@ import { RouterView, useRoute, useRouter, type RouteLocationNormalizedLoaded } f
 import AppShell from './components/AppShell.vue';
 import AdminUnlockDialog from './components/AdminUnlockDialog.vue';
 import AuthGate from './components/AuthGate.vue';
-import { canAccessRoute, routeAllowsPublicShareAccess } from './router';
+import { canAccessRoute, routeAllowsPublicShareAccess, routeLoadRecovery } from './router';
+import RouteLoadRecoveryDialog from './components/RouteLoadRecoveryDialog.vue';
+import MediaLoadNotice from './components/MediaLoadNotice.vue';
 import PostView from './views/PostView.vue';
 import { useAppStore } from './stores/app';
 import { useAuthStore } from './stores/auth';
@@ -118,7 +122,7 @@ function resetProtectedState() {
 }
 
 async function loadProtectedState(force = false) {
-  const tasks: Array<Promise<unknown>> = [appStore.fetchStats(force ? { background: true } : {}), foldersStore.fetchFolders(force)];
+  const tasks: Array<Promise<unknown>> = [appStore.ensureStatus(force), foldersStore.fetchFolders(force)];
 
   if (authStore.canUseSavedItems) {
     tasks.push(likesStore.initialize(force));

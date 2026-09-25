@@ -11,7 +11,7 @@
     </header>
 
     <nav aria-label="账本工作区" class="mb-5 flex flex-wrap gap-2">
-      <button v-for="tab in workspaces" :key="tab.id" type="button" :data-test="'workspace-'+tab.id" :aria-pressed="workspace === tab.id" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="workspace === tab.id ? 'bg-accent text-white border-accent' : 'bg-surface border-border'" @click="workspace = tab.id">{{ tab.label }}</button>
+      <button v-for="tab in workspaces" :key="tab.id" type="button" :data-test="'workspace-'+tab.id" :aria-pressed="workspace === tab.id" class="rounded-xl border px-5 py-3 text-sm font-semibold" :class="workspace === tab.id ? 'bg-accent text-white border-accent' : 'bg-surface border-border'" @click="selectWorkspace(tab.id)">{{ tab.label }}</button>
     </nav>
 
     <div v-if="summary" v-show="workspace === 'roster'" class="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6" aria-label="账本概览">
@@ -24,7 +24,7 @@
 
     <p v-if="downloadNotice" role="alert" class="mb-4 text-sm text-red-700">{{ downloadNotice }}</p>
     <div v-if="rosterVisited" v-show="workspace === 'roster'"><ManagedCreatorRoster ref="managedRoster" @changed="loadCatalog()" @source-planned="loadCatalog" @plan-downloads="planCreatorDownloads" @resource-catalog="openResourceCatalog" /></div>
-    <ResourceCatalog v-if="workspace === 'resources'" :creator-id="resourceCreatorId" :global-scope="resourceGlobalScope" @select="openResourceCatalog" @all="openAllResources" @back="workspace = 'roster'" />
+    <ResourceCatalog v-if="workspace === 'resources'" :key="permissionContext" :creator-id="resourceCreatorId" :global-scope="resourceGlobalScope" :scope-error="resourceScopeError" @select="openResourceCatalog" @all="openAllResources" @resolved="rememberResourceScope" @unavailable="discardRememberedScope" />
 
   </section>
 </template>
@@ -35,6 +35,7 @@ import ResourceCatalog from '../components/ResourceCatalog.vue';
 import ManagedCreatorRoster from '../components/ManagedCreatorRoster.vue';
 import { fetchArchiveCatalog, planArchiveDownloadTasks, fetchLocalIngestSettings } from '../api/gallery';
 import type { ArchiveCatalogSummary } from '../types/api';
+import { useAuthStore } from '../stores/auth';
 const workspaces = [
   { id: 'roster', label: '博主库' },
   { id: 'resources', label: '资源目录' }
@@ -46,26 +47,64 @@ const workspace = ref<Workspace>('roster');
 const rosterVisited = ref(false);
 const resourceCreatorId = ref<number | null>(null);
 const resourceGlobalScope = ref(false);
+const resourceScopeError = ref('');
+const auth = useAuthStore();
+const permissionContext = computed(() => JSON.stringify([auth.enabled, auth.authenticated, auth.role, auth.accessMode, auth.canManageLibrary]));
+let restoredMemory = false;
+let activePermissionContext = permissionContext.value;
+const memoryKey = () => `cosgallery-resource-scope:${permissionContext.value}`;
+function rememberResourceScope(id: number | null) {
+  if (resourceScopeError.value) return;
+  restoredMemory = false;
+  try { sessionStorage.setItem(memoryKey(), id === null ? 'all' : String(id)); } catch { /* Storage is optional. */ }
+}
+function discardRememberedScope() {
+  if (!restoredMemory) return; // Explicit URLs must never silently widen their scope.
+  try { sessionStorage.removeItem(memoryKey()); } catch { /* Storage is optional. */ }
+  restoredMemory = false;
+  resourceCreatorId.value = null;
+  resourceGlobalScope.value = true;
+}
 watch(
-  () => route?.query,
-  query => {
+  () => [route?.query, permissionContext.value] as const,
+  ([query, permission]) => {
     if (route?.path && route.path !== '/archive-catalog') return;
     const requested = query?.workspace;
     workspace.value = workspaces.some(tab => tab.id === requested)
       ? requested as Workspace
       : 'roster';
     if (workspace.value === 'roster') rosterVisited.value = true;
-    const value = typeof query?.creatorId === 'string' && /^\d+$/.test(query.creatorId) ? Number(query.creatorId) : NaN;
-    resourceCreatorId.value = Number.isSafeInteger(value) && value > 0 ? value : null;
-    resourceGlobalScope.value = query?.creatorId === undefined && query?.scope === 'all';
+    resourceScopeError.value = '';
+    if (permission !== activePermissionContext) {
+      resourceCreatorId.value = null; resourceGlobalScope.value = false;
+      activePermissionContext = permission;
+    }
+    restoredMemory = false;
+    if (query?.creatorId !== undefined) {
+      const value = typeof query.creatorId === 'string' && /^\d+$/.test(query.creatorId) ? Number(query.creatorId) : NaN;
+      resourceCreatorId.value = Number.isSafeInteger(value) && value > 0 ? value : null;
+      resourceGlobalScope.value = false;
+      if (resourceCreatorId.value === null) resourceScopeError.value = '链接中的博主编号无效，请明确选择目录范围。';
+    } else if (query?.scope !== undefined) {
+      resourceCreatorId.value = null;
+      resourceGlobalScope.value = query.scope === 'all';
+      if (!resourceGlobalScope.value) resourceScopeError.value = '链接中的目录范围无效，请重新选择。';
+    } else if (resourceCreatorId.value === null && !resourceGlobalScope.value) {
+      let saved: string | null = null;
+      try { saved = sessionStorage.getItem(memoryKey()); } catch { /* Storage is optional. */ }
+      const value = saved && /^\d+$/.test(saved) ? Number(saved) : NaN;
+      resourceCreatorId.value = Number.isSafeInteger(value) && value > 0 ? value : null;
+      resourceGlobalScope.value = resourceCreatorId.value === null;
+      restoredMemory = resourceCreatorId.value !== null;
+    }
   },
   { immediate: true }
 );
-watch(workspace, value => {
-  if (value === 'roster') rosterVisited.value = true;
-  if (!router || !route || route.path !== '/archive-catalog' || (route.query.workspace ?? 'roster') === value) return;
-  void router.push({ query: { ...route.query, workspace: value }, hash: route.hash });
-});
+function selectWorkspace(value:Workspace) {
+  if (value===workspace.value) return;
+  if (router && route) void router.push({query:{...route.query,workspace:value},hash:route.hash});
+  else {workspace.value=value;if(value==='roster')rosterVisited.value=true;}
+}
 function openResourceCatalog(id: number | null) {
   if (router && route) {
     void router.push({ query: { ...route.query, workspace: 'resources', creatorId: id === null ? undefined : String(id), scope: undefined } });

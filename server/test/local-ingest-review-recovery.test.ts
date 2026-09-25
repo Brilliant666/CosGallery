@@ -47,8 +47,20 @@ async function makeFixture(members: Record<string, Buffer>, options: { scanFailu
   await fs.writeFile(sourcePath, outerBytes);
   const database = new DatabaseSync(path.join(root, 'isolated.sqlite'));
   fixtures.push({ root, database });
-  database.exec(schemaSql);
-  seed(database, creatorName);
+  // Fixture setup is not the recovery under test: publish the schema and seed
+  // together instead of paying a durable disk commit for every DDL statement.
+  // Keep the real on-disk database and enable FK checks before the transaction.
+  database.exec('PRAGMA foreign_keys = ON; BEGIN');
+  try {
+    database.exec(schemaSql);
+    seed(database, creatorName);
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+  expect(database.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+  expect(database.isTransaction).toBe(false);
   const settings = {
     get: () => ({ libraryRoot, inboxRoot, processingRoot, sevenZipPath: 'synthetic-7z', fileStableSeconds: 1,
       recycleAfterIngest: options.recycleAfterIngest ?? false, maxExtractionDepth: 2 as const, allowlist: [creatorName], archivePasswordConfigured: true }),

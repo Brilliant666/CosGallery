@@ -20,6 +20,7 @@ import { useAuthStore } from './auth';
 interface AppState {
   stats: AppStatus | null;
   statsGeneration: number;
+  statsContext: string | null;
   loadingStats: boolean;
   error: string | null;
   theme: 'light' | 'dark';
@@ -40,6 +41,14 @@ const LAST_OPENED_FOLDER_STORAGE_KEY = 'foldergram-last-opened-folder';
 const RECENT_OPENED_FOLDERS_STORAGE_KEY = 'foldergram-recent-opened-folders';
 const RECENT_OPENED_FOLDERS_LIMIT = 24;
 const SCAN_PROGRESS_POLL_INTERVAL_MS = 1000;
+
+// Only equivalent initialization reads share a promise. Explicit refreshes remain
+// new generations, including refreshes following mutations in another view.
+const initialStatusRequests = new WeakMap<object, { key: string; promise: Promise<void> }>();
+function accessContextKey() {
+  const auth = useAuthStore();
+  return JSON.stringify([auth.role, auth.authenticated, auth.enabled, auth.accessMode, auth.capabilities]);
+}
 
 function parseStoredRecentFolderSlugs(value: string | null): string[] {
   if (!value) {
@@ -86,6 +95,7 @@ export const useAppStore = defineStore('app', {
   state: (): AppState => ({
     stats: null,
     statsGeneration: 0,
+    statsContext: null,
     loadingStats: false,
     error: null,
     theme: 'light',
@@ -360,6 +370,8 @@ export const useAppStore = defineStore('app', {
 
     resetProtectedState() {
       this.statsGeneration += 1;
+      initialStatusRequests.delete(this);
+      this.statsContext = null;
       this.stopStatsPolling();
       this.stats = null;
       this.loadingStats = false;
@@ -403,12 +415,26 @@ export const useAppStore = defineStore('app', {
       this.stats.indexedImages = Math.max(0, this.stats.indexedImages - deletedImageCount);
     },
 
-    async fetchStats(options: { background?: boolean } = {}) {
+    ensureStatus(force = false): Promise<void> {
+      const key = () => `${this.statsGeneration}:${accessContextKey()}`;
+      const pending = initialStatusRequests.get(this);
+      if (!force && pending?.key === key()) return pending.promise;
+      if (!force && this.stats && this.statsContext === accessContextKey()) return Promise.resolve();
+      const promise = this.fetchStats({ lightweight: true, background: force });
+      const entry = { key: key(), promise };
+      initialStatusRequests.set(this, entry);
+      void promise.finally(() => {
+        if (initialStatusRequests.get(this) === entry) initialStatusRequests.delete(this);
+      });
+      return promise;
+    },
+
+    async fetchStats(options: { background?: boolean; lightweight?: boolean } = {}) {
       // Stats calls also follow mutations: do not share an older read with a
       // newer refresh. Only the latest request in this access context may win.
       this.statsGeneration += 1;
-      const admin = this.shouldUseAdminScanProgress();
-      const contextKey = () => `${this.statsGeneration}:${useAuthStore().role}:${useAuthStore().authenticated}:${this.shouldUseAdminScanProgress()}`;
+      const admin = !options.lightweight && this.shouldUseAdminScanProgress();
+      const contextKey = () => `${this.statsGeneration}:${accessContextKey()}`;
       const key = contextKey();
       const current = () => contextKey() === key;
       if (!options.background) {
@@ -419,6 +445,7 @@ export const useAppStore = defineStore('app', {
         const stats = admin ? await fetchAdminStats() : await fetchStatus();
         if (!current()) return;
         this.stats = stats;
+        this.statsContext = accessContextKey();
         this.syncLocaleFromStats(this.stats);
         this.statsPollFailures = 0;
         if (options.background && this.error) this.error = null;
@@ -447,15 +474,18 @@ export const useAppStore = defineStore('app', {
 
     async refreshScanProgress() {
       if (!this.stats) {
-        await this.fetchStats({ background: true });
+        await this.fetchStats({ background: true, lightweight: true });
         return;
       }
 
+      const key = `${this.statsGeneration}:${accessContextKey()}`;
+      const current = () => key === `${this.statsGeneration}:${accessContextKey()}`;
       try {
         const progress = this.shouldUseAdminScanProgress()
           ? await fetchAdminScanProgress()
           : await fetchScanProgress();
 
+        if (!current()) return;
         this.updateScanProgress(progress);
         this.statsPollFailures = 0;
 
@@ -465,9 +495,10 @@ export const useAppStore = defineStore('app', {
 
         if (!progress.isScanning) {
           this.stopStatsPolling();
-          await this.fetchStats({ background: true });
+          await this.fetchStats({ background: true, lightweight: true });
         }
       } catch {
+        if (!current()) return;
         this.statsPollFailures += 1;
 
         if (this.statsPollFailures >= 3) {

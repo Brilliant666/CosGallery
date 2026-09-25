@@ -23,6 +23,12 @@ describe('unified library navigation state', () => {
   it('rejects external, protocol-relative and backslash return targets', () => {
     for (const target of ['https://evil.invalid/library', '//evil.invalid/library', '/library\\evil']) expect(libraryReadingQuery(target)).toEqual({});
   });
+  it('retains the joint preference through creator, work and library return links', () => {
+    const creator = canonicalCreatorRoute(166, '/library?q=alias&rating=R18&preference=kept&page=2');
+    expect(creator.query).toEqual({ q: 'alias', rating: 'R18', preference: 'kept', libraryPage: '2' });
+    const work = canonicalWorkGalleryRoute(166, 123, '/library/166?q=alias&rating=R18&preference=kept&libraryPage=2');
+    expect(libraryReturnRoute(work.query!)).toEqual({ name: 'library', query: { q: 'alias', rating: 'R18', preference: 'kept', page: '2' } });
+  });
   it('invalidates reading state after a media mutation and retains only bounded navigation state', () => {
     const reading = useCreatorReadingStore();
     reading.libraryPages['/library'] = { items: [], total: 1, scrollY: 400 };

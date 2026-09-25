@@ -24,6 +24,12 @@ description: 当前环境变量、网页配置、启动行为及数据保护边�
 | `DB_DIR` | `<DATA_ROOT>/db` | 数据库目录，文件名 `gallery.sqlite`。 |
 | `THUMBNAILS_DIR` | `<DATA_ROOT>/thumbnails` | 缩略图派生缓存。 |
 | `PREVIEWS_DIR` | `<DATA_ROOT>/previews` | 预览派生缓存。 |
+| `BACKUP_ROOT` | `<repositoryRoot>/data_backup` | 应用恢复点位置；相对仓库根解析，开发 worktree / 隔离环境必须显式指定独立位置。 |
+| `BACKUP_AUTO_ENABLED` | `false` | 日常自动恢复点，接受 `true/false/1/0`；不控制必需的升级 / 重建前保护。 |
+| `BACKUP_INTERVAL_HOURS` | `24` | 日常间隔，至少 24 小时。 |
+| `BACKUP_RETAIN_DAILY` / `BACKUP_RETAIN_WEEKLY` | `7` / `4` | 日常与周代表保留目标；手动及重要操作前恢复点不自动删除。 |
+| `APP_ENV_FILE` | `<repositoryRoot>/.env` | 实际加载的环境配置文件；隔离实例可明确指定自己的文件，恢复点按实际来源收集。 |
+| `APP_RUN_CONFIG_FILE` | 未指定 | 实际运行的 `.run.xml`；未指定时仅选取唯一匹配进程环境的配置，缺失或歧义明确记录恢复缺口。 |
 | `GALLERY_EXCLUDED_FOLDERS` | 空 | 逗号分隔排除规则：名称匹配任意层级，带斜线的规则匹配图库内精确相对路径。 |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe` | 媒体工具可执行文件名称或路径。 |
 | `FFMPEG_VIDEO_ENCODER` | `libx264` | 可选 `h264_nvenc`，必须与本机 FFmpeg 和硬件匹配。 |

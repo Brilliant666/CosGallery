@@ -124,6 +124,14 @@ describe.sequential('viewer-safe status payload', () => {
     pendingSpy.mockRestore();
   });
 
+  it('computes the identical indexedImages/indexedPosts count only once per admin request', () => {
+    const count = vi.spyOn(imageRepository, 'countFeed').mockReturnValue(17);
+    try {
+      expect(galleryService.getStats()).toMatchObject({ indexedImages: 17, indexedPosts: 17 });
+      expect(count).toHaveBeenCalledTimes(1);
+    } finally { count.mockRestore(); }
+  });
+
   it('includes the nested folder title format preference in viewer and admin status payloads', () => {
     expect(galleryService.getStatus().preferences.nestedFolderTitleFormat).toBe('folder');
 

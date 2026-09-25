@@ -776,6 +776,10 @@ class ScannerService {
   }
 
   async rebuildLibraryIndex(reason = 'rebuild'): Promise<ScanRunRecord | undefined> {
+    // Backup runs before queue/maintenance/admission locks, so a failed backup
+    // cannot clear the index or deadlock recursively with the scan barrier.
+    const { createPreRebuildRecoveryPoint } = await import('./application-recovery-service.js');
+    await createPreRebuildRecoveryPoint();
     const resolvedOptions = resolveFullScanOptions({
       repairUnchangedDerivatives: false,
       forceNewFileDerivatives: false,

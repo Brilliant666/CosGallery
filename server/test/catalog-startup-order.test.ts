@@ -17,6 +17,7 @@ vi.mock('node:http', () => ({ createServer: () => ({
 vi.mock('../src/config/env.js', () => ({ appConfig: {
   isDevelopment: false, nodeEnv: 'production', host: '127.0.0.1', port: 4141,
   localIngestStartupScan: false,
+  backupAutomatic: { enabled: false, intervalHours: 24, retainDaily: 7, retainWeekly: 4 },
 } }));
 vi.mock('../src/app.js', () => ({ createApp: vi.fn(() => ({})) }));
 vi.mock('../src/db/repositories.js', () => ({ collectionRepository: {

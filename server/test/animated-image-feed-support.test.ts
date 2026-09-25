@@ -62,7 +62,10 @@ describe.sequential('animated image feed support', () => {
 
     const firstFeedItem = galleryService.getFeed(1, 10, 'recent').items[0];
     expect(firstFeedItem?.isAnimated).toBe(true);
-    expect(firstFeedItem?.previewUrl).toMatch(/^\/previews\/[a-f0-9]{2}\/[a-f0-9]{32}\.webp\?v=\d+$/);
+    const { imageRepository } = await import('../src/db/repositories.js');
+    const { imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+    const indexedImage = imageRepository.getByRelativePath(relativePath)!;
+    expect(firstFeedItem?.previewUrl).toBe(`/previews/${indexedImage.preview_path}?v=${imageDerivativeVersion(indexedImage, 'preview')}`);
 
     const firstDetail = firstFeedItem ? galleryService.getImageDetail(firstFeedItem.id, 'image') : null;
     expect(firstDetail?.isAnimated).toBe(true);
@@ -73,6 +76,7 @@ describe.sequential('animated image feed support', () => {
 
     const refreshedFeedItem = galleryService.getFeed(1, 10, 'recent').items[0];
     expect(refreshedFeedItem?.isAnimated).toBe(true);
+    expect(refreshedFeedItem?.previewUrl).toBe(firstFeedItem?.previewUrl);
   });
 });
 

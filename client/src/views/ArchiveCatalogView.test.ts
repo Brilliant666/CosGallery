@@ -2,6 +2,8 @@ vi.mock('../components/ManagedCreatorRoster.vue', () => ({default:{name:'Managed
 vi.mock('../components/FirstCollectionSelector.vue', () => ({default:{template:'<button data-test="first-collection-slot" @click="$emit(\'planned\', [123])">从博主库选择</button>',emits:['planned']}}));
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { defineComponent } from 'vue';
+import { useAuthStore } from '../stores/auth';
+import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 enableAutoUnmount(afterEach);
@@ -255,6 +257,8 @@ describe('ArchiveCatalogView', () => {
   });
 
   beforeEach(() => {
+    sessionStorage.clear();
+    setActivePinia(createPinia());
     vi.mocked(fetchArchiveCatalog).mockReset();
     vi.mocked(fetchArchiveCatalogCreator).mockReset();
     vi.mocked(fetchArchiveDownloadTasks).mockReset();
@@ -504,13 +508,13 @@ describe('ArchiveCatalogView', () => {
     expect(refreshed.get('[data-test="resource-stub"]').text()).toBe('35');
   });
 
-  it('requires an explicit all scope and never turns invalid creator links into global scope', async () => {
+  it('defaults to all scope but never turns invalid explicit creator links into global scope', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/archive-catalog', component: ArchiveCatalogView }] });
     await router.push('/archive-catalog?workspace=resources');
     await router.isReady();
     const wrapper = mount(ArchiveCatalogView, { global: { plugins: [router], stubs: { ResourceCatalog: { name: 'ResourceCatalogTestStub', props: ['creatorId', 'globalScope'], template: '<section data-test="resource-stub" :data-global="globalScope">{{ creatorId }}</section>' } } } });
     await flushPromises();
-    expect(wrapper.get('[data-test="resource-stub"]').attributes('data-global')).toBe('false');
+    expect(wrapper.get('[data-test="resource-stub"]').attributes('data-global')).toBe('true');
     await router.push('/archive-catalog?workspace=resources&scope=all');
     await flushPromises();
     expect(wrapper.get('[data-test="resource-stub"]').attributes('data-global')).toBe('true');
@@ -529,6 +533,35 @@ describe('ArchiveCatalogView', () => {
     catalog.vm.$emit('select', null);
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ workspace: 'resources' });
+  });
+
+  it('restores only a valid permission-context scope and lets explicit URL override it', async () => {
+    const auth = useAuthStore();
+    const key = `cosgallery-resource-scope:${JSON.stringify([auth.enabled, auth.authenticated, auth.role, auth.accessMode, auth.canManageLibrary])}`;
+    sessionStorage.setItem(key, '35');
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/archive-catalog', component: ArchiveCatalogView }] });
+    await router.push('/archive-catalog?workspace=resources'); await router.isReady();
+    const wrapper = mount(ArchiveCatalogView, { global: { plugins: [router], stubs: { ResourceCatalog: { name: 'ScopeStub', props: ['creatorId', 'globalScope', 'scopeError'], template: '<section>{{ creatorId }} {{ globalScope }} {{ scopeError }}</section>' } } } });
+    await flushPromises();
+    let catalog = wrapper.findComponent({ name: 'ScopeStub' });
+    expect(catalog.props('creatorId')).toBe(35);
+    catalog.vm.$emit('unavailable'); await flushPromises();
+    expect(catalog.props('globalScope')).toBe(true);
+    expect(sessionStorage.getItem(key)).toBeNull();
+    await router.push('/archive-catalog?workspace=resources&creatorId=36&manageCreator=12&manageTab=profile'); await flushPromises();
+    expect(catalog.props('creatorId')).toBe(36);
+    catalog.vm.$emit('unavailable'); await flushPromises();
+    expect(catalog.props('creatorId')).toBe(36);
+    expect(catalog.props('globalScope')).toBe(false);
+    catalog.vm.$emit('resolved', 36); await flushPromises();
+    expect(sessionStorage.getItem(key)).toBe('36');
+    catalog.vm.$emit('all'); await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({ scope: 'all', manageCreator: '12', manageTab: 'profile' });
+    await router.push('/archive-catalog?workspace=resources'); await flushPromises();
+    auth.role = 'viewer'; auth.capabilities.canManageLibrary = false;
+    await flushPromises();
+    catalog = wrapper.findComponent({ name: 'ScopeStub' });
+    expect(catalog.props('creatorId')).toBeNull();
   });
 
   it('generates per-creator download tasks under the isolated inbox root', async () => {

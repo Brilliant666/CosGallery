@@ -29,14 +29,15 @@
         </span>
       </a>
     </RouterLink>
-    <button v-if="failed" type="button" class="work-media-card__retry" :aria-label="t('workGallery.retryThumbnail', { index: ordinal })" @click="retryThumbnail">
+    <p v-if="sourceIssue" class="m-0 p-2 text-xs text-muted" role="status">{{ sourceIssue === 'SOURCE_INDEX_OUTDATED' ? '源文件变化，等待管理员更新索引' : '媒体地址已过期，请重新打开图集' }}</p>
+    <button v-else-if="failed" type="button" class="work-media-card__retry" :aria-label="t('workGallery.retryThumbnail', { index: ordinal })" @click="retryThumbnail">
       {{ t('workGallery.retry') }}
     </button>
   </article>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 
@@ -44,6 +45,7 @@ import { useAppStore } from '../stores/app';
 import type { PostMediaItem } from '../types/api';
 import { formatMediaDuration } from '../utils/media';
 import { workMediaRoute } from '../utils/work-gallery';
+import { diagnoseMediaFailure, mediaAccessKey, reportMediaLoadIssue, type MediaLoadCode } from '../utils/media-load-diagnostics';
 
 const props = defineProps<{
   item: PostMediaItem;
@@ -58,6 +60,8 @@ const source = ref<string | null>(props.item.thumbnailUrl || null);
 const failed = ref(!source.value);
 const triedPreview = ref(false);
 const retryCount = ref(0);
+const sourceIssue = ref<MediaLoadCode | null>(null);
+let errorGeneration = 0;
 const duration = computed(() => formatMediaDuration(props.item.durationMs) || t('workGallery.unknownDuration'));
 const accessibleName = computed(() => t('workGallery.openMedia', {
   index: props.ordinal,
@@ -66,6 +70,12 @@ const accessibleName = computed(() => t('workGallery.openMedia', {
 }));
 
 function onImageError() {
+  const failedSource = source.value, generation = errorGeneration, access = mediaAccessKey();
+  void diagnoseMediaFailure(failedSource).then(code => {
+    if (!code || generation !== errorGeneration || access !== mediaAccessKey()) return;
+    sourceIssue.value = code;
+    reportMediaLoadIssue(failedSource!, code);
+  });
   // Never send a video preview (or an original file) to an image card.
   const preview = props.item.previewUrl;
   if (!triedPreview.value && props.item.mediaType === 'image' && preview &&
@@ -78,6 +88,8 @@ function onImageError() {
 }
 
 function retryThumbnail() {
+  errorGeneration += 1;
+  sourceIssue.value = null;
   triedPreview.value = false;
   source.value = props.item.thumbnailUrl || null;
   failed.value = !source.value;
@@ -92,6 +104,7 @@ function openMedia(event: MouseEvent, navigate: () => void) {
 }
 
 watch(() => [props.item.imageId, props.item.thumbnailUrl] as const, retryThumbnail);
+onBeforeUnmount(() => { errorGeneration += 1; });
 </script>
 
 <style scoped>

@@ -3,6 +3,7 @@ import { defineStore } from 'pinia';
 import { fetchFeed } from '../api/gallery';
 import type { FeedItem, FeedMode } from '../types/api';
 import { updateCaptionInItems } from '../utils/caption';
+import { useAuthStore } from './auth';
 
 interface FeedState {
   mode: FeedMode;
@@ -16,6 +17,7 @@ interface FeedState {
   initialized: boolean;
   randomSeed: number | null;
   reloadRequested: boolean;
+  generation: number;
 }
 
 function createRandomSeed(): number {
@@ -39,7 +41,8 @@ export const useFeedStore = defineStore('feed', {
     error: null,
     initialized: false,
     randomSeed: null,
-    reloadRequested: false
+    reloadRequested: false,
+    generation: 0
   }),
   actions: {
     initializeMode(mode: FeedMode = 'random') {
@@ -82,6 +85,7 @@ export const useFeedStore = defineStore('feed', {
     },
 
     resetForRebuild() {
+      this.generation += 1;
       this.loadedMode = null;
       this.items = [];
       this.page = 1;
@@ -126,9 +130,14 @@ export const useFeedStore = defineStore('feed', {
       const requestMode = this.mode;
       const requestPage = this.page;
       const requestSeed = requestMode === 'random' ? this.ensureRandomSeed() : undefined;
+      const generation = this.generation;
+      const accessKey = () => JSON.stringify([useAuthStore().role, useAuthStore().authenticated, useAuthStore().capabilities]);
+      const access = accessKey();
+      const current = () => generation === this.generation && access === accessKey();
 
       try {
         const payload = await fetchFeed(requestPage, this.limit, requestMode, requestSeed);
+        if (!current()) return;
 
         const modeChanged = this.mode !== requestMode;
         const seedChanged = requestMode === 'random' && this.randomSeed !== requestSeed;
@@ -144,11 +153,13 @@ export const useFeedStore = defineStore('feed', {
         this.hasMore = payload.hasMore;
         this.initialized = true;
       } catch (error) {
-        this.error = error instanceof Error ? error.message : 'Unable to load feed';
+        if (current()) this.error = error instanceof Error ? error.message : 'Unable to load feed';
       } finally {
-        this.loading = false;
+        // Release only this generation's slot, including changed access. A newer
+        // request after reset owns a different generation and must not be cleared.
+        if (generation === this.generation) this.loading = false;
 
-        if (this.reloadRequested) {
+        if (current() && this.reloadRequested) {
           this.reloadRequested = false;
           await this.loadInitial(true);
         }

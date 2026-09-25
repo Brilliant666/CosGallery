@@ -119,6 +119,60 @@ describe('useAppStore locale preferences', () => {
     expect(store.stats).not.toBeNull();
   });
 
+  it('shares equivalent light initialization even for an administrator', async () => {
+    let resolve!: (value: AppStatus) => void;
+    fetchStatusMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolve = done; }));
+    const store = useAppStore();
+    const first = store.ensureStatus();
+    const second = store.ensureStatus();
+    expect(fetchStatusMock).toHaveBeenCalledTimes(1);
+    expect(fetchAdminStatsMock).not.toHaveBeenCalled();
+    resolve(createAppStatus());
+    await Promise.all([first, second]);
+    await store.ensureStatus();
+    expect(fetchStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries failed initialization and detaches old initial reads after a forced refresh', async () => {
+    fetchStatusMock.mockRejectedValueOnce(new Error('offline'));
+    const store = useAppStore();
+    await store.ensureStatus();
+    expect(store.error).toBe('offline');
+    let resolveOld!: (value: AppStatus) => void;
+    fetchStatusMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolveOld = done; }))
+      .mockResolvedValueOnce({ ...createAppStatus(), indexedPosts: 99 });
+    const old = store.ensureStatus();
+    await store.ensureStatus(true);
+    resolveOld({ ...createAppStatus(), indexedPosts: 1 });
+    await old;
+    expect(fetchStatusMock).toHaveBeenCalledTimes(3);
+    expect(store.stats?.indexedPosts).toBe(99);
+    expect(store.error).toBeNull();
+    expect(store.loadingStats).toBe(false);
+  });
+
+  it('does not share initial reads across permission contexts or accept old scan polling', async () => {
+    const store = useAppStore();
+    let resolveOld!: (value: AppStatus) => void;
+    fetchStatusMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolveOld = done; }))
+      .mockResolvedValueOnce(createAppStatus('es'));
+    const old = store.ensureStatus();
+    useAuthStore().capabilities.canAccessSettings = false;
+    await store.ensureStatus();
+    resolveOld(createAppStatus('en'));
+    await old;
+    expect(fetchStatusMock).toHaveBeenCalledTimes(2);
+    expect(store.stats?.preferences.defaultLocale).toBe('es');
+    let resolveScan!: (value: AppStatus['scan']) => void;
+    fetchScanProgressMock.mockImplementationOnce(() => new Promise<AppStatus['scan']>(done => { resolveScan = done; }));
+    const scan = store.refreshScanProgress();
+    store.resetProtectedState();
+    resolveScan(createAppStatus().scan);
+    await scan;
+    expect(store.stats).toBeNull();
+    expect(fetchStatusMock).toHaveBeenCalledTimes(2);
+  });
+
   it('does not deduplicate a newer post-mutation stats refresh into an older read', async () => {
     let resolveOld!: (value: AppStatus) => void;
     fetchAdminStatsMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolveOld = done; }))

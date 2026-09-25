@@ -81,12 +81,13 @@ describe.sequential('video playback strategy mapping', () => {
 
     const feedItems = new Map(galleryService.getFeed(1, 10, 'recent').items.map((item) => [item.id, item]));
 
-    expect(feedItems.get(image.id)?.previewUrl).toBe('/previews/clips/photo-1.webp');
-    expect(feedItems.get(compatibleVideo.id)?.previewUrl).toBe('/previews/clips/reel-1.mp4');
-    expect(feedItems.get(transcodedVideo.id)?.previewUrl).toBe('/previews/clips/reel-2.mp4');
+    const { imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+    expect(feedItems.get(image.id)?.previewUrl).toBe(`/previews/clips/photo-1.webp?v=${imageDerivativeVersion(image, 'preview')}`);
+    expect(feedItems.get(compatibleVideo.id)?.previewUrl).toBe(`/previews/clips/reel-1.mp4?v=${imageDerivativeVersion(compatibleVideo, 'preview')}`);
+    expect(feedItems.get(transcodedVideo.id)?.previewUrl).toBe(`/previews/clips/reel-2.mp4?v=${imageDerivativeVersion(transcodedVideo, 'preview')}`);
 
     const compatibleVideoDetail = galleryService.getImageDetail(compatibleVideo.id, 'video');
-    expect(compatibleVideoDetail?.previewUrl).toBe('/previews/clips/reel-1.mp4');
+    expect(compatibleVideoDetail?.previewUrl).toBe(`/previews/clips/reel-1.mp4?v=${imageDerivativeVersion(compatibleVideo, 'preview')}`);
     expect(compatibleVideoDetail?.originalUrl).toBe(`/api/originals/${compatibleVideo.id}`);
     expect(compatibleVideoDetail?.playbackStrategy).toBe('original');
 

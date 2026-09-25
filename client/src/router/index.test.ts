@@ -198,6 +198,10 @@ import { useAuthStore } from '../stores/auth';
 import { useAppStore } from '../stores/app';
 
 describe('router', () => {
+  it('delegates library navigation intent and preserves the roster when management context changes', () => {
+    expect(router.options.scrollBehavior!(router.resolve('/library?rating=R18'), router.resolve('/library'), { left: 0, top: 800 })).toBe(false);
+    expect(router.options.scrollBehavior!(router.resolve('/archive-catalog?manageCreator=1&manageTab=profile'), router.resolve('/archive-catalog'), null)).toBe(false);
+  });
   it('generates numeric library routes and replaces old canonical URLs without a loop', async () => {
     expect(router.options.scrollBehavior!(router.resolve('/library/166?loaded=2'), router.resolve('/library/166'), null)).toBe(false);
     expect(router.resolve({ name: 'canonical-creator', params: { creatorId: '166' } }).fullPath).toBe('/library/166');

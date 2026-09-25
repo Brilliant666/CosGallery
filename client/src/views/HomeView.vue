@@ -39,7 +39,13 @@
       </section>
 
       <section v-if="!appStore.isLibraryUnavailable" class="grid min-w-0 gap-[1rem] mb-5 w-full max-w-[39.375rem]">
-        <section v-if="displayMomentItems.length" class="mb-2 min-w-0">
+        <section v-if="initialFeedReady || displayMomentItems.length" class="mb-2 min-w-0 min-h-[7.5rem]" data-test="moments-slot" :aria-busy="momentsPending || momentsStore.loadingList">
+          <p v-if="!displayMomentItems.length" class="m-0 flex min-h-[7.5rem] items-center gap-3 text-sm text-muted" role="status">
+            <template v-if="momentsPending || momentsStore.loadingList">正在加载回忆与精选…</template>
+            <template v-else-if="momentsStore.listError">回忆与精选暂时无法加载。<button type="button" class="text-accent" @click="refreshHomeRail(true)">重试</button></template>
+            <template v-else>暂无可展示的回忆与精选</template>
+          </p>
+          <template v-else>
           <div class="story-rail-shell">
             <div class="stories-bar story-rail pb-5 pt-[0.12rem]" :aria-label="momentsStore.displayRailTitle">
               <div class="story-rail__track">
@@ -64,6 +70,7 @@
             </div>
           </div>
           </div>
+          </template>
         </section>
 
         <div class="w-full max-w-[29.375rem] mx-auto flex items-center justify-between gap-[0.8rem] max-sm:flex-col max-sm:items-center">
@@ -111,6 +118,10 @@
 
       <!-- States -->
       <EmptyState v-if="appStore.isLibraryUnavailable" title="Library storage unavailable" :description="appStore.libraryUnavailableReason" />
+      <div v-else-if="!appStore.stats && appStore.error">
+        <ErrorState title="Could not load library status" :message="appStore.error" />
+        <button class="btn-primary" type="button" :disabled="appStore.loadingStats" @click="appStore.ensureStatus()">{{ t('common.retry') }}</button>
+      </div>
       <ErrorState v-else-if="feedStore.error" title="Could not load feed" :message="feedStore.error" />
 
       <!-- Initial scan state (no feed yet) -->
@@ -194,7 +205,7 @@
           />
         </div>
         <div class="w-full max-w-[29.375rem] mx-auto">
-          <InfiniteLoader :loading="feedStore.loading" :has-more="feedStore.hasMore" @load-more="feedStore.loadMore" />
+          <InfiniteLoader v-if="initialFeedReady" :loading="feedStore.loading" :has-more="feedStore.hasMore" @load-more="feedStore.loadMore" />
         </div>
       </template>
 
@@ -273,7 +284,7 @@
 
 <script setup lang="ts">
 import { folderReadingRoute } from '../utils/work-gallery';
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 
@@ -318,6 +329,68 @@ const isCompactHomeLayout = ref(false);
 const requestingHomeScan = ref(false);
 const homeScanError = ref<string | null>(null);
 const feedStoryError = ref<string | null>(null);
+const initialFeedReady = ref(false);
+let homeActive = true;
+let explicitMode: FeedMode | null = null;
+const momentsPending = ref(false);
+const firstFeedSettled = ref(false);
+let homeGeneration = 0;
+const pendingHomeWaits = new Set<() => void>();
+const homeAccessKey = () => JSON.stringify([authStore.role, authStore.authenticated, authStore.accessMode, authStore.capabilities]);
+
+function cancelHomeWork() {
+  homeGeneration += 1;
+  for (const cancel of [...pendingHomeWaits]) cancel();
+  momentsPending.value = false;
+}
+
+function waitForFeedSettlement() {
+  if (!feedStore.loading) return Promise.resolve();
+  return new Promise<void>(resolve => {
+    const stop = watch(() => feedStore.loading, loading => { if (!loading) finish(); });
+    const finish = () => { stop(); pendingHomeWaits.delete(finish); resolve(); };
+    pendingHomeWaits.add(finish);
+  });
+}
+
+function paintOpportunity() {
+  if (document.hidden) return Promise.resolve();
+  return new Promise<void>(resolve => {
+    let frame = 0;
+    const finish = () => { cancelAnimationFrame(frame); pendingHomeWaits.delete(finish); resolve(); };
+    pendingHomeWaits.add(finish);
+    // Two frames allow the committed card DOM to paint before a new synchronous
+    // server read is dispatched. This is a render boundary, not an arbitrary delay.
+    frame = requestAnimationFrame(() => { frame = requestAnimationFrame(finish); });
+  });
+}
+
+async function feedThenRail(load: () => Promise<void>, forceRail = false) {
+  cancelHomeWork();
+  const generation = homeGeneration, access = homeAccessKey(), feedGeneration = feedStore.generation;
+  const current = () => homeActive && generation === homeGeneration && access === homeAccessKey()
+    && feedGeneration === feedStore.generation
+    && authStore.accessGranted && Boolean(appStore.stats) && !appStore.isLibraryUnavailable;
+  momentsPending.value = true;
+  try {
+    await load(); // The store records a feed failure; it must not starve the rail.
+    if (!current()) return;
+    await waitForFeedSettlement();
+    await nextTick();
+    if (!current()) return;
+    await paintOpportunity();
+    if (!current()) return;
+    firstFeedSettled.value = true;
+    await momentsStore.fetchMoments(forceRail);
+  } finally {
+    if (generation === homeGeneration) momentsPending.value = false;
+  }
+}
+
+async function refreshHomeRail(force = false) {
+  if (!initialFeedReady.value || !homeActive || !authStore.accessGranted || appStore.isLibraryUnavailable) return;
+  await feedThenRail(async () => {}, force);
+}
 
 function formatDisplayFolderTitle(folder: NonNullable<typeof homeSummaryFolder.value> | (typeof recommendedFolders.value)[number]) {
   return formatFolderTitle(folder, appStore.nestedFolderTitleFormat);
@@ -458,7 +531,11 @@ async function warmScanStatus() {
 }
 
 async function selectMode(mode: FeedMode) {
-  await feedStore.setMode(mode);
+  explicitMode = mode;
+  // User intent wins over a late saved preference, but storage/access status is
+  // still required before any request is made.
+  if (!initialFeedReady.value) return;
+  await feedThenRail(() => feedStore.setMode(mode));
 }
 
 function openRailViewer(id: string) {
@@ -533,12 +610,21 @@ async function runHomeScan() {
     void warmScanStatus();
     await request;
     await appStore.fetchStats({ background: true });
-    await Promise.all([foldersStore.fetchFolders(true), feedStore.loadInitial(true), momentsStore.fetchMoments(true)]);
+    await Promise.all([foldersStore.fetchFolders(true), feedThenRail(() => feedStore.loadInitial(true), true)]);
   } catch (error) {
     homeScanError.value = error instanceof Error ? error.message : 'Unable to start a library scan.';
   } finally {
     requestingHomeScan.value = false;
   }
+}
+
+async function initializeHomeFeed() {
+  if (initialFeedReady.value || !homeActive || !appStore.stats || appStore.isLibraryUnavailable || !authStore.accessGranted) return;
+  if (explicitMode || !feedStore.initialized) {
+    feedStore.initializeMode(explicitMode ?? appStore.defaultHomeFeedMode);
+  }
+  initialFeedReady.value = true;
+  await feedThenRail(() => feedStore.loadInitial());
 }
 
 onMounted(async () => {
@@ -554,34 +640,41 @@ onMounted(async () => {
   }
 
   if (!appStore.stats) {
-    await appStore.fetchStats().catch(() => {});
+    await appStore.ensureStatus();
   }
 
-  if (appStore.isLibraryUnavailable) {
+  await initializeHomeFeed();
+});
+
+watch(() => appStore.stats, async (stats) => {
+  if (!stats) {
+    cancelHomeWork();
+    firstFeedSettled.value = false;
+    initialFeedReady.value = false;
+    explicitMode = null;
     return;
   }
-
-  feedStore.initializeMode(appStore.defaultHomeFeedMode);
-  await Promise.all([feedStore.loadInitial(), momentsStore.fetchMoments()]);
+  await initializeHomeFeed();
 });
 
 watch(
   () => [appStore.stats?.indexedImages ?? 0, appStore.stats?.folders ?? 0] as const,
-  async ([indexedImages, folderCount]) => {
-    if (appStore.isLibraryUnavailable) {
+  async ([indexedImages], previous) => {
+    if (!previous || previous[0] === 0 && !feedStore.initialized) return;
+    if (!initialFeedReady.value || !firstFeedSettled.value || !appStore.stats || appStore.isLibraryUnavailable) {
       return;
     }
 
-    if (folderCount > 0 && folderCount !== foldersStore.items.length) {
-      await foldersStore.fetchFolders(true);
-    }
+    // App owns folder-list refreshes. Its summary count is not necessarily the
+    // number of visible sidebar entries and must not trigger another fetch here.
 
     if (indexedImages > 0 && feedStore.items.length === 0 && !feedStore.loading) {
-      await feedStore.loadInitial(true);
+      await feedThenRail(() => feedStore.loadInitial(true), true);
+      return;
     }
 
     if (indexedImages > 0 && momentsStore.items.length === 0 && !momentsStore.loadingList) {
-      await momentsStore.fetchMoments(true);
+      await refreshHomeRail(true);
     }
   }
 );
@@ -590,7 +683,7 @@ watch(
   () => appStore.stats?.scan.lastCompletedScan?.id ?? null,
   async (lastCompletedScanId, previousScanId) => {
     if (
-      appStore.isLibraryUnavailable ||
+      !initialFeedReady.value || !firstFeedSettled.value || appStore.isLibraryUnavailable ||
       lastCompletedScanId === null ||
       lastCompletedScanId === previousScanId ||
       momentsStore.loadingList
@@ -598,7 +691,7 @@ watch(
       return;
     }
 
-    await momentsStore.fetchMoments(true);
+    await refreshHomeRail(true);
   }
 );
 
@@ -622,7 +715,11 @@ watch(
   }
 );
 
+watch(homeAccessKey, async () => { cancelHomeWork(); firstFeedSettled.value = false; initialFeedReady.value = false; await initializeHomeFeed(); });
+
 onUnmounted(() => {
+  homeActive = false;
+  cancelHomeWork();
   homeLayoutResizeObserver?.disconnect();
   homeLayoutResizeObserver = null;
   window.removeEventListener('resize', updateHomeLayout);

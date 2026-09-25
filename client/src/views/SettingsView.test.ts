@@ -128,7 +128,8 @@ function mountSettingsView() {
   return mount(SettingsView, {
     global: {
       stubs: {
-        ConfirmDialog: true
+        ConfirmDialog: true,
+        ApplicationRecoveryPanel: true
       }
     }
   });
@@ -158,6 +159,16 @@ describe('SettingsView', () => {
       value: scrollIntoViewSpy
     });
     vi.spyOn(galleryApi, 'fetchAdminStats').mockResolvedValue(createAppStats());
+  });
+
+  it('places recovery points in the default library controls rather than access settings', async () => {
+    useAppStore().$patch({ stats: createAppStatus() });
+    const wrapper = mountSettingsView();
+    await flushPromises();
+    expect(wrapper.find('application-recovery-panel-stub').exists()).toBe(true);
+    await openGeneralSettingsSidebarTab(wrapper);
+    expect(wrapper.find('application-recovery-panel-stub').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it('renders the combined feed defaults card with separate home and reels groups', async () => {
