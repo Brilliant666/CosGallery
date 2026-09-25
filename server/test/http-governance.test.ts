@@ -9,6 +9,7 @@ import { contentSecurityPolicy, securityHeaders } from '../src/middleware/securi
 import { createHttpErrorHandler, publicErrorText, requestIdentity } from '../src/middleware/http-errors.js';
 import { requestTestApp } from './http-test-utils.js';
 import { LocalIngestPathError } from '../src/utils/local-ingest-paths.js';
+import { RequestInputError } from '../src/utils/request-input-error.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -25,10 +26,24 @@ describe('HTTP error boundary', () => {
   it.each([
     'Failed at C:\\private\\db.sqlite', 'Failed at /srv/private/db.sqlite',
     'Failed at /tmp/private.sqlite', 'Failed at \\\\private\\share',
+    '/私有目录/数据库.sqlite', '文件：/私有目录/数据库.sqlite',
+    'file="/private/file with spaces.sqlite"', '{"path":"/private/database.sqlite"}',
     'Authorization: Bearer synthetic-token', 'Cookie:first=synthetic;second=also-private',
     'password="two word secret"', '{"access_token":"synthetic-token"}'
   ])('suppresses the whole sensitive error description: %s', message => {
-    expect(publicErrorText(message)).toBe('Request could not be completed. See the error code and request ID.');
+    expect(publicErrorText(message)).toBe('请求未能完成，请根据错误码和请求编号排查。');
+  });
+
+  it.each([
+    '相关博主存在活动领取/下载，未处理文件。',
+    '已有SourceWork与具体页面/Work不一致，请核对。',
+    '中文/中文', 'JPEG/WebP格式不支持此操作。'
+  ])('preserves slash-separated business prose through the HTTP boundary: %s', async message => {
+    expect(publicErrorText(message)).toBe(message);
+    const response = await requestTestApp(appWithFailure(new RequestInputError(message)), 'GET', '/failure');
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe(message);
+    expect(response.body.requestId).toBe(response.headers.get('x-request-id'));
   });
 
   it.each(['ROOT_NOT_ABSOLUTE', 'ROOTS_OVERLAP'])('keeps known local path input failure %s as 400 with its code', async code => {
@@ -49,7 +64,7 @@ describe('HTTP error boundary', () => {
     const logger = vi.spyOn(console, 'error').mockImplementation(() => {});
     const response = await requestTestApp(appWithFailure(new Error('C:\\private\\db.sqlite password=secret Cookie=secret token=secret')), 'GET', '/failure?password=secret', { Cookie: 'secret', 'X-Request-Id': 'untrusted-secret' });
     expect(response.status).toBe(500);
-    expect(response.body).toEqual({ code: 'INTERNAL_ERROR', message: 'Unexpected server error.', requestId: expect.any(String) });
+    expect(response.body).toEqual({ code: 'INTERNAL_ERROR', message: '服务端发生异常，请根据请求编号排查。', requestId: expect.any(String) });
     expect(response.body.requestId).toBe(response.headers.get('x-request-id'));
     const logged = JSON.stringify(logger.mock.calls);
     expect(logged).toContain(response.body.requestId);
@@ -62,6 +77,7 @@ describe('HTTP error boundary', () => {
     const response = await requestTestApp(appWithFailure(parsed.error), 'GET', '/failure');
     expect(response.status).toBe(400);
     expect(response.body.code).toBe('INVALID_REQUEST');
+    expect(response.body.message).toBe('请求参数不正确，请检查后重试。');
     expect(JSON.stringify(response.body)).not.toContain('private-secret');
   });
 
@@ -70,6 +86,7 @@ describe('HTTP error boundary', () => {
     const response = await requestTestApp(appWithFailure(Object.assign(new Error('/private/media secret'), { status })), 'GET', '/failure');
     expect(response.status).toBe(status);
     expect(response.body.code).toBeTruthy();
+    expect(response.body.message).toMatch(/[\u4e00-\u9fff]/);
     expect(JSON.stringify(response.body)).not.toContain('private');
   });
 
@@ -89,7 +106,7 @@ describe('HTTP error boundary', () => {
     app.use(createHttpErrorHandler(() => ({ status: 503, code: 'CATALOG_NOT_READY', message: 'C:\\private\\store unavailable' })));
     const response = await requestTestApp(app, 'GET', '/');
     expect(response.status).toBe(503);
-    expect(response.body).toEqual({ code: 'CATALOG_NOT_READY', message: 'Service is temporarily unavailable.' });
+    expect(response.body).toEqual({ code: 'CATALOG_NOT_READY', message: '服务暂时不可用，请稍后重试。' });
   });
 
   it('does not mistake missing internal configuration for a missing HTTP resource', async () => {

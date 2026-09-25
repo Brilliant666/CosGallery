@@ -119,7 +119,7 @@ describe.sequential('managed creator admin API', () => {
     // Unexpected storage failures are server errors; the transaction still rolls back.
     expect(failed.status).toBe(500);
     expect(failed.body.code).toBe('INTERNAL_ERROR');
-    expect(failed.body.message).toBe('Unexpected server error.');
+    expect(failed.body.message).toBe('服务端发生异常，请根据请求编号排查。');
     expect(JSON.stringify(failed.body)).not.toContain('isolated route write failure');
     const unchanged=await requestTestApp(app,'GET',url+'/editing-state');
     expect(unchanged.body.profileRevision).toBe(state.body.profileRevision);

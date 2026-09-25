@@ -28,23 +28,26 @@ export function publicErrorText(message: string): string {
   // paths with spaces have no reliable delimiter. Suppress the whole error
   // description; stable code/requestId remain available for diagnosis.
   const credentials = /\b(?:password|passwd|pwd|cookie|authorization|(?:access[_-]?|refresh[_-]?)?token|secret|api[_-]?key)["']?\s*[:=]|\bBearer\s+\S+/i;
-  const absolutePath = /\b[A-Za-z]:[\\/]|\\\\|(?:^|[^A-Za-z0-9])\/(?!\/)[^\s]/;
+  // A slash inside prose (including Chinese text) is not a path boundary.
+  // Retain quoted/labelled absolute paths as well as whitespace-delimited ones.
+  const absolutePath = /\b[A-Za-z]:[\\/]|\\\\|(?:^|[\s"'`(=：:])\/(?!\/)[^\s]/;
   return credentials.test(message) || absolutePath.test(message)
-    ? 'Request could not be completed. See the error code and request ID.' : message;
+    ? '请求未能完成，请根据错误码和请求编号排查。' : message;
 }
 
 const descriptions: Record<number, [string, string]> = {
-  400: ['INVALID_REQUEST', 'Invalid request.'],
-  401: ['AUTHENTICATION_REQUIRED', 'Authentication is required.'],
-  403: ['FORBIDDEN', 'This operation is not allowed.'],
-  404: ['NOT_FOUND', 'Requested resource was not found.'],
-  409: ['CONFLICT', 'The request conflicts with current state.'],
-  410: ['GONE', 'This operation is no longer available.'],
-  413: ['PAYLOAD_TOO_LARGE', 'Request body is too large.'],
-  415: ['UNSUPPORTED_MEDIA_TYPE', 'Unsupported request encoding.'],
-  416: ['RANGE_NOT_SATISFIABLE', 'Requested media range is not satisfiable.'],
-  429: ['RATE_LIMITED', 'Too many requests. Please try again later.'],
-  503: ['SERVICE_UNAVAILABLE', 'Service is temporarily unavailable.']
+  400: ['INVALID_REQUEST', '请求参数不正确，请检查后重试。'],
+  401: ['AUTHENTICATION_REQUIRED', '请先完成身份验证。'],
+  403: ['FORBIDDEN', '当前不允许执行此操作。'],
+  404: ['NOT_FOUND', '未找到请求的资源。'],
+  409: ['CONFLICT', '请求与当前状态冲突，请刷新后重试。'],
+  410: ['GONE', '此操作已停用。'],
+  413: ['PAYLOAD_TOO_LARGE', '请求内容过大。'],
+  415: ['UNSUPPORTED_MEDIA_TYPE', '不支持此请求编码。'],
+  416: ['RANGE_NOT_SATISFIABLE', '请求的媒体范围无效。'],
+  429: ['RATE_LIMITED', '请求过于频繁，请稍后重试。'],
+  500: ['INTERNAL_ERROR', '服务端发生异常，请根据请求编号排查。'],
+  503: ['SERVICE_UNAVAILABLE', '服务暂时不可用，请稍后重试。']
 };
 
 export function logRequestFailure(response: Response, error: unknown, status = 500): void {
@@ -58,7 +61,7 @@ export function logRequestFailure(response: Response, error: unknown, status = 5
 export function sendUnexpectedError(response: Response, error: unknown): void {
   logRequestFailure(response, error);
   if (response.headersSent || response.destroyed || response.writableEnded || response.req?.aborted) return;
-  response.status(500).json({ code: 'INTERNAL_ERROR', message: 'Unexpected server error.', requestId: response.locals.requestId });
+  response.status(500).json({ code: 'INTERNAL_ERROR', message: descriptions[500]![1], requestId: response.locals.requestId });
 }
 
 export function createHttpErrorHandler(known?: (error: unknown) => { status: number; message: string; code?: string } | null): ErrorRequestHandler {
@@ -76,7 +79,7 @@ export function createHttpErrorHandler(known?: (error: unknown) => { status: num
       if (business.status >= 500) logRequestFailure(response, error, business.status);
       response.status(business.status).json({
         code: business.code,
-        message: business.status >= 500 ? (descriptions[business.status]?.[1] ?? 'Unexpected server error.') : business.message,
+        message: business.status >= 500 ? (descriptions[business.status]?.[1] ?? descriptions[500]![1]) : business.message,
         requestId: response.locals.requestId
       });
       return;

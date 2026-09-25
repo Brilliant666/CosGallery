@@ -7,6 +7,7 @@ import { acquisitionHeldSql, fulfillmentValidSql, sourceNeedsAcquisitionSql } fr
 import type { ArchiveDownloadTask, ArchiveDownloadTaskStatus, ArchiveDownloadTaskSummary } from './archive-download-task-service.js';
 import type { ArchiveMetadataTaskStatus, ArchiveSourceState } from './archive-metadata-task-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
+import { RequestInputError } from '../utils/request-input-error.js';
 
 export type CreatorSyncFilters = {
   q?: string;
@@ -185,7 +186,7 @@ function pageOptions(options: CreatorSyncPageOptions): { page: number; limit: nu
   if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
     throw new Error('分页参数无效，page 必须为正整数，limit 必须为 1～100。');
   }
-  if (!Number.isSafeInteger((page - 1) * limit)) throw new Error('分页范围过大。');
+  if (!Number.isSafeInteger((page - 1) * limit)) throw new RequestInputError('分页范围过大。', 'PAGINATION_RANGE_INVALID');
   return { page, limit };
 }
 
@@ -444,7 +445,7 @@ export class CreatorSyncQueryService {
     return this.read(() => {
       const scope = this.taskScope(options, options.creatorId);
       const creator = this.database.prepare('SELECT id FROM archive_catalog_creators WHERE id=?').get(options.creatorId);
-      if (!creator) throw new Error('规范博主不存在，不能将查询失败显示为 0 条。');
+      if (!creator) throw new RequestInputError('规范博主不存在，不能将查询失败显示为 0 条。', 'CREATOR_SCOPE_NOT_FOUND');
       const counts = summary(DOWNLOAD_STATUSES, this.database.prepare(`${scope.sql} SELECT status,COUNT(*) AS count FROM task_scope GROUP BY status`)
         .all(...scope.values) as Array<{ status: string; count: number }>);
       const items = this.database.prepare(`${scope.sql}, deliveries_ranked AS (
