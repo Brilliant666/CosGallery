@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import dotenv from 'dotenv';
 import { appConfig, environmentFile, repositoryRoot, supportedEnvironmentKeys, isEnvironmentValueRestorable } from '../config/env.js';
 import { isSameOrWithinPath } from '../utils/path-utils.js';
 import { ApplicationRecoveryService, waitForRecoveryCreates } from './application-recovery-core.js';
+import { buildInfo } from '../build-info.js';
 
 // This adapter deliberately never imports databaseManager or business services:
 // migration protection must observe the original schema before any app writes.
@@ -112,12 +112,11 @@ function backedRunEnvironment(uncovered: string[]) {
   return { files: matches.length === 1 ? matches : [], gaps };
 }
 
-let version: string | undefined;
 function codeVersion(): string {
-  if (version) return version;
-  try { version = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
-  catch { version = 'unavailable'; }
-  return version;
+  // A checkout may move while a server remains running. Recovery evidence must
+  // describe these loaded build artifacts, never the current checkout's HEAD.
+  if (!buildInfo.commit) return 'unbuilt';
+  return `${buildInfo.commit}${buildInfo.dirty === true ? '-dirty' : buildInfo.dirty === null ? '-unverified' : ''}`;
 }
 
 export function createApplicationRecoveryService(databasePath = appConfig.databasePath): ApplicationRecoveryService {
