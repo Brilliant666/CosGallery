@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "description": "Development-only examples; no usable token or real gallery identity.",
+  "connection": {
+    "apiVersion": "companion-v1",
+    "instanceId": "10000000-0000-4000-8000-000000000001",
+    "label": "CosGallery",
+    "grantId": "20000000-0000-4000-8000-000000000001",
+    "permissionFingerprint": "synthetic-permission-fingerprint",
+    "scopes": ["identity:read", "summary:read", "library:link", "catalog:link"],
+    "expiresAt": "2030-02-01T00:00:00.000Z",
+    "countPolicyVersion": "independent-work-available-copy-v1",
+    "queriedAt": "2030-01-02T00:00:00.000Z",
+    "capabilities": { "batchResolve": true, "creatorSearch": true, "creatorSummary": true, "libraryLink": true, "catalogLink": true, "maxBatchItems": 50, "maxBodyBytes": 32768, "mutations": false }
+  },
+  "resolveRequest": {
+    "items": [{ "requestKey": "card-1", "site": "costuan.com", "pageType": "resource", "pageIdentifier": "/123.html", "candidateNames": ["Synthetic Alpha"] }]
+  },
+  "resolveResponse": {
+    "apiVersion": "companion-v1",
+    "instanceId": "10000000-0000-4000-8000-000000000001",
+    "label": "CosGallery",
+    "grantId": "20000000-0000-4000-8000-000000000001",
+    "permissionFingerprint": "synthetic-permission-fingerprint",
+    "scopes": ["identity:read", "summary:read", "library:link", "catalog:link"],
+    "expiresAt": "2030-02-01T00:00:00.000Z",
+    "countPolicyVersion": "independent-work-available-copy-v1",
+    "queriedAt": "2030-01-02T00:00:00.000Z",
+    "batchStatus": "complete",
+    "items": [{
+      "index": 0, "requestKey": "card-1", "matchStatus": "matched", "matchedBy": "canonical_or_registered_alias",
+      "creator": { "creatorId": 1, "canonicalName": "Synthetic Alpha", "links": { "library": "/library/1", "catalog": "/archive-catalog?workspace=resources&creatorId=1" } },
+      "candidates": [{ "creatorId": 1, "canonicalName": "Synthetic Alpha", "links": { "library": "/library/1", "catalog": "/archive-catalog?workspace=resources&creatorId=1" } }],
+      "candidatesTruncated": false, "collectedWorkCount": 4, "countPolicyVersion": "independent-work-available-copy-v1",
+      "readModel": { "status": "ready", "complete": true }, "dataVersion": "synthetic-ready-version",
+      "dataUpdatedAt": "2030-01-01T00:00:00.000Z", "queriedAt": "2030-01-02T00:00:00.000Z"
+    }]
+  },
+  "variantItems": {
+    "unresolved": { "index": 0, "requestKey": "card-1", "matchStatus": "unresolved", "matchedBy": null, "creator": null, "candidates": [], "candidatesTruncated": false, "collectedWorkCount": null, "countPolicyVersion": "independent-work-available-copy-v1", "readModel": { "status": "unresolved", "complete": false }, "dataVersion": "synthetic-unresolved-version", "dataUpdatedAt": null, "queriedAt": "2030-01-02T00:00:00.000Z" },
+    "invalid": { "index": 1, "requestKey": "card-2", "error": { "code": "INVALID_RESOLVE_ITEM", "status": 400, "message": "查询项格式无效。" }, "collectedWorkCount": null }
+  },
+  "revokedResponse": { "code": "COMPANION_AUTH_REQUIRED", "message": "只读授权无效、已撤销或已到期，请重新连接。", "collectedWorkCount": null },
+  "scopeDeniedResponse": { "code": "COMPANION_SCOPE_DENIED", "message": "此授权未包含作品摘要读取权限。", "collectedWorkCount": null },
+  "staleSummaryFields": { "collectedWorkCount": null, "readModel": { "status": "updating", "complete": false }, "dataVersion": "synthetic-new-version", "dataUpdatedAt": "2030-01-01T00:00:00.000Z", "queriedAt": "2030-01-02T00:00:00.000Z" }
+}
