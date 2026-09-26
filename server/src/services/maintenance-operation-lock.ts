@@ -1,3 +1,5 @@
+import { AsyncResource } from 'node:async_hooks';
+
 export const PERMANENT_DELETION_QUARANTINE_DIRECTORY_NAME = '.foldergram-delete-quarantine';
 
 export class MaintenanceOperationLock {
@@ -16,11 +18,15 @@ export class MaintenanceOperationLock {
   }
 
   private enqueue<T>(generation: boolean, operation: () => Promise<T>): Promise<T> {
+    // A preceding writer drains this queue in its own async context. Preserve
+    // each caller's context so scoped indexing retains its admission owner,
+    // while unrelated jobs never inherit the preceding writer's ownership.
+    const runOperation = AsyncResource.bind(operation);
     return new Promise<T>((resolve, reject) => {
       this.queue.push({ generation, start: () => {
         if (generation) this.activeGenerations += 1;
         else this.exclusive = true;
-        Promise.resolve().then(operation).then(resolve, reject).finally(() => {
+        Promise.resolve().then(runOperation).then(resolve, reject).finally(() => {
           if (generation) this.activeGenerations -= 1;
           else this.exclusive = false;
           this.drain();
