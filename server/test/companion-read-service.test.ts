@@ -52,6 +52,33 @@ describe('Companion independent Work read contract (synthetic in-memory database
     db.exec('UPDATE posts SET is_trashed=1 WHERE id=2'); publish();
     expect(reader.summary(1).collectedWorkCount).toBe(0);
   });
+  it('bounds summary traversal to creator Works and Post media, not global visibility indexes', () => {
+    add(); add(2, 2); publish();
+    const prepare = vi.spyOn(db, 'prepare');
+    expect(reader.summary(1).collectedWorkCount).toBe(1);
+    const sql = prepare.mock.calls.map(([sql]) => sql).find(sql => sql.startsWith('SELECT COUNT(DISTINCT w.id)'))!;
+    expect(sql).toBeTruthy();
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(1).map(row => String(row.detail));
+    expect(plan[0]).toMatch(/SEARCH w USING .*idx_archive_catalog_works_creator.*creator_id/);
+    expect(plan.some(detail => /SEARCH l USING .*idx_archive_catalog_local_works_work.*work_id/.test(detail))).toBe(true);
+    expect(plan.filter(detail => /SEARCH pi /.test(detail))).toHaveLength(2);
+    expect(plan.filter(detail => /SEARCH pi /.test(detail)).every(detail => detail.includes('post_id=?'))).toBe(true);
+    expect(plan.some(detail => /SEARCH i USING INTEGER PRIMARY KEY/.test(detail))).toBe(true);
+    expect(plan.some(detail => /SCAN |idx_images_.*visible|idx_posts_.*listing/.test(detail))).toBe(false);
+  });
+  it('computes a creator summary once per batch snapshot but never reuses it across requests', () => {
+    add(); publish();
+    const summary = vi.spyOn(reader, 'summary');
+    const batch = Array.from({ length: 50 }, (_, index) => item({ requestKey: `card-${index}` }));
+    const results = reader.resolveBatch(batch);
+    expect(results.every(result => result.collectedWorkCount === 1)).toBe(true);
+    expect(summary).toHaveBeenCalledTimes(1);
+    db.exec('UPDATE posts SET is_trashed=1'); publish();
+    expect(reader.resolveBatch(batch).every(result => result.collectedWorkCount === 0)).toBe(true);
+    expect(summary).toHaveBeenCalledTimes(2);
+    reader.resolveBatch(batch, { includeSummary: false });
+    expect(summary).toHaveBeenCalledTimes(2);
+  });
   it.each(['is_deleted', 'is_trashed'])('excludes %s media even if a Post still exists', column => {
     add(); db.exec(`UPDATE images SET ${column}=1`); publish();
     expect(reader.summary(1).collectedWorkCount).toBe(0);

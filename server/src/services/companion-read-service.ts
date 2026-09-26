@@ -75,11 +75,15 @@ export class CompanionReadService {
   private availableWorkCount(id: number): number {
     // Same ownership/index/media eligibility as ResourceCatalogBuilder. Unlike its
     // presentation total, any usable secondary copy counts; NO/date/primary choice do not.
+    // CROSS JOIN deliberately fixes the bounded traversal: creator Works -> local
+    // copies -> one Post -> that Post's media. Otherwise SQLite can start with all
+    // visible Posts and probe the global media visibility index once per Post,
+    // blocking the HTTP event loop on a real library despite tiny fixtures passing.
     return Number(this.db.prepare(`SELECT COUNT(DISTINCT w.id) AS count FROM archive_catalog_works w
-      JOIN archive_catalog_local_works l ON l.work_id=w.id
-      JOIN archive_catalog_local_creator_folders f ON f.id=l.local_creator_folder_id
-      JOIN folders gf ON gf.id=f.gallery_folder_id AND gf.role='normal'
-      JOIN posts p ON p.id=COALESCE(l.post_id,(SELECT legacy.id FROM posts legacy
+      CROSS JOIN archive_catalog_local_works l ON l.work_id=w.id
+      CROSS JOIN archive_catalog_local_creator_folders f ON f.id=l.local_creator_folder_id
+      CROSS JOIN folders gf ON gf.id=f.gallery_folder_id AND gf.role='normal'
+      CROSS JOIN posts p ON p.id=COALESCE(l.post_id,(SELECT legacy.id FROM posts legacy
         WHERE l.match_status='matched' AND legacy.folder_id=f.gallery_folder_id
         AND legacy.source_path=rtrim(replace(f.relative_path,char(92),'/'),'/') || '/' || ltrim(replace(l.relative_path,char(92),'/'),'/')))
       WHERE w.creator_id=? AND f.creator_id=w.creator_id AND f.is_active=1 AND l.is_active=1
@@ -88,10 +92,10 @@ export class CompanionReadService {
       AND NOT EXISTS (SELECT 1 FROM archive_catalog_local_creator_folders other
         WHERE other.gallery_folder_id=f.gallery_folder_id AND other.is_active=1 AND other.match_status='matched'
         AND other.creator_id IS NOT NULL AND other.creator_id<>w.creator_id)
-      AND NOT EXISTS (SELECT 1 FROM post_items pi JOIN images i ON i.id=pi.image_id
+      AND NOT EXISTS (SELECT 1 FROM post_items pi CROSS JOIN images i ON i.id=pi.image_id
         WHERE pi.post_id=p.id AND pi.position=1 AND i.folder_id=p.folder_id
         AND lower(i.filename) IN ('cover.jpg','cover.jpeg','cover.png','cover.webp','cover.avif','cover.gif'))
-      AND EXISTS (SELECT 1 FROM post_items pi JOIN images i ON i.id=pi.image_id WHERE pi.post_id=p.id
+      AND EXISTS (SELECT 1 FROM post_items pi CROSS JOIN images i ON i.id=pi.image_id WHERE pi.post_id=p.id
         AND i.is_deleted=0 AND i.is_trashed=0 AND i.media_type IN ('image','video')
         AND instr(replace(i.relative_path,char(92),'/'),'/_未支持格式原件/')=0)`).get(id)!.count);
   }
@@ -140,6 +144,9 @@ export class CompanionReadService {
     const keys = items.map(item => typeof item === 'object' && item !== null ? (item as {requestKey?:unknown}).requestKey : undefined)
       .filter((key): key is string => typeof key === 'string');
     if (new Set(keys).size !== keys.length) throw new CompanionReadError(400, 'DUPLICATE_REQUEST_KEY', '批次中的请求标识不能重复。');
+    // Only share within this synchronous read snapshot; never cache across requests,
+    // grants or database changes. A card batch may repeat the same creator many times.
+    const summaries = new Map<number, CompanionSummary>();
     return this.read(() => items.map((raw, index) => {
       const parsed = companionResolveItemSchema.safeParse(raw);
       const key = typeof raw === 'object' && raw !== null ? (raw as {requestKey?:unknown}).requestKey : null;
@@ -154,7 +161,11 @@ export class CompanionReadService {
       const matchStatus = needsConfirmation ? 'needs_confirmation' : conflict ? 'conflict' : sources.length === 1 ? 'matched'
         : names.length > 1 ? 'ambiguous' : names.length === 1 ? 'matched' : 'unresolved';
       const match = matchStatus === 'matched' ? (sources[0] ?? names[0])! : null;
-      const summary = match && options.includeSummary !== false ? this.summary(match.creatorId) : null;
+      let summary: CompanionSummary | null = null;
+      if (match && options.includeSummary !== false) {
+        summary = summaries.get(match.creatorId) ?? this.summary(match.creatorId);
+        summaries.set(match.creatorId, summary);
+      }
       return { index, requestKey: item.requestKey, matchStatus,
         matchedBy: match ? sources.length ? 'source_relation' : 'canonical_or_registered_alias' : null,
         creator: match, candidates: candidates.slice(0, 30), candidatesTruncated: candidates.length > 30,
