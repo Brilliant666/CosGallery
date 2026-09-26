@@ -7,6 +7,7 @@ import { ArchiveMetadataTaskError } from './services/archive-metadata-task-servi
 import { appConfig, repositoryRoot } from './config/env.js';
 import { requireApiAuthentication, requireMediaAuthentication } from './middleware/auth-protection.js';
 import { requireTrustedMutationRequest } from './middleware/csrf-protection.js';
+import { createAllowedRequestHost } from './middleware/request-host.js';
 import { blockPublicDemoMutations } from './middleware/public-demo-mode.js';
 import { createTextCompression, mountClientDelivery } from './middleware/text-delivery.js';
 import { denyRecoveryFileRequests } from './middleware/protected-recovery-files.js';
@@ -27,10 +28,12 @@ export function applyApiNoStoreHeaders(response: Pick<express.Response, 'setHead
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', false);
   const clientDist = path.join(repositoryRoot, 'client', 'dist');
   const clientHtml = path.join(clientDist, 'index.html');
   app.use(requestIdentity);
   app.use(securityHeaders(fs.existsSync(clientHtml) ? fs.readFileSync(clientHtml, 'utf8') : '', appConfig.nodeEnv === 'development'));
+  app.use(createAllowedRequestHost({ serverHost: appConfig.host, allowedHosts: appConfig.allowedHosts }));
   app.use(denyRecoveryFileRequests());
   app.use(createTextCompression());
 

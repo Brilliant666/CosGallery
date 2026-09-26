@@ -17,6 +17,7 @@ if (process.env.NODE_ENV !== 'test') {
 
 const envSchema = z.object({
   SERVER_HOST: z.string().default('127.0.0.1'),
+  SERVER_ALLOWED_HOSTS: z.string().optional(),
   SERVER_PORT: z.coerce.number().int().positive().optional(),
   DEV_SERVER_PORT: z.coerce.number().int().positive().optional(),
   DEV_CLIENT_PORT: z.coerce.number().int().positive().optional(),
@@ -34,6 +35,7 @@ const envSchema = z.object({
   PREVIEWS_DIR: z.string().optional(),
   FFMPEG_PATH: z.string().trim().min(1).optional(),
   FFPROBE_PATH: z.string().trim().min(1).optional(),
+  LOCAL_INGEST_SEVEN_ZIP_PATH: z.string().trim().default(''),
   FFMPEG_VIDEO_ENCODER: z.enum(['libx264', 'h264_nvenc']).default('libx264'),
   LOG_VERBOSE: z.string().optional(),
   SCAN_MEDIA_ERROR_MODE: z.enum(['skip', 'fail']).default('skip'),
@@ -200,6 +202,7 @@ const managedGalleryRelativeIgnores = uniq(
 
 export const appConfig = {
   host: parsed.SERVER_HOST,
+  allowedHosts: (parsed.SERVER_ALLOWED_HOSTS ?? '').split(',').map(value => value.trim()).filter(Boolean),
   port: serverPort,
   devClientPort,
   devClientPorts,
@@ -222,6 +225,7 @@ export const appConfig = {
   previewsDir,
   ffmpegPath: parsed.FFMPEG_PATH ?? ffmpegDefault,
   ffprobePath: parsed.FFPROBE_PATH ?? ffprobeDefault,
+  sevenZipPath: parsed.LOCAL_INGEST_SEVEN_ZIP_PATH,
   ffmpegVideoEncoder: parsed.FFMPEG_VIDEO_ENCODER,
   scanErrorReportDir,
   managedGalleryRelativeIgnores,

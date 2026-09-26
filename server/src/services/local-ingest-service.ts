@@ -33,7 +33,8 @@ import {
   canonicalizeLocalIngestPath,
   LocalIngestPathError
 } from '../utils/local-ingest-paths.js';
-import { ProcessTimeoutError, runProcessWithTimeout } from '../utils/run-process.js';
+import { ProcessTimeoutError } from '../utils/run-process.js';
+import { trustedSevenZip } from '../utils/trusted-seven-zip.js';
 import {
   LocalIngestDestinationError,
   LocalIngestDestinationService,
@@ -571,7 +572,7 @@ export function assertSafeArchiveEntry(entryPath: string): void {
 }
 
 function runCommand(command: string, args: string[], timeoutMs: number): Promise<SevenZipResult> {
-  return runProcessWithTimeout(command, args, timeoutMs);
+  return trustedSevenZip.run(command, args, timeoutMs);
 }
 
 function classifySevenZipFailure(output: string): LocalIngestFailure {

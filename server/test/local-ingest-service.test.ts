@@ -13,11 +13,16 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { appConfig } from '../src/config/env.js';
 import { schemaSql } from '../src/db/schema.js';
 import { assertSafeArchiveEntry, LocalIngestService } from '../src/services/local-ingest-service.js';
+import { TrustedSevenZip } from '../src/utils/trusted-seven-zip.js';
 import type { LocalIngestSettingsService } from '../src/services/local-ingest-settings-service.js';
 import type { RecycleBinAdapter } from '../src/services/recycle-bin-adapter.js';
 
 const sevenZipPath = 'C:\\Program Files\\NVIDIA Corporation\\NVIDIA app\\7z.exe';
 const fixturePassword = 'fixture-password-not-a-real-secret';
+// The fixture owner chooses the native tool, through the same pinned boundary
+// as startup configuration; database settings alone cannot grant execution.
+const fixtureTool = new TrustedSevenZip(sevenZipPath);
+const runFixtureTool = fixtureTool.run.bind(fixtureTool);
 const ffmpegPath = process.env.FFMPEG_PATH ?? 'ffmpeg';
 const ffprobePath = process.env.FFPROBE_PATH ?? 'ffprobe';
 const originalFfprobePath = appConfig.ffprobePath;
@@ -338,6 +343,7 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
   };
   let clock = Date.now();
   const service = new LocalIngestService(database, settings, recycle, rescan, {
+    runCommand: runFixtureTool,
     now: () => new Date(clock),
     wait: async (milliseconds) => { clock += milliseconds; },
     expectedGalleryRoot: libraryRoot
@@ -1062,7 +1068,7 @@ describe.sequential('LocalIngestService', () => {
       settings,
       { recycle: async () => { throw new Error('must not recycle'); } } as unknown as RecycleBinAdapter,
       async () => { rescanCalls += 1; },
-      { expectedGalleryRoot: fixture.libraryRoot }
+      { expectedGalleryRoot: fixture.libraryRoot, runCommand: runFixtureTool }
     );
 
     const result = await service.runJob(1);
@@ -1277,7 +1283,7 @@ describe.sequential('LocalIngestService', () => {
       wrongSettings,
       {} as RecycleBinAdapter,
       async () => undefined,
-      { expectedGalleryRoot: fixture.libraryRoot }
+      { expectedGalleryRoot: fixture.libraryRoot, runCommand: runFixtureTool }
     );
     const discovery = await service.scanInbox([fixture.creatorName]);
     const result = await service.runJob(discovery.jobs[0].id);

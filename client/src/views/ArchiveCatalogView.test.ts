@@ -823,6 +823,8 @@ describe('ArchiveCatalogView', () => {
     const wrapper = await mountCostuan('ingest');
     await flushPromises();
     await wrapper.get('[data-test="open-ingest-settings"]').trigger('click');
+    expect(wrapper.get('[data-test="local-ingest-sevenzip"]').attributes()).toHaveProperty('readonly');
+    expect((wrapper.get('[data-test="local-ingest-sevenzip"]').element as HTMLInputElement).value).toBe(localIngestSettings.sevenZipPath);
     await wrapper.get('[data-test="local-ingest-stable-seconds"]').setValue(60);
     await wrapper.get('[data-test="cancel-ingest-settings"]').trigger('click');
 

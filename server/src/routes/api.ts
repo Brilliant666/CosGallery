@@ -371,7 +371,7 @@ const localIngestSettingsBodySchema = z.object({
   libraryRoot: z.string().trim().min(1).max(500),
   inboxRoot: z.string().trim().min(1).max(500),
   processingRoot: z.string().trim().min(1).max(500),
-  sevenZipPath: z.string().trim().min(1).max(500),
+  sevenZipPath: z.string().trim().max(500),
   fileStableSeconds: z.number().int().min(1).max(3600),
   recycleAfterIngest: z.boolean(),
   maxExtractionDepth: z.literal(2),

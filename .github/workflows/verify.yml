@@ -56,6 +56,9 @@ jobs:
       - name: Run client tests
         run: pnpm --dir client test
 
+      - name: Check Vite development boundary with synthetic fixtures
+        run: pnpm test:dev-security
+
       - name: Build server
         run: pnpm --dir server build
 
