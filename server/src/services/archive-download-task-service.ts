@@ -194,7 +194,7 @@ function mapTask(row: TaskRow): ArchiveDownloadTask {
     createdAt: row.created_at,
     updatedAt: row.updated_at
     ,acquisitionState: row.local_satisfied ? 'local_satisfied' : row.acquisition_held ? 'review_required' : 'required'
-    ,acquisitionExplanation: row.local_satisfied ? '本地已有资源满足，无需继续获取；下载执行历史保留。' : row.acquisition_held ? '接受决定需复核，不自动重新获取。' : null
+    ,acquisitionExplanation: row.local_satisfied ? '本地已有资源满足，无需继续获取；下载执行历史保留。' : row.acquisition_held ? '本地候选或接受决定需复核，不自动重新获取。' : null
   };
 }
 

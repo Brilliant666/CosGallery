@@ -25,7 +25,13 @@ export const acquisitionHeldSql = (s: string) => `(EXISTS (SELECT 1 FROM archive
  OR EXISTS (SELECT 1 FROM archive_catalog_collections reuse_collection,
  json_each(COALESCE(json_extract(reuse_collection.metadata_json,'$.localSourceReuse'),'[]')) reuse_entry
  WHERE reuse_collection.id=${s}.collection_id AND json_extract(reuse_entry.value,'$.sourceOrder')=${s}.source_work_id
- AND json_extract(reuse_entry.value,'$.status')='review'))`;
+ AND json_extract(reuse_entry.value,'$.status')='review')
+ OR EXISTS (SELECT 1 FROM archive_catalog_local_creator_folders title_folder
+ JOIN archive_catalog_local_works title_local ON title_local.local_creator_folder_id=title_folder.id,
+ json_each(COALESCE(json_extract(title_local.provenance_json,'$.sourceTitleReview.candidateWorkIds'),'[]')) title_candidate
+ WHERE title_folder.creator_id=(SELECT creator_id FROM archive_catalog_works WHERE id=${s}.work_id)
+ AND title_folder.is_active=1 AND title_local.is_active=1 AND title_local.work_id IS NULL
+ AND title_local.match_status='ambiguous' AND title_candidate.value=${s}.work_id))`;
 export const legacyLocalCoverageSql = (s: string) => `EXISTS (SELECT 1 FROM archive_catalog_local_works legacy_local
  JOIN archive_catalog_local_creator_folders legacy_folder ON legacy_folder.id=legacy_local.local_creator_folder_id
  WHERE legacy_local.work_id=${s}.work_id AND legacy_local.is_active=1 AND legacy_folder.is_active=1

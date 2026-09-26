@@ -3,6 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script id="fg-initial-theme">
+      // Apply the same preference as the app before the first paint, without
+      // waiting for modules, stylesheets or authentication requests.
+      (function () {
+        var theme;
+        try { theme = window.localStorage.getItem('foldergram-theme'); } catch (_) {}
+        if (theme !== 'light' && theme !== 'dark') {
+          theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <meta name="theme-color" content="#4f46e5" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -22,6 +34,14 @@
     <title>我的图库</title>
     <style>
       /* ── Splash screen — shown before Vue boots ──────────────────── */
+      :root { --fg-initial-background: rgb(244, 245, 247); }
+      :root[data-theme="dark"] { --fg-initial-background: rgb(12, 16, 20); }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme]) { --fg-initial-background: rgb(12, 16, 20); }
+      }
+      html, body { background: var(--bg, var(--fg-initial-background)); }
+      /* Reserve the viewport scrollbar space before modules or content load. */
+      html { scrollbar-gutter: stable; }
       #fg-splash {
         position: fixed;
         inset: 0;
@@ -30,7 +50,7 @@
         align-items: center;
         justify-content: center;
         gap: 1rem;
-        background: #0a0e18;
+        background: var(--bg, var(--fg-initial-background));
         z-index: 99999;
         transition: opacity 0.3s ease, visibility 0.3s ease;
       }

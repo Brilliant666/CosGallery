@@ -1,5 +1,6 @@
 import { parseCostuanNumberRange, type CostuanNumberRange } from './costuan-numbering-range.js';
 import { matchNamedCostuanNumberPrefix } from './costuan-numbering-prefix.js';
+import { parseWorkTitle, type ParsedWorkTitle } from '../utils/work-title.js';
 
 export type CostuanNumberingScheme = 'NO' | 'VOL' | 'SPECIAL';
 
@@ -340,7 +341,14 @@ export function splitCostuanCheckDirectory(title:string, works:ExistingCostuanWo
   return {works:numbered,supplementalContents};
 }
 
-export function normalizeCostuanTitle(value: string, stripNumbering = true): string {
+/** Source-adapter evidence only. verificationKey verifies an already scoped
+ * Costuan directory/file pair; it is deliberately NOT the shared exactKey and
+ * must never assign a local Work or establish fulfillment on its own. */
+export function parseCostuanVerificationTitle(
+  value: string,
+  stripNumbering = true,
+  creatorNames: readonly string[] = []
+): ParsedWorkTitle & { readonly verificationKey: string } {
   const normalized = String(value ?? '')
     .normalize('NFKC')
     .replace(/\u00a0/gu, ' ')
@@ -348,16 +356,22 @@ export function normalizeCostuanTitle(value: string, stripNumbering = true): str
     // deterministic glyph normalization, not creator-specific fuzzy matching.
     .replace(/咝/gu, '丝')
     // Preserve the raw title separately while correcting a known literal
-    // platform typo for exact title verification.
+    // platform typo for source-directory verification (not exact work identity).
     .replace(/自怕/gu, '自拍')
     .replace(/\s*[\[【][^\]】]+[\]】]\s*$/u, '')
     .trim();
   const numbering = parseCostuanNumbering(normalized);
   const title = numbering && stripNumbering ? normalized.slice(numbering.end) : normalized;
-  return title
+  const verificationKey = title
     .toLocaleLowerCase()
     .replace(/^[\s_\-–—:：]+/u, '')
     .replace(/[\s_\-–—:：·・.《》【】[\]()（）?!？!]+/gu, '');
+  return { ...parseWorkTitle(String(value ?? ''), creatorNames), verificationKey };
+}
+
+/** Legacy source-adapter API. Do not use this key for local Work identity. */
+export function normalizeCostuanTitle(value: string, stripNumbering = true): string {
+  return parseCostuanVerificationTitle(value, stripNumbering).verificationKey;
 }
 
 function stripCreatorPrefix(value: string, creatorNames: string[]): string {
@@ -371,6 +385,8 @@ function stripCreatorPrefix(value: string, creatorNames: string[]): string {
   return value;
 }
 
+/** Compatibility evidence inside an already identified Costuan source scope,
+ * never an identity decision for a local Work. Includes lossy containment. */
 export function areCostuanTitlesCompatible(
   localTitle: string,
   remoteTitle: string,

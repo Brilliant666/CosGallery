@@ -151,7 +151,10 @@ function lockModalScroll() {
   previousBodyStyles.overflowY = document.body.style.overflowY;
   previousBodyStyles.paddingRight = document.body.style.paddingRight;
 
-  const scrollbarWidth = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
+  // A stable root gutter also reserves space for the fixed body. Only older
+  // browsers without that gutter need the manual scrollbar compensation.
+  const stableGutter = getComputedStyle(document.documentElement).scrollbarGutter?.includes('stable');
+  const scrollbarWidth = stableGutter ? 0 : Math.max(0, window.innerWidth - document.documentElement.clientWidth);
 
   document.body.style.position = 'fixed';
   document.body.style.top = `-${lockedScrollY}px`;
