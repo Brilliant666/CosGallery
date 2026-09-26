@@ -64,7 +64,17 @@ describe('Companion independent Work read contract (synthetic in-memory database
     expect(plan.filter(detail => /SEARCH pi /.test(detail))).toHaveLength(2);
     expect(plan.filter(detail => /SEARCH pi /.test(detail)).every(detail => detail.includes('post_id=?'))).toBe(true);
     expect(plan.some(detail => /SEARCH i USING INTEGER PRIMARY KEY/.test(detail))).toBe(true);
+    expect(plan.some(detail => /SEARCH p USING INTEGER PRIMARY KEY/.test(detail))).toBe(true);
+    expect(plan.some(detail => /SEARCH legacy USING .*\(source_path=\?\)/.test(detail))).toBe(true);
     expect(plan.some(detail => /SCAN |idx_images_.*visible|idx_posts_.*listing/.test(detail))).toBe(false);
+  });
+  it('preserves exact legacy path fallback without admitting another folder or unmatched copy', () => {
+    add(); db.exec('UPDATE archive_catalog_local_works SET post_id=NULL'); publish();
+    expect(reader.summary(1).collectedWorkCount).toBe(1);
+    db.exec('UPDATE posts SET folder_id=2'); publish();
+    expect(reader.summary(1).collectedWorkCount).toBe(0);
+    db.exec("UPDATE posts SET folder_id=1; UPDATE archive_catalog_local_works SET match_status='unmatched'"); publish();
+    expect(reader.summary(1)).toMatchObject({ collectedWorkCount: null, readModel: { status: 'incomplete' } });
   });
   it('computes a creator summary once per batch snapshot but never reuses it across requests', () => {
     add(); publish();
