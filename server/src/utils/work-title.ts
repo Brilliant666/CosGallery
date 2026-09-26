@@ -19,7 +19,7 @@ function displayTitle(name: string, creatorNames: readonly string[]): string {
     }
   }
   title = title.replace(/^(?:NO\.?|VOL\.?)\s*\d+\s+/iu, '');
-  title = title.replace(/\s*\[(?=[^\]]*\d)(?:\d+(?:\.\d+)?\s*(?:P|V|KB|MB|GB|TB|K|M|G|T)[\s+-]*)+\]\s*$/iu, '').trim();
+  title = title.replace(/\s*\[(?=[^\]]*\d)(?:\d+(?:\.\d+)?\s*(?:P|V|KB|MB|GB|TB|K|M|G|T|B)[\s+-]*)+\]\s*$/iu, '').trim();
   // Internal numbers, punctuation, subtitles and case are intentionally significant.
   return title || normalized;
 }
@@ -35,7 +35,7 @@ function candidateKey(title: string, creatorNames: readonly string[]): string {
   }
   value = value.replace(/\(\s*\)/gu, '').trim();
   value = value.replace(/^(?:(?:NO\.?|VOL\.?)\s*\d+|\d+)\s*(?:[-:：.、]\s*|\s+)/iu, '');
-  value = value.replace(/\s*\[(?=[^\]]*\d)(?:\d+(?:\.\d+)?\s*(?:P|V|KB|MB|GB|TB|K|M|G|T)[\s+\-/]*)+\]\s*$/iu, '');
+  value = value.replace(/\s*\[(?=[^\]]*\d)(?:\d+(?:\.\d+)?\s*(?:P|V|KB|MB|GB|TB|K|M|G|T|B)[\s+\-/]*)+\]\s*$/iu, '');
   return value.replace(/[\s\p{P}]/gu, '').toLocaleLowerCase('en-US');
 }
 
