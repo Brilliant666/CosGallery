@@ -46,7 +46,14 @@ describe('work gallery route modal history and background', () => {
   });
   afterEach(() => { histories.splice(0).forEach((history) => history.destroy()); vi.restoreAllMocks(); });
 
-  it.each(['close', 'back'])('returns once via %s, preserving DOM and scroll, then back to creator', async (method) => {
+  it.each([['close', 'stable', ''], ['back', 'stable', ''], ['close', 'auto', '15px']])('returns via %s with %s gutter, preserving DOM and scroll', async (method, gutter, padding) => {
+    const computedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => {
+      const style = computedStyle(element, pseudo);
+      if (element === document.documentElement) Object.defineProperty(style, 'scrollbarGutter', { value: gutter });
+      return style;
+    });
+    vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(window.innerWidth - 15);
     const history = createWebHistory();
     histories.push(history);
     const blank = { template: '<div data-creator>Creator</div>' };
@@ -69,6 +76,7 @@ describe('work gallery route modal history and background', () => {
     await flushPromises();
     expect(wrapper.find('.app__image-modal-layer').exists()).toBe(true);
     expect(document.body.style.top).toBe('-840px');
+    expect(document.body.style.paddingRight).toBe(padding);
     await wrapper.get('[data-next]').trigger('click');
     await flushPromises();
     await wrapper.get('[data-next]').trigger('click');
@@ -85,6 +93,7 @@ describe('work gallery route modal history and background', () => {
     expect(fetchImage).toHaveBeenCalledTimes(1);
     expect(scroll).toHaveBeenCalledWith(0, 840);
     expect(document.body.style.position).not.toBe('fixed');
+    expect(document.body.style.paddingRight).toBe('');
     router.back();
     await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('folder'));
     expect(wrapper.find('.app__image-modal-layer').exists()).toBe(false);

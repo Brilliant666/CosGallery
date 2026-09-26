@@ -40,6 +40,8 @@
         :root:not([data-theme]) { --fg-initial-background: rgb(12, 16, 20); }
       }
       html, body { background: var(--bg, var(--fg-initial-background)); }
+      /* Reserve the viewport scrollbar space before modules or content load. */
+      html { scrollbar-gutter: stable; }
       #fg-splash {
         position: fixed;
         inset: 0;
