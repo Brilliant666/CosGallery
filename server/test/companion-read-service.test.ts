@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { schemaSql } from '../src/db/schema.js';
 import { CompanionReadService, COUNT_POLICY_VERSION } from '../src/services/companion-read-service.js';
 import { ResourceCatalogReadModel } from '../src/services/resource-catalog-read-model.js';
+import { CompanionGrantService } from '../src/services/companion-grant-service.js';
 
 describe('Companion independent Work read contract (synthetic in-memory database)', () => {
   let db: DatabaseSync;
@@ -143,5 +144,22 @@ describe('Companion independent Work read contract (synthetic in-memory database
     const after = reader.resolveBatch([item()], {includeSummary:false});
     expect(summary).not.toHaveBeenCalled();
     expect(after[0]!.dataVersion).toBe(before[0]!.dataVersion);
+  });
+
+  it('keeps the same creator ID in two fresh instances in separate authorization/cache namespaces', () => {
+    add(); publish();
+    const other = new DatabaseSync(':memory:');
+    try {
+      other.exec(schemaSql);
+      other.exec("INSERT INTO archive_catalog_creators(id,canonical_name,normalized_name,seed_source,seed_source_creator_id) VALUES(1,'Other Instance Person','otherinstance','fixture','1')");
+      new ResourceCatalogReadModel(other).rebuildCreator(1);
+      const grantInput = { label:'Synthetic', extensionOrigin:`chrome-extension://${'a'.repeat(32)}`, scopes:['identity:read','summary:read'] };
+      const firstGrants = new CompanionGrantService(db), otherGrants = new CompanionGrantService(other);
+      const first = firstGrants.create(grantInput), second = otherGrants.create(grantInput);
+      expect(reader.summary(1)).toMatchObject({creatorId:1,canonicalName:'Alpha',collectedWorkCount:1});
+      expect(new CompanionReadService(other).summary(1)).toMatchObject({creatorId:1,canonicalName:'Other Instance Person',collectedWorkCount:0});
+      expect(first.instanceId).not.toBe(second.instanceId);
+      expect(() => otherGrants.authenticate(`Bearer ${first.token}`, grantInput.extensionOrigin)).toThrow();
+    } finally { other.close(); }
   });
 });
