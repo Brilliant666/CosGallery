@@ -20,8 +20,10 @@ CosGallery 当前面向本机与受控自托管环境。继承的密码保护不
 普通网页变更 API 要求 `x-foldergram-intent: 1`，并检查请求来源：
 
 - 开发/测试使用允许的 loopback 主机和开发端口。
-- production 对照提供应用的请求主机及端口；还可显式配置 `CSRF_TRUSTED_ORIGINS`。
-- 请求同时缺少 `Origin`、`Referer` 时，该中间件仅凭 intent 标记即可通过来源检查；后续认证与能力检查仍适用。这不是完整的公网加固方案。
+- production 对照直接连接的协议、Host及端口，不信任客户端提交的Forwarded/X-Forwarded头；反向代理需明确配置 `CSRF_TRUSTED_ORIGINS`。
+- 请求同时缺少 `Origin`、`Referer` 时，CLI仍须提供intent，并通过后续既有认证与能力检查。没有Fetch Metadata，或仅有Node内置fetch自动发送的 `Sec-Fetch-Mode: cors`（没有 `Sec-Fetch-Site`），可进入这条CLI路径；不能把该mode单独视为浏览器身份。带有 `Sec-Fetch-Site` 却缺少来源，或仅有navigate/no-cors等mode而缺少来源，以及非法或矛盾来源，均会被拒绝。普通API不会授予跨来源CORS预检许可；这不是完整的公网加固方案。
+
+所有入口先核对Host：默认允许loopback与明确的非通配监听主机，其他主机通过 `SERVER_ALLOWED_HOSTS` 精确配置。Host校验不替代用户登录，也不赋予插件管理权限。继承的管理员密码开关保持不变，请在“设置 → 安全与访问”启用；不新增强制首次设置或管理员CLI。开发监听、文件范围及合成验证见[开发访问边界](/h1-development-boundary)。
 
 `/api/archive-bridge` 在普通网页认证/变更中间件之前注册，单独要求 loopback 连接与有效的 `x-cosgallery-bridge-token`。它允许扩展跨域通信，不应被描述为“没有网页 Cookie 就不能使用”，也不能把连接令牌当作可公开信息。反向代理配置不当可能削弱本机来源假设，不要直接把 bridge 代理到公网。
 

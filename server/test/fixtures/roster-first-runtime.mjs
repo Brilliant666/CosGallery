@@ -20,6 +20,7 @@ for (const [key, value] of Object.entries(paths)) {
   await fs.mkdir(value, { recursive: true });
 }
 Object.assign(process.env, {
+  LOCAL_INGEST_SEVEN_ZIP_PATH: process.env.ROSTER_E2E_7ZIP ?? '',
   NODE_ENV: 'production', SERVER_HOST: '127.0.0.1', SERVER_PORT: String(port),
   LOCAL_INGEST_STARTUP_SCAN: 'false', COS_GALLERY_MODE: 'true', DERIVATIVE_MODE: 'lazy',
   LOCAL_INGEST_ARCHIVE_PASSWORD: 'fixture-password-not-a-real-secret'
@@ -68,7 +69,7 @@ if (process.argv[4] === 'seed') {
   await new ArchiveCatalogPipelineService(db).refreshAfterGalleryScan({ galleryRoot: paths.GALLERY_ROOT, defaultInboxRoot: path.join(root, 'inbox') });
   const { localIngestSettingsService } = await load('services/local-ingest-settings-service.ts');
   localIngestSettingsService.save({ libraryRoot: paths.GALLERY_ROOT, inboxRoot: path.join(root, 'inbox'),
-    processingRoot: path.join(root, 'processing'), sevenZipPath: process.env.ROSTER_E2E_7ZIP,
+    processingRoot: path.join(root, 'processing'), sevenZipPath: localIngestSettingsService.get().sevenZipPath,
     fileStableSeconds: 1, recycleAfterIngest: true, maxExtractionDepth: 2, allowlist: [first.name] });
   await fs.mkdir(path.join(root, 'inbox'), { recursive: true });
   await fs.mkdir(path.join(root, 'processing'), { recursive: true });

@@ -338,7 +338,7 @@ describe('LocalIngest pending creator discovery', () => {
       libraryRoot,
       inboxRoot,
       processingRoot,
-      sevenZipPath: '7z',
+      sevenZipPath: service.get().sevenZipPath,
       fileStableSeconds: 5,
       recycleAfterIngest: true,
       maxExtractionDepth: 2,

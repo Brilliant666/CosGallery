@@ -30,4 +30,4 @@ Dependabot 对 npm 每周、Actions 每月提出有限更新 PR，不自动合�
 
 生产 Express 响应使用强制 CSP 和适用安全头，保留 Inter 的既有字体来源、blob 媒体和本机 HTTP；不启用 HTTPS 强制升级。独立 Vite 开发 HTML 不因此自动获得 Express 的响应头，不宣称已加强开发文件暴露策略。
 
-H1 四项由用户明确暂缓：管理员鉴权改造、7-Zip 执行边界、Host/Origin/代理规则、Vite 监听与文件访问保护。M5、响应头及错误治理不代表 H1 已修复。WAL/NORMAL、云端部署和原媒体备份也不属于本轮。
+PR42阶段的H1四项曾明确暂缓，M5、响应头及错误治理不代表PR42已修复H1。后续独立候选补充7-Zip启动配置、Host/Origin/代理规则与[开发文件访问边界](/h1-development-boundary)；管理员密码仍沿用“设置 → 安全与访问”的现有开关，不新增强制初始化机制。WAL/NORMAL、云端部署和原媒体备份不在该修正范围。
