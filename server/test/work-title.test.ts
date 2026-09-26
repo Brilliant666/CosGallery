@@ -1,7 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { extractWorkDisplayTitle, normalizeWorkTitle } from '../src/utils/work-title.js';
+import { extractWorkDisplayTitle, normalizeWorkTitle, parseWorkTitle } from '../src/utils/work-title.js';
+import { workTitleCandidateKey } from '../src/utils/work-title-candidate.js';
+import { parseCostuanVerificationTitle } from '../src/services/costuan-numbering-service.js';
 
 describe('conservative shared work titles', () => {
+  it('retains raw evidence and provides the same display/exact/candidate contract to every wrapper', () => {
+    const raw = 'Ｓｙｎｔｈｅｔｉｃ　ＮＯ．０３２　Blue Theme 2 (Night) ［31P-80MB］';
+    const names = ['Synthetic'];
+    const parsed = parseWorkTitle(raw, names);
+    expect(parsed).toEqual({ raw, displayTitle: 'Blue Theme 2 (Night)', exactKey: 'Blue Theme 2 (Night)', candidateKey: 'bluetheme2night' });
+    expect(extractWorkDisplayTitle(raw, names)).toBe(parsed.displayTitle);
+    expect(normalizeWorkTitle(raw, names)).toBe(parsed.exactKey);
+    expect(workTitleCandidateKey(raw, names)).toBe(parsed.candidateKey);
+  });
+  it('does not promote a lossy candidate or source typo/containment key into an exact identity', () => {
+    const local = parseWorkTitle('1 - [Studio] Summer', ['Synthetic']);
+    const source = parseWorkTitle('[Studio] Summer', ['Synthetic']);
+    expect(local.candidateKey).toBe(source.candidateKey);
+    expect(local.exactKey).not.toBe(source.exactKey);
+    const typo = parseCostuanVerificationTitle('NO.001 黑咝自怕');
+    const corrected = parseCostuanVerificationTitle('NO.001 黑丝自拍');
+    expect(typo.verificationKey).toBe(corrected.verificationKey);
+    expect(typo.exactKey).not.toBe(corrected.exactKey);
+    expect(typo.raw).toBe('NO.001 黑咝自怕');
+    expect(typo.exactKey).toBe(parseWorkTitle(typo.raw).exactKey);
+    expect(parseWorkTitle('Summer [Part 2]').exactKey).toBe('Summer [Part 2]');
+  });
   it('strips only known creator, outer numbering and media packaging', () => {
     expect(extractWorkDisplayTitle('Synthetic NO.032 Blue Theme 2 (Night) [31P-80MB]', ['Synthetic'])).toBe('Blue Theme 2 (Night)');
     expect(normalizeWorkTitle('Ｓｙｎｔｈｅｔｉｃ　ＶＯＬ．０２　Blue\tTheme 2 (Night) ［31P-80MB］', ['Synthetic'])).toBe('Blue Theme 2 (Night)');

@@ -235,11 +235,14 @@ describe('Costuan numbering reconciliation', () => {
     });
   });
 
-  it('links an unnumbered local folder only through a unique exact title in the same creator', () => {
+  it.each([
+    ['白丝JK', 1, 0],
+    ['白咝JK', 0, 1]
+  ] as const)('uses shared exact identity, not source glyph compatibility: %s', (sourceTitle, links, blockers) => {
     const creatorName = '五更百鬼';
     const { creatorId } = seedCollection(database, {
       creatorName,
-      rawDirectoryText: `${creatorName} VOL.001 兔玩映画 ${creatorName} 白咝JK [10P-26MB]`
+      rawDirectoryText: `${creatorName} VOL.001 兔玩映画 ${creatorName} ${sourceTitle} [10P-26MB]`
     });
     const localFolderId = seedLocalFolder(database, creatorId, creatorName);
     const localId = seedLocalWork(
@@ -251,12 +254,35 @@ describe('Costuan numbering reconciliation', () => {
     const service = new CostuanNumberingReconciliationService(database);
     const plan = service.plan({ creatorNames: [creatorName] });
 
-    expect(plan.summary).toMatchObject({ localLinksToCreate: 1, blockingIssues: 0 });
-    expect(plan.localLinksToCreate[0]).toMatchObject({
+    expect(plan.summary).toMatchObject({ localLinksToCreate: links, blockingIssues: blockers });
+    if (links) expect(plan.localLinksToCreate[0]).toMatchObject({
       localWorkId: localId,
       sourceWorkId: 'VOL.001',
       numberingKey: 'VOL:001'
     });
+    else expect(() => service.apply({ creatorNames: [creatorName] })).toThrow(/blocking issue/);
+  });
+
+  it.each(['Synthetic NO.001 summer','Synthetic NO.001 Summer Extra','Synthetic 001 Summer'])
+  ('does not assign or plan acquisition for format/containment candidates: %s', (localTitle) => {
+    const creatorName = 'Synthetic';
+    const {creatorId,collectionId} = seedCollection(database,{creatorName,rawDirectoryText:'Synthetic NO.001 Summer [1P-1MB]'});
+    const historical = seedSourceWork(database,creatorId,collectionId,'NO.002','Historical',2);
+    database.prepare(`INSERT INTO archive_catalog_download_tasks(source_work_id,provider,target_root,target_relative_directory,target_filename,status)
+      VALUES(?,'baidu','/synthetic/inbox','Synthetic','002.7z','pending')`).run(historical.sourceWorkDatabaseId);
+    database.prepare(`INSERT INTO archive_catalog_deliveries(collection_id,provider,delivery_key,delivery_type,status,first_seen_at,last_seen_at)
+      VALUES(?,'baidu','synthetic','folder','saved','2026-01-01','2026-01-01')`).run(collectionId);
+    seedLocalWork(database,seedLocalFolder(database,creatorId,creatorName),localTitle,null);
+    const service = new CostuanNumberingReconciliationService(database);
+    const before = database.prepare('SELECT * FROM archive_catalog_download_tasks').all();
+    const plan = service.plan({creatorNames:[creatorName]});
+    expect(plan.summary.localLinksToCreate).toBe(0);
+    expect(plan.summary.blockingIssues).toBeGreaterThan(0);
+    expect(plan.downloadTasksToCreate).toEqual([]);
+    expect(plan.downloadTasksSkipped).toContainEqual(expect.objectContaining({sourceWorkId:'NO.001',reason:expect.stringContaining('requires review')}));
+    expect(() => service.apply({creatorNames:[creatorName]})).toThrow(/blocking issue/);
+    expect(database.prepare('SELECT * FROM archive_catalog_download_tasks').all()).toEqual(before);
+    expect(database.prepare('SELECT work_id FROM archive_catalog_local_works').get()).toEqual({work_id:null});
   });
 
   it('blocks a numbered match when its normalized title is severely inconsistent', () => {

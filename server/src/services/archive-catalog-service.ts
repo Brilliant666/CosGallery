@@ -11,16 +11,19 @@ import { LocalSourceReuseService } from './local-source-reuse-service.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import { LocalCreatorFolderBridgeService, normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
+import { RequestInputError } from '../utils/request-input-error.js';
+import { parseWorkTitle } from '../utils/work-title.js';
+import { isWorkTitleCandidate } from '../utils/work-title-candidate.js';
 import { checkedIdentityEvidence, completeIdentityDirectory, directoryCreatorNames, isCostuanNameVariant,
   type CostuanIdentityInput, type CostuanIdentityVerification } from './costuan-identity-evidence.js';
 import {directShareDeliverySchema} from './archive-baidu-delivery.js';
-import {elyRangeDirectory} from './ely-range-directory.js';
+import {CostuanRangeReviewStore} from './costuan-range-review-store.js';
+import {costuanRangeReviewSchema} from './costuan-range-review.js';
 import { analyzeCostuanRangeInput, CostuanRangeDirectoryReviewRequired } from './costuan-directory-coverage.js';
 import {applyCostuanDirectoryReview,costuanDirectoryReviewSchema,directoryReviewKey} from './costuan-directory-review.js';
 import {
   areCostuanTitlesCompatible,
   mergeCostuanDirectoryWorks,
-  normalizeCostuanTitle,
   parseCostuanCollectionCreator,
   splitCostuanCheckDirectory,
   parseCostuanDirectoryText,
@@ -238,29 +241,6 @@ export function parseArchiveSourceOrder(value: string): number | null {
   return parseCostuanNumbering(leaf)?.order ?? null;
 }
 
-function normalizeWorkTitle(value: string): string {
-  return normalizeCostuanTitle(value);
-}
-
-function creatorPrefixedWorkTitleCandidates(value: string, creatorNames: string[]): string[] {
-  const normalizedTitle = normalizeWorkTitle(value);
-  if (!normalizedTitle) return [];
-
-  const candidates = new Set<string>();
-  const normalizedCreatorNames = [...new Set(
-    creatorNames
-      .map(normalizeWorkTitle)
-      .filter((name) => name.length > 0)
-  )].sort((left, right) => right.length - left.length);
-
-  for (const creatorName of normalizedCreatorNames) {
-    if (!normalizedTitle.startsWith(creatorName)) continue;
-    const titleWithoutCreator = normalizedTitle.slice(creatorName.length);
-    if (titleWithoutCreator) candidates.add(titleWithoutCreator);
-  }
-  return [...candidates];
-}
-
 function remoteWorkNumberingKey(work: RemoteWorkRow): string | null {
   if (work.metadata_json) {
     try {
@@ -464,13 +444,23 @@ export class ArchiveCatalogService {
     if(!old)this.database.prepare('INSERT INTO app_settings(key,value) VALUES (?,?)').run(key,value);
   }
 
+  /** Explicit source evidence review; never creates or merges gallery Works. */
+  saveCostuanRangeReview(creatorId:number,input:unknown) {
+    const review=costuanRangeReviewSchema.parse(input);
+    if(review.creatorId!==creatorId)throw new RequestInputError('范围审核与指定规范博主不一致。');
+    this.validateCostuanIdentity(creatorId,review.postId,review.collectionTitle);
+    return new CostuanRangeReviewStore(this.database).save(review);
+  }
+
   validateCompleteCostuanDirectory(recordInput:unknown, creatorId:number) {
     const record=costuanRecordSchema.parse(recordInput);
     record.costuan.identityVerification=this.validateCostuanIdentity(creatorId,record.costuan.postId,record.costuan.title,record.costuan);
     const savedReview=this.database.prepare('SELECT value FROM app_settings WHERE key=?').get(directoryReviewKey(creatorId)) as {value:string}|undefined;
-    const rangeReviewed=elyRangeDirectory(creatorId,record.costuan.postId,record.costuan.title,record.costuan.resourceDirectoryText);
     const coverage=analyzeCostuanRangeInput(record.costuan.resourceDirectoryText,record.costuan.works,
       record.costuan.collectionCount ?? (Number(record.costuan.title.match(/[\[【](\d+)\s*套/u)?.[1]) || null));
+    const rangeReviewed=coverage ? new CostuanRangeReviewStore(this.database).resolve({creatorId,
+      postId:record.costuan.postId,collectionTitle:record.costuan.title,
+      rawDirectoryText:record.costuan.resourceDirectoryText??'',works:record.costuan.works}) : null;
     if (!rangeReviewed && coverage) throw new CostuanRangeDirectoryReviewRequired(coverage);
     const reviewed=rangeReviewed ?? (savedReview?applyCostuanDirectoryReview(costuanDirectoryReviewSchema.parse(JSON.parse(savedReview.value)),
       record.costuan.title,record.costuan.works,record.costuan.resourceDirectoryText):null);
@@ -556,8 +546,8 @@ export class ArchiveCatalogService {
     const canonicalDirectoryVerification={complete:true,checkedAt:proof.data.checkedAt,parsedWorkCount:works.length};
     return {record:{...record,costuan:{...record.costuan,works,supplementalContents,acceptedDirectoryRevisions,directoryVerification:canonicalDirectoryVerification}},
       supplementalContents,acceptedDirectoryRevisions,canonicalWorks:works,canonicalDirectoryVerification,sourceFilenames:[...filenames],localSourceReuse,
-      ...(rangeReviewed ? {reviewedRangePolicy:'ely-638-v1' as const} : {}),
-      requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename) || (rangeReviewed && Number(filename.slice(0,-3))<=66))};
+      ...(rangeReviewed ? {rangeReview:rangeReviewed.rangeReview} : {}),
+      requiredFilenames:[...filenames].filter(filename=>!localFilenames.has(filename) || rangeReviewed?.rangeReview.requiredFilenames.includes(filename))};
   }
 
   private confirmedLocalWorksForSourceCheck(creatorId:number):Set<number> {
@@ -607,8 +597,8 @@ export class ArchiveCatalogService {
   }
 
   validateCompleteCostuanCheck(recordInput:unknown, creatorId:number, checkRoundId:string): CostuanArchiveRecord {
-    const {record,requiredFilenames}=this.validateCompleteCostuanDirectory(recordInput,creatorId);
-    if(elyRangeDirectory(creatorId,record.costuan.postId,record.costuan.title,record.costuan.resourceDirectoryText) && record.baidu?.transport!=='direct-share') throw new Error('Ely 范围声明仅接受本轮原分享逐文件核验，不能用历史转存记录代替');
+    const {record,requiredFilenames,rangeReview}=this.validateCompleteCostuanDirectory(recordInput,creatorId);
+    if(rangeReview && record.baidu?.transport!=='direct-share') throw new RequestInputError('范围声明仅接受本轮原分享逐文件核验，不能用历史转存记录代替');
     if(record.baidu?.transport==='direct-share') {
       const proof=directShareDeliverySchema.safeParse(record.baidu);
       if(!proof.success || proof.data.verification.checkRoundId!==checkRoundId) {
@@ -1117,7 +1107,8 @@ export class ArchiveCatalogService {
             values.push(remoteWork);
             byNumberingKey.set(numberingKey, values);
           }
-          const normalizedTitle = normalizeWorkTitle(remoteWork.source_title);
+          const normalizedTitle = parseWorkTitle(remoteWork.source_title, creatorNames).exactKey;
+          if (!normalizedTitle) continue;
           const values = byTitle.get(normalizedTitle) ?? [];
           values.push(remoteWork);
           byTitle.set(normalizedTitle, values);
@@ -1180,43 +1171,31 @@ export class ArchiveCatalogService {
 
           let matches: RemoteWorkRow[] = [];
           let matchMethod: string | null = null;
-          let numberingTitleConflict = false;
-          if (creatorId !== null && workSnapshot.numberingKey !== null) {
-            matches = byNumberingKey.get(workSnapshot.numberingKey) ?? [];
-            if (matches.length > 0) {
-              const compatible = matches.filter((remoteWork) => areCostuanTitlesCompatible(
-                workSnapshot.folderName,
-                remoteWork.source_title,
-                creatorNames
-              ));
-              if (compatible.length > 0) {
-                matches = compatible;
-                matchMethod = 'costuan-numbering-key';
-              } else {
-                numberingTitleConflict = true;
-                matchMethod = 'costuan-numbering-title-conflict';
+          let titleReviewRequired = false;
+          let titleReviewWorkIds: number[] = [];
+          if (creatorId !== null) {
+            const localTitle = parseWorkTitle(workSnapshot.folderName, creatorNames);
+            // Numbering belongs to the source, not the local Work. Never use a
+            // source-specific typo, containment or equal ordinal to assign identity.
+            matches = localTitle.exactKey ? byTitle.get(localTitle.exactKey) ?? [] : [];
+            matches = [...new Map(matches.map(work => [work.work_id, work])).values()];
+            if (matches.length > 0) matchMethod = 'shared-exact-title';
+            if (!matches.length) {
+              const numbered = workSnapshot.numberingKey === null ? [] : byNumberingKey.get(workSnapshot.numberingKey) ?? [];
+              const candidates = remoteWorks.filter(remote => isWorkTitleCandidate(workSnapshot.folderName, remote.source_title, creatorNames)
+                // Source quirks may hold acquisition for review, never assign identity.
+                || areCostuanTitlesCompatible(workSnapshot.folderName, remote.source_title, creatorNames));
+              if (numbered.length || candidates.length) {
+                titleReviewRequired = true;
+                titleReviewWorkIds = [...new Set([...numbered, ...candidates].map(work => work.work_id))];
+                matchMethod = numbered.length ? 'source-numbering-title-review' : 'shared-title-candidate-review';
               }
             }
-          }
-          if (creatorId !== null && workSnapshot.numberingKey === null && matches.length === 0) {
-            const normalizedLocalTitle = normalizeWorkTitle(workSnapshot.folderName);
-            matches = byTitle.get(normalizedLocalTitle) ?? [];
-            if (matches.length > 0) matchMethod = 'normalized-title';
-          }
-          if (creatorId !== null && workSnapshot.numberingKey === null && matches.length === 0) {
-            const prefixedTitleMatches = new Map<number, RemoteWorkRow>();
-            for (const candidate of creatorPrefixedWorkTitleCandidates(workSnapshot.folderName, creatorNames)) {
-              for (const remoteWork of byTitle.get(candidate) ?? []) {
-                prefixedTitleMatches.set(remoteWork.work_id, remoteWork);
-              }
-            }
-            matches = [...prefixedTitleMatches.values()];
-            if (matches.length > 0) matchMethod = 'normalized-title-with-creator-prefix';
           }
 
           let status: MatchStatus;
           let workId: number | null = null;
-          if (numberingTitleConflict) {
+          if (titleReviewRequired) {
             status = 'ambiguous';
             result.ambiguousWorks += 1;
           } else if (matches.length === 1 && !claimedWorkIds.has(matches[0].work_id)) {
@@ -1226,6 +1205,7 @@ export class ArchiveCatalogService {
             result.matchedWorks += 1;
           } else if (matches.length > 1 || (matches.length === 1 && claimedWorkIds.has(matches[0].work_id))) {
             status = 'ambiguous';
+            titleReviewWorkIds = matches.map(work => work.work_id);
             result.ambiguousWorks += 1;
           } else {
             status = 'unmatched';
@@ -1240,6 +1220,16 @@ export class ArchiveCatalogService {
             method: status === 'unmatched' ? null : matchMethod,
             scannedAt
           });
+          // Review evidence is not a binding or fulfillment. Keep it on the
+          // observed local row so all acquisition entry points can derive a hold.
+          // Once the row is resolved/inactive, the hold no longer applies.
+          this.database.prepare(`UPDATE archive_catalog_local_works SET provenance_json =
+            CASE WHEN ? THEN json_set(COALESCE(provenance_json,'{}'),'$.sourceTitleReview',json(?))
+            ELSE json_remove(COALESCE(provenance_json,'{}'),'$.sourceTitleReview') END
+            WHERE local_creator_folder_id=? AND relative_path=?
+            AND (? OR json_type(provenance_json,'$.sourceTitleReview') IS NOT NULL)`)
+            .run(titleReviewWorkIds.length ? 1 : 0, JSON.stringify({rule:'shared-title-v1',candidateWorkIds:titleReviewWorkIds}),
+              localFolderId, relativePath, titleReviewWorkIds.length ? 1 : 0);
         }
 
         if (!input.partialWorks) this.deactivateMissingLocalWorks(localFolderId, activeWorkPaths);

@@ -2,10 +2,11 @@ import type { DatabaseSync } from 'node:sqlite';
 
 import { sanitizeArchiveDirectoryName } from './archive-download-task-service.js';
 import { preserveDownloadStagedAt } from './archive-download-activity.js';
+import { parseWorkTitle } from '../utils/work-title.js';
+import { isWorkTitleCandidate } from '../utils/work-title-candidate.js';
 import {
   areCostuanTitlesCompatible,
   mergeCostuanDirectoryWorks,
-  normalizeCostuanTitle,
   parseCostuanNumbering,
   type CostuanNumberingScheme
 } from './costuan-numbering-service.js';
@@ -132,7 +133,7 @@ export type CostuanNumberingReconciliationPlan = {
     numberingKey: string;
     title: string;
     order: number | null;
-    matchMethod: 'costuan-numbering-key' | 'costuan-exact-title';
+    matchMethod: 'shared-exact-title-with-source-numbering' | 'shared-exact-title';
   }>;
   numberingConflicts: Array<{
     creatorName: string;
@@ -395,6 +396,14 @@ export class CostuanNumberingReconciliationService {
     const numberingConflicts: CostuanNumberingReconciliationPlan['numberingConflicts'] = [
       ...existingSourceNumberingConflicts
     ];
+    const namesByCreator = new Map<number, string[]>();
+    for (const collection of collections) namesByCreator.set(collection.creator_id, [collection.creator_name]);
+    if (creatorIds.length) {
+      for (const alias of this.database.prepare(`SELECT creator_id,alias FROM archive_catalog_creator_aliases
+        WHERE creator_id IN (${creatorIds.map(() => '?').join(',')})`).all(...creatorIds) as Array<{creator_id:number;alias:string}>) {
+        namesByCreator.get(alias.creator_id)?.push(alias.alias);
+      }
+    }
     const byCreatorAndNumbering = new Map<string, SimulatedSourceWork[]>();
     const byCreatorAndTitle = new Map<string, SimulatedSourceWork[]>();
     for (const sourceWork of simulated) {
@@ -402,7 +411,7 @@ export class CostuanNumberingReconciliationService {
       const values = byCreatorAndNumbering.get(mapKey) ?? [];
       values.push(sourceWork);
       byCreatorAndNumbering.set(mapKey, values);
-      const titleKey = `${sourceWork.creatorId}:${normalizeCostuanTitle(sourceWork.title)}`;
+      const titleKey = `${sourceWork.creatorId}:${parseWorkTitle(sourceWork.title, namesByCreator.get(sourceWork.creatorId)).exactKey}`;
       const titleValues = byCreatorAndTitle.get(titleKey) ?? [];
       titleValues.push(sourceWork);
       byCreatorAndTitle.set(titleKey, titleValues);
@@ -420,6 +429,7 @@ export class CostuanNumberingReconciliationService {
     const titleConflicts: CostuanNumberingReconciliationPlan['titleConflicts'] = [];
     const unresolvedLocalWorks: CostuanNumberingReconciliationPlan['unresolvedLocalWorks'] = [];
     const claimedSourceStableIds = new Set<string>();
+    const reviewSourceStableIds = new Set<string>();
     let preservedLocalLinks = 0;
     for (const localWork of localWorks) {
       if (localWork.linked_source_work_id !== null) {
@@ -439,12 +449,15 @@ export class CostuanNumberingReconciliationService {
         continue;
       }
       const numbering = parseCostuanNumbering(localWork.folder_name);
+      const creatorNames = namesByCreator.get(localWork.creator_id) ?? [localWork.creator_name];
+      const localTitle = parseWorkTitle(localWork.folder_name, creatorNames);
       if (!numbering) {
         const titleCandidates = byCreatorAndTitle.get(
-          `${localWork.creator_id}:${normalizeCostuanTitle(localWork.folder_name)}`
+          `${localWork.creator_id}:${localTitle.exactKey}`
         ) ?? [];
         if (titleCandidates.length !== 1) {
           if (titleCandidates.length > 1) {
+            for (const candidate of titleCandidates) reviewSourceStableIds.add(candidate.stableId);
             titleConflicts.push({
               creatorName: localWork.creator_name,
               localWorkId: localWork.id,
@@ -456,12 +469,16 @@ export class CostuanNumberingReconciliationService {
               }))
             });
           } else {
+            const suggestions = simulated.filter(candidate => candidate.creatorId === localWork.creator_id
+              && (isWorkTitleCandidate(localWork.folder_name, candidate.title, creatorNames)
+                || areCostuanTitlesCompatible(localWork.folder_name, candidate.title, creatorNames)));
+            for (const candidate of suggestions) reviewSourceStableIds.add(candidate.stableId);
             unresolvedLocalWorks.push({
               creatorName: localWork.creator_name,
               localWorkId: localWork.id,
               localFolder: localWork.folder_name,
               numberingKey: null,
-              reason: 'local-numbering-unparseable-and-exact-title-not-found'
+              reason: suggestions.length ? 'shared-title-candidate-requires-review' : 'local-numbering-unparseable-and-exact-title-not-found'
             });
           }
           continue;
@@ -486,12 +503,16 @@ export class CostuanNumberingReconciliationService {
           numberingKey: candidate.numberingKey,
           title: candidate.title,
           order: candidate.order,
-          matchMethod: 'costuan-exact-title'
+          matchMethod: 'shared-exact-title'
         });
         continue;
       }
       const candidates = byCreatorAndNumbering.get(`${localWork.creator_id}:${numbering.key}`) ?? [];
       if (candidates.length === 0) {
+        const suggestions = simulated.filter(candidate => candidate.creatorId === localWork.creator_id
+          && (isWorkTitleCandidate(localWork.folder_name, candidate.title, creatorNames)
+            || areCostuanTitlesCompatible(localWork.folder_name, candidate.title, creatorNames)));
+        for (const candidate of suggestions) reviewSourceStableIds.add(candidate.stableId);
         unresolvedLocalWorks.push({
           creatorName: localWork.creator_name,
           localWorkId: localWork.id,
@@ -502,6 +523,7 @@ export class CostuanNumberingReconciliationService {
         continue;
       }
       if (candidates.length > 1) {
+        for (const candidate of candidates) reviewSourceStableIds.add(candidate.stableId);
         numberingConflicts.push({
           creatorName: localWork.creator_name,
           numberingKey: numbering.key,
@@ -510,18 +532,18 @@ export class CostuanNumberingReconciliationService {
         });
         continue;
       }
-      const compatible = candidates.filter((candidate) => areCostuanTitlesCompatible(
-        localWork.folder_name,
-        candidate.title,
-        [localWork.creator_name]
-      ));
-      if (compatible.length === 0) {
+      const compatible = candidates.filter(candidate => localTitle.exactKey.length > 0
+        && localTitle.exactKey === parseWorkTitle(candidate.title, creatorNames).exactKey);
+      const exactIdentities = byCreatorAndTitle.get(`${localWork.creator_id}:${localTitle.exactKey}`) ?? [];
+      if (compatible.length === 0 || exactIdentities.length > 1) {
+        const reviewCandidates = [...new Map([...candidates, ...exactIdentities].map(candidate => [candidate.stableId,candidate])).values()];
+        for (const candidate of reviewCandidates) reviewSourceStableIds.add(candidate.stableId);
         titleConflicts.push({
           creatorName: localWork.creator_name,
           localWorkId: localWork.id,
           localFolder: localWork.folder_name,
           numberingKey: numbering.key,
-          candidates: candidates.map((candidate) => ({
+          candidates: reviewCandidates.map((candidate) => ({
             sourceWorkId: candidate.sourceWorkId,
             title: candidate.title
           }))
@@ -548,7 +570,7 @@ export class CostuanNumberingReconciliationService {
         numberingKey: candidate.numberingKey,
         title: candidate.title,
         order: candidate.order,
-        matchMethod: 'costuan-numbering-key'
+        matchMethod: 'shared-exact-title-with-source-numbering'
       });
     }
 
@@ -587,6 +609,11 @@ export class CostuanNumberingReconciliationService {
     for (const source of simulated) {
       if (claimedSourceStableIds.has(source.stableId)) continue;
       if (source.databaseId && taskBySourceDatabaseId.has(source.databaseId)) continue;
+      if (reviewSourceStableIds.has(source.stableId)) {
+        downloadTasksSkipped.push({creatorName:source.creatorName,sourceWorkId:source.sourceWorkId,
+          numberingKey:source.numberingKey,reason:'local title candidate requires review; no automatic acquisition'});
+        continue;
+      }
       if (!latestTargetRoot || !deliveredCollections.has(source.collectionId)) continue;
       if (source.scheme !== 'NO' || source.order === null) {
         downloadTasksSkipped.push({

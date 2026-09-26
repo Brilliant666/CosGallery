@@ -112,7 +112,7 @@ describe('archive catalog first-stage pipeline', () => {
       }
     }));
 
-    const ruaFirst = path.join(galleryRoot, 'rua阮阮', 'rua阮阮 001 第一套');
+    const ruaFirst = path.join(galleryRoot, 'rua阮阮', 'rua阮阮 NO.001 第一套');
     const ruaThird = path.join(galleryRoot, 'rua阮阮', 'rua阮阮 NO.003 第三套');
     const lunanaFirst = path.join(galleryRoot, 'lunananya', 'lunana NO.001 地雷系');
     await Promise.all([
@@ -151,7 +151,7 @@ describe('archive catalog first-stage pipeline', () => {
     const localMetadata = database.prepare(
       `SELECT image_count, video_count, advertisement_file_count
        FROM archive_catalog_local_works
-       WHERE folder_name = 'rua阮阮 001 第一套'`
+       WHERE folder_name = 'rua阮阮 NO.001 第一套'`
     ).get();
     expect(localMetadata).toEqual({ image_count: 1, video_count: 0, advertisement_file_count: 2 });
 
@@ -367,7 +367,7 @@ describe('archive catalog first-stage pipeline', () => {
     ).get('桜桃喵 微博配图 [981P-740MB]')).toEqual({
       parsed_source_order: null,
       match_status: 'matched',
-      match_method: 'normalized-title-with-creator-prefix'
+      match_method: 'shared-exact-title'
     });
 
     expect(downloadService.planMissing({ targetRoot: 'G:\\cos待入库' })).toMatchObject({
