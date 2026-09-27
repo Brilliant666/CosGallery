@@ -84,7 +84,10 @@ async function strictDirectory(value:string) {
   if (!path.isAbsolute(value)) throw new AdmissionWebError('等待区必须是绝对路径',400);
   // Reject linked ancestors as well as a linked final component; do not treat a junction as permission.
   let cursor=path.resolve(value);
-  for (;;) { const stat=await fs.lstat(cursor); if(!stat.isDirectory()||stat.isSymbolicLink()) throw new AdmissionWebError('目录链接或重解析点不能作为导入路径');
+  for (;;) { const stat=await fs.lstat(cursor).catch(error=>{
+      if((error as NodeJS.ErrnoException).code==='ENOENT')throw new AdmissionWebError('所需目录已不存在，请核对当前目录范围；已保存的执行记录保持。');
+      throw error;
+    }); if(!stat.isDirectory()||stat.isSymbolicLink()) throw new AdmissionWebError('目录链接或重解析点不能作为导入路径');
     const parent=path.dirname(cursor); if(parent===cursor)break; cursor=parent; }
   return path.resolve(value);
 }
@@ -569,6 +572,8 @@ export class LocalAdmissionWebService {
     this.assertIdle();
     const report:DirectoryRefresh={added:[],removed:[],warnings:[]};
     const prepared:PreparedPreview[]=[];
+    const empty:PreparedPreview[]=[];
+    const observations:{inputRoot:string;entries:Awaited<ReturnType<LocalAdmissionWebService['refreshEntries']>>}[]=[];
     const normalize=(name:string)=>process.platform==='win32'?name.toLowerCase():name;
     for(const scope of this.collectionScope(id).scopes){
       this.assertCreatorIdle(scope.creatorId);
@@ -582,11 +587,12 @@ export class LocalAdmissionWebService {
       const later=laterAdmissionCompletions(this.db,[String(old.id)]);
       const covered=new Set(this.db.prepare("SELECT item_key,json_extract(summary_json,'$.sourceRelativePath') relative FROM local_admission_web_items WHERE batch_id=?").all(old.id)
         .filter(row=>later.get(admissionItemIdentity(String(old.id),String(row.item_key)))?.status==='completed_later').map(row=>normalize(String(row.relative))));
-      if(scope.directories.every(name=>covered.has(normalize(name)))){
+      if(scope.directories.length&&scope.directories.every(name=>covered.has(normalize(name)))){
         report.warnings.push(`${scope.parent}：原范围已在后续批次完成，未重新读取或加入本次核对。`);continue;
       }
-      await this.validateRoot();await strictDirectory(inputRoot);await assertPathInsideLocalIngestRoot(context.waitingRoot,inputRoot,{directChild:true});
-      const entries=await this.siblingEntries(inputRoot),byName=new Map(entries.map(entry=>[normalize(entry.name),entry]));
+      const observed=await this.refreshEntries(inputRoot);observations.push({inputRoot,entries:observed});
+      const entries=observed??[],byName=new Map(entries.map(entry=>[normalize(entry.name),entry]));
+      if(observed===null)report.warnings.push(`${scope.parent}：等待区父目录已不存在，原预览保留；本次没有移动或删除文件。`);
       const selected=new Set(scope.directories.map(normalize));
       const known=new Set(context.knownSiblingDirectories?.map(normalize)??[]);
       const retained=scope.directories.filter(name=>byName.has(normalize(name))&&!covered.has(normalize(name)));
@@ -604,7 +610,14 @@ export class LocalAdmissionWebService {
       for(const entry of added)report.added.push({creatorId:scope.creatorId,parent:scope.parent,name:entry.name});
       if(entries.some(entry=>entry.link&&!selected.has(normalize(entry.name))))report.warnings.push(`${scope.parent}：目录链接未加入核对范围。`);
       if(added.length&&!context.knownSiblingDirectories)report.warnings.push(`${scope.parent}：旧预览未记录完整父目录范围，新发现的 ${added.length} 个目录先暂缓，请核对是否属于本批拆分后的作品。`);
-      if(!retained.length&&!added.length)continue;
+      if(!retained.length&&!added.length){
+        // Keep a zero-item child so the persisted empty preview retains lineage
+        // and the removal report without rewriting the historical draft.
+        empty.push({id:randomUUID(),scope:{...scope,directories:[]},inputRoot,
+          context:{...context,workFacts:{},sourceFacts:{},knownSiblingDirectories:entries.filter(entry=>entry.directory).map(entry=>entry.name)},
+          items:[],titleCandidates:new LocalAdmissionTitleCandidates(this.db,scope.creatorId)});
+        continue;
+      }
       const child=await this.preparePreview({...scope,directories:[...retained,...added.map(entry=>entry.name)]});
       if(hash(entries)!==hash(await this.siblingEntries(inputRoot)))throw new AdmissionWebError('重新读取期间目录范围发生变化，请待整理结束后重试；原草稿保持');
       for(const item of child.items)if(unresolvedScope.has(item.summary.sourceRelativePath)||!context.knownSiblingDirectories&&added.some(entry=>entry.name===item.summary.sourceRelativePath)){
@@ -613,10 +626,25 @@ export class LocalAdmissionWebService {
       }
       prepared.push(child);
     }
+    if(!prepared.length)prepared.push(...empty);
     if(!prepared.length)throw new AdmissionWebError('本批博主下没有可核对的作品目录，原草稿保留；请先完成目录整理或调整导入范围');
+    for(const observation of observations)if(hash(observation.entries)!==hash(await this.refreshEntries(observation.inputRoot)))
+      throw new AdmissionWebError('重新读取期间目录范围发生变化，请待整理结束后重试；原草稿保持');
     this.assertIdle();for(const child of prepared)this.assertCreatorIdle(child.scope.creatorId);
     prepared[0]!.context.directoryRefresh=report;
     return prepared;
+  }
+  private async refreshEntries(inputRoot:string) {
+    const root=await this.validateRoot();
+    if(!same(path.dirname(inputRoot),root))throw new AdmissionWebError('等待区范围已改变，请重新选择目录');
+    try{await fs.lstat(inputRoot);}catch(error){
+      if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+      // A missing child is a scope change, not proof that a disconnected root
+      // or inaccessible drive is an empty waiting area.
+      await this.validateRoot();return null;
+    }
+    await strictDirectory(inputRoot);await assertPathInsideLocalIngestRoot(root,inputRoot,{directChild:true});
+    return this.siblingEntries(inputRoot);
   }
   private remainingItems(id:string,completedLater?:Map<string,CurrentAdmissionDisposition>) {
     // DB-only projection: progress reads never re-inventory files or parse full manifests.
@@ -736,6 +764,8 @@ export class LocalAdmissionWebService {
     const record=this.collectionRow(id);if(record.state!=='draft'||record.has_confirmation)throw new AdmissionWebError('集中确认已保存，请继续原集合');
     this.assertIdle();
     const children=this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=? ORDER BY position').all(id);
+    if(!children.length||!this.db.prepare(`SELECT 1 FROM local_admission_web_items i JOIN local_admission_web_collection_batches c ON c.batch_id=i.batch_id WHERE c.collection_id=? LIMIT 1`).get(id))
+      throw new AdmissionWebError('已无待入库目录，无需提交；原预览与历史记录保留。');
     const requested=new Map(request.batches.map(child=>[child.batchId,child]));
     if(requested.size!==request.batches.length||requested.size!==children.length||children.some(row=>!requested.has(String(row.batch_id))))throw new AdmissionWebError('集中确认必须覆盖本集合所有博主批次',400);
     const prepared:PreparedExecution[]=[],targets=new Set<string>();

@@ -446,16 +446,55 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     const reread=await service.repreviewCollection(remaining.id,{refreshDirectories:true});
     expect(service.items(reread.batches[0].id).items.every(item=>item.scopeReviewRequired===undefined)).toBe(true);expect(apply).not.toHaveBeenCalled();
   });
-  it('does not replace the original draft when rereading leaves no eligible selected directories',async()=>{
+  it('persists an empty refreshed scope without replacing the original draft or executing files',async()=>{
     const db=manager.connection,parent='刷新后无可选目录',title='已移出作品';await makeWithin(parent,title);
     const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]});
     await fs.rename(path.join(waiting,parent,title),path.join(root,'刷新移出的作品'));await makeWithin(parent,'.local-admission-attachments');
     const count=Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n),saved=db.prepare('SELECT * FROM local_admission_web_collections WHERE id=?').get(original.id);
     const apply=vi.spyOn(Admission.prototype,'apply'),move=vi.spyOn(fs,'rename');
-    await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow(/目录|范围/);
+    const empty=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(empty.totals.total).toBe(0);expect(empty.previousCollectionId).toBe(original.id);
+    expect(empty.directoryRefresh?.removed).toEqual([{creatorId:creators[0],parent,name:title}]);
+    expect(service.collection(empty.id).directoryRefresh).toEqual(empty.directoryRefresh);
     expect(db.prepare('SELECT * FROM local_admission_web_collections WHERE id=?').get(original.id)).toEqual(saved);
-    expect(service.collection(original.id).nextCollectionIds).toEqual([]);expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count);
+    expect(service.collection(original.id).nextCollectionIds).toEqual([empty.id]);expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count+1);
+    await expect(service.executeCollection(empty.id,{requestKey:randomUUID(),confirmed:true,batches:[{batchId:empty.batches[0].id,acceptExistingVersion:true,actions:[{key:'not-present',action:'new'}]}]})).rejects.toThrow('已无待入库目录');
     expect(apply).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
+  });
+  it('rejects an original submission with HTTP 409 after its parent disappears and rereads an empty scope',async()=>{
+    const db=manager.connection,parent='移出父目录',title='待核对作品';await makeWithin(parent,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]}),input=request(original);
+    input.batches[0].actions[0].action='defer' as 'new';
+    await fs.rename(path.join(waiting,parent),path.join(root,parent));
+    const {createApp}=await import('../src/app.js');
+    const response=await requestTestApp(createApp(),'POST',`/api/admin/local-admission/collections/${original.id}/execute`,{'x-foldergram-intent':'1'},input);
+    expect(response.status).toBe(409);expect(response.body.message).toContain('目录已不存在');
+    expect(db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE collection_id=?').all(original.id)).toHaveLength(0);
+    expect(service.collection(original.id).state).toBe('draft');
+    const empty=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(empty.totals.total).toBe(0);expect(empty.directoryRefresh?.removed).toHaveLength(1);
+    expect((await service.repreviewCollection(empty.id,{refreshDirectories:true})).totals.total).toBe(0);
+  });
+  it('keeps the remaining creator executable when another creator parent was removed',async()=>{
+    const parent='移出多博主父目录',other='保留多博主父目录',title='独立作品';await makeWithin(parent,title);await makeWithin(other,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]},{creatorId:creators[1],parent:other,directories:[title]}]});
+    await fs.rename(path.join(waiting,parent),path.join(root,parent));
+    const refreshed=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(refreshed.batches.map(b=>b.parent)).toEqual([other]);expect(refreshed.totals.total).toBe(1);
+    expect(refreshed.directoryRefresh?.removed).toEqual([{creatorId:creators[0],parent,name:title}]);
+    expect(request(refreshed).batches.every(b=>b.actions.length>0)).toBe(true);
+  });
+  it('does not interpret missing storage, permission errors or a replaced parent as empty scope',async()=>{
+    const parent='不可解释为空的范围',title='保留作品';await makeWithin(parent,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]});
+    const lstat=fs.lstat;
+    for(const [target,code] of [[waiting,'ENOENT'],[gallery,'ENOENT'],[path.join(waiting,parent),'EACCES']] as const){
+      const spy=vi.spyOn(fs,'lstat').mockImplementation((async(...args:Parameters<typeof fs.lstat>)=>{if(String(args[0])===target)throw Object.assign(new Error('unavailable'),{code});return lstat(...args);}) as typeof fs.lstat);
+      await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow();spy.mockRestore();
+    }
+    await fs.rename(path.join(waiting,parent),path.join(root,parent));await fs.writeFile(path.join(waiting,parent),'not a directory');
+    await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow('目录链接或重解析点');
+    expect(service.collection(original.id).nextCollectionIds).toEqual([]);
   });
   it('rejects refreshed-directory requests for confirmed or active collections before touching the filesystem',async()=>{
     const db=manager.connection,parent='刷新确认保护',title='保持原记录';await makeWithin(parent,title);

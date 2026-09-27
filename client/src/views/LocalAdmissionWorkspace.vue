@@ -47,7 +47,12 @@
         <p v-for="(warning,index) in collection.directoryRefresh.warnings" :key="index" class="warning">{{ warning }}</p>
       </section>
 
-      <section v-if="collection.state==='draft'" class="panel review-panel" aria-label="多博主集中核对">
+      <section v-if="collection.state==='draft'&&collection.totals.total===0" class="panel empty-state" data-test="collection-empty" aria-label="已无待入库目录">
+        <h2>已无待入库目录</h2>
+        <p>本次重新核对的范围内已没有作品目录，无需确认入库。移出目录及原草稿保留在入库记录中，不代表这些目录已执行入库。</p>
+        <p class="hint">如需导入其他图集，可通过“1 选择图集”调整范围；在原博主目录放回或新增作品后，可点击“重新读取并核对”。</p>
+      </section>
+      <section v-else-if="collection.state==='draft'" class="panel review-panel" aria-label="多博主集中核对">
         <div class="heading"><div><h2>核对本批图集</h2><p class="hint">未发现候选且无目录问题的作品已预选，但不证明从未收录；直接在下方查看目录边界并选择处理方式。需要判断的图集可先暂缓，不影响其余作品入库。</p></div><button data-test="review-ads-open" @click="reviewPanel='ads'">广告附件 · 已选 {{ adsCount }} 项</button></div>
 
         <section v-if="scopeReviewRows.length&&!pending" class="scope-review warning" aria-label="确认本批目录范围" data-test="scope-review">
@@ -284,7 +289,7 @@ async function preview(){
 async function repreviewFiles(){
   if(locked.value||collection.value?.state!=='draft')return;saveDraft();const id=collection.value.id,previous=repreviewEntries();let current=generation;busy.value=true;error.value='';
   try{const result=await api.refreshAdmissionCollectionDirectories(id);if(current!==generation||disposed)return;current++;await openCollection(result.id,previous);
-    if(current===generation&&!disposed&&collection.value?.id===result.id){const priorSelected=new Set(previous.filter(row=>isAdmissionSelected(row.action)).map(row=>`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`));const selected=repreviewEntries().filter(row=>isAdmissionSelected(row.action)&&!priorSelected.has(`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`)).length;const changes=collection.value.directoryRefresh;notice.value=`已重新读取并核对：${changes?`新增目录 ${changes.added.length} 个、移出目录 ${changes.removed.length} 个；`:''}新增选中 ${selected} 个，当前 ${selectedCount.value} 个入库、${deferredCount.value} 个暂缓。依据仍适用的人工决定和已有广告取消保留；新目录请核对后统一确认。`;await loadRecent();}}
+    if(current===generation&&!disposed&&collection.value?.id===result.id){const priorSelected=new Set(previous.filter(row=>isAdmissionSelected(row.action)).map(row=>`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`));const selected=repreviewEntries().filter(row=>isAdmissionSelected(row.action)&&!priorSelected.has(`${row.creatorId}:${row.parent}:${row.item.sourceRelativePath}`)).length;const changes=collection.value.directoryRefresh;notice.value=`已重新读取并核对：${changes?`新增目录 ${changes.added.length} 个、移出目录 ${changes.removed.length} 个；`:''}`+(collection.value.totals.total===0?'已无待入库目录，原草稿和历史执行记录保持。':`新增选中 ${selected} 个，当前 ${selectedCount.value} 个入库、${deferredCount.value} 个暂缓。依据仍适用的人工决定和已有广告取消保留；新目录请核对后统一确认。`);await loadRecent();}}
   catch(cause){if(current===generation&&!disposed)error.value=cause instanceof Error?cause.message:'重新读取并核对失败';}finally{if(current===generation&&!disposed)busy.value=false;}
 }
 async function continueRemaining(){

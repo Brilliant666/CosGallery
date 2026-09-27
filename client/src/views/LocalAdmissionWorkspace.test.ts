@@ -645,6 +645,34 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.executeAdmissionCollection).mockRejectedValueOnce(new Error('receipt lost'));const {wrapper}=await render('?collection=collection-one');await (await openAds(wrapper)).get('[data-test=ads-clear-all]').trigger('click');await closeReviewDialog(wrapper);await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
     const original=JSON.parse(JSON.stringify(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]));wrapper.unmount();const returned=await render('?collection=collection-one');expect(returned.wrapper.text()).toContain('回执尚未确认');expect(returned.wrapper.get('[data-test=collection-repreview]').attributes('disabled')).toBeDefined();await closeReviewDialog(returned.wrapper);await returned.wrapper.get('[data-test=collection-confirm]').trigger('click');await returned.wrapper.get('[role=dialog] input').setValue(true);await returned.wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();expect(vi.mocked(api.executeAdmissionCollection).mock.calls[1]![1]).toEqual(original);expect(api.executeAdmission).not.toHaveBeenCalled();
   });
+  it('keeps a 500 submission frozen until the identical explicit retry is rejected, then shows a persistent empty reread',async()=>{
+    const removed=[{creatorId:17,parent:'甲别名',name:'a-first'},{creatorId:17,parent:'甲别名',name:'a-candidate'},{creatorId:88,parent:'博主乙',name:'b-first'},{creatorId:88,parent:'博主乙',name:'b-complex'}];
+    const empty:AdmissionCollection={...collection(),id:'empty-draft',previousCollectionId:'collection-one',directoryRefresh:{added:[],removed,warnings:[]},totals:{...collection().totals,total:0,selected:0,deferred:0},batches:collection().batches.map(child=>({...child,id:`empty-${child.id}`,collectionId:'empty-draft',totals:{...child.totals,total:0,deferred:0}}))};
+    vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>id==='empty-draft'?empty:collection());
+    const originalItems=vi.mocked(api.fetchAdmissionItems).getMockImplementation()!;
+    vi.mocked(api.fetchAdmissionItems).mockImplementation(async(...args)=>String(args[0]).startsWith('empty-')?{items:[],total:0,page:1,pageSize:100}:originalItems(...args));
+    vi.mocked(api.refreshAdmissionCollectionDirectories).mockResolvedValue(empty);
+    vi.mocked(api.executeAdmissionCollection).mockRejectedValueOnce(new RequestError('服务端发生异常',500)).mockRejectedValueOnce(new RequestError('等待目录已不存在，请重新读取并核对',409));
+    const {wrapper}=await render('?collection=collection-one');
+    await (await openAds(wrapper)).get('[data-test=ads-clear-all]').trigger('click');await closeReviewDialog(wrapper);
+    await wrapper.get('[data-test=collection-confirm]').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    const original=structuredClone(vi.mocked(api.executeAdmissionCollection).mock.calls[0]![1]);
+    expect(wrapper.text()).toContain('执行回执尚未确认');expect(localStorage.getItem('cosgallery:admission:collection:collection-one')).not.toBeNull();
+    await button(wrapper,'返回核对').trigger('click');
+    await (await savedStateButton(wrapper)).trigger('click');await flushPromises();await closeReviewDialog(wrapper);
+    expect(wrapper.text()).toContain('执行回执尚未确认');expect(wrapper.get('[data-test=collection-repreview]').attributes('disabled')).toBeDefined();expect(api.executeAdmissionCollection).toHaveBeenCalledTimes(1);
+    wrapper.unmount();const returned=await render('?collection=collection-one');
+    expect(returned.wrapper.text()).toContain('执行回执尚未确认');
+    await returned.wrapper.get('[data-test=collection-confirm]').trigger('click');await returned.wrapper.get('[role=dialog] input').setValue(true);await returned.wrapper.get('[data-test=collection-execute]').trigger('click');await flushPromises();
+    expect(vi.mocked(api.executeAdmissionCollection).mock.calls[1]![1]).toEqual(original);expect(returned.wrapper.text()).not.toContain('执行回执尚未确认');expect(localStorage.getItem('cosgallery:admission:collection:collection-one')).toBeNull();
+    await button(returned.wrapper,'返回核对').trigger('click');expect(returned.wrapper.get('[data-test=collection-repreview]').attributes('disabled')).toBeUndefined();
+    await returned.wrapper.get('[data-test=collection-repreview]').trigger('click');await flushPromises();
+    expect(returned.router.currentRoute.value.query.collection).toBe('empty-draft');expect(returned.wrapper.get('[data-test=collection-empty]').text()).toContain('已无待入库目录');
+    expect(returned.wrapper.get('[data-test=directory-refresh]').text()).toContain('移出 4 个');
+    expect(returned.wrapper.find('[data-test=collection-confirm]').exists()).toBe(false);expect(returned.wrapper.find('[data-test=review-status-all]').exists()).toBe(false);expect(returned.wrapper.find('[aria-label="多博主后台结果"]').exists()).toBe(false);
+    expect(returned.wrapper.get('[data-test=admission-step-select]').attributes('disabled')).toBeUndefined();expect(returned.wrapper.get('[data-test=collection-repreview]').attributes('disabled')).toBeUndefined();expect(button(returned.wrapper,'查看上次预览')).toBeDefined();
+    returned.wrapper.unmount();const reopened=await render('?collection=empty-draft');expect(reopened.wrapper.get('[data-test=collection-empty]').exists()).toBe(true);expect(reopened.wrapper.get('[data-test=directory-refresh]').text()).toContain('移出 4 个');expect(api.executeAdmissionCollection).toHaveBeenCalledTimes(2);expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+  });
   it('polls only lightweight collection state, stops after completion, and never automatically resumes',async()=>{
     vi.useFakeTimers();vi.mocked(api.fetchAdmissionCollection).mockResolvedValueOnce(collection('running')).mockResolvedValue(collection('completed'));const {wrapper}=await render('?collection=collection-one');await vi.advanceTimersByTimeAsync(2500);await flushPromises();expect(wrapper.text()).toContain('本批执行已结束');const calls=vi.mocked(api.fetchAdmissionCollection).mock.calls.length;await vi.advanceTimersByTimeAsync(15000);expect(api.fetchAdmissionCollection).toHaveBeenCalledTimes(calls);expect(api.executeAdmission).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
