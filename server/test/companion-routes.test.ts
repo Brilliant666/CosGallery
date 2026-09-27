@@ -127,7 +127,7 @@ describe.sequential('Companion real HTTP boundary on synthetic database', () => 
     expect(resolved.body.items[0]).toMatchObject({ collectedWorkCount: null, readModel: { status: 'permission_denied' }, creator: { links: {} } });
     const roster = await requestTestApp(app, 'GET', '/api/companion/v1/roster', headers);
     expect(roster.status).toBe(200);
-    expect(roster.body.items[0]).toMatchObject({ creatorId: 1, collectedWorkCount: null, readModel: { status: 'permission_denied' }, links: {} });
+    expect(roster.body.items[0]).toMatchObject({ creatorId: 1, preference: 'liked', collectedWorkCount: null, readModel: { status: 'permission_denied' }, links: {} });
     const aliases = await requestTestApp(app, 'GET', `/api/companion/v1/aliases?identityVersion=${roster.body.identityVersion}`, headers);
     expect(aliases.status).toBe(200); expect(aliases.body.identityVersion).toBe(roster.body.identityVersion);
   });
@@ -140,11 +140,12 @@ describe.sequential('Companion real HTTP boundary on synthetic database', () => 
     for (const path of ['/roster', '/aliases']) expect((await requestTestApp(app, 'GET', '/api/companion/v1' + path, host)).status).toBe(401);
     const first = await requestTestApp(app, 'GET', '/api/companion/v1/roster?limit=1', plugin());
     expect(first.status).toBe(200); expect(first.body.total).toBe(2); expect(first.body.items).toHaveLength(1);
-    expect(first.body.items[0]).toMatchObject({ creatorId: 1, canonicalName: 'Fixture', collectedWorkCount: null, readModel: { status: 'uninitialized' }, links: { library: '/library/1' } });
+    expect(first.body.items[0]).toMatchObject({ creatorId: 1, canonicalName: 'Fixture', preference: 'liked', collectedWorkCount: null, readModel: { status: 'uninitialized' }, links: { library: '/library/1' } });
     const version = first.body.identityVersion;
     expect(version).toMatch(/^[a-f0-9]{64}$/);
     const next = await requestTestApp(app, 'GET', `/api/companion/v1/roster?limit=1&identityVersion=${version}&cursor=${encodeURIComponent(first.body.nextCursor)}`, plugin());
     expect(next.status).toBe(200); expect(next.body.items[0].creatorId).toBe(2); expect(next.body.nextCursor).toBeNull();
+    expect(next.body.items[0].preference).toBeNull();
     expect(next.body).toMatchObject({ identityVersion: version, instanceId: first.body.instanceId, grantId: first.body.grantId, permissionFingerprint: first.body.permissionFingerprint });
     const aliases = await requestTestApp(app, 'GET', `/api/companion/v1/aliases?identityVersion=${version}`, plugin());
     expect(aliases.status).toBe(200); expect(aliases.body.total).toBe(2);
@@ -159,6 +160,26 @@ describe.sequential('Companion real HTTP boundary on synthetic database', () => 
       const changed = await requestTestApp(app, 'GET', `/api/companion/v1${path}?identityVersion=${version}`, plugin());
       expect(changed.status).toBe(409); expect(changed.body).toMatchObject({ code: 'COMPANION_IDENTITY_CHANGED', collectedWorkCount: null });
     }
+  });
+
+  it('invalidates both streams on preference edits without exposing a preference mutation route', async () => {
+    const db = manager.connection;
+    const first = await requestTestApp(app, 'GET', '/api/companion/v1/roster?limit=1', plugin());
+    try {
+      db.exec("UPDATE archive_catalog_creators SET preference='kept' WHERE id=2");
+      const before = db.prepare('SELECT total_changes() n').get();
+      for (const route of ['/roster', '/aliases']) {
+        const stale = await requestTestApp(app, 'GET', `/api/companion/v1${route}?identityVersion=${first.body.identityVersion}`, plugin());
+        expect(stale.status).toBe(409); expect(stale.body.code).toBe('COMPANION_IDENTITY_CHANGED');
+        expect(stale.body.items).toBeUndefined();
+      }
+      const fresh = await requestTestApp(app, 'GET', '/api/companion/v1/roster', plugin());
+      expect(fresh.status).toBe(200); expect(fresh.body.identityVersion).not.toBe(first.body.identityVersion);
+      expect(fresh.body.items.find((entry: { creatorId: number }) => entry.creatorId === 2).preference).toBe('kept');
+      const write = await requestTestApp(app, 'POST', '/api/companion/v1/roster', plugin(), { creatorId: 2, preference: 'liked' });
+      expect(write.status).toBe(404);
+      expect(db.prepare('SELECT total_changes() n').get()).toEqual(before);
+    } finally { db.exec('UPDATE archive_catalog_creators SET preference=NULL WHERE id=2'); }
   });
 
   it('rejects an oversized directory response rather than silently truncating it', async () => {

@@ -81,7 +81,7 @@ describe('Companion complete read-only directory (synthetic database)', () => {
     const expected = reader.summary(1);
     const summary = vi.spyOn(reader, 'summary');
     const first = directory.roster({ limit: 1 });
-    expect(first.items[0]).toEqual({ ...expected, queriedAt: first.items[0]!.queriedAt });
+    expect(first.items[0]).toEqual({ ...expected, preference: null, queriedAt: first.items[0]!.queriedAt });
     expect(summary).toHaveBeenCalledTimes(1);
     expect(summary).toHaveBeenLastCalledWith(1);
     const second = directory.roster({ limit: 1, cursor: first.nextCursor!, identityVersion: first.identityVersion });
@@ -90,19 +90,40 @@ describe('Companion complete read-only directory (synthetic database)', () => {
     expect(summary).toHaveBeenLastCalledWith(2);
   });
 
-  it.each(['add', 'rename', 'alias', 'deactivate'] as const)('rejects both endpoint continuations when identity changes: %s', action => {
+  it.each(['add', 'rename', 'alias', 'deactivate', 'like', 'keep', 'clear'] as const)('rejects both endpoint continuations when identity or preference changes: %s', action => {
     creator(1); creator(2); alias(1, 'Alias'); alias(2, 'Second');
+    if (action === 'clear') db.exec("UPDATE archive_catalog_creators SET preference='liked' WHERE id=2");
     const first = directory.roster({ limit: 1 }, identityOnly);
     const firstAliases = directory.aliases({ identityVersion: first.identityVersion, limit: 1 });
     if (action === 'add') creator(3);
     if (action === 'rename') db.exec("UPDATE archive_catalog_creators SET canonical_name='Renamed' WHERE id=1");
     if (action === 'alias') alias(2, 'New alias');
     if (action === 'deactivate') db.exec('UPDATE archive_catalog_creators SET is_active=0 WHERE id=1');
+    if (action === 'like') db.exec("UPDATE archive_catalog_creators SET preference='liked' WHERE id=2");
+    if (action === 'keep') db.exec("UPDATE archive_catalog_creators SET preference='kept' WHERE id=2");
+    if (action === 'clear') db.exec('UPDATE archive_catalog_creators SET preference=NULL WHERE id=2');
     readOnly();
     const changed = { status: 409, code: 'COMPANION_IDENTITY_CHANGED' };
     expect(() => directory.roster({ identityVersion: first.identityVersion, cursor: first.nextCursor! }, identityOnly)).toThrowError(expect.objectContaining(changed));
     expect(() => directory.aliases({ identityVersion: first.identityVersion, cursor: firstAliases.nextCursor! })).toThrowError(expect.objectContaining(changed));
     expect(() => directory.aliases({ identityVersion: first.identityVersion })).toThrowError(expect.objectContaining(changed));
+    expect(() => directory.roster({ limit: 1, identityVersion: first.identityVersion }, identityOnly)).toThrowError(expect.objectContaining(changed));
+  });
+
+  it('returns explicit liked/kept/null on roster only, with and without summaries, without writes', () => {
+    creator(1); creator(2); creator(3); alias(1, 'Alias');
+    db.exec("UPDATE archive_catalog_creators SET preference='liked' WHERE id=1; UPDATE archive_catalog_creators SET preference='kept' WHERE id=2");
+    readOnly();
+    const changes = db.prepare('SELECT total_changes() AS n').get()!.n;
+    const full = directory.roster();
+    const identity = directory.roster({}, identityOnly);
+    for (const page of [full, identity]) {
+      expect(page.items.map(item => item.preference)).toEqual(['liked', 'kept', null]);
+      expect(page.identityVersion).toBe(full.identityVersion);
+    }
+    expect(directory.aliases({ identityVersion: full.identityVersion }).items).toEqual([{ creatorId: 1, alias: 'Alias' }]);
+    expect(reader.summary(1)).not.toHaveProperty('preference');
+    expect(db.prepare('SELECT total_changes() AS n').get()!.n).toBe(changes);
   });
 
   it('excludes source metadata and duplicate registrations from identityVersion; Work changes do not invalidate identity pagination', () => {

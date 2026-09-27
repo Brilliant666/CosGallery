@@ -59,9 +59,10 @@
 
 响应包含现有上下文`apiVersion、instanceId、label、grantId、permissionFingerprint、scopes、expiresAt、countPolicyVersion、queriedAt`，另有`identityVersion、total、nextCursor、items`。`total`是该端点整个身份集合的记录数，不是本页长度。最后一页`nextCursor:null`；空库明确返回`items:[]、total:0、nextCursor:null`。
 
-- roster按`creatorId`升序；每项为`creatorId、canonicalName、collectedWorkCount、countPolicyVersion、readModel、dataVersion、dataUpdatedAt、queriedAt、links`。有`summary:read`时直接复用现有`summary()`；未就绪数量null，没有摘要权限时完全不读统计，返回null/permission_denied与纯身份版本。`links`只包含获准的图库/资源目录链接。
+- roster按`creatorId`升序；每项为`creatorId、canonicalName、preference、collectedWorkCount、countPolicyVersion、readModel、dataVersion、dataUpdatedAt、queriedAt、links`。顶层`preference`明确为`"liked"`（喜欢）、`"kept"`（保留）或`null`（未设置），互斥且只读，使用现有名单授权；即使没有摘要权限也会返回。有`summary:read`时直接复用现有`summary()`的统计字段；未就绪数量null，没有摘要权限时完全不读统计，返回null/permission_denied与身份/偏好同步版本。`links`只包含获准的图库/资源目录链接。
 - aliases按`creatorId`及原文alias的BINARY顺序；每项只有`{creatorId,alias}`。同一博主相同原文别名跨来源去重，不返回来源、URL、私人资料或内部ID；跨博主相同别名保留两条，大小写等不同原文仍可分别存在。
-- `identityVersion`是有效博主ID、规范名及上述去重别名集合的共同指纹，与作品数量和来源私密信息无关。两个端点、所有页共享；任意改名、增删身份/别名或启停导致版本变化。统计变化不改变此版本。
+- `identityVersion`是有效博主ID、规范名、偏好及上述去重别名集合的共同指纹，与作品数量和来源私密信息无关。两个端点、所有页共享；任意改名、增删身份/别名、启停或偏好修改（包括明确清空）导致版本变化。统计变化不改变此版本。
+- 偏好只通过手动完整名单同步更新离线数据，仍只在CosGallery修改；其他查询接口和别名单项不增加此字段，摘要`dataVersion`及计数语义不变。旧插件可以忽略新增字段；新插件连接旧服务端时，字段缺失表示“偏好未同步”，不能按`null`显示“未设置”。升级后旧分页版本失效时按既有409流程重新完整同步，不复用半份名单。
 - 每页只在一个短只读事务中核对版本、取身份与该页摘要，不保持跨HTTP长事务。名单身份一致**不代表全部摘要来自同一时刻**；保留逐项摘要版本和查询时间，客户端显示整轮同步完成时间。
 - 请求版本与当前身份集合不一致返回409 `COMPANION_IDENTITY_CHANGED`，数量null、没有items。缺少必需版本、非法游标/端点混用或参数返回400 `INVALID_COMPANION_REQUEST`。整页JSON超过256KiB返回413 `COMPANION_PAGE_TOO_LARGE`，不截断；客户端可降低limit重试，单项仍超限则报告同步失败。
 
@@ -144,7 +145,7 @@ pageType为`creator | resource | publisher | organization | multi_person | unkno
 
 ## 权限、缓存及错误
 
-摘要不返回磁盘路径、密码、偏好、来源资料正文、任务历史或媒体清单。仅相应scope存在时返回同实例相对跳转：`/library/{creatorId}`、`/archive-catalog?workspace=resources&creatorId={creatorId}`。插件应基于已连接服务地址解析；网页本身仍需要正常登录，Bearer不能换取网页/管理权限。
+摘要查询不返回磁盘路径、密码、偏好、来源资料正文、任务历史或媒体清单；偏好仅在上述roster名单顶层扩展。仅相应scope存在时返回同实例相对跳转：`/library/{creatorId}`、`/archive-catalog?workspace=resources&creatorId={creatorId}`。插件应基于已连接服务地址解析；网页本身仍需要正常登录，Bearer不能换取网页/管理权限。
 
 查询缓存键至少包含：`instanceId + grantId + permissionFingerprint + 查询对象(含site/pageType/path/names或creatorId) + countPolicyVersion`，并关联dataVersion。完整离线名单亦按实例、授权、权限、计数口径隔离，并保存共同identityVersion及逐项摘要版本。不同实例中相同creatorId不是同一身份。
 

@@ -4,6 +4,7 @@ import { CompanionReadError, CompanionReadService, COUNT_POLICY_VERSION, type Co
 
 export interface CompanionDirectoryInput { limit?: number; cursor?: string; identityVersion?: string }
 interface Alias { creatorId: number; alias: string }
+interface RosterIdentity extends CompanionIdentity { preference: 'liked' | 'kept' | null }
 type Kind = 'roster' | 'aliases';
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const invalid = () => new CompanionReadError(400, 'INVALID_COMPANION_REQUEST', '名单分页参数无效，请从第一页重新同步。');
@@ -12,17 +13,19 @@ const invalid = () => new CompanionReadError(400, 'INVALID_COMPANION_REQUEST', '
 export class CompanionDirectoryService {
   constructor(private readonly db: DatabaseSync, private readonly reader = new CompanionReadService(db)) {}
 
-  private snapshot<T>(action: (creators: CompanionIdentity[], aliases: Alias[], identityVersion: string) => T): T {
+  private snapshot<T>(action: (creators: RosterIdentity[], aliases: Alias[], identityVersion: string) => T): T {
     this.db.exec('SAVEPOINT companion_directory');
     try {
-      const creators = this.db.prepare(`SELECT id AS creatorId,canonical_name AS canonicalName
-        FROM archive_catalog_creators WHERE is_active=1 ORDER BY id`).all() as unknown as CompanionIdentity[];
+      const creators = this.db.prepare(`SELECT id AS creatorId,canonical_name AS canonicalName,preference
+        FROM archive_catalog_creators WHERE is_active=1 ORDER BY id`).all() as unknown as RosterIdentity[];
       // Multiple source registrations of exactly the same alias are one public identity
       // fact. Case/Unicode differences and the same alias on another creator are retained.
       const aliases = this.db.prepare(`SELECT DISTINCT a.creator_id AS creatorId,a.alias COLLATE BINARY AS alias
         FROM archive_catalog_creator_aliases a JOIN archive_catalog_creators c ON c.id=a.creator_id
         WHERE c.is_active=1 ORDER BY a.creator_id,alias COLLATE BINARY`).all() as unknown as Alias[];
-      return action(creators, aliases, fingerprint(['companion-directory-identity-v1', creators, aliases]));
+      // Includes preference so a manual full sync cannot mix preference revisions.
+      // Existing cursors see the normal version-change response after this upgrade.
+      return action(creators, aliases, fingerprint(['companion-directory-identity-v2', creators, aliases]));
     } finally {
       this.db.exec('RELEASE companion_directory');
     }
@@ -55,7 +58,7 @@ export class CompanionDirectoryService {
   private page<T>(items: T[], input: CompanionDirectoryInput, kind: Kind, identityVersion: string,
     parameters: { limit: number; offset: number }) {
     if (input.identityVersion !== undefined && input.identityVersion !== identityVersion)
-      throw new CompanionReadError(409, 'COMPANION_IDENTITY_CHANGED', '博主或别名已变化，请保留上次完整名单并重新同步。');
+      throw new CompanionReadError(409, 'COMPANION_IDENTITY_CHANGED', '博主、别名或偏好已变化，请保留上次完整名单并重新同步。');
     const { limit, offset } = parameters;
     if (offset > 0 && offset >= items.length) throw invalid();
     const end = Math.min(items.length, offset + limit);
@@ -67,7 +70,9 @@ export class CompanionDirectoryService {
     const parameters = this.parameters(input, 'roster');
     return this.snapshot((creators, _aliases, identityVersion) => {
       const page = this.page(creators, input, 'roster', identityVersion, parameters);
-      return { ...page, items: page.items.map(creator => options.includeSummary !== false ? this.reader.summary(creator.creatorId) : {
+      return { ...page, items: page.items.map(creator => options.includeSummary !== false ? {
+        ...this.reader.summary(creator.creatorId), preference: creator.preference,
+      } : {
         ...creator, collectedWorkCount: null, countPolicyVersion: COUNT_POLICY_VERSION,
         readModel: { status: 'permission_denied' as const, complete: false },
         dataVersion: fingerprint([creator.creatorId, identityVersion]), dataUpdatedAt: null, queriedAt: new Date().toISOString(),
