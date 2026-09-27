@@ -49,6 +49,63 @@ describe.sequential('actual local directory admission and recovery',()=>{
   await service.apply(legacy);expect(rows('posts')).toEqual(before);
   await expect(service.apply({...p,items:p.items.map(i=>({...i,displayTitle:'changed'}))})).rejects.toThrow('content changed');
  });
+ it.each(['files_verified','planned'])('preserves creator spelling and resumes legacy %s comparison-case plans',async(initialState)=>{
+  const {ManagedCreatorService}=await import('../src/services/managed-creator-service.js');
+  const creatorName='MixedCaseCreator_'+initialState,seedName='Case seed '+initialState;
+  const mixedCreator=new ManagedCreatorService(manager.connection,gallery).create({name:creatorName,rating:'R15',preference:'liked'}).id;
+  await make(seedName);const seed=await service.preview({creatorId:mixedCreator,inputRoot:input,directories:[seedName]});
+  await service.apply({...seed,confirmed:true,items:seed.items.map(i=>({...i,reason:'Seed existing canonical creator directory'}))});
+  const name='NO.081 MixedCase Set '+initialState;await make(name);
+  const preview=await service.preview({creatorId:mixedCreator,inputRoot:input,directories:[name]});
+  expect(preview.creatorDirectory).toBe(creatorName);
+  expect(path.basename(path.dirname(preview.items[0].targetPath))).toBe(creatorName);
+  // Windows old plans persisted a lowercase comparison key; Linux must retain case sensitivity.
+  const directory=process.platform==='win32'?creatorName.toLowerCase():preview.creatorDirectory;
+  const p={...preview,confirmed:true,creatorDirectory:directory,items:preview.items.map(i=>({...i,targetPath:path.join(gallery,directory,name),reason:'Synthetic confirmed scope'}))};
+  const {admissionPlanSchema}=await import('../src/services/local-folder-admission-service.js');
+  const {WorkIdentityService}=await import('../src/services/work-identity-service.js');const item=p.items[0];
+  const mapped=new WorkIdentityService(manager.connection).registerLocal({creatorId:mixedCreator,rootPath:p.galleryRoot,creatorFolderName:directory,
+    absolutePath:item.targetPath,relativePath:path.relative(gallery,item.targetPath),title:item.displayTitle,reason:item.reason,key:`${p.planId}:${item.key}`,localOnly:false});
+  manager.connection.prepare('INSERT INTO archive_local_admission_plans(plan_id,payload_json,content_hash) VALUES(?,?,?)').run(p.planId,JSON.stringify(admissionPlanSchema.parse(p)),'historical immutable hash');
+  manager.connection.prepare("INSERT INTO archive_local_admission_items(plan_id,item_key,state,manifest_json,work_id,local_work_id,last_error) VALUES(?,?,?,?,?,?,'Scoped Post was not found')").run(p.planId,item.key,initialState,JSON.stringify(item.manifest),initialState==='planned'?null:mapped.workId,initialState==='planned'?null:mapped.localWorkId);
+  const {scannerService}=await import('../src/services/scanner-service.js');
+  if(initialState==='files_verified'){
+    await fs.rename(path.join(input,name),item.targetPath);
+    await scannerService.scanCosCreators([creatorName],'synthetic-legacy-case',{workFolderName:name});
+  }else{
+    const scan=scannerService.scanCosCreators.bind(scannerService);
+    const spy=vi.spyOn(scannerService,'scanCosCreators').mockImplementationOnce(async(...args)=>{await scan(...args);throw Error('Lost indexing response');});
+    try {await expect(service.apply(p)).rejects.toThrow('Lost indexing response');}finally{spy.mockRestore();}
+  }
+  const checkpoint=()=>manager.connection.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=?').get(p.planId)!;
+  expect(checkpoint().state).toBe('files_verified');
+  const before=checkpoint();const saved=manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(p.planId);
+  const post=manager.connection.prepare('SELECT id FROM posts WHERE source_path=?').get(creatorName+'/'+name)!;
+  expect(post).toBeTruthy();
+  const file=path.join(p.items[0].targetPath,'nested','1.jpg'),stat=await fs.stat(file,{bigint:true});
+  const identityCounts=()=>['archive_catalog_works','archive_catalog_local_works','posts','images'].map(t=>rows(t).length);
+  const counts=identityCounts();
+  const decisions=rows('archive_catalog_work_decisions');const folderCount=rows('archive_catalog_local_creator_folders').length;
+  if(process.platform==='win32'&&initialState==='files_verified'){
+    const old=manager.connection.prepare('SELECT local_creator_folder_id FROM archive_catalog_local_works WHERE id=?').get(mapped.localWorkId)!;
+    manager.connection.prepare('UPDATE archive_catalog_local_creator_folders SET creator_id=? WHERE id=?').run(creator,old.local_creator_folder_id);
+    await expect(service.apply(p)).rejects.toThrow('ownership changed');
+    expect(manager.connection.prepare('SELECT local_creator_folder_id FROM archive_catalog_local_works WHERE id=?').get(mapped.localWorkId)).toEqual(old);
+    manager.connection.prepare('UPDATE archive_catalog_local_creator_folders SET creator_id=? WHERE id=?').run(mixedCreator,old.local_creator_folder_id);
+    manager.connection.prepare('UPDATE archive_catalog_local_creator_folders SET is_active=0 WHERE id=?').run(old.local_creator_folder_id);
+    await expect(service.apply(p)).rejects.toThrow('ownership changed');
+    expect(manager.connection.prepare('SELECT is_active FROM archive_catalog_local_creator_folders WHERE id=?').get(old.local_creator_folder_id)?.is_active).toBe(0);
+    manager.connection.prepare('UPDATE archive_catalog_local_creator_folders SET is_active=1 WHERE id=?').run(old.local_creator_folder_id);
+  }
+  expect((await service.apply(p)).completed).toBe(true);
+  expect(checkpoint()).toMatchObject({state:'completed',work_id:before.work_id,local_work_id:before.local_work_id,last_error:null});
+  expect(manager.connection.prepare('SELECT post_id FROM archive_catalog_local_works WHERE id=?').get(before.local_work_id)?.post_id).toBe(post.id);
+  expect(manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(p.planId)).toEqual(saved);
+  expect(identityCounts()).toEqual(counts);expect((await fs.stat(file,{bigint:true})).ino).toBe(stat.ino);
+  expect(rows('archive_catalog_work_decisions')).toEqual(decisions);expect(rows('archive_catalog_local_creator_folders')).toHaveLength(folderCount);
+  expect(manager.connection.prepare('SELECT count(*) n FROM archive_catalog_local_creator_folders WHERE creator_id=? AND is_active=1').get(mixedCreator)?.n).toBe(1);
+  expect((await service.apply(p)).completed).toBe(true);expect(identityCounts()).toEqual(counts);
+ });
  it('resumes a real move before verification checkpoint without recreating identities',async()=>{
   const p=await plan('NO.099 Interrupted');
   p.items[0].acceptExistingVersion=true;

@@ -93,7 +93,9 @@ export class LocalFolderAdmissionService {
       await assertPathInsideLocalIngestRoot(input.inputRoot,source,{directChild:true});
       const target=await destination.resolveNewTarget(input.creatorId,name);
       // Destination helper sanitizes titles for archived jobs; legacy admission must preserve the exact basename.
-      creatorDirectory=(await assertPathInsideLocalIngestRoot(this.galleryRoot,target.creatorDirectory,{directChild:true})).relative;
+      const checkedCreator=await assertPathInsideLocalIngestRoot(this.galleryRoot,target.creatorDirectory,{directChild:true});
+      // `relative` is a comparison key (lowercase on Windows), not a persisted directory spelling.
+      creatorDirectory=path.relative(checkedCreator.root,checkedCreator.candidate);
       const targetPath=path.join(this.galleryRoot,creatorDirectory,name);
       await assertPathInsideLocalIngestRoot(this.galleryRoot,targetPath);
       leaf.parse(creatorDirectory);
@@ -475,14 +477,62 @@ export class LocalFolderAdmissionService {
     await this.verifyTarget(plan,item);
   }
 
-  private async detachRecoveredMedia(plan:AdmissionPlan,item:AdmissionPlan['items'][number],localId:number){
+  private async directorySpelling(parent:string,name:string){
+    const matches=(await fs.readdir(parent,{withFileTypes:true})).filter(entry=>cmp(entry.name)===cmp(name));
+    if(matches.length!==1||!matches[0]!.isDirectory()||matches[0]!.isSymbolicLink())throw Error('Confirmed indexing directory is missing or ambiguous; keep files for review');
+    return matches[0]!.name;
+  }
+
+  /** Resolve only the two confirmed directory components; never infer identity from a case-folded DB query. */
+  private async indexedScope(plan:AdmissionPlan,item:AdmissionPlan['items'][number]){
+    let parent=plan.galleryRoot;const names:string[]=[];
+    for(const name of [plan.creatorDirectory,item.sourceRelativePath]){
+      const actual=await this.directorySpelling(parent,name);parent=path.join(parent,actual);
+      await assertPathInsideLocalIngestRoot(plan.galleryRoot,parent);await regularDirectory(parent);
+      names.push(actual);
+    }
+    return {creatorDirectory:names[0]!,workFolderName:names[1]!,sourcePath:names.join('/')};
+  }
+
+  /** Repair only this unfinished checkpoint's legacy case-only registration, never merge Works or rewrite decisions. */
+  private alignIndexedRegistration(plan:AdmissionPlan,item:AdmissionPlan['items'][number],localId:number,scope:{creatorDirectory:string;workFolderName:string}){
+    const actual=path.resolve(plan.galleryRoot,scope.creatorDirectory,scope.workFolderName);
+    const own=!this.db.isTransaction;this.db.exec(own?'BEGIN IMMEDIATE':'SAVEPOINT admission_case');
+    try {
+      const local=this.db.prepare(`SELECT l.*,f.root_path,f.relative_path creator_path,f.creator_id,f.gallery_folder_id,f.match_method parent_method,f.is_active parent_active,f.match_status parent_status
+        FROM archive_catalog_local_works l JOIN archive_catalog_local_creator_folders f ON f.id=l.local_creator_folder_id WHERE l.id=?`).get(localId)!;
+      if(!local||local.is_active!==1||local.parent_active!==1||local.parent_status!=='matched'||local.creator_id!==plan.creatorId||cmp(path.resolve(String(local.absolute_path)))!==cmp(actual))throw Error('Indexed directory ownership changed; review required');
+      if(path.resolve(String(local.absolute_path))!==actual||local.creator_path!==scope.creatorDirectory){
+        const decision=this.db.prepare("SELECT work_id,local_work_id,payload_json FROM archive_catalog_work_decisions WHERE decision_key=? AND state='active' AND kind='same_work'").get(`${plan.planId}:${item.key}`);
+        const recorded=decision?JSON.parse(String(decision.payload_json)):null;
+        if(process.platform!=='win32'||local.post_id!==null||local.relative_path!==scope.workFolderName||local.gallery_folder_id!==null||local.parent_method!=='manual-admission'
+          ||decision?.local_work_id!==localId||decision.work_id!==local.work_id||recorded?.creatorId!==plan.creatorId||recorded?.absolutePath!==local.absolute_path
+          ||recorded?.absolutePath!==item.targetPath||recorded?.rootPath!==plan.galleryRoot||recorded?.creatorFolderName!==plan.creatorDirectory
+          ||recorded?.relativePath!==path.relative(plan.galleryRoot,item.targetPath)||cmp(path.resolve(String(local.root_path)))!==cmp(path.resolve(plan.galleryRoot))
+          ||cmp(String(local.creator_path))!==cmp(scope.creatorDirectory))throw Error('Legacy directory spelling needs explicit review');
+        // Do not adopt or retire a parent used by another local copy.
+        if(this.db.prepare('SELECT id FROM archive_catalog_local_works WHERE local_creator_folder_id=? AND id<>? LIMIT 1').get(local.local_creator_folder_id,localId))throw Error('Legacy directory has other copies; review required');
+        const parent=this.db.prepare('SELECT id,creator_id,is_active,match_status,absolute_path FROM archive_catalog_local_creator_folders WHERE root_path=? AND relative_path=?').get(path.resolve(plan.galleryRoot),scope.creatorDirectory);
+        if(parent){
+          if(parent.creator_id!==plan.creatorId||parent.is_active!==1||parent.match_status!=='matched'||cmp(path.resolve(String(parent.absolute_path)))!==cmp(path.dirname(actual))||this.db.prepare('SELECT id FROM archive_catalog_local_works WHERE local_creator_folder_id=? AND relative_path=?').get(parent.id,scope.workFolderName))throw Error('Canonical directory identity conflicts; review required');
+          this.db.prepare('UPDATE archive_catalog_local_works SET local_creator_folder_id=?,absolute_path=? WHERE id=?').run(parent.id,actual,localId);
+          this.db.prepare('UPDATE archive_catalog_local_creator_folders SET is_active=0 WHERE id=?').run(local.local_creator_folder_id);
+        }else{
+          this.db.prepare('UPDATE archive_catalog_local_creator_folders SET relative_path=?,folder_name=?,absolute_path=? WHERE id=?').run(scope.creatorDirectory,scope.creatorDirectory,path.dirname(actual),local.local_creator_folder_id);
+          this.db.prepare('UPDATE archive_catalog_local_works SET absolute_path=? WHERE id=?').run(actual,localId);
+        }
+      }
+      this.db.exec(own?'COMMIT':'RELEASE admission_case');
+    }catch(error){this.db.exec(own?'ROLLBACK':'ROLLBACK TO admission_case; RELEASE admission_case');throw error;}
+  }
+
+  private async detachRecoveredMedia(plan:AdmissionPlan,item:AdmissionPlan['items'][number],localId:number,sourcePath:string){
     const removals=this.removals(plan,item).filter(r=>['image','video'].includes(r.entry.kind));
     if(!removals.length)return;
     const local=this.db.prepare('SELECT post_id,work_id FROM archive_catalog_local_works WHERE id=?').get(localId) as {post_id:number|null;work_id:number}|undefined;
     if(!local||this.db.prepare("SELECT id FROM archive_catalog_local_fulfillments WHERE local_work_id=? AND state='active'").get(localId)||
       this.db.prepare(`SELECT t.id FROM archive_catalog_download_tasks t JOIN archive_catalog_source_works s ON s.id=t.source_work_id
         WHERE s.work_id=? AND t.status IN ('claimed','downloading') LIMIT 1`).get(local.work_id))throw Error('Media recovery ownership or acquisition changed; review required');
-    const sourcePath=path.relative(plan.galleryRoot,item.targetPath).split(path.sep).join('/');
     const post=this.db.prepare('SELECT id FROM posts WHERE source_path=? AND is_deleted=0 AND is_trashed=0').get(sourcePath) as {id:number}|undefined;
     if(local.post_id!==null&&local.post_id!==post?.id)throw Error('Recovery LocalWork Post changed; review required');
     if(!post)return;
@@ -559,9 +609,15 @@ export class LocalFolderAdmissionService {
           if((await fs.stat(source,{bigint:true})).dev!==(await fs.stat(path.dirname(target),{bigint:true})).dev)throw Error('Cross-volume admission is not supported in V1');
           let sameAsLocalId:number|undefined;
           if(item.identity.kind==='same-as')sameAsLocalId=(this.db.prepare('SELECT local_work_id FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.identity.itemKey) as {local_work_id:number}).local_work_id;
-          const mapped=identity.registerLocal({creatorId:plan.creatorId,rootPath:plan.galleryRoot,creatorFolderName:plan.creatorDirectory,absolutePath:target,relativePath:path.relative(plan.galleryRoot,target),title:item.displayTitle,
+          const actualCreator=await this.directorySpelling(plan.galleryRoot,plan.creatorDirectory);
+          const actualTarget=path.join(plan.galleryRoot,actualCreator,item.sourceRelativePath);
+          const registration={creatorId:plan.creatorId,rootPath:plan.galleryRoot,creatorFolderName:actualCreator,absolutePath:actualTarget,relativePath:path.relative(plan.galleryRoot,actualTarget),title:item.displayTitle,
             ...(item.identity.kind==='existing'?{workId:item.identity.workId,sourceWorkId:item.identity.sourceWorkId}:{}),sameAsLocalId,reason:item.reason,key:`${plan.planId}:${item.key}`,localOnly:item.localOnly,
-            ...(item.acceptExistingVersion?{acceptExistingVersion:true}:{})});
+            ...(item.acceptExistingVersion?{acceptExistingVersion:true}:{})};
+          const previous=this.db.prepare('SELECT payload_json FROM archive_catalog_work_decisions WHERE decision_key=?').get(registration.key);
+          const legacy={...registration,creatorFolderName:plan.creatorDirectory,absolutePath:target,relativePath:path.relative(plan.galleryRoot,target)};
+          // Registration may have committed before the checkpoint: validate either exact historical input, never silently rewrite it.
+          const mapped=identity.registerLocal(previous?.payload_json===json(legacy)?legacy:registration);
           this.db.prepare("UPDATE archive_local_admission_items SET state='move_intent',work_id=?,local_work_id=? WHERE plan_id=? AND item_key=?").run(mapped.workId,mapped.localWorkId,plan.planId,item.key);
           state={...state,state:'move_intent',work_id:mapped.workId,local_work_id:mapped.localWorkId};
         }
@@ -586,15 +642,17 @@ export class LocalFolderAdmissionService {
             }
           }
           await this.verifyTarget(plan,item);
-          await this.detachRecoveredMedia(plan,item,state.local_work_id!);
+          const scope=await this.indexedScope(plan,item);
+          this.alignIndexedRegistration(plan,item,state.local_work_id!,scope);
+          await this.detachRecoveredMedia(plan,item,state.local_work_id!,scope.sourcePath);
           const {scannerService}=await import('./scanner-service.js');
-          const scan=await scannerService.scanCosCreators([plan.creatorDirectory],'local-folder-admission',{workFolderName:item.sourceRelativePath});
+          const scan=await scannerService.scanCosCreators([scope.creatorDirectory],'local-folder-admission',{workFolderName:scope.workFolderName});
           if(scan?.status!=='completed')throw Error('Scoped media indexing did not complete');
-          const post=this.db.prepare('SELECT id,folder_id FROM posts WHERE source_path=? AND is_deleted=0 AND is_trashed=0').get(path.relative(plan.galleryRoot,target).split(path.sep).join('/')) as {id:number;folder_id:number}|undefined;
+          const post=this.db.prepare('SELECT id,folder_id FROM posts WHERE source_path=? AND is_deleted=0 AND is_trashed=0').get(scope.sourcePath) as {id:number;folder_id:number}|undefined;
           if(!post)throw Error('Scoped Post was not found; keep files and retry indexing');
           const {ManagedCreatorService}=await import('./managed-creator-service.js');new ManagedCreatorService(this.db,plan.galleryRoot).linkFolder(post.folder_id,{creatorId:plan.creatorId});
           identity.attachPost(state.local_work_id!,post.id);
-          const {ArchiveCatalogService}=await import('./archive-catalog-service.js');await new ArchiveCatalogService(this.db).reconcileLocalCreators({rootPath:plan.galleryRoot,creators:[{creatorId:plan.creatorId,folderName:plan.creatorDirectory}],workFolderName:item.sourceRelativePath});
+          const {ArchiveCatalogService}=await import('./archive-catalog-service.js');await new ArchiveCatalogService(this.db).reconcileLocalCreators({rootPath:plan.galleryRoot,creators:[{creatorId:plan.creatorId,folderName:scope.creatorDirectory}],workFolderName:scope.workFolderName});
           this.db.prepare("UPDATE archive_local_admission_items SET state='indexed' WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='indexed';
         }
         if(state.state==='indexed'){
