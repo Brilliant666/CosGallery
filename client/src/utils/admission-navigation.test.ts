@@ -15,6 +15,28 @@ describe('tab-local admission navigation hints',()=>{
     expect(carryRefreshedChoices([{...marked,action:confirmed}],[marked])[0]?.action.scopeConfirmed).toBe(true);
   });
   it('remembers only a collection id and clears it when deliberately starting a new scope',()=>{rememberAdmissionCollection('c');expect(lastAdmissionCollection()).toBe('c');rememberAdmissionCollection(null);expect(lastAdmissionCollection()).toBeNull();});
+  it('reconsiders automatic new when only new risk metadata changes, preserving manual holds',()=>{
+    for(const change of [{reviewIssues:['title_similar' as const]},{candidatesTruncated:true}]){
+      const previous={...row,action:{...row.action,action:'new' as const,selectionOrigin:'automatic' as const}};
+      const next={...previous,item:{...row.item,...change}};
+      expect(carryRefreshedChoices([previous],[next])[0]?.action.action).toBe('defer');
+      for(const action of ['skip','defer'] as const){
+        const manual={...previous,action:{...previous.action,action,selectionOrigin:'manual' as const}};
+        expect(carryRefreshedChoices([manual],[next])[0]?.action.action).toBe(action);
+      }
+    }
+  });
+  it('retains unchanged pre-upgrade manual choices when optional risk fields are absent or empty',()=>{
+    const work={workId:7,title:'Chosen Work',catalogNo:null,images:1,videos:0,thumbnailUrl:null,primaryLocalWorkId:1,localState:'indexed',originalDirectories:[],sources:[]};
+    const base={...row,work,action:{...row.action,action:'existing' as const,workId:7,primary:true,selectionOrigin:'manual' as const}};
+    const peer={...row,item:{...row.item,key:'peer',sourceRelativePath:'peer'},action:{...row.action,key:'peer',action:'same-as' as const,sameAsKey:'i',selectionOrigin:'manual' as const}};
+    const legacy=(entry:DraftEntry)=>({batchId:entry.batchId,creatorId:entry.creatorId,key:entry.item.key,action:entry.action,work:entry.work,
+      evidence:JSON.stringify([entry.item.key,entry.item.sourceRelativePath,entry.item.targetPath,entry.item.group,entry.item.summary,entry.item.candidates,entry.item.conflicts,entry.item.structureWarnings,entry.item.needsBoundaryReview,entry.item.ads,entry.item.reviewFingerprint,entry.item.displayTitle])});
+    sessionStorage.setItem('cosgallery:admission:tab-drafts',JSON.stringify([{id:'c',entries:[legacy(base),legacy(peer)]}]));
+    const restored=restoreAdmissionDraft('c',[{...base,item:{...base.item,reviewIssues:[],candidatesTruncated:false}},peer]);
+    expect(restored.map(entry=>entry.action.action)).toEqual(['existing','same-as']);
+    expect(restored[0]?.action).toMatchObject({workId:7,primary:true,selectionOrigin:'manual'});
+  });
   it('retains manual skip across evidence changes only within the same source scope',()=>{
     saveAdmissionDraft('c',[row]);expect(restoreAdmissionDraft('c',[row])[0]?.action).toEqual(row.action);
     expect(restoreAdmissionDraft('other',[row])).toEqual([]);expect(restoreAdmissionDraft('c',[{...row,creatorId:18}])).toEqual([]);

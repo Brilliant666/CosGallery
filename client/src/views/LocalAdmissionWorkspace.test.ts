@@ -168,7 +168,7 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.refreshAdmissionCollectionDirectories).mockImplementation(async()=>{fresh=true;return {...collection(),id:'reread'};});
     const {wrapper}=await render('?collection=collection-one',false);
     const scope=wrapper.get('[data-test=scope-review]');expect(scope.element.tagName).toBe('SECTION');
-    expect(scope.text()).toContain('范围待确认，不代表文件冲突');expect(scope.text()).toContain('77 个无冲突候选可预选 · 1 个仍需判断');
+    expect(scope.text()).toContain('范围待确认，不代表文件冲突');expect(scope.text()).toContain('77 个未发现候选的目录可预选 · 1 个仍需判断');
     expect(scope.findAll('section')).toHaveLength(2);expect(scope.text()).toContain('甲别名 / 目录-0');
     expect(wrapper.text()).toContain('0 接纳 · 1 跳过 · 79 暂缓');
     expect(api.refreshAdmissionCollectionDirectories).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
@@ -281,7 +281,7 @@ describe('independent multi-creator admission workspace',()=>{
     await wrapper.get('[data-test=admission-item-a-candidate] select').setValue('existing');
     expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(true);
     const editor=wrapper.get('[data-test=admission-item-a-candidate]');
-    await editor.findAll('button').find(entry=>entry.text().startsWith('候选：'))!.trigger('click');
+    await editor.findAll('button').find(entry=>entry.text()==='选择此已有作品')!.trigger('click');
     expect(wrapper.find('[data-item-key="a-candidate"]').exists()).toBe(false);
     expect(wrapper.get('[data-test=review-status-pending]').text()).toContain('1');
     expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
@@ -543,7 +543,7 @@ describe('independent multi-creator admission workspace',()=>{
     const work={workId:91,title:'旧展示作品',catalogNo:1,images:2,videos:0,thumbnailUrl:null,primaryLocalWorkId:19,localState:'available',originalDirectories:['原目录'],sources:[]};
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('a-first','B'),candidates:[work]}],total:1,page:1,pageSize:100});
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});
-    const {wrapper}=await render('?collection=collection-one');await (await editItem(wrapper,'a-first')).get('select').setValue('existing');await button(wrapper,'候选：旧展示作品 · 2 图 / 0 视频').trigger('click');wrapper.unmount();
+    const {wrapper}=await render('?collection=collection-one');await (await editItem(wrapper,'a-first')).get('select').setValue('existing');await button(wrapper,'选择此已有作品').trigger('click');wrapper.unmount();
     const original={requestKey:'old-receipt',confirmed:true,batches:[{batchId:'a',acceptExistingVersion:false,actions:[{key:'a-first',action:'existing',workId:92,approvedAds:[],acceptSourceIds:[]}]}]};
     localStorage.setItem('cosgallery:admission:collection:collection-one',JSON.stringify(original));
     const returned=await render('?collection=collection-one');await editItem(returned.wrapper,'a-first');expect(returned.wrapper.text()).toContain('对应作品 #92');expect(returned.wrapper.text()).not.toContain('对应：旧展示作品');
@@ -573,7 +573,7 @@ describe('independent multi-creator admission workspace',()=>{
     const work={workId:91,title:'已选作品',catalogNo:1,images:2,videos:0,thumbnailUrl:null,primaryLocalWorkId:19,localState:'available',originalDirectories:['原目录'],sources:[]};
     const records=[{...item('existing'),candidates:[work]},item('skip'),{...item('edited'),suggestedAction:{key:'edited',action:'new' as const,displayTitle:'上次名称',primary:true,approvedAds:['492.jpg']}},item('copy'),item('undecided'),item('candidate','B'),item('complex','D')];
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection(),batches:[batch()]});vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:records.length,page:1,pageSize:100});
-    const {wrapper}=await render('?collection=collection-one');await (await editItem(wrapper,'existing')).get('select').setValue('existing');await button(wrapper,'候选：已选作品 · 2 图 / 0 视频').trigger('click');await (await editItem(wrapper,'skip')).get('select').setValue('skip');
+    const {wrapper}=await render('?collection=collection-one');await (await editItem(wrapper,'existing')).get('select').setValue('existing');await button(wrapper,'选择此已有作品').trigger('click');await (await editItem(wrapper,'skip')).get('select').setValue('skip');
     const edited=(await editItem(wrapper,'edited'));await edited.get('input:not([type=checkbox])').setValue('用户修改的标题');await edited.get('.item-ads input[value="492.jpg"]').setValue(false);await edited.get('.item-ads input[value="附件/推广.txt"]').setValue(true);
     await (await editItem(wrapper,'copy')).get('select').setValue('same-as');await (await editItem(wrapper,'copy')).findAll('select')[1]!.setValue('edited');
 

@@ -12,6 +12,7 @@ import { LOCAL_ADMISSION_LOCK_KEY, runAdmissionCollectionExclusive } from './loc
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { recycleEmptyAdmissionParent, type AdmissionParentCleanupResult } from './local-admission-parent-cleanup.js';
 import { laterAdmissionCompletions, admissionItemIdentity, assertNoLaterAdmissionCompletion, type CurrentAdmissionDisposition } from './local-admission-later-completion.js';
+import { LocalAdmissionTitleCandidates, type AdmissionMatchEvidence } from './local-admission-title-candidates.js';
 
 const ROOT_KEY = 'local-admission.waiting-root.v1';
 const reservedDirectory = (name:string) => /^\.local-(?:admission|review)-/i.test(name);
@@ -35,7 +36,7 @@ type Preview = Awaited<ReturnType<LocalFolderAdmissionService['preview']>>;
 type PreviewItem = Preview['items'][number];
 type Source = {sourceWorkId:number;title:string;sourceOrder:number|null;mediaSummary:string|null;taskIds:number[]};
 export type AdmissionWorkChoice = {workId:number;title:string;catalogNo:string|null;images:number;videos:number;
-  thumbnailUrl:string|null;primaryLocalWorkId:number|null;localState:string;originalDirectories:string[];sources:Source[]};
+  thumbnailUrl:string|null;primaryLocalWorkId:number|null;localState:string;originalDirectories:string[];sources:Source[];matchEvidence?:AdmissionMatchEvidence};
 type Batch = {id:string;creator_id:number;input_root:string;source_evidence_id:number|null;state:string;created_at:string;updated_at:string;
   error:string|null;context_json:string;confirmed_json:string|null;owner_pid:number|null;owner_token:string|null};
 type DirectoryRefresh = {added:{creatorId:number;parent:string;name:string}[];removed:{creatorId:number;parent:string;name:string}[];warnings:string[]};
@@ -46,8 +47,9 @@ type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTi
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
   ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>;
   scopeReviewRequired?:boolean;
+  reviewIssues?:('title_exact'|'title_similar'|'multiple_candidates'|'existing_path'|'target_conflict'|'structure'|'read_error')[];candidatesTruncated?:boolean;
   structureWarnings?:string[];needsBoundaryReview?:boolean;reviewFingerprint?:string};
-type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[]};
+type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[];titleCandidates:LocalAdmissionTitleCandidates};
 type PreparedExecution={batch:Batch;request:z.infer<typeof webExecuteSchema>;plan:AdmissionPlan|null;saved:Record<string,unknown>[]};
 type Collection={id:string;state:string;created_at:string;updated_at:string;confirmed_json:string|null;error:string|null;owner_pid:number|null;owner_token:string|null};
 const advertisementRulesVersion=1;
@@ -208,21 +210,44 @@ export class LocalAdmissionWebService {
     const siblings=await this.siblingEntries(inputRoot);
     if(new Set(scope.directories.map(d=>process.platform==='win32'?d.toLowerCase():d)).size!==scope.directories.length)throw new AdmissionWebError('选择了重复目录',400);
     const id=randomUUID(),items:{summary:Summary;preview:PreviewItem|null}[]=[];let creatorDirectory='';const version=this.thumbnailVersion();
+    const titleCandidates=new LocalAdmissionTitleCandidates(this.db,scope.creatorId);
+    const choiceCache=new Map<number,AdmissionWorkChoice|null>();
+    const getChoice=(workId:number)=>{if(!choiceCache.has(workId))choiceCache.set(workId,this.workChoice(workId,scope.creatorId,version));return choiceCache.get(workId);};
     for(const name of scope.directories){
       try {
         const preview=await this.admission.preview({...scope,inputRoot,directories:[name]});creatorDirectory=preview.creatorDirectory;
         const item=preview.items[0]!;
-        const workIds=new Set([...(item.review.candidates as unknown as {workId:number}[]).map(c=>Number(c.workId)),...item.review.existingRelations.map(c=>Number(c.workId))].filter(Boolean));
-        // Include source-free same-title Works as suggestions too; never implicitly merge.
-        for(const w of this.db.prepare('SELECT id FROM archive_catalog_works WHERE creator_id=? AND display_title=?').all(scope.creatorId,item.displayTitle))workIds.add(Number(w.id));
-        const candidates=[...workIds].slice(0,50).flatMap(workId=>{const choice=this.workChoice(workId,scope.creatorId,version);return choice?[choice]:[];});
+        const evidence=titleCandidates.find(name);
+        for(const candidate of item.review.candidates as unknown as {workId:number;title:string}[]){
+          const workId=Number(candidate.workId);if(!titleCandidates.workIds.has(workId))continue;
+          const previous=evidence.get(workId),source=titleCandidates.sourceEvidence(name,candidate.title);
+          evidence.set(workId,{level:previous?.level==='exact'?'exact':source.level,reasons:[...new Set([...(previous?.reasons??[]),...source.reasons])]});
+        }
+        for(const relation of item.review.existingRelations){
+          const workId=Number(relation.workId);if(!titleCandidates.workIds.has(workId))continue;
+          evidence.set(workId,{level:'path',reasons:[...(evidence.get(workId)?.reasons??[]),'目标路径已有本地副本关系；不能覆盖目标']});
+        }
+        const matching:(AdmissionWorkChoice&{matchEvidence:AdmissionMatchEvidence})[]=[];
+        for(const [workId,matchEvidence] of [...evidence].sort(([a,ea],[b,eb])=>({path:0,exact:1,similar:2}[ea.level]-{path:0,exact:1,similar:2}[eb.level])||a-b)){
+          const choice=getChoice(workId);if(choice)matching.push({...choice,matchEvidence});
+          if(matching.length===51)break;
+        }
+        const candidates=matching.slice(0,50),candidatesTruncated=matching.length>50;
         const warnings=structureWarnings(item.manifest);
-        const group:Summary['group']=warnings.length?'D':item.review.existingRelations.length?'C':item.review.conflicts.length?'D':candidates.length===1?'B':candidates.length>1?'D':'A';
+        const reviewIssues:NonNullable<Summary['reviewIssues']>=[];
+        if(matching.some(c=>c.matchEvidence.level==='exact'))reviewIssues.push('title_exact');
+        if(matching.some(c=>c.matchEvidence.level==='similar'))reviewIssues.push('title_similar');
+        if(matching.length>1)reviewIssues.push('multiple_candidates');
+        if(item.review.existingRelations.length)reviewIssues.push('existing_path');
+        if(item.review.conflicts.length)reviewIssues.push('target_conflict');
+        if(warnings.length)reviewIssues.push('structure');
+        const group:Summary['group']=warnings.length||item.review.conflicts.length||matching.length>1?'D':item.review.existingRelations.length?'C':
+          candidates.length===1?(candidates[0]!.matchEvidence.level==='exact'?'B':'C'):'A';
         items.push({preview:item,summary:{key:item.key,sourceRelativePath:name,targetPath:item.targetPath,displayTitle:item.displayTitle,group,
-          summary:item.review.summary,candidates,conflicts:item.review.conflicts,ads:advertisementCandidates(item.manifest),advertisementRulesVersion,
+          summary:item.review.summary,candidates,candidatesTruncated,reviewIssues,conflicts:item.review.conflicts,ads:advertisementCandidates(item.manifest),advertisementRulesVersion,
           ...(warnings.length?{structureWarnings:warnings,needsBoundaryReview:true}:{})}});
       } catch(e) {items.push({preview:null,summary:{key:randomUUID(),sourceRelativePath:name,targetPath:'',displayTitle:name,group:'D',
-        summary:{images:0,videos:0,other:0,bytes:0},candidates:[],conflicts:[message(e)],ads:[]}});}
+        summary:{images:0,videos:0,other:0,bytes:0},candidates:[],reviewIssues:['read_error'],candidatesTruncated:false,conflicts:[message(e)],ads:[]}});}
     }
     const context:Context={galleryRoot:this.galleryRoot,creatorDirectory,parent:scope.parent,waitingRoot:root,workFacts:{},sourceFacts:{}};
     for(const w of this.db.prepare('SELECT id FROM archive_catalog_works WHERE creator_id=?').all(scope.creatorId))context.workFacts[String(w.id)]=this.workFact(Number(w.id));
@@ -234,19 +259,24 @@ export class LocalAdmissionWebService {
       creatorId:scope.creatorId,parent:scope.parent,sourceEvidenceId:scope.sourceEvidenceId??null,inputRoot,context,
       manifest:item.preview.manifest,sourceRelativePath:item.summary.sourceRelativePath,targetPath:item.summary.targetPath,
       displayTitle:item.summary.displayTitle,group:item.summary.group,conflicts:item.summary.conflicts,
+      candidates:item.summary.candidates.map(c=>({workId:c.workId,matchEvidence:c.matchEvidence})),
+      reviewIssues:item.summary.reviewIssues,candidatesTruncated:item.summary.candidatesTruncated,
       ads:item.summary.ads,advertisementRulesVersion,structureWarnings:item.summary.structureWarnings??[]
     });
     // Operational scope metadata must not invalidate unchanged per-work review facts.
     context.knownSiblingDirectories=siblings.filter(entry=>entry.directory).map(entry=>entry.name);
     if(hash(siblings)!==hash(await this.siblingEntries(inputRoot)))throw new AdmissionWebError('核对期间父目录范围发生变化，请待整理结束后重新读取');
-    return {id,scope,inputRoot,context,items};
+    return {id,scope,inputRoot,context,items,titleCandidates};
   }
   private async siblingEntries(inputRoot:string) {
     return (await fs.readdir(inputRoot,{withFileTypes:true})).filter(entry=>!reservedDirectory(entry.name))
       .map(entry=>({name:entry.name,directory:entry.isDirectory()&&!entry.isSymbolicLink(),link:entry.isSymbolicLink()}))
       .sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans-CN'));
   }
-  private savePreview({id,scope,inputRoot,context,items}:PreparedPreview) {
+  private savePreview({id,scope,inputRoot,context,items,titleCandidates}:PreparedPreview) {
+      // BEGIN IMMEDIATE already encloses every caller. Refuse stale recall
+      // rather than saving a false A-group after an asynchronous inventory.
+      if(!titleCandidates.unchanged())throw new AdmissionWebError('核对期间博主名称、别名或已有作品目录信息发生变化，请重新核对。');
       this.db.prepare(`INSERT INTO local_admission_web_batches(id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,context_json)
         VALUES(?,?,?,?,'draft',?,?,?)`).run(id,scope.creatorId,inputRoot,scope.sourceEvidenceId??null,now(),now(),JSON.stringify(context));
       for(const [position,item] of items.entries())this.db.prepare('INSERT INTO local_admission_web_items(batch_id,item_key,position,summary_json,preview_json) VALUES(?,?,?,?,?)')

@@ -35,8 +35,8 @@ describe('web local admission without CLI or raw identity inputs',()=>{
   });
   it('does not bulk-select an unresolved historical A item while retaining its explicit manual choice',async()=>{
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('unknown'),currentDisposition:{status:'unresolved'}},item('ordinary')],total:2,page:1,pageSize:100});
-    const {wrapper}=await render('?batch=batch-synthetic');await button(wrapper,'选择无冲突的新作品').trigger('click');expect(wrapper.get('[data-test=admission-item-unknown] select').element.value).toBe('defer');expect(wrapper.get('[data-test=admission-item-ordinary] select').element.value).toBe('new');
-    await wrapper.get('[data-test=admission-item-unknown] select').setValue('new');await wrapper.get('[data-test=admission-item-unknown] input[maxlength="500"]').setValue('用户确认保留整套');await button(wrapper,'选择无冲突的新作品').trigger('click');expect(wrapper.get('[data-test=admission-item-unknown] input[maxlength="500"]').element.value).toBe('用户确认保留整套');expect(api.executeAdmission).not.toHaveBeenCalled();
+    const {wrapper}=await render('?batch=batch-synthetic');await button(wrapper,'选择未发现候选的作品').trigger('click');expect(wrapper.get('[data-test=admission-item-unknown] select').element.value).toBe('defer');expect(wrapper.get('[data-test=admission-item-ordinary] select').element.value).toBe('new');
+    await wrapper.get('[data-test=admission-item-unknown] select').setValue('new');await wrapper.get('[data-test=admission-item-unknown] input[maxlength="500"]').setValue('用户确认保留整套');await button(wrapper,'选择未发现候选的作品').trigger('click');expect(wrapper.get('[data-test=admission-item-unknown] input[maxlength="500"]').element.value).toBe('用户确认保留整套');expect(api.executeAdmission).not.toHaveBeenCalled();
   });
   it('keeps original failure history but prevents completed-later items from resume or repreview',async()=>{
     vi.mocked(api.fetchAdmissionBatch).mockResolvedValue({...batch('needs_review'),error:'原锁错误',currentTotals:{completedLater:1,pending:1,unresolved:1}});
@@ -51,15 +51,15 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     const record={...item(),currentDisposition:completedLater,ads:[{relativePath:'广告.txt',size:8}],suggestedAction:{key:'first',action:'new' as const,approvedAds:['广告.txt']}};
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[record],total:1,page:1,pageSize:100});const {wrapper}=await render('?batch=batch-synthetic');
     expect(wrapper.text()).toContain('预览草稿 · 未执行');expect(wrapper.text()).toContain('0 接纳 · 0 跳过 · 0 暂缓');expect(wrapper.get('[data-test=admission-item-first]').find('fieldset').exists()).toBe(false);
-    await button(wrapper,'选择无冲突的新作品').trigger('click');expect(wrapper.find('[data-ad-filename]').exists()).toBe(false);expect(button(wrapper,'查看入库确认').attributes('disabled')).toBeDefined();expect(api.executeAdmission).not.toHaveBeenCalled();expect(record.suggestedAction.approvedAds).toEqual(['广告.txt']);
+    await button(wrapper,'选择未发现候选的作品').trigger('click');expect(wrapper.find('[data-ad-filename]').exists()).toBe(false);expect(button(wrapper,'查看入库确认').attributes('disabled')).toBeDefined();expect(api.executeAdmission).not.toHaveBeenCalled();expect(record.suggestedAction.approvedAds).toEqual(['广告.txt']);
   });
   it('bulk-selects only undecided A items and preserves manual choices and edited new-work fields',async()=>{
     const records=[{...item('existing'),candidates:[work]},item('skip'),{...item('edited'),ads:[{relativePath:'492.jpg',size:12,automatic:true},{relativePath:'指定广告.txt',size:8}],suggestedAction:{key:'edited',action:'new' as const,displayTitle:'上次名称',primary:true,approvedAds:['492.jpg']}},item('copy'),item('undecided'),item('candidate','B'),item('complex','D')];
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:records.length,page:1,pageSize:100});const {wrapper}=await render('?batch=batch-synthetic');
-    await wrapper.get('[data-test=admission-item-existing] select').setValue('existing');await button(wrapper,`候选：${work.title} · 24 图 / 0 视频`).trigger('click');await wrapper.get('[data-test=admission-item-skip] select').setValue('skip');
+    await wrapper.get('[data-test=admission-item-existing] select').setValue('existing');await button(wrapper,'选择此已有作品').trigger('click');await wrapper.get('[data-test=admission-item-skip] select').setValue('skip');
     const edited=wrapper.get('[data-test=admission-item-edited]');await edited.get('input:not([type=checkbox])').setValue('用户修改的标题');await edited.get('.item-ads input[value="492.jpg"]').setValue(false);await edited.get('.item-ads input[value="指定广告.txt"]').setValue(true);
     await wrapper.get('[data-test=admission-item-copy] select').setValue('same-as');await wrapper.get('[data-test=admission-item-copy]').findAll('select')[1]!.setValue('edited');
-    await button(wrapper,'选择无冲突的新作品').trigger('click');await button(wrapper,'选择无冲突的新作品').trigger('click');
+    await button(wrapper,'选择未发现候选的作品').trigger('click');await button(wrapper,'选择未发现候选的作品').trigger('click');
     expect(wrapper.get('[data-test=admission-item-candidate] select').element.value).toBe('defer');expect(wrapper.get('[data-test=admission-item-complex] select').element.value).toBe('defer');
     await button(wrapper,'查看入库确认').trigger('click');for(const input of wrapper.get('[role=dialog]').findAll('input'))await input.setValue(true);await wrapper.get('[data-test=admission-execute]').trigger('click');await flushPromises();
     const actions=vi.mocked(api.executeAdmission).mock.calls[0]![1].actions;expect(actions[0]).toMatchObject({action:'existing',workId:91});expect(actions[1]).toMatchObject({action:'skip',approvedAds:[]});expect(actions[2]).toMatchObject({action:'new',displayTitle:'用户修改的标题',primary:true,approvedAds:['指定广告.txt']});expect(actions[3]).toMatchObject({action:'same-as',sameAsKey:'edited'});expect(actions[4]).toMatchObject({action:'new'});expect(actions.slice(5).map(action=>action.action)).toEqual(['defer','defer']);
@@ -75,7 +75,7 @@ describe('web local admission without CLI or raw identity inputs',()=>{
   it('selects an existing work by name and accepts only explicitly selected mapped sources',async()=>{const {wrapper}=await render('?batch=batch-synthetic');await wrapper.get('[data-test=admission-item-first] select').setValue('existing');await button(wrapper,'查找已有作品').trigger('click');await flushPromises();await wrapper.get('.work-option').trigger('click');expect(wrapper.find('[data-test=admission-accept-version]').exists()).toBe(false);await wrapper.get('[data-test=admission-item-first]').findAll('label.check').find(label=>label.text().includes('来源声明'))!.get('input').setValue(true);await button(wrapper,'查看入库确认').trigger('click');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=admission-execute]').trigger('click');await flushPromises();const payload=vi.mocked(api.executeAdmission).mock.calls[0]![1];expect(payload.actions[0]).toMatchObject({action:'existing',workId:91,primary:false,acceptSourceIds:[71]});expect(payload.acceptExistingVersion).toBe(true);expect(wrapper.find('input[type=number]').exists()).toBe(false);});
   it('defaults a new confirmation to future reuse without automatically selecting any existing source',async()=>{
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item(),candidates:[work]}],total:1,page:1,pageSize:100});
-    const {wrapper}=await render('?batch=batch-synthetic');await wrapper.get('[data-test=admission-item-first] select').setValue('existing');await button(wrapper,`候选：${work.title} · 24 图 / 0 视频`).trigger('click');
+    const {wrapper}=await render('?batch=batch-synthetic');await wrapper.get('[data-test=admission-item-first] select').setValue('existing');await button(wrapper,'选择此已有作品').trigger('click');
     expect(wrapper.find('[data-test=admission-accept-version]').exists()).toBe(false);
     const source=wrapper.get('[data-test=admission-item-first]').findAll('label.check').find(label=>label.text().includes('来源声明'))!;expect((source.get('input').element as HTMLInputElement).checked).toBe(false);
     await button(wrapper,'查看入库确认').trigger('click');expect(wrapper.get('[role=dialog]').text()).toContain('已入库的同一作品不重复获取');expect(wrapper.get('[role=dialog]').text()).toContain('不代表文件完整');await wrapper.get('[role=dialog] input').setValue(true);await wrapper.get('[data-test=admission-execute]').trigger('click');await flushPromises();
@@ -137,7 +137,7 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     vi.mocked(api.fetchAdmissionItems).mockImplementation(async(_id,page=1)=>({items:records.slice((page-1)*20,page*20),total:23,page,pageSize:20}));
     const {wrapper}=await render('?batch=batch-synthetic');
     expect(api.fetchAdmissionItems).toHaveBeenCalledTimes(2);
-    await button(wrapper,'选择无冲突的新作品').trigger('click');
+    await button(wrapper,'选择未发现候选的作品').trigger('click');
     await wrapper.get('[data-test=admission-item-set-0] select').setValue('skip');
     await wrapper.get('[data-test=admission-item-set-1] select').setValue('defer');
     const group=wrapper.findAll('label').find(label=>label.text().startsWith('分组'))!.get('select');
@@ -165,7 +165,7 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:3,page:1,pageSize:100});
     const {wrapper}=await render('?batch=batch-synthetic');
     await wrapper.get('[data-test=admission-item-first] select').setValue('existing');
-    await button(wrapper,`候选：${work.title} · 24 图 / 0 视频`).trigger('click');
+    await button(wrapper,'选择此已有作品').trigger('click');
     await wrapper.get('[data-test=admission-item-first] input[type=checkbox]').setValue(true);
     expect(wrapper.find('[data-test=admission-accept-version]').exists()).toBe(false);
     await wrapper.get('[data-test=admission-item-first]').findAll('label.check').find(label=>label.text().includes('来源声明'))!.get('input').setValue(true);
@@ -197,7 +197,7 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     await checks[0]!.setValue(false);
     await checks[1]!.setValue(false);
     await wrapper.get('[data-test=admission-item-first] select').setValue('existing');
-    await button(wrapper,`候选：${work.title} · 24 图 / 0 视频`).trigger('click');
+    await button(wrapper,'选择此已有作品').trigger('click');
     checks=wrapper.get('[data-test=admission-item-first] .item-ads').findAll('input');
     expect(checks.map(input=>(input.element as HTMLInputElement).checked)).toEqual([false,false,true,true]);
     await button(wrapper,'查看入库确认').trigger('click');const dialog=wrapper.get('[role=dialog]');
@@ -222,12 +222,12 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     vi.mocked(api.fetchAdmissionItems).mockReturnValue(delayed.promise);
     const {wrapper}=await render('?batch=batch-synthetic');
     expect(wrapper.text()).toContain('正在读取预览摘要');
-    expect(button(wrapper,'选择无冲突的新作品').attributes('disabled')).toBeDefined();
+    expect(button(wrapper,'选择未发现候选的作品').attributes('disabled')).toBeDefined();
     expect(wrapper.find('[aria-label="本批附件集中选择"]').exists()).toBe(false);
     expect(wrapper.find('[data-test=ads-select-all]').exists()).toBe(false);expect(api.executeAdmission).not.toHaveBeenCalled();
     delayed.resolve({items:[{...item(),ads:[{relativePath:'广告.txt',size:8}]}],total:1,page:1,pageSize:100});await flushPromises();
     expect(wrapper.find('[aria-label="本批附件集中选择"]').exists()).toBe(false);
-    await button(wrapper,'选择无冲突的新作品').trigger('click');
+    await button(wrapper,'选择未发现候选的作品').trigger('click');
     expect(wrapper.get('[aria-label="本批附件集中选择"] fieldset').attributes('disabled')).toBeUndefined();
     expect(wrapper.get('[data-ad-filename="广告.txt"]').text()).toContain('已选 1');
   });

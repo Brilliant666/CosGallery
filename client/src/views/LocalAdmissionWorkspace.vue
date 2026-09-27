@@ -48,15 +48,15 @@
       </section>
 
       <section v-if="collection.state==='draft'" class="panel review-panel" aria-label="多博主集中核对">
-        <div class="heading"><div><h2>核对本批图集</h2><p class="hint">正常作品已预选；直接在下方查看目录边界并选择处理方式。需要判断的图集可先暂缓，不影响其余作品入库。</p></div><button data-test="review-ads-open" @click="reviewPanel='ads'">广告附件 · 已选 {{ adsCount }} 项</button></div>
+        <div class="heading"><div><h2>核对本批图集</h2><p class="hint">未发现候选且无目录问题的作品已预选，但不证明从未收录；直接在下方查看目录边界并选择处理方式。需要判断的图集可先暂缓，不影响其余作品入库。</p></div><button data-test="review-ads-open" @click="reviewPanel='ads'">广告附件 · 已选 {{ adsCount }} 项</button></div>
 
         <section v-if="scopeReviewRows.length&&!pending" class="scope-review warning" aria-label="确认本批目录范围" data-test="scope-review">
           <h3>有 {{ scopeReviewRows.length }} 个目录需要确认属于本批</h3>
           <p>这是范围待确认，不代表文件冲突。旧预览没有记录完整父目录范围，请集中确认以下新发现目录是否属于本次入库。</p>
-          <p>{{ scopeReviewSafeCount }} 个无冲突候选可预选 · {{ scopeReviewRows.length-scopeReviewSafeCount }} 个仍需判断作品身份或目录边界。</p>
+          <p>{{ scopeReviewSafeCount }} 个未发现候选的目录可预选 · {{ scopeReviewRows.length-scopeReviewSafeCount }} 个仍需判断作品身份或目录边界。</p>
           <section v-for="entry in scopeReviewGroups" :key="entry.id"><h4>{{ entry.creatorName }} · {{ entry.rows.length }} 个候选目录</h4><ul><li v-for="row in entry.rows" :key="row.item.key">{{ entry.parent }} / {{ row.item.sourceRelativePath }}</li></ul></section>
           <p>不属于本批的目录请先逐项改为跳过；暂不决定的项目可点“本项保留暂缓”。下方按钮只确认仍待核对的范围并更新未提交选择，不执行入库；已作出的人工决定保持。</p>
-          <button data-test="scope-review-confirm" :disabled="locked" @click="confirmScopeReview">确认这些目录属于本批，并预选无冲突作品</button>
+          <button data-test="scope-review-confirm" :disabled="locked" @click="confirmScopeReview">确认这些目录属于本批，并预选未发现候选的作品</button>
         </section>
         <div class="review-statuses" role="group" aria-label="按处理状态筛选">
           <button v-for="status in reviewStatuses" :key="status.value" :data-test="`review-status-${status.value}`" :aria-pressed="reviewFilter===status.value" @click="reviewFilter=status.value">{{ status.label }} <span>{{ itemsLoading?'…':status.count }}</span></button>
@@ -107,7 +107,7 @@
     <div v-if="reviewPanel&&collection" class="overlay"><section class="dialog" role="dialog" v-admission-dialog="{ close: closeReviewPanel, locked: busy }" aria-modal="true" :aria-label="reviewPanel==='ads'?'广告附件':reviewPanel==='help'?'核对说明':'批次详情'" :data-test="reviewPanel==='details'?'collection-details-dialog':`review-${reviewPanel}-dialog`">
       <div class="heading"><h2>{{ reviewPanel==='ads'?'广告附件':reviewPanel==='help'?'核对说明':'批次详情' }}</h2><button :disabled="busy" @click="closeReviewPanel">关闭</button></div>
       <AdmissionAdsPicker v-if="reviewPanel==='ads'" expanded :entries="allEntries" :locked="locked" :recycle-ads="!pending" @change="invalidateConfirmation" />
-      <template v-else-if="reviewPanel==='help'"><h3>文件整理与选择</h3><p>正常新作品已按原规则预选；人工暂缓、跳过及广告取消保持。可切到“已选入库”逐项检查。</p><p>在本批已选博主父目录内新增、改名或拆分作品目录后，使用“重新读取并核对”。会盘点并保存新预览；新增范围仍须明确核对。更换博主或父目录时，关闭说明后点击步骤条“1 选择图集”，调整后点击“下一步：检查所选图集”。原草稿和已确认计划保留。</p><p>边界提示不代表文件损坏。确认整组属于一套，可逐项选择整套接纳；确为多套时先在等待区整理。不覆盖已有作品，也不用改名掩盖冲突。</p><p>未提交选择仅保存在当前浏览器标签页；后台确认与执行记录由服务端保存。</p><AdmissionAcquisitionPolicy expanded :retry="!!pending" /></template>
+      <template v-else-if="reviewPanel==='help'"><h3>文件整理与选择</h3><p>未发现候选且无目录问题的作品已预选，不代表内容已查重；人工暂缓、跳过及广告取消保持。可切到“已选入库”逐项检查。</p><p>在本批已选博主父目录内新增、改名或拆分作品目录后，使用“重新读取并核对”。会盘点并保存新预览；新增范围仍须明确核对。更换博主或父目录时，关闭说明后点击步骤条“1 选择图集”，调整后点击“下一步：检查所选图集”。原草稿和已确认计划保留。</p><p>边界提示不代表文件损坏。确认整组属于一套，可逐项选择整套接纳；确为多套时先在等待区整理。不覆盖已有作品，也不用改名掩盖冲突。</p><p>未提交选择仅保存在当前浏览器标签页；后台确认与执行记录由服务端保存。</p><AdmissionAcquisitionPolicy expanded :retry="!!pending" /></template>
       <template v-else><dl><dt>批次</dt><dd>{{ collection.id }}</dd><dt>更新时间</dt><dd>{{ time(collection.updatedAt) }}</dd><dt>历史状态</dt><dd>{{ stateLabel(collection.state) }}</dd></dl><p>查看记录不会重新执行入库，原确认计划与历史状态保留。</p><button v-if="collection.state==='draft'" :disabled="busy" @click="refreshCollection()">读取已保存状态</button></template>
     </section></div>
     <div v-if="showConfirm&&collection" class="overlay"><section class="dialog" role="dialog" v-admission-dialog="{ close: () => showConfirm = false, locked: busy }" aria-modal="true" aria-label="确认多博主接纳"><h2>一次确认本批全部范围</h2><p>{{ collection.totals.creators }} 位博主 · {{ selectedCount }} 个接纳目录 · {{ skippedCount }} 跳过 · {{ deferredCount }} 暂缓。</p><div class="confirmation-list"><details v-for="entry in collection.batches" :key="entry.id"><summary><strong>{{ entry.creatorName }}</strong> · {{ batchSummary(entry.id) }}<small>{{ entry.parent }} · 展开核对目录、作品对应和具体广告文件</small></summary><ul><li v-for="pair in contexts[entry.id]?entriesFor(contexts[entry.id]):[]" :key="pair.item.key"><strong>{{ pair.item.sourceRelativePath }}</strong><span>{{ admissionActionLabels[pair.action.action] }}<template v-if="contexts[entry.id].works[pair.item.key]"> → {{ contexts[entry.id].works[pair.item.key].title }}</template><template v-else-if="pair.action.action==='existing'&&pair.action.workId"> → 作品 #{{ pair.action.workId }}（展示资料未缓存）</template><template v-if="pair.action.sameAsKey"> → {{ contexts[entry.id].items.find(item=>item.key===pair.action.sameAsKey)?.sourceRelativePath }}</template></span><small v-if="isAdmissionSelected(pair.action)">{{ pair.item.targetPath }}</small><small v-if="pair.action.primary">使用本目录为主副本，其他副本保留</small><small v-for="ad in pair.action.approvedAds" :key="ad">{{ recyclesAds(entry.id)?'广告送入Windows回收站：':'按原请求移至可恢复附件区：' }}{{ ad }}</small></li></ul></details></div><AdmissionAcquisitionPolicy :retry="!!pending" /><p>跳过 / 暂缓不删除，目标已存在不覆盖。入库完成后，本批已清空且无活动任务的博主父目录送入Windows回收站；非空目录保留。</p><p v-if="selectionError" class="error">{{ selectionError }}</p><p v-if="error" role="alert" class="error">{{ error }}</p><label class="check"><input v-model="confirmed" type="checkbox" />确认上述所有博主、目录及作品选择；当前文件没有继续写入</label><label v-if="adsCount" class="check warning"><input v-model="adsConfirmed" type="checkbox" />另行批准列出的 {{ adsCount }} 个明确广告文件按上述方式处理，其他附件保留</label><p v-if="executeBlockReason" class="action-reason" role="status">{{ executeBlockReason }}</p><div class="dialog-actions"><button :disabled="busy" @click="showConfirm=false">返回核对</button><button class="primary" data-test="collection-execute" :disabled="busy||!confirmed||(adsCount>0&&!adsConfirmed)||!!selectionError" @click="execute">{{ busy?'提交中…':pending?'重试原请求':`确认入库 ${selectedCount} 个目录` }}</button></div></section></div>
@@ -179,7 +179,7 @@ function confirmScopeReview(){
   if(locked.value)return;
   const count=scopeReviewRows.value.length,safe=scopeReviewSafeCount.value;
   for(const row of scopeReviewRows.value)row.context.actions[row.item.key]=confirmAdmissionScope(row.item,row.context.actions[row.item.key]);
-  invalidateConfirmation();notice.value=`已确认 ${count} 个目录属于本批，预选 ${safe} 个无冲突作品；其余仍需判断。尚未执行入库。`;
+  invalidateConfirmation();notice.value=`已确认 ${count} 个目录属于本批，预选 ${safe} 个未发现候选的作品；其余仍需判断。尚未执行入库。`;
 }
 const reviewStatuses=computed(()=>[{value:'pending',label:'需处理',count:reviewEntries.value.filter(needsAttention).length},{value:'selected',label:'已选入库',count:selectedCount.value},{value:'defer',label:'暂缓',count:deferredCount.value},{value:'skip',label:'跳过',count:skippedCount.value},{value:'all',label:'全部',count:allEntries.value.length},...(hasLaterCompletion.value?[{value:'completed_later',label:'后续已完成',count:allEntries.value.filter(entry=>isAdmissionCompletedLater(entry.item)).length}]:[])]);
 function pendingFor(id:string){return reviewEntries.value.filter(row=>row.context.batch.id===id&&needsAttention(row)).length;}
@@ -306,7 +306,7 @@ function selectSafe(restored?:Set<string>){
   for(const context of Object.values(contexts))for(const item of context.items){
     if(restored&&(restored.has(`${context.batch.id}:${item.key}`)||item.suggestedAction))continue;
     if(isAdmissionSafeCandidate(item)&&context.actions[item.key]?.action==='defer'&&context.actions[item.key]?.selectionOrigin==='automatic')
-      context.actions[item.key]={...admissionAction(item,'new',context.actions[item.key]),selectionOrigin:'automatic',reason:'检查后预选无冲突的新作品，待用户最终确认'};
+      context.actions[item.key]={...admissionAction(item,'new',context.actions[item.key]),selectionOrigin:'automatic',reason:'检查后预选未发现候选的作品，待用户最终确认'};
   }
   adsConfirmed.value=false;saveDraft();
 }

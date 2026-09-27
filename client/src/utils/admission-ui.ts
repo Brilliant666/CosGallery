@@ -1,11 +1,13 @@
 import type { AdmissionAction, AdmissionActionKind, AdmissionItem } from '../types/local-admission';
 
 export interface AdmissionEntry { item:AdmissionItem; action:AdmissionAction }
-export const admissionGroups = {A:'无冲突的新作品',B:'已有作品候选，待本次确认',C:'同名 / 副本需确认',D:'冲突 / 需整理'};
+export const admissionGroups = {A:'未找到已有作品候选',B:'已有作品候选，需确认',C:'相似标题 / 已有目录关系',D:'多候选 / 路径或结构需核对'};
+export const admissionReviewIssueLabels = {title_exact:'标题精确命中，不代表内容相同',title_similar:'标题相似，仅供人工比对',multiple_candidates:'存在多个已有作品候选',existing_path:'目标目录已有作品关系',target_conflict:'目标路径已占用，不会覆盖',structure:'目录结构需要核对',read_error:'目录读取或预览失败'};
+export const admissionMatchLabels = {exact:'标题精确命中',similar:'标题相似候选',path:'已有目录关系'};
 export const admissionActionLabels = {new:'新独立作品',existing:'对应已有作品','same-as':'与本批目录同套',skip:'跳过',defer:'暂缓'};
 export const isAdmissionSelected = (action:AdmissionAction) => ['new','existing','same-as'].includes(action.action);
 export const isAdmissionCompletedLater = (item:AdmissionItem) => item.currentDisposition?.status==='completed_later';
-export const isAdmissionSafeCandidate = (item:AdmissionItem) => !item.currentDisposition&&item.group==='A'&&!item.candidates.length&&!item.conflicts.length&&!item.structureWarnings?.length&&!item.needsBoundaryReview;
+export const isAdmissionSafeCandidate = (item:AdmissionItem) => !item.currentDisposition&&item.group==='A'&&!item.candidates.length&&!item.conflicts.length&&!item.structureWarnings?.length&&!item.needsBoundaryReview&&!item.reviewIssues?.length&&!item.candidatesTruncated;
 export const mediaSize = (value:number) => value>=1024**3?`${(value/1024**3).toFixed(2)} GiB`:value>=1024**2?`${(value/1024**2).toFixed(2)} MiB`:`${value} B`;
 export const admissionScopeReviewReason = '旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品';
 /** Reconcile unsubmitted system defaults only; never reinterpret an explicit user choice. */
@@ -22,7 +24,7 @@ export function normalizeAdmissionScopeAction(item:AdmissionItem,action:Admissio
 export function confirmAdmissionScope(item:AdmissionItem,previous:AdmissionAction):AdmissionAction {
   if(isAdmissionCompletedLater(item)||previous.selectionOrigin!=='scope-review'||previous.action!=='defer')return previous;
   return {...admissionAction(item,isAdmissionSafeCandidate(item)?'new':'defer',previous),selectionOrigin:'automatic',scopeConfirmed:true,
-    reason:isAdmissionSafeCandidate(item)?'用户确认本批目录范围，预选无冲突作品，待最终确认执行':'本批目录范围已确认，作品身份或目录边界仍需核对'};
+    reason:isAdmissionSafeCandidate(item)?'用户确认本批目录范围，预选未发现候选的作品，待最终确认执行':'本批目录范围已确认，作品身份或目录边界仍需核对'};
 }
 function cancelledAdmissionAds(action:AdmissionAction,ads:AdmissionItem['ads']):string[]{
   return [...new Set([...(action.cancelledAds??[]),...(isAdmissionSelected(action)?ads.filter(ad=>!action.approvedAds?.includes(ad.relativePath)).map(ad=>ad.relativePath):[])])];
