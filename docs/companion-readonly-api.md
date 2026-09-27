@@ -1,6 +1,6 @@
 # Companion 最小只读接口（v1）
 
-本契约供独立 **CosGallery Companion** 浏览辅助插件使用，不是 CostuanArchiveManager 改名，也不是采集 bridge 的另一组权限。当前为独立 Draft 候选；发布前的4141不会因本文件出现而自动获得接口。
+本契约供独立 **CosGallery Companion** 浏览辅助插件使用，不是 CostuanArchiveManager 改名，也不是采集 bridge 的另一组权限。PR49持续迭代；部署版本以实际构建信息与`/connection`能力为准，文档出现不等于旧实例已支持新增接口。
 
 基线：PR48合并后的 `c5ef42abf0795ec59499f83431b3eb5b81ba9699`。插件在 `costuan.com` / `www.costuan.com`、`ecytt02.com`、`sndiary02.com` 页面提取有限身份线索；服务端不访问这些网站、不代理任意 URL、不登记来源、不增别名、不触发下载或入库。
 
@@ -44,6 +44,35 @@
 返回 `apiVersion:'companion-v1'`、`instanceId`、`label`、`grantId`、`permissionFingerprint`、`scopes`、`expiresAt`、`countPolicyVersion`、`queriedAt` 和 `capabilities`。
 
 能力字段：`batchResolve`、`creatorSearch`、`creatorSummary`、`libraryLink`、`catalogLink`、`maxBatchItems:50`、`maxBodyBytes:32768`、`mutations:false`。权限指纹绑定实例、grant、扩展来源、权限及到期时间；不包含原始密钥。
+
+支持完整离线名单同步的版本另返回`rosterSync:true`、`aliasSync:true`、`maxRosterPageSize:50`、`maxAliasPageSize:200`、`maxPageBytes:262144`。旧版本缺少能力时不要以关键词搜索或伪造页面解析请求代替完整同步。
+
+### GET /roster 与 GET /aliases
+
+两端点复用专用授权、Origin边界、`identity:read`和现有限流。只读，不调用扫描、编目、登记关系或重建服务；不新增迁移。只包含当前有效博主。
+
+| 参数 | 规则 |
+| --- | --- |
+| `limit` | 正整数；roster默认/最大50，aliases默认/最大200；均可调小到1 |
+| `identityVersion` | 64位小写十六进制共同身份版本；roster首个无游标请求可省略，其他请求必填，包括aliases首个请求 |
+| `cursor` | 服务端返回的不透明游标，最长512字符；原样URL编码携带，不能在两个端点间互换 |
+
+响应包含现有上下文`apiVersion、instanceId、label、grantId、permissionFingerprint、scopes、expiresAt、countPolicyVersion、queriedAt`，另有`identityVersion、total、nextCursor、items`。`total`是该端点整个身份集合的记录数，不是本页长度。最后一页`nextCursor:null`；空库明确返回`items:[]、total:0、nextCursor:null`。
+
+- roster按`creatorId`升序；每项为`creatorId、canonicalName、collectedWorkCount、countPolicyVersion、readModel、dataVersion、dataUpdatedAt、queriedAt、links`。有`summary:read`时直接复用现有`summary()`；未就绪数量null，没有摘要权限时完全不读统计，返回null/permission_denied与纯身份版本。`links`只包含获准的图库/资源目录链接。
+- aliases按`creatorId`及原文alias的BINARY顺序；每项只有`{creatorId,alias}`。同一博主相同原文别名跨来源去重，不返回来源、URL、私人资料或内部ID；跨博主相同别名保留两条，大小写等不同原文仍可分别存在。
+- `identityVersion`是有效博主ID、规范名及上述去重别名集合的共同指纹，与作品数量和来源私密信息无关。两个端点、所有页共享；任意改名、增删身份/别名或启停导致版本变化。统计变化不改变此版本。
+- 每页只在一个短只读事务中核对版本、取身份与该页摘要，不保持跨HTTP长事务。名单身份一致**不代表全部摘要来自同一时刻**；保留逐项摘要版本和查询时间，客户端显示整轮同步完成时间。
+- 请求版本与当前身份集合不一致返回409 `COMPANION_IDENTITY_CHANGED`，数量null、没有items。缺少必需版本、非法游标/端点混用或参数返回400 `INVALID_COMPANION_REQUEST`。整页JSON超过256KiB返回413 `COMPANION_PAGE_TOO_LARGE`，不截断；客户端可降低limit重试，单项仍超限则报告同步失败。
+
+推荐同步顺序：
+
+1. 验证connection的实例/授权/权限及新增能力；GET `/roster?limit=50`取得版本。
+2. roster后续页携带该版本和nextCursor；GET `/aliases?limit=200&identityVersion=...`并同样翻至结束。
+3. 最后GET `/roster?limit=1&identityVersion=...`重新核对身份版本和授权；检查上下文不变、两个total收齐、无重复条目或悬空creatorId。
+4. 只有全部成功才用整份新数据替换旧本地集合；409丢弃本轮暂存，有界重试。网络/限流/格式/容量失败保留上次完整集合，不发布半份。401/403、连接切换、撤销及到期仍执行原安全清理边界。
+
+这两个端点不包含完整来源归属，离线名称匹配不能声称完整复现在线resolve的来源冲突判断。完整本地名单和手工同步属于独立插件实现，不会由服务端主动同步到浏览器。
 
 ### POST /resolve
 
@@ -117,9 +146,9 @@ pageType为`creator | resource | publisher | organization | multi_person | unkno
 
 摘要不返回磁盘路径、密码、偏好、来源资料正文、任务历史或媒体清单。仅相应scope存在时返回同实例相对跳转：`/library/{creatorId}`、`/archive-catalog?workspace=resources&creatorId={creatorId}`。插件应基于已连接服务地址解析；网页本身仍需要正常登录，Bearer不能换取网页/管理权限。
 
-缓存键至少包含：`instanceId + grantId + permissionFingerprint + 查询对象(含site/pageType/path/names或creatorId) + countPolicyVersion`，并关联dataVersion。不同实例中相同creatorId不是同一身份。
+查询缓存键至少包含：`instanceId + grantId + permissionFingerprint + 查询对象(含site/pageType/path/names或creatorId) + countPolicyVersion`，并关联dataVersion。完整离线名单亦按实例、授权、权限、计数口径隔离，并保存共同identityVersion及逐项摘要版本。不同实例中相同creatorId不是同一身份。
 
-HTTP缓存禁止；插件若保留展示快照，必须标记旧快照并在使用前重新验证**相同查询**。仅connection成功不证明旧统计或身份版本仍有效。401/403/到期/撤销、连接失败、未知API或未就绪后，清除可用数据状态，数量显示null/未知，不能继续显示为已授权当前事实。不得离线使用旧“0”作下载建议。每次服务端读取现查grant，旧If-None-Match/缓存不能绕过撤销。
+HTTP缓存禁止；仅connection成功不证明旧统计或身份版本仍有效。原查询缓存重新作为在线当前结果使用时须验证相同查询。用户主动完整同步的离线名单可以显示上次同步的身份与摘要，但必须说明同步时间，不能冒充当前在线事实；网络失败保留完整旧名单，不把旧“0”作下载建议。已知401/403/到期/撤销仍使授权数据不可用；离线无法立即感知远端撤销，重新连接验证后必须执行撤销。每次服务端读取现查grant，旧游标/版本/缓存不能绕过撤销。
 
 典型错误：400参数错误、401专用授权失效、403来源或scope不足、404身份/接口不存在、413正文过大、429频率限制、500未知服务故障；本协议错误响应数量null，不能当0。更外层Host拒绝也按失败处理，不依赖一定存在数量字段。错误不返回底层堆栈、路径、凭据。插件网络失败自行采用同样null语义。
 
@@ -127,4 +156,4 @@ HTTP缓存禁止；插件若保留展示快照，必须标记旧快照并在使�
 
 合成内存库覆盖重复副本、有效次副本、source-only、删除/回收、不可用索引、未编排、歧义和来源冲突、版本失效；`PRAGMA query_only`及全表前后比较验证读取无领域/派生写入，spy验证不触发rebuild。真实Express隔离HTTP覆盖管理创建/撤销、401/403、权限裁剪、Host/CORS/CSRF保持、批量/正文限制和部分失败；临时端口由测试分配，不使用4141/4241。
 
-不复制正式数据库、.env、Cookie或插件存储。此次仅开发、测试和Draft PR；没有正式部署、重启、真实绑定或采集。未来插件的实际安装、跨浏览器连接、页面提取及缓存实现仍由Companion任务按本契约完成；这些不能冒称本次已端到端验收。
+初始开发使用合成数据；后续经用户授权部署候选，并以只读测量发现和修复摘要SQL连接顺序造成的同步阻塞。实际部署记录、精确Head CI和插件验收分别记录，不将接口或隔离测试冒称为插件端到端验收。无真实绑定或采集；完整名单接口不授权修改身份、来源或既有任务。

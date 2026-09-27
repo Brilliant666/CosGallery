@@ -4,16 +4,24 @@ import { databaseManager } from '../db/database.js';
 import { isLoopbackAddress } from '../services/archive-bridge-service.js';
 import { CompanionGrantService, CompanionAccessError, extensionOriginSchema } from '../services/companion-grant-service.js';
 import { CompanionReadService, CompanionReadError, COUNT_POLICY_VERSION, type CompanionIdentity } from '../services/companion-read-service.js';
+import { CompanionDirectoryService } from '../services/companion-directory-service.js';
 import { createRateLimiter } from '../middleware/rate-limit.js';
 import { companionAccessErrors } from './companion-grant-routes.js';
 
 type Access = ReturnType<CompanionGrantService['authenticate']>;
+const MAX_DIRECTORY_PAGE_BYTES = 262_144;
+const directoryQuery = (max: number) => z.object({
+  limit: z.coerce.number().int().min(1).max(max).default(max),
+  cursor: z.string().min(1).max(512).optional(),
+  identityVersion: z.string().regex(/^[a-f0-9]{64}$/).optional()
+}).strict();
 
 /** Independent bearer surface. Never accepts browser sessions/bridge tokens and
  * never mounts the ordinary mutation router under its narrow CORS policy. */
 export function createCompanionRouter(
   grants = () => new CompanionGrantService(),
-  reader = () => new CompanionReadService(databaseManager.connection)
+  reader = () => new CompanionReadService(databaseManager.connection),
+  directory = () => new CompanionDirectoryService(databaseManager.connection, reader())
 ) {
   const router = express.Router();
   router.use((request, response, next) => {
@@ -85,8 +93,25 @@ export function createCompanionRouter(
     response.json({ ...context(response), capabilities: {
       batchResolve: true, creatorSearch: true, creatorSummary: has(response, 'summary:read'),
       libraryLink: has(response, 'library:link'), catalogLink: has(response, 'catalog:link'),
-      maxBatchItems: 50, maxBodyBytes: 32_768, mutations: false
+      maxBatchItems: 50, maxBodyBytes: 32_768, mutations: false,
+      rosterSync: true, aliasSync: true, maxRosterPageSize: 50, maxAliasPageSize: 200,
+      maxPageBytes: MAX_DIRECTORY_PAGE_BYTES
     } });
+  });
+  const sendDirectory = (response: express.Response, body: unknown) => {
+    if (Buffer.byteLength(JSON.stringify(body), 'utf8') > MAX_DIRECTORY_PAGE_BYTES) {
+      throw new CompanionReadError(413, 'COMPANION_PAGE_TOO_LARGE', '只读同步页过大，请减小每页数量后重试。');
+    }
+    response.json(body);
+  };
+  router.get('/roster', (request, response) => {
+    const input = directoryQuery(50).parse(request.query);
+    const result = directory().roster(input, { includeSummary: has(response, 'summary:read') });
+    sendDirectory(response, { ...context(response), ...result, items: result.items.map(item => links(response, item)) });
+  });
+  router.get('/aliases', (request, response) => {
+    const input = directoryQuery(200).parse(request.query);
+    sendDirectory(response, { ...context(response), ...directory().aliases(input) });
   });
   router.get('/creators', (request, response) => {
     const input = z.object({ q: z.string().trim().min(1).max(120), limit: z.coerce.number().int().min(1).max(30).default(20) }).strict().parse(request.query);

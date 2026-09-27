@@ -63,6 +63,7 @@ describe.sequential('Companion real HTTP boundary on synthetic database', () => 
     const result = await requestTestApp(app, 'GET', endpoint, plugin());
     expect(result.status).toBe(200); expect(result.body.apiVersion).toBe('companion-v1');
     expect(result.body.capabilities.mutations).toBe(false); expect(result.headers.get('cache-control')).toBe('no-store');
+    expect(result.body.capabilities).toMatchObject({ rosterSync: true, aliasSync: true, maxRosterPageSize: 50, maxAliasPageSize: 200, maxPageBytes: 262144 });
     expect((await requestTestApp(app, 'GET', '/api/admin/local-ingest/operation', plugin())).status).toBe(401);
     expect((await requestTestApp(app, 'GET', '/api/library', plugin())).status).toBe(401);
   });
@@ -124,13 +125,58 @@ describe.sequential('Companion real HTTP boundary on synthetic database', () => 
     expect(summary.status).toBe(403); expect(summary.body.collectedWorkCount).toBeNull();
     const resolved = await requestTestApp(app, 'POST', '/api/companion/v1/resolve', headers, { items: [item] });
     expect(resolved.body.items[0]).toMatchObject({ collectedWorkCount: null, readModel: { status: 'permission_denied' }, creator: { links: {} } });
+    const roster = await requestTestApp(app, 'GET', '/api/companion/v1/roster', headers);
+    expect(roster.status).toBe(200);
+    expect(roster.body.items[0]).toMatchObject({ creatorId: 1, collectedWorkCount: null, readModel: { status: 'permission_denied' }, links: {} });
+    const aliases = await requestTestApp(app, 'GET', `/api/companion/v1/aliases?identityVersion=${roster.body.identityVersion}`, headers);
+    expect(aliases.status).toBe(200); expect(aliases.body.identityVersion).toBe(roster.body.identityVersion);
+  });
+
+  it('pages authorized roster/aliases with shared identity consistency and unchanged DB', async () => {
+    const db = manager.connection;
+    db.exec(`INSERT INTO archive_catalog_creators(id,canonical_name,normalized_name,seed_source,seed_source_creator_id) VALUES(2,'Second','second','synthetic','2');
+      INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(1,'Shared','shared','one'),(1,'Shared','shared','two'),(2,'Shared','shared','one')`);
+    const before = db.prepare('SELECT total_changes() n').get();
+    for (const path of ['/roster', '/aliases']) expect((await requestTestApp(app, 'GET', '/api/companion/v1' + path, host)).status).toBe(401);
+    const first = await requestTestApp(app, 'GET', '/api/companion/v1/roster?limit=1', plugin());
+    expect(first.status).toBe(200); expect(first.body.total).toBe(2); expect(first.body.items).toHaveLength(1);
+    expect(first.body.items[0]).toMatchObject({ creatorId: 1, canonicalName: 'Fixture', collectedWorkCount: null, readModel: { status: 'uninitialized' }, links: { library: '/library/1' } });
+    const version = first.body.identityVersion;
+    expect(version).toMatch(/^[a-f0-9]{64}$/);
+    const next = await requestTestApp(app, 'GET', `/api/companion/v1/roster?limit=1&identityVersion=${version}&cursor=${encodeURIComponent(first.body.nextCursor)}`, plugin());
+    expect(next.status).toBe(200); expect(next.body.items[0].creatorId).toBe(2); expect(next.body.nextCursor).toBeNull();
+    expect(next.body).toMatchObject({ identityVersion: version, instanceId: first.body.instanceId, grantId: first.body.grantId, permissionFingerprint: first.body.permissionFingerprint });
+    const aliases = await requestTestApp(app, 'GET', `/api/companion/v1/aliases?identityVersion=${version}`, plugin());
+    expect(aliases.status).toBe(200); expect(aliases.body.total).toBe(2);
+    expect(aliases.body.items).toEqual([{ creatorId: 1, alias: 'Shared' }, { creatorId: 2, alias: 'Shared' }]);
+    for (const path of ['/aliases', '/roster?limit=51', '/aliases?limit=201', '/roster?identityVersion=bad', `/roster?cursor=${first.body.nextCursor}`]) {
+      const invalid = await requestTestApp(app, 'GET', '/api/companion/v1' + path, plugin());
+      expect(invalid.status).toBe(400); expect(invalid.body.collectedWorkCount).toBeNull();
+    }
+    expect(db.prepare('SELECT total_changes() n').get()).toEqual(before);
+    db.exec("UPDATE archive_catalog_creators SET canonical_name='Renamed' WHERE id=2");
+    for (const path of ['/roster', '/aliases']) {
+      const changed = await requestTestApp(app, 'GET', `/api/companion/v1${path}?identityVersion=${version}`, plugin());
+      expect(changed.status).toBe(409); expect(changed.body).toMatchObject({ code: 'COMPANION_IDENTITY_CHANGED', collectedWorkCount: null });
+    }
+  });
+
+  it('rejects an oversized directory response rather than silently truncating it', async () => {
+    const db = manager.connection;
+    const old = db.prepare('SELECT canonical_name FROM archive_catalog_creators WHERE id=2').get()!.canonical_name;
+    try {
+      db.prepare('UPDATE archive_catalog_creators SET canonical_name=? WHERE id=2').run('大'.repeat(100000));
+      const result = await requestTestApp(app, 'GET', '/api/companion/v1/roster', plugin());
+      expect(result.status).toBe(413); expect(result.body).toMatchObject({ code: 'COMPANION_PAGE_TOO_LARGE', collectedWorkCount: null });
+      expect(result.body.items).toBeUndefined();
+    } finally { db.prepare('UPDATE archive_catalog_creators SET canonical_name=? WHERE id=2').run(old); }
   });
 
   it('revocation immediately invalidates connection and cached-result revalidation', async () => {
     const endpoint = '/api/admin/companion/grants/' + grantId;
     expect((await requestTestApp(app, 'DELETE', endpoint, plugin())).status).toBe(403);
     expect((await requestTestApp(app, 'DELETE', endpoint, admin())).status).toBe(200);
-    for (const route of ['/connection', '/creators/1', '/creators?q=Fix']) {
+    for (const route of ['/connection', '/creators/1', '/creators?q=Fix', '/roster', '/aliases']) {
       const result = await requestTestApp(app, 'GET', '/api/companion/v1' + route, plugin());
       expect(result.status).toBe(401); expect(result.body.collectedWorkCount).toBeNull();
     }
