@@ -13,6 +13,7 @@ import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '..
 import { recycleEmptyAdmissionParent, type AdmissionParentCleanupResult } from './local-admission-parent-cleanup.js';
 import { laterAdmissionCompletions, admissionItemIdentity, assertNoLaterAdmissionCompletion, type CurrentAdmissionDisposition } from './local-admission-later-completion.js';
 import { LocalAdmissionTitleCandidates, type AdmissionMatchEvidence, type AdmissionPeerCandidate } from './local-admission-title-candidates.js';
+import { assertNewAdmissionOwnership, ownershipErrorPlan, ownershipErrorText } from './local-admission-plan-ownership.js';
 
 const ROOT_KEY = 'local-admission.waiting-root.v1';
 const reservedDirectory = (name:string) => /^\.local-(?:admission|review)-/i.test(name);
@@ -74,6 +75,10 @@ const hash = (value:unknown) => createHash('sha256').update(JSON.stringify(value
 const same = (a:string,b:string) => process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b);
 const message = (e:unknown) => e instanceof Error ? e.message : String(e);
 export class AdmissionWebError extends Error { constructor(text:string,readonly status=409){super(text);} }
+function confirmationOwnershipError(error:unknown):unknown {
+  const planId=ownershipErrorPlan(message(error));
+  return planId?new AdmissionWebError(`${ownershipErrorText(message(error))} 所属批次：${planId}。`):error;
+}
 function alive(pid:number|null) { if (!pid) return false; try {process.kill(pid,0);return true;} catch(e) {return (e as NodeJS.ErrnoException).code !== 'ESRCH';} }
 async function strictDirectory(value:string) {
   if (!path.isAbsolute(value)) throw new AdmissionWebError('等待区必须是绝对路径',400);
@@ -317,6 +322,11 @@ export class LocalAdmissionWebService {
     }
   }
   private effectiveState(row:Pick<Batch,'state'|'owner_pid'>){return ['queued','running'].includes(row.state)&&!alive(row.owner_pid)?'interrupted':row.state;}
+  private blockingBatch(error:string|null,creatorId:number) {
+    const id=ownershipErrorPlan(error);if(!id)return undefined;
+    const row=this.db.prepare('SELECT id FROM local_admission_web_batches WHERE id=? AND creator_id=?').get(id,creatorId);
+    return row?{batchId:id,collectionId:this.collectionId(id)}:undefined;
+  }
   get(id:string,later=laterAdmissionCompletions(this.db,[id])) {
     // No manifest/content reads, hashing or directory traversal on progress polling.
     const row=this.db.prepare(`SELECT id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,error,owner_pid,context_json FROM local_admission_web_batches WHERE id=?`).get(id) as Omit<Batch,'confirmed_json'|'owner_token'>|undefined;
@@ -333,7 +343,8 @@ export class LocalAdmissionWebService {
     const cleanupMessage=cleanup?({recycled:'空博主目录已放入回收站',not_empty:'父目录仍有内容，已保留',not_applicable:'父目录已不存在，无需清理',failed:'空目录清理未完成，已入库作品不受影响'}[cleanup.status]
       +(cleanup.message?`：${cleanup.message}`:'')+(cleanup.retainedPath?`；保留位置：${cleanup.retainedPath}`:'')):undefined;
     return {id,planId:id,collectionId:this.collectionId(id),creatorId:row.creator_id,creatorName:String(this.db.prepare('SELECT canonical_name FROM archive_catalog_creators WHERE id=?').get(row.creator_id)?.canonical_name??''),
-      inputRoot:row.input_root,sourceEvidenceId:row.source_evidence_id,state:reconciled?'completed':this.effectiveState(row),createdAt:row.created_at,updatedAt:row.updated_at,error:reconciled?null:row.error,
+      inputRoot:row.input_root,sourceEvidenceId:row.source_evidence_id,state:reconciled?'completed':this.effectiveState(row),createdAt:row.created_at,updatedAt:row.updated_at,error:reconciled?null:ownershipErrorText(row.error),
+      ...(!reconciled?{blockingBatch:this.blockingBatch(row.error,row.creator_id)}:{}),
       ...(cleanup?{parentCleanup:{...cleanup,message:cleanupMessage!}}:{}),
       currentTotals:{completedLater,pending:Math.max(0,Number(counts.total)-Number(counts.skipped??0)-completed-completedLater),unresolved},
       totals:{total:Number(counts.total),selected:Number(counts.selected??0),completed,skipped:Number(counts.skipped??0),deferred:Number(counts.deferred??0)}};
@@ -386,7 +397,8 @@ export class LocalAdmissionWebService {
       return {...summary,action:String(r.action),state,executionState:r.state??null,...this.itemNextAction(batch,r,blocked),
         ...(currentDisposition?{currentDisposition}:{}),
         ...(currentDisposition?.status==='completed_later'?{nextAction:'none' as const,nextActionReason:'历史批次未完成；本项已在后续批次完成，请查看后续结果。'}:{}),
-        lastError:r.last_error??null,workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
+        ...(currentDisposition?.status!=='completed_later'&&ownershipErrorPlan(r.last_error==null?null:String(r.last_error))?{nextAction:'none' as const,nextActionReason:'请查看上方提示中的所属批次；这不是文件损坏审核，不要移动或删除文件。'}:{}),
+        lastError:ownershipErrorText(r.last_error==null?null:String(r.last_error)),workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
   }
   private itemNextAction(batch:ReturnType<LocalAdmissionWebService['get']>,item:Record<string,unknown>,blocked:string|null):NextAction {
     const none=(nextActionReason:string):NextAction=>({nextAction:'none',nextActionReason});
@@ -737,7 +749,8 @@ export class LocalAdmissionWebService {
         await this.admission.verifyUnstarted(next.plan);
       }
       prepared.push(next);
-    }}catch(e){if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);throw e;}
+    }}catch(e){if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);
+      throw confirmationOwnershipError(e);}
     // Filesystem reads above do not hold a SQLite read snapshot. Commit all children
     // under one fresh write transaction; no child can run before the last validates.
     if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);
@@ -890,6 +903,7 @@ export class LocalAdmissionWebService {
     if(!same(context.waitingRoot,this.settings().waitingRoot)||!same(context.galleryRoot,this.galleryRoot))throw new AdmissionWebError('配置已改变，请重新预览');
     this.creator(batch.creator_id);this.assertCreatorIdle(batch.creator_id);
     this.assertNotCompletedLater(batch.id,plan?.items.map(item=>item.key)??[]);
+    if(plan){try{assertNewAdmissionOwnership(this.db,plan);}catch(error){throw confirmationOwnershipError(error);}}
     for(const item of plan?.items??[]) {
       if(item.identity.kind==='existing'&&context.workFacts[String(item.identity.workId)]!==this.workFact(item.identity.workId!))throw new AdmissionWebError('准备期间作品身份已变化，请重新预览');
       if(item.acceptVersions.some(a=>context.sourceFacts[String(a.sourceWorkId)]!==this.sourceFact(a.sourceWorkId)))throw new AdmissionWebError('准备期间来源或任务已变化，请重新预览');

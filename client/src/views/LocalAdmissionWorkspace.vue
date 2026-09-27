@@ -80,7 +80,7 @@
           <div class="heading"><h3>{{ entry.creatorName }}</h3><span>{{ batchStateLabel(entry.state) }}</span></div>
           <p>{{ entry.totals.completed }} 已完成 · {{ entry.totals.skipped }} 跳过 · {{ entry.totals.deferred }} 暂缓</p><AdmissionCurrentTotals :totals="entry.currentTotals" />
           <RouterLink v-if="entry.totals.completed" class="primary gallery-link" :to="{name:'canonical-creator',params:{creatorId:entry.creatorId}}">查看本博主图库</RouterLink>
-          <p v-if="entry.error" class="error">{{ entry.error }}</p>
+          <p v-if="entry.error" class="error">{{ entry.error }} <AdmissionBlockingBatchLink :batch="entry" /></p>
           <details :open="resultItems(entry.id).length>0"><summary>目录明细与处理入口 · {{ resultItems(entry.id).length }} 项当前展开范围</summary>
             <ul><li v-for="item in resultItems(entry.id)" :key="item.key">
               <strong>{{ item.sourceRelativePath }}</strong><span>{{ isAdmissionCompletedLater(item)?'原状态：':'' }}{{ itemPhase(item) }}</span>
@@ -127,6 +127,7 @@ import AdmissionAcquisitionPolicy from '../components/AdmissionAcquisitionPolicy
 import AdmissionAdsPicker from '../components/AdmissionAdsPicker.vue';
 import AdmissionCurrentDisposition from '../components/AdmissionCurrentDisposition.vue';
 import AdmissionCurrentTotals from '../components/AdmissionCurrentTotals.vue';
+import AdmissionBlockingBatchLink from '../components/AdmissionBlockingBatchLink.vue';
 import * as api from '../api/local-admission';
 import { RequestError } from '../api/http';
 import { carryRefreshedChoices,clearAdmissionDraft,lastAdmissionCollection,rememberAdmissionCollection,restoreAdmissionDraft,saveAdmissionDraft } from '../utils/admission-navigation';

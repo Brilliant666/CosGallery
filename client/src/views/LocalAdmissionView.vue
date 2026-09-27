@@ -20,7 +20,7 @@
       <div v-if="directories?.items.length" class="stage-actions"><div><span>将检查 {{ selectedNames.length }} 个目录</span><p v-if="previewBlockReason" id="single-preview-reason" class="action-reason">{{ previewBlockReason }}</p></div><button class="primary" data-test="admission-preview" aria-describedby="single-preview-reason" :disabled="busy || directoryLoading || !!directoryError || !parent || !selectedNames.length" @click="preview">{{ busy ? '正在检查所选图集…' : '下一步：检查所选图集' }}</button></div>
     </section>
     <template v-if="batch">
-      <section class="panel" aria-label="批次状态"><div class="section-heading"><h2>{{ stateLabel(batch.state) }}</h2><button :disabled="busy" @click="refreshBatch()">读取最新状态</button></div><p>{{ batch.totals.completed }} 已完成 · {{ batch.totals.selected }} 确认接纳 · {{ batch.totals.skipped }} 跳过 · {{ batch.totals.deferred }} 暂缓</p><AdmissionCurrentTotals :totals="batch.currentTotals" /><p v-if="active" role="status">服务端正在执行。关闭页面不会取消；稍后通过“最近导入批次”继续查看。{{ pollFailures ? '暂时无法刷新，可手动读取最新状态。' : '' }}</p><p v-if="batch.error" class="error">{{ batch.error }}</p><details><summary>技术详情</summary><dl><dt>批次</dt><dd>{{ batch.id }}</dd><dt>原计划</dt><dd>{{ batch.planId || '尚未确认' }}</dd><dt>更新时间</dt><dd>{{ batch.updatedAt }}</dd><dt>输入根目录</dt><dd>{{ batch.inputRoot }}</dd></dl></details></section>
+      <section class="panel" aria-label="批次状态"><div class="section-heading"><h2>{{ stateLabel(batch.state) }}</h2><button :disabled="busy" @click="refreshBatch()">读取最新状态</button></div><p>{{ batch.totals.completed }} 已完成 · {{ batch.totals.selected }} 确认接纳 · {{ batch.totals.skipped }} 跳过 · {{ batch.totals.deferred }} 暂缓</p><AdmissionCurrentTotals :totals="batch.currentTotals" /><p v-if="active" role="status">服务端正在执行。关闭页面不会取消；稍后通过“最近导入批次”继续查看。{{ pollFailures ? '暂时无法刷新，可手动读取最新状态。' : '' }}</p><p v-if="batch.error" class="error">{{ batch.error }} <AdmissionBlockingBatchLink :batch="batch" /></p><details><summary>技术详情</summary><dl><dt>批次</dt><dd>{{ batch.id }}</dd><dt>原计划</dt><dd>{{ batch.planId || '尚未确认' }}</dd><dt>更新时间</dt><dd>{{ batch.updatedAt }}</dd><dt>输入根目录</dt><dd>{{ batch.inputRoot }}</dd></dl></details></section>
       <section v-if="batch.state === 'draft'" class="panel" aria-label="预览与确认">
         <h2>先处理需要判断的图集，再查看入库确认</h2><p class="selection-summary">{{ selectedCount }} 个选择入库 · {{ deferredCount }} 个本次暂缓 · {{ skippedCount }} 个本次跳过</p><details class="hint"><summary>如何核对作品边界和对应关系</summary><p>候选不是已批准关系。单博主旧入口默认暂缓，可集中选择未发现候选的作品。复杂目录只按选中目录作为一套，不自动拆合；已有人工选择不会被自动更改。</p></details>
         <p v-if="items.some(item => item.suggestedAction)" class="hint">已保留未变化项目的上次选择，仍需本次确认。发生变化或无法复用的项目暂缓，不会自动执行。</p>
@@ -50,6 +50,7 @@ import AdmissionAcquisitionPolicy from '../components/AdmissionAcquisitionPolicy
 import AdmissionAdsPicker from '../components/AdmissionAdsPicker.vue';
 import AdmissionCurrentDisposition from '../components/AdmissionCurrentDisposition.vue';
 import AdmissionCurrentTotals from '../components/AdmissionCurrentTotals.vue';
+import AdmissionBlockingBatchLink from '../components/AdmissionBlockingBatchLink.vue';
 import { admissionAction, admissionPayload, isAdmissionCompletedLater, isAdmissionSafeCandidate, validateAdmissionSelection } from '../utils/admission-ui';
 import * as api from '../api/local-admission';
 import { fetchSourceEvidence } from '../api/source-evidence';

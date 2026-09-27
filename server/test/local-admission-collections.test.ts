@@ -37,6 +37,50 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     return service.previewCollection({scopes:creators.map((creatorId,n)=>({creatorId,parent:names[n],directories:[prefix]}))});}
   function request(collection:ReturnType<typeof service.collection>){return {requestKey:randomUUID(),confirmed:true as const,
     batches:collection.batches.map(batch=>({batchId:batch.id,acceptExistingVersion:true,actions:service.items(batch.id).items.map(item=>({key:item.key,action:'new' as const}))}))};}
+  it('rejects an overlapping confirmation and rechecks ownership inside the final confirmation transaction',async()=>{
+    const db=manager.connection,title='Ownership race shared scope';
+    await make(0,title);
+    const scope={scopes:[{creatorId:creators[0],parent:names[0],directories:[title]}]};
+    const old=await service.previewCollection(scope),next=await service.previewCollection(scope),input=request(next);
+    const oldBatch=old.batches[0],item=JSON.parse(String(db.prepare('SELECT preview_json FROM local_admission_web_items WHERE batch_id=?').get(oldBatch.id)!.preview_json));
+    const {review,...base}=item;
+    const {admissionPlanSchema}=await import('../src/services/local-folder-admission-service.js');
+    const plan=admissionPlanSchema.parse({version:1,confirmed:true,planId:oldBatch.id,creatorId:creators[0],inputRoot:oldBatch.inputRoot,galleryRoot:gallery,
+      creatorDirectory:path.basename(path.dirname(base.targetPath)),items:[{...base,reason:'Historical fixture confirmation'}]});
+    const persist=()=>{
+      db.prepare('INSERT INTO archive_local_admission_plans(plan_id,payload_json,content_hash) VALUES(?,?,?)').run(plan.planId,JSON.stringify(plan),'historical');
+      db.prepare("INSERT INTO archive_local_admission_items(plan_id,item_key,state,manifest_json) VALUES(?,?,'move_intent',?)").run(plan.planId,plan.items[0].key,JSON.stringify(plan.items[0].manifest));
+    };
+    const original=Admission.prototype.verifyUnstarted;
+    vi.spyOn(Admission.prototype,'verifyUnstarted').mockImplementationOnce(async function(this:InstanceType<typeof Admission>,raw){await original.call(this,raw);persist();});
+    await expect(service.executeCollection(next.id,input)).rejects.toThrow('原批次已有移动');
+    expect(service.collection(next.id).state).toBe('draft');
+    expect(db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(next.batches[0].id)!.confirmed_json).toBeNull();
+    expect(db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE collection_id=?').all(next.id)).toHaveLength(0);
+    await expect(fs.stat(path.join(waiting,names[0],title))).resolves.toBeTruthy();
+    await expect(fs.stat(base.targetPath)).rejects.toThrow();
+    vi.restoreAllMocks();
+    await expect(service.executeCollection(next.id,input)).rejects.toThrow('原批次已有移动');
+    const {createApp}=await import('../src/app.js');
+    const response=await requestTestApp(createApp(),'POST',`/api/admin/local-admission/collections/${next.id}/execute`,{'x-foldergram-intent':'1'},input);
+    expect(response.status).toBe(409);expect(response.body.message).toContain('原批次已有移动');expect(response.body.message).not.toContain('ADMISSION_PLAN_CONFLICT');
+    // A wholly unstarted old plan must not disable the existing re-preview workflow.
+    db.prepare("UPDATE archive_local_admission_items SET state='planned' WHERE plan_id=?").run(plan.planId);
+    await expect(new Admission(db,gallery).verifyUnstarted({...plan,planId:next.batches[0].id})).resolves.toBeUndefined();
+    expect(db.prepare('SELECT payload_json FROM archive_local_admission_plans WHERE plan_id=?').get(plan.planId)!.payload_json).toBe(JSON.stringify(plan));
+  });
+  it('exposes a read-only owning-batch link instead of suggesting damaged-file review',async()=>{
+    const collection=await preview('Ownership link fixture'),[owner,current]=collection.batches;
+    const {planOwnershipError}=await import('../src/services/local-admission-plan-ownership.js');
+    // A same-creator historical batch is the only linkable owner; arbitrary IDs cannot become routes.
+    const followup=await service.previewCollection({scopes:[{creatorId:owner.creatorId,parent:names[0],directories:['Ownership link fixture']}]});
+    const batch=followup.batches[0],error=planOwnershipError(owner.id,'请先处理原检查点').message;
+    manager.connection.prepare("UPDATE local_admission_web_batches SET state='needs_review',error=? WHERE id=?").run(error,batch.id);
+    expect(service.get(batch.id)).toMatchObject({blockingBatch:{batchId:owner.id,collectionId:collection.id},error:expect.not.stringContaining('ADMISSION_PLAN_CONFLICT')});
+    const noOwner=planOwnershipError(current.id,'different creator').message;
+    manager.connection.prepare('UPDATE local_admission_web_batches SET error=? WHERE id=?').run(noOwner,batch.id);
+    expect(service.get(batch.id).blockingBatch).toBeUndefined();
+  });
   it('discovers only one directory layer and matches active canonical identities or registered aliases without creating anyone',async()=>{
     const db=manager.connection;
     db.prepare("INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,?,?,'manual')").run(creators[0],'甲的别名','甲的别名');

@@ -20,6 +20,18 @@ describe('web local admission without CLI or raw identity inputs',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchAdmissionSettings).mockResolvedValue({waitingRoot:'R:/等待区',galleryRoot:'R:/正式',archiveInboxRoot:'R:/压缩包'});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(_id,parent)=>dir(parent??null));vi.mocked(api.fetchAdmissionBatches).mockResolvedValue({items:[],total:0,page:1,pageSize:20});vi.mocked(api.fetchAdmissionBatch).mockResolvedValue(batch());vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[item(),item('skip'),item('defer')],total:3,page:1,pageSize:100});vi.mocked(api.createAdmissionPreview).mockResolvedValue(batch());vi.mocked(api.executeAdmission).mockResolvedValue(batch('queued'));vi.mocked(api.fetchAdmissionWorks).mockResolvedValue({items:[work],total:1,page:1,pageSize:20});vi.mocked(evidence.fetchSourceEvidence).mockResolvedValue({items:[],total:0,page:1,limit:20});});
   afterEach(()=>{vi.useRealTimers();});
+  it.each([null,'owner-collection'])('opens the owning %s batch from an error without resuming it',async(collectionId)=>{
+    vi.mocked(api.fetchAdmissionBatch).mockImplementation(async id=>id==='owner-batch'?{...batch('needs_review'),id}:{...batch('needs_review'),error:'请先继续原批次',blockingBatch:{batchId:'owner-batch',collectionId}});
+    const {wrapper,router}=await render('?batch=batch-synthetic');
+    const link=wrapper.get('[data-test=admission-blocking-batch]');
+    expect(link.text()).toBe('查看所属批次');
+    expect(link.attributes('href')).toBe(collectionId?'/local-admission?collection=owner-collection':'/local-admission/17?batch=owner-batch');
+    await link.trigger('click');await flushPromises();
+    expect(router.currentRoute.value.query).toEqual(collectionId?{collection:collectionId}:{batch:'owner-batch'});
+    if(!collectionId)expect(api.fetchAdmissionBatch).toHaveBeenCalledWith('owner-batch');
+    expect(api.resumeAdmission).not.toHaveBeenCalled();expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+    expect(api.executeAdmission).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
   it('keeps source and return context plus hash on saved-batch loading and removes the prior scope on explicit new selection',async()=>{
     const {wrapper,router}=await render('?batch=batch-synthetic&sourceEvidenceId=72&returnTo=%2Flibrary&session=old-session&planId=old-plan#review');
     expect(router.currentRoute.value.query).toEqual({batch:'batch-synthetic',sourceEvidenceId:'72',returnTo:'/library'});expect(router.currentRoute.value.hash).toBe('#review');

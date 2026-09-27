@@ -54,6 +54,7 @@ export interface AdmissionBatch {
   totals: { total: number; selected: number; completed: number; skipped: number; deferred: number };
   items?: AdmissionItem[];
   collectionId?: string | null;
+  blockingBatch?: { batchId: string; collectionId: string | null };
   parentCleanup?: {status:'recycled'|'not_empty'|'failed'|'not_applicable';message:string};
   currentTotals?: AdmissionCurrentTotals;
 }

@@ -13,6 +13,7 @@ import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { recycleBinAdapter, type RecycleBinAdapter } from './recycle-bin-adapter.js';
 import { assertNoLaterAdmissionCompletion } from './local-admission-later-completion.js';
+import { assertNewAdmissionOwnership, admissionItemOwnershipGuard, foreignCaseCheckpointGuard } from './local-admission-plan-ownership.js';
 
 const leaf = z.string().min(1).refine(v => !/[\\/:\x00]/.test(v) && v!=='.' && v!=='..', 'A direct child directory name is required');
 const entrySchema = z.object({ relativePath:z.string().min(1), kind:z.enum(['directory','image','video','other']), size:z.number().int().nonnegative(), dev:z.string(), ino:z.string(), mtimeNs:z.string() }).strict();
@@ -551,6 +552,7 @@ export class LocalFolderAdmissionService {
   /** Read-only preparation for an all-child confirmation; apply repeats these guards under its execution lock. */
   async verifyUnstarted(raw:unknown):Promise<void> {
     const plan=this.validate(raw);this.idle();
+    assertNewAdmissionOwnership(this.db,plan);
     await regularDirectory(plan.inputRoot);await regularDirectory(plan.galleryRoot);
     for(const item of plan.items){
       const source=path.join(plan.inputRoot,item.sourceRelativePath);
@@ -578,6 +580,7 @@ export class LocalFolderAdmissionService {
     // while retaining their original persisted payload and hash unchanged.
     if(prior&&json(admissionPlanSchema.parse(JSON.parse(prior.payload_json)))!==payload)throw Error('Plan ID content changed; new confirmation required');
     if(!prior){
+      assertNewAdmissionOwnership(this.db,plan);
       const destination=await new LocalIngestDestinationService(this.db,plan.galleryRoot).resolveNewTarget(plan.creatorId,plan.items[0].sourceRelativePath);
       const expected=(await assertPathInsideLocalIngestRoot(plan.galleryRoot,destination.creatorDirectory,{directChild:true})).relative;
       if(cmp(expected)!==cmp(plan.creatorDirectory))throw Error('Destination is no longer the selected legal creator directory');
@@ -591,11 +594,13 @@ export class LocalFolderAdmissionService {
         this.db.exec('RELEASE admission_plan');
       } catch(error) {this.db.exec('ROLLBACK TO admission_plan; RELEASE admission_plan');throw error;}
     }
-    const results=[];
+    const results=[];const assertItemOwnership=admissionItemOwnershipGuard(this.db,plan),assertCaseCheckpoint=foreignCaseCheckpointGuard(this.db,plan);
     for(const item of plan.items){
       let state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key) as ItemState;
       if(!state)throw Error('Plan checkpoint missing; cannot infer progress');
       try {
+        assertItemOwnership(item);
+        assertCaseCheckpoint(item);
         const source=path.join(plan.inputRoot,item.sourceRelativePath),target=item.targetPath;
         await assertPathInsideLocalIngestRoot(plan.inputRoot,source,{directChild:true});
         await assertPathInsideLocalIngestRoot(plan.galleryRoot,target);
