@@ -363,6 +363,38 @@ describe.sequential('web directory admission delegates to original plans',()=>{
     expect(fresh.items[0].group).toBe('B');
     expect(fresh.items[0].candidates[0]?.title).toBe(title);
   });
+  it('provides sibling candidates bidirectionally and changes fingerprints only when peer evidence changes',async()=>{
+    const names=['NO.090 PeerGarden_RED','NO.091 PeerGarden (RED.Ver)'];
+    const batch=await preview(names),first=batch.items[0],second=batch.items[1];
+    expect(batch.items.map(item=>item.group)).toEqual(['C','C']);
+    expect(first.peerCandidates).toEqual([{sourceRelativePath:names[1],reasons:[expect.stringContaining('版本')]}]);
+    expect(second.peerCandidates?.[0]?.sourceRelativePath).toBe(names[0]);
+    expect(first.reviewIssues).toContain('batch_candidate');
+    expect(batch.items.every(item=>item.suggestedAction===undefined)).toBe(true);
+    const fresh=await service.repreview(batch.id,batch.items.map(item=>item.key));
+    expect(fresh.items.map(item=>item.reviewFingerprint)).toEqual(batch.items.map(item=>item.reviewFingerprint));
+    const single=await service.preview({creatorId:creator,parent,directories:[names[0]]});
+    expect(single.items[0].peerCandidates).toEqual([]);
+    expect(single.items[0].reviewFingerprint).not.toBe(first.reviewFingerprint);
+    // Same byte count of synthesized files is not enough to make unrelated peers.
+    const unrelated=await preview(['NO.092 DistinctPeerTitleA','NO.093 DistinctPeerTitleB']);
+    expect(unrelated.items[0].summary).toEqual(unrelated.items[1].summary);
+    expect(unrelated.items.every(item=>item.peerCandidates?.length===0)).toBe(true);
+    // Explicit separate Works remain permitted even after a peer suggestion.
+    await service.execute(batch.id,request(batch));await service.waitForIdle();
+    const completed=service.items(batch.id).items;
+    expect(completed[0].workId).not.toBe(completed[1].workId);
+  });
+  it('keeps collection peer recall inside each explicitly selected creator scope',async()=>{
+    const {ManagedCreatorService}=await import('../src/services/managed-creator-service.js');
+    const otherParent='Synthetic Peer Other Creator';
+    const other=new ManagedCreatorService(manager.connection,gallery).create({name:otherParent,rating:'R15',preference:'liked'}).id;
+    const name='NO.094 CrossCreatorPeer';await make(name);
+    await fs.mkdir(path.join(waiting,otherParent,name),{recursive:true});
+    await fs.copyFile(path.join(waiting,parent,name,'图片 1.jpg'),path.join(waiting,otherParent,name,'image.jpg'));
+    const collection=await service.previewCollection({scopes:[{creatorId:creator,parent,directories:[name]},{creatorId:other,parent:otherParent,directories:[name]}]});
+    for(const batch of collection.batches)expect(service.items(batch.id).items[0].peerCandidates).toEqual([]);
+  });
   it('viewer and unauthenticated requests cannot browse disk, inspect batches or submit operations',async()=>{
     const {authService}=await import('../src/services/auth-service.js');authService.setAdminPassword('synthetic-admin-pass');authService.setViewerAccess('password','synthetic-viewer-pass');
     const app=App(),login=await requestTestApp(app,'POST','/api/auth/login',{'x-foldergram-intent':'1'},{password:'synthetic-viewer-pass'});

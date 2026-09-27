@@ -16,7 +16,7 @@ describe('tab-local admission navigation hints',()=>{
   });
   it('remembers only a collection id and clears it when deliberately starting a new scope',()=>{rememberAdmissionCollection('c');expect(lastAdmissionCollection()).toBe('c');rememberAdmissionCollection(null);expect(lastAdmissionCollection()).toBeNull();});
   it('reconsiders automatic new when only new risk metadata changes, preserving manual holds',()=>{
-    for(const change of [{reviewIssues:['title_similar' as const]},{candidatesTruncated:true}]){
+    for(const change of [{reviewIssues:['title_similar' as const]},{candidatesTruncated:true},{peerCandidates:[{sourceRelativePath:'other',reasons:['similar']}]},{peerCandidatesTruncated:true}]){
       const previous={...row,action:{...row.action,action:'new' as const,selectionOrigin:'automatic' as const}};
       const next={...previous,item:{...row.item,...change}};
       expect(carryRefreshedChoices([previous],[next])[0]?.action.action).toBe('defer');

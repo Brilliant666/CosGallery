@@ -9,6 +9,19 @@ const item:AdmissionItem={key:'review',sourceRelativePath:'Moon',targetPath:'gal
 const render=(value:AdmissionItem=item,locked=false)=>mount(AdmissionItemEditor,{props:{item:value,creatorId:1,peers:[],locked,acceptExistingVersion:true,modelValue:admissionAction(value,'defer')}});
 
 describe('admission candidate review evidence',()=>{
+  it('shows batch peers while deferred without selecting a relation, and permits independent manual handling',async()=>{
+    const wrapper=render({...item,candidates:[],reviewIssues:['batch_candidate'],peerCandidates:[{sourceRelativePath:'Studio Series-123 V2',reasons:['同系列标记，仅供核对']}],peerCandidatesTruncated:true});
+    expect(wrapper.text()).toContain('本批还有相关目录');
+    expect(wrapper.text()).toContain('Studio Series-123 V2');
+    expect(wrapper.text()).toContain('同系列标记，仅供核对');
+    expect(wrapper.text()).toContain('本批候选超过展示上限');
+    expect(wrapper.text()).toContain('希望保留两份');
+    expect(wrapper.get('select').element.value).toBe('defer');
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+    await wrapper.get('select').setValue('new');
+    expect(wrapper.emitted('update:modelValue')?.[0]?.[0]).toMatchObject({action:'new',selectionOrigin:'manual',primary:false,acceptSourceIds:[]});
+    wrapper.unmount();
+  });
   it('shows similar evidence while deferred and only selects an existing Work after an explicit click',async()=>{
     const wrapper=render();
     expect(wrapper.get('select').element.value).toBe('defer');

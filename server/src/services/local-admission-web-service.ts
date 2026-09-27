@@ -12,7 +12,7 @@ import { LOCAL_ADMISSION_LOCK_KEY, runAdmissionCollectionExclusive } from './loc
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { recycleEmptyAdmissionParent, type AdmissionParentCleanupResult } from './local-admission-parent-cleanup.js';
 import { laterAdmissionCompletions, admissionItemIdentity, assertNoLaterAdmissionCompletion, type CurrentAdmissionDisposition } from './local-admission-later-completion.js';
-import { LocalAdmissionTitleCandidates, type AdmissionMatchEvidence } from './local-admission-title-candidates.js';
+import { LocalAdmissionTitleCandidates, type AdmissionMatchEvidence, type AdmissionPeerCandidate } from './local-admission-title-candidates.js';
 
 const ROOT_KEY = 'local-admission.waiting-root.v1';
 const reservedDirectory = (name:string) => /^\.local-(?:admission|review)-/i.test(name);
@@ -47,7 +47,8 @@ type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTi
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
   ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>;
   scopeReviewRequired?:boolean;
-  reviewIssues?:('title_exact'|'title_similar'|'multiple_candidates'|'existing_path'|'target_conflict'|'structure'|'read_error')[];candidatesTruncated?:boolean;
+  reviewIssues?:('title_exact'|'title_similar'|'multiple_candidates'|'existing_path'|'target_conflict'|'structure'|'read_error'|'batch_candidate')[];candidatesTruncated?:boolean;
+  peerCandidates?:AdmissionPeerCandidate[];peerCandidatesTruncated?:boolean;
   structureWarnings?:string[];needsBoundaryReview?:boolean;reviewFingerprint?:string};
 type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[];titleCandidates:LocalAdmissionTitleCandidates};
 type PreparedExecution={batch:Batch;request:z.infer<typeof webExecuteSchema>;plan:AdmissionPlan|null;saved:Record<string,unknown>[]};
@@ -249,6 +250,15 @@ export class LocalAdmissionWebService {
       } catch(e) {items.push({preview:null,summary:{key:randomUUID(),sourceRelativePath:name,targetPath:'',displayTitle:name,group:'D',
         summary:{images:0,videos:0,other:0,bytes:0},candidates:[],reviewIssues:['read_error'],candidatesTruncated:false,conflicts:[message(e)],ads:[]}});}
     }
+    const peerCandidates=titleCandidates.peers(items.filter(item=>item.preview).map(item=>item.summary.sourceRelativePath));
+    for(const item of items){
+      const peers=peerCandidates.get(item.summary.sourceRelativePath);
+      item.summary.peerCandidates=peers?.items??[];item.summary.peerCandidatesTruncated=peers?.truncated??false;
+      if(peers?.items.length||peers?.truncated){
+        item.summary.reviewIssues=[...(item.summary.reviewIssues??[]),'batch_candidate'];
+        if(item.summary.group!=='D')item.summary.group='C';
+      }
+    }
     const context:Context={galleryRoot:this.galleryRoot,creatorDirectory,parent:scope.parent,waitingRoot:root,workFacts:{},sourceFacts:{}};
     for(const w of this.db.prepare('SELECT id FROM archive_catalog_works WHERE creator_id=?').all(scope.creatorId))context.workFacts[String(w.id)]=this.workFact(Number(w.id));
     for(const s of this.db.prepare('SELECT s.id FROM archive_catalog_source_works s JOIN archive_catalog_works w ON w.id=s.work_id WHERE w.creator_id=?').all(scope.creatorId))context.sourceFacts[String(s.id)]=this.sourceFact(Number(s.id));
@@ -261,6 +271,7 @@ export class LocalAdmissionWebService {
       displayTitle:item.summary.displayTitle,group:item.summary.group,conflicts:item.summary.conflicts,
       candidates:item.summary.candidates.map(c=>({workId:c.workId,matchEvidence:c.matchEvidence})),
       reviewIssues:item.summary.reviewIssues,candidatesTruncated:item.summary.candidatesTruncated,
+      ...(item.summary.peerCandidates?.length||item.summary.peerCandidatesTruncated?{peerCandidates:item.summary.peerCandidates,peerCandidatesTruncated:item.summary.peerCandidatesTruncated}:{}),
       ads:item.summary.ads,advertisementRulesVersion,structureWarnings:item.summary.structureWarnings??[]
     });
     // Operational scope metadata must not invalidate unchanged per-work review facts.

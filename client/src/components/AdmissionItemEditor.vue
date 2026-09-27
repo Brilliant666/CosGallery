@@ -20,6 +20,15 @@
           <div class="actions"><small>{{ candidate.images }} 图 · {{ candidate.videos }} 视频</small><button type="button" @click="selectWork(candidate)">选择此已有作品</button></div>
         </li></ul>
       </section>
+      <section v-if="item.peerCandidates?.length||item.peerCandidatesTruncated" class="candidate-review" aria-label="本批相关目录及依据">
+        <strong>本批相关目录 · {{ item.peerCandidates?.length||0 }} 项{{ item.peerCandidatesTruncated?'（仅展示部分）':'' }}</strong>
+        <p class="hint">仅核对本博主同一父目录下本次选中的图集，不代表内容相同；版本、合集和额外内容仍需人工判断。确认同套且希望保留两份时，先为其中一项选择新作品或已有作品，再将另一项设为“与本批另一目录同套”；不需再次收录可跳过，不能确定则暂缓。</p>
+        <p v-if="item.peerCandidatesTruncated" class="warning">本批候选超过展示上限，请缩小导入范围后重新核对，不自动批准。</p>
+        <ul class="candidate-list"><li v-for="peer in item.peerCandidates" :key="peer.sourceRelativePath">
+          <strong class="path">{{ peer.sourceRelativePath }}</strong>
+          <p v-for="reason in peer.reasons" :key="reason" class="hint">{{ reason }}</p>
+        </li></ul>
+      </section>
       <template v-if="model.action==='new'"><label>展示名称<input v-model="model.displayTitle" maxlength="500" @input="markManual" /></label><p class="hint">保留原目录名与内部结构；允许以后可靠来源关联，不自动建立来源对应。</p></template>
       <template v-if="model.action==='existing'">
         <div class="actions"><button type="button" @click="showPicker=!showPicker">{{ selectedWork?'改选已有作品':'查找已有作品' }}</button></div>

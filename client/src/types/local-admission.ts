@@ -15,7 +15,7 @@ export interface AdmissionWork {
   originalDirectories: string[]; sources: AdmissionSource[];
   matchEvidence?: { level: 'exact' | 'similar' | 'path'; reasons: string[] };
 }
-export type AdmissionReviewIssue = 'title_exact' | 'title_similar' | 'multiple_candidates' | 'existing_path' | 'target_conflict' | 'structure' | 'read_error';
+export type AdmissionReviewIssue = 'title_exact' | 'title_similar' | 'multiple_candidates' | 'existing_path' | 'target_conflict' | 'structure' | 'read_error' | 'batch_candidate';
 export type AdmissionActionKind = 'new' | 'existing' | 'same-as' | 'skip' | 'defer';
 export interface AdmissionAction {
   key: string; action: AdmissionActionKind; workId?: number; sameAsKey?: string; primary?: boolean;
@@ -40,6 +40,8 @@ export interface AdmissionItem {
   reviewFingerprint?: string;
   reviewIssues?: AdmissionReviewIssue[];
   candidatesTruncated?: boolean;
+  peerCandidates?: Array<{ sourceRelativePath: string; reasons: string[] }>;
+  peerCandidatesTruncated?: boolean;
   nextAction?: 'review_files' | 'resume_plan' | 'prepare_preview' | 'none';
   nextActionReason?: string;
   executionState?: string | null;

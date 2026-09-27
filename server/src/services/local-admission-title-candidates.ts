@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { parseWorkTitle } from '../utils/work-title.js';
 
 export type AdmissionMatchEvidence = { level: 'exact' | 'similar' | 'path'; reasons: string[] };
+export type AdmissionPeerCandidate = { sourceRelativePath: string; reasons: string[] };
 type IndexedTitle = { workId: number; kind: 'title' | 'directory'; volumeSignature?: string };
 const volumeSignature=(title:string)=>[...title.normalize('NFKC').matchAll(/\bvol\.?\s*(\d+)/giu)].map(match=>String(Number(match[1]))).join(',');
 const fingerprint=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -10,12 +11,39 @@ const fingerprint=(value:unknown)=>createHash('sha256').update(JSON.stringify(va
 // ONLY a manual-review recall key. Version suffix differences never establish
 // Work identity. VOL suffix removal is confined to this lossy recall key;
 // the original version/number and exact parser output remain untouched.
+function reviewTitle(title:string,names:readonly string[]) {
+  // Shared exact parsing intentionally preserves more information. Extra
+  // presentation cleanup here is ONLY for explicit manual review suggestions.
+  let normalized=title.normalize('NFKC').replace(/\s*\[(?=[^\]]*\d)(?:\d+(?:\.\d+)?\s*(?:P|V|KB|MB|GB|TB|K|M|G|T|B)[\s+\-/]*)+\]\s*$/iu,'').trim();
+  const patterns=names.filter(Boolean).sort((a,b)=>b.length-a.length).map(name=>{
+    const escaped=[...name.normalize('NFKC').replace(/\s+/gu,'')].map(char=>char.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&')).join('\\s*');
+    return new RegExp(`^(?:\\(\\s*${escaped}\\s*\\)|\\[\\s*${escaped}\\s*\\]|${escaped}(?=$|[\\s_]))[\\s_]*`,'iu');
+  });
+  // Prefixes may repeat as canonical name + parenthesized registered alias.
+  // Only already registered names are removed; this never learns an alias.
+  for(let n=0;n<names.length+1;n++){
+    const next=patterns.reduce((value,pattern)=>value.replace(pattern,''),normalized).trim();
+    if(next===normalized)break;normalized=next;
+  }
+  return parseWorkTitle(normalized,names).displayTitle.trim();
+}
+
 function versionSuggestionKey(title: string, names: readonly string[]) {
-  const parsed = parseWorkTitle(title, names);
-  const stripped = parsed.displayTitle.replace(/\s*\+\s*video\s*$/iu, '')
-    .replace(/\s+[\p{L}\p{N}]+[. _-]*ver\.?\s*$/iu, '')
-    .replace(/\s+vol\.?\s*\d+\s*$/iu, '').trim();
+  let stripped=reviewTitle(title,names);
+  const color='(?:red|blue|green|black|white|pink|purple|yellow|orange|gray|grey|silver|gold)';
+  // Peel suffix wrappers/markers, not arbitrary middle title words/numbers.
+  const suffix=new RegExp(`(?:[\\s_.+-]+|\\s*[([]\\s*)(?:\\+?\\s*video|v\\d+|${color}(?:[. _-]*ver\\.?)?(?:[ _-]+sp)?|[\\p{L}\\p{N}]+[. _-]+ver\\.?|vol\\.?\\s*\\d+)\\s*[)\\]]?\\s*$`,'iu');
+  for(let n=0;n<4;n++){const next=stripped.replace(suffix,'').trim();if(next===stripped)break;stripped=next;}
   return parseWorkTitle(stripped, names).candidateKey;
+}
+
+function studioSeriesKey(title:string,names:readonly string[]) {
+  const value=reviewTitle(title,names);
+  // Both an explicit studio token AND structured alphabetic series-number
+  // are required. A bare NO, equal file counts or byte sizes is never evidence.
+  const match=/^(?:\[([\p{L}\p{N} .&_\-]{2,40})\]|([A-Z][A-Z0-9_&]*(?:\s+[A-Z][A-Z0-9_&]*){0,4}))\s+([A-Z]{2,10})[ -]+(\d{2,6})(?=\s|$)/u.exec(value);
+  if(!match||['NO','VOL','VER'].includes(match[3]!))return '';
+  return `${(match[1]??match[2])!.replace(/\s+/gu,'').toLocaleLowerCase('en-US')}|${match[3]}|${Number(match[4])}`;
 }
 
 /** One creator-scoped load per preview; no source requirement or per-directory library query. */
@@ -86,5 +114,36 @@ export class LocalAdmissionTitleCandidates {
     const exact=!!incoming.exactKey&&incoming.exactKey===source.exactKey&&volumeSignature(title)===volumeSignature(sourceTitle);
     return {level:exact?'exact':'similar',
       reasons:[exact?'已有来源标题规范化后相同；仍需人工确认作品身份':'已有来源标题相关，可能存在版本差异；来源编号不作为作品身份']};
+  }
+
+  /** Selected siblings only: indexed joins, capped output, no pairwise n² scan. */
+  peers(paths:readonly string[]):Map<string,{items:AdmissionPeerCandidate[];truncated:boolean}> {
+    const rows=[...new Set(paths)].sort().map(sourceRelativePath=>{
+      const parsed=parseWorkTitle(sourceRelativePath,this.names),volume=volumeSignature(sourceRelativePath);
+      const series=studioSeriesKey(sourceRelativePath,this.names);
+      const numberedOnly=/^(?:(?:NO\.?|VOL\.?)\s*)?\d+$/iu.test(reviewTitle(sourceRelativePath,this.names));
+      const keys=[
+        ['exact',parsed.exactKey,'本批目录标题规范化后相同；是否同一作品仍需人工确认'],
+        ['candidate',parsed.candidateKey,'本批目录标题忽略大小写、间距或标点后相似；仅供核对'],
+        ['version',versionSuggestionKey(sourceRelativePath,this.names),'本批目录标题主体相似，可能有颜色、版本或视频内容差异；仅供核对'],
+        ['series',series,'本批目录具有相同明确厂牌及系列编号；标题可能不同，不能仅凭编号认同作品'],
+      ].filter(([,key])=>!!key&&!numberedOnly).map(([kind,key,reason])=>({key:JSON.stringify([kind,key,volume]),reason:reason!}));
+      return {sourceRelativePath,keys};
+    });
+    const buckets=new Map<string,string[]>();
+    for(const row of rows)for(const {key} of row.keys){const entries=buckets.get(key)??[];entries.push(row.sourceRelativePath);buckets.set(key,entries);}
+    const result=new Map<string,{items:AdmissionPeerCandidate[];truncated:boolean}>();
+    for(const row of rows){
+      const matches=new Map<string,AdmissionPeerCandidate>();let truncated=false;
+      for(const {key,reason} of row.keys){const bucket=buckets.get(key)!;
+        if(bucket.length>51)truncated=true;
+        // The extra slot covers self exclusion. Multiple keys add at most 4×51
+        // candidates, independent of dense bucket size.
+        for(const peer of bucket.slice(0,52))if(peer!==row.sourceRelativePath&&!matches.has(peer))matches.set(peer,{sourceRelativePath:peer,reasons:[reason]});
+      }
+      const items=[...matches.values()].sort((a,b)=>a.sourceRelativePath<b.sourceRelativePath?-1:a.sourceRelativePath>b.sourceRelativePath?1:0);
+      result.set(row.sourceRelativePath,{items:items.slice(0,50),truncated:truncated||items.length>50});
+    }
+    return result;
   }
 }
