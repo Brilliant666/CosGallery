@@ -51,10 +51,10 @@ export async function serveReelMedia(request: express.Request, response: express
     // Authoritative post identity/visibility and recipe version gate even warm
     // cache reads; the generic /previews route cannot serve these private paths.
     if (kind === 'remux' && await serveRemux()) return;
-    const playback = await resolveReelPlayback(postId);
+    const playback = await resolveReelPlayback(postId, kind === 'remux');
     validate();
     if (kind === 'original') {
-      if (!playback.originalUrl || !playback.originalMimeType) throw new ReelPlaybackError(404, 'REEL_ORIGINAL_UNAVAILABLE', 'Compatible original media is unavailable.');
+      if (!playback.originalUrl || !playback.originalMimeType) throw new ReelPlaybackError(404, 'REEL_ORIGINAL_UNAVAILABLE', 'Original media is unavailable.');
       await sendFile(response, source, playback.originalMimeType);
       return;
     }

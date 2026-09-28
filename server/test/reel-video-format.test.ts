@@ -32,7 +32,7 @@ describe('scoped reel format inspection', () => {
     expect(formats.classifyReelVideo('clip.webm', probe, true)).toEqual({ mode: 'original', mimeType: `video/webm; codecs="${codec}, opus"` });
     expect(formats.classifyReelVideo('renamed.webm', probe, false).mode).toBe('preview');
   });
-  it.each(['hevc', 'prores', 'av1'])('keeps unverified %s on the preview path', codec => {
+  it.each(['hevc', 'prores', 'av1'])('does not authorize stream-copy fallback for unverified %s', codec => {
     expect(formats.classifyReelVideo('clip.mov', { ...h264, streams: [{ ...h264.streams[0]!, codec_name: codec }] }).mode).toBe('preview');
   });
   it('rejects unsupported pixel formats, audio and multiple tracks', () => {

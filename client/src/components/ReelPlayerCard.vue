@@ -21,7 +21,7 @@
           :load="playerLoadMode"
           preload="metadata"
         >
-          <media-provider />
+            <media-provider :loaders.prop="originalLoaders" />
           <media-poster
             :src.prop="item.thumbnailUrl"
             :alt.prop="item.filename"
@@ -132,6 +132,9 @@ import { useReelPlayback } from '../composables/useReelPlayback';
 import type { FeedItem, FolderSummary } from '../types/api';
 import { formatFolderTitle } from '../utils/folder-titles';
 import Avatar from './Avatar.vue';
+import { ReelOriginalLoader } from '../utils/reel-original-loader';
+
+const originalLoaders = [new ReelOriginalLoader()];
 
 const props = defineProps<{
   item: FeedItem;

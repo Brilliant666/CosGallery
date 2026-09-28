@@ -37,6 +37,7 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     writer.mockClear();
+    inspect.mockReset().mockResolvedValue({ mode: 'remux', mimeType: 'video/mp4' });
     repos.maintenanceRepository.resetLibraryIndex();
     await fs.mkdir(config.galleryRoot, { recursive: true });
     await fs.rm(config.previewsDir, { recursive: true, force: true });
@@ -58,7 +59,7 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
     const folder = repos.folderRepository.upsert({ slug: 'clips', name: 'Clips', folderPath: '' });
     const image = repos.imageRepository.upsert({ folderId: folder.id, filename, extension, relativePath: filename, absolutePath, fileSize: stat.size, width: 16, height: 16, mediaType: 'video', mimeType: getMimeTypeFromExtension(extension), durationMs: 1000, fingerprint: createFingerprint(filename, stat.size, stat.mtimeMs), mtimeMs: stat.mtimeMs, firstSeenAt: new Date().toISOString(), sortTimestamp: stat.mtimeMs, takenAt: stat.mtimeMs, takenAtSource: 'mtime', exifJson: null, thumbnailPath: getThumbnailRelativePath(filename), previewPath: getPreviewRelativePath(filename, 'video'), playbackStrategy: extension === '.mp4' ? 'original' : 'preview' });
     const post = repos.postRepository.findByImageId(image.id)!;
-    const result = await playback.resolveReelPlayback(post.id);
+    const result = await playback.resolveReelPlayback(post.id, extension !== '.mp4');
     return { image, post, url: new URL(extension === '.mp4' ? result.originalUrl! : result.remuxUrl!, origin) };
   }
   it('singleflights cold remux, supports Range and reuses separately stamped bytes', async () => {
@@ -85,6 +86,44 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
     const response = await fetch(url, { headers: { Range: 'bytes=0-8' } });
     expect(response.status).toBe(206);
     expect(await response.text()).toBe('synthetic');
+    expect(writer).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it.each(['.mov', '.mkv', '.m4v', '.webm'])('serves %s original GET and HEAD without probing or generating', async extension => {
+    const { image, post } = await fixture(extension);
+    inspect.mockClear();
+    const result = await playback.resolveReelPlayback(post.id);
+    const url = new URL(result.originalUrl!, origin);
+    const head = await fetch(url, { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(head.headers.get('content-type')).toBe(getMimeTypeFromExtension(extension));
+    expect(await head.text()).toBe('');
+    const response = await fetch(url, { headers: { Range: 'bytes=0-8' } });
+    expect(response.status).toBe(206);
+    expect(await response.text()).toBe('synthetic');
+    expect(inspect).not.toHaveBeenCalled();
+    expect(writer).not.toHaveBeenCalled();
+    expect(await fs.readFile(image.absolute_path, 'utf8')).toBe('synthetic-source-original');
+  });
+
+  it('rejects an unverified cold remux request instead of copying incompatible streams', async () => {
+    const { image, post } = await fixture('.mp4');
+    inspect.mockResolvedValue({ mode: 'preview', mimeType: 'video/mp4' });
+    const remux = playback.getReelRemuxLocation(image);
+    const response = await fetch(new URL(`/api/reels/${post.id}/remux?v=${remux.version}`, origin));
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ code: 'REEL_REMUX_UNAVAILABLE' });
+    expect(writer).not.toHaveBeenCalled();
+  });
+
+  it('rechecks visibility after fallback inspection before generating a remux', async () => {
+    const { post, url } = await fixture();
+    inspect.mockImplementationOnce(async () => {
+      database.connection.prepare('UPDATE posts SET is_trashed = 1 WHERE id = ?').run(post.id);
+      return { mode: 'remux', mimeType: 'video/mp4' };
+    });
+    expect((await fetch(url)).status).toBe(404);
     expect(writer).not.toHaveBeenCalled();
   });
   it('does not expose hidden media inside a configured root and keeps missing files as 404', async () => {

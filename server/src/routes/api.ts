@@ -829,9 +829,10 @@ router.get('/reels', (request, response) => {
 
 router.get('/reels/:id/playback', async (request, response) => {
   const params = imageIdSchema.parse(request.params);
+  const query = z.object({ fallback: z.literal('1').optional() }).strict().parse(request.query);
   authService.setNoStoreHeaders(response);
   try {
-    response.json(await resolveReelPlayback(params.id));
+    response.json(await resolveReelPlayback(params.id, query.fallback === '1'));
   } catch (error) {
     if (error instanceof ReelPlaybackError || error instanceof SourceIndexOutdatedError) {
       response.status(error instanceof ReelPlaybackError ? error.status : 409).json({ code: error.code, message: error.message });

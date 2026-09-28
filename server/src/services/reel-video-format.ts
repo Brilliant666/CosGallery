@@ -16,6 +16,8 @@ export interface ReelVideoProbe {
   format?: { format_name?: string; tags?: { major_brand?: string } };
 }
 
+// Conservative fallback classification, not a browser-original allowlist.
+// The playback resolver offers original bytes independently of this result.
 export function classifyReelVideo(source: string, probe: ReelVideoProbe, webmContainer = false): ReelVideoFormat {
   const videos = probe.streams?.filter(stream => stream.codec_type === 'video') ?? [];
   const audio = probe.streams?.filter(stream => stream.codec_type === 'audio') ?? [];

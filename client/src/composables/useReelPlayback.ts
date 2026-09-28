@@ -16,12 +16,14 @@ export function useReelPlayback(
 ) {
   const state = ref<PlaybackState>('idle');
   const source = ref('');
-  const sourceMime = ref<'video/mp4' | 'video/webm'>('video/mp4');
+  const sourceMime = ref('video/mp4');
   const plan = ref<ReelPlayback | null>(null);
+  // Our scoped native loader supports real MOV/MKV MIME types beyond the
+  // built-in PlayerSrc union. Do not relabel those bytes as MP4.
   const videoSource = computed<PlayerSrc>(() => active() && source.value
-    ? { src: source.value, type: sourceMime.value } : '');
+    ? { src: source.value, type: sourceMime.value } as PlayerSrc : '');
   const statusText = computed(() => ({
-    idle: '', resolving: '正在选择播放源…', preparing: source.value === plan.value?.remuxUrl
+    idle: '', resolving: '正在选择播放源…', preparing: source.value === plan.value?.remuxUrl && !plan.value?.remuxReady
       ? '正在准备播放（无损换封装，不降低清晰度）…'
       : source.value === plan.value?.previewUrl && !plan.value?.previewReady
         ? '正在准备播放（兼容预览，首次可能需要转换）…' : '正在准备播放…',
@@ -33,17 +35,11 @@ export function useReelPlayback(
   let pendingPlay: number | null = null;
   const attemptedSources = new Set<string>();
   let userPaused = false;
+  let fallbackPending: number | null = null;
   let removeListeners: (() => void) | undefined;
 
-  function canPlayOriginal(candidate: ReelPlayback) {
-    return Boolean(candidate.originalUrl && candidate.originalMimeType
-      && ['video/mp4', 'video/webm'].includes(candidate.originalMimeType.split(';')[0]!.trim())
-      && document.createElement('video').canPlayType(candidate.originalMimeType));
-  }
-
   function canPlayRemux(candidate: ReelPlayback) {
-    return Boolean(candidate.remuxUrl && candidate.remuxMimeType
-      && document.createElement('video').canPlayType(candidate.remuxMimeType));
+    return Boolean(candidate.remuxUrl && candidate.remuxMimeType);
   }
 
   const canUsePreview = computed(() => state.value === 'error' && Boolean(plan.value)
@@ -53,7 +49,7 @@ export function useReelPlayback(
     epoch += 1;
     pendingPlay = null;
     attemptedSources.add(url);
-    sourceMime.value = mime.split(';')[0]!.trim() === 'video/webm' ? 'video/webm' : 'video/mp4';
+    sourceMime.value = mime.split(';')[0]!.trim();
     source.value = url;
     state.value = 'preparing';
   }
@@ -73,7 +69,7 @@ export function useReelPlayback(
       const candidate = await fetchReelPlayback(item().id, controller.signal);
       if (token !== epoch || !active()) return;
       plan.value = candidate;
-      if (canPlayOriginal(candidate)) {
+      if (candidate.originalUrl && candidate.originalMimeType) {
         selectSource(candidate.originalUrl!, candidate.originalMimeType!);
       } else if (canPlayRemux(candidate)) {
         selectSource(candidate.remuxUrl!, candidate.remuxMimeType!);
@@ -86,6 +82,46 @@ export function useReelPlayback(
     }
   }
 
+  async function chooseFallback(checkOriginalResponse = false) {
+    const token = epoch;
+    if (fallbackPending === token || !plan.value) return;
+    fallbackPending = token;
+    const previousSource = source.value;
+    const current = () => token === epoch && active() && !userPaused;
+    try {
+      // MEDIA_ERR_SRC_NOT_SUPPORTED also covers HTTP failures. Check only the
+      // original (HEAD never generates derivatives), not a remux/preview URL.
+      if (checkOriginalResponse) {
+        const response = await fetch(previousSource, { method: 'HEAD', signal: controller?.signal });
+        if (!current()) return;
+        if (!response.ok || !response.headers.get('content-type')?.startsWith('video/')) {
+          state.value = 'error';
+          return;
+        }
+      }
+      if (previousSource === plan.value.originalUrl) {
+        const candidate = await fetchReelPlayback(item().id, controller?.signal, true);
+        if (!current()) return;
+        // Never apply a fallback for a different source revision.
+        if (candidate.originalUrl !== plan.value.originalUrl || candidate.previewUrl !== plan.value.previewUrl) {
+          state.value = 'error';
+          return;
+        }
+        plan.value = candidate;
+        if (canPlayRemux(candidate) && !attemptedSources.has(candidate.remuxUrl!)) {
+          selectSource(candidate.remuxUrl!, candidate.remuxMimeType!);
+          return;
+        }
+      }
+      if (current() && !attemptedSources.has(plan.value.previewUrl)) selectSource(plan.value.previewUrl);
+      else if (current()) state.value = 'error';
+    } catch {
+      if (current()) state.value = 'error';
+    } finally {
+      if (fallbackPending === token) fallbackPending = null;
+    }
+  }
+
   function failed(error: unknown) {
     if (!active()) return;
     const name = error && typeof error === 'object' && 'name' in error ? error.name : '';
@@ -95,31 +131,22 @@ export function useReelPlayback(
     if (name === 'AbortError' || code === 1) return;
     if (userPaused) return;
     if (name === 'NotAllowedError') { state.value = 'blocked'; return; }
-    // Only a decoding failure after media was established as usable justifies
-    // automatic conversion. Code 4 / NotSupportedError can also mean an initial
-    // HTTP or network failure, so those ambiguous errors must offer retry instead.
-    // Even a reported warm cache can expire: network errors must never switch src.
     if (code === 3 && plan.value) {
-      const candidate = plan.value;
-      if (source.value === candidate.originalUrl && canPlayRemux(candidate)
-          && !attemptedSources.has(candidate.remuxUrl!)) {
-        selectSource(candidate.remuxUrl!, candidate.remuxMimeType!);
-        return;
-      }
-      if (source.value !== candidate.previewUrl && !attemptedSources.has(candidate.previewUrl)) {
-        selectSource(candidate.previewUrl);
-        return;
-      }
+      void chooseFallback();
+      return;
+    }
+    if ((code === 4 || name === 'NotSupportedError') && source.value === plan.value?.originalUrl) {
+      void chooseFallback(true);
+      return;
     }
     state.value = 'error';
   }
 
-  // Ambiguous HTTP/network failures never trigger conversion automatically.
-  // The user can explicitly opt into a compatible preview after retrying.
+  // Explicit opt-in still prefers a verified lossless fallback over transcode.
   function usePreview() {
     if (!active() || !canUsePreview.value || !plan.value) return;
     userPaused = false;
-    selectSource(plan.value.previewUrl);
+    void chooseFallback();
   }
 
   function matchesSource(target: MediaPlayerElement) {

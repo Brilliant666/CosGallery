@@ -8,6 +8,7 @@ import { derivativeVersion, derivativeSourceVersion, hasCurrentDerivative, image
 import { resolveOriginalPath } from '../utils/media-paths.js';
 import { safeJoin } from '../utils/path-utils.js';
 import { scannerService } from './scanner-service.js';
+import { getMimeTypeFromExtension, SUPPORTED_VIDEO_EXTENSIONS } from '../utils/image-utils.js';
 import { inspectReelVideo } from './reel-video-format.js';
 
 export class ReelPlaybackError extends Error {
@@ -58,9 +59,10 @@ export function getReelRemuxLocation(image: ReelVersionRecord) {
   return { version, mediaType, output: safeJoin(appConfig.previewsDir, `.reel-remux/${image.id}/${version}.mp4`) };
 }
 
-// Resolve one active post only. Legacy preview rows are inspected on demand;
-// no indexing/database update, media generation or whole-feed probing occurs.
-export async function resolveReelPlayback(postId: number): Promise<ReelPlayback> {
+// Resolve one active post only. Browser capability is not inferred from an old
+// indexed strategy: every supported original gets an attempt without ffprobe.
+// Only an explicit fallback lookup probes remux eligibility after that attempt.
+export async function resolveReelPlayback(postId: number, inspectFallback = false): Promise<ReelPlayback> {
   const { initial, version, recheck } = getReelSourceSnapshot(postId);
   let output: string;
   try { output = safeJoin(appConfig.previewsDir, initial.preview_path); } catch { throw notFound(); }
@@ -107,25 +109,25 @@ export async function resolveReelPlayback(postId: number): Promise<ReelPlayback>
   if (derivativeSourceVersion(stat.size, stat.mtimeMs) !== derivativeSourceVersion(initial.file_size, initial.mtime_ms)) {
     throw new SourceIndexOutdatedError();
   }
-  // Existing indexed compatible MP4s retain their zero-probe fast path. Every
-  // other container, including old preview-only rows, uses versioned inspection.
-  let format;
-  try {
-    format = initial.playback_strategy === 'original' && path.extname(initial.relative_path).toLowerCase() === '.mp4' && initial.mime_type === 'video/mp4'
-      ? { mode: 'original' as const, mimeType: 'video/mp4' }
-      : await inspectReelVideo(source, derivativeSourceVersion(initial.file_size, initial.mtime_ms));
-  } catch (error) {
-    recheck();
-    if (!(error instanceof SourceIndexOutdatedError) && (previewReady || result.remuxReady)) return result;
-    throw error;
-  }
-  recheck();
-  if (format.mode === 'original') {
+  const extension = path.extname(initial.relative_path).toLowerCase();
+  if (SUPPORTED_VIDEO_EXTENSIONS.has(extension)) {
     result.originalUrl = `/api/reels/${postId}/original?v=${getReelOriginalVersion(initial)}`;
-    result.originalMimeType = format.mimeType;
-  } else if (format.mode === 'remux') {
-    result.remuxUrl = `/api/reels/${postId}/remux?v=${remux.version}`;
-    result.remuxMimeType = 'video/mp4';
+    result.originalMimeType = getMimeTypeFromExtension(extension);
+  }
+  if (inspectFallback && !result.remuxReady) {
+    let format;
+    try {
+      format = await inspectReelVideo(source, derivativeSourceVersion(initial.file_size, initial.mtime_ms));
+    } catch (error) {
+      recheck();
+      if (!(error instanceof SourceIndexOutdatedError) && previewReady) return result;
+      throw error;
+    }
+    recheck();
+    if (format.mode === 'remux' || (format.mode === 'original' && format.mimeType === 'video/mp4')) {
+      result.remuxUrl = `/api/reels/${postId}/remux?v=${remux.version}`;
+      result.remuxMimeType = 'video/mp4';
+    }
   }
   return result;
 }

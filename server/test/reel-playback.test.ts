@@ -138,9 +138,10 @@ describe.sequential('scoped reel playback resolution', () => {
     if (state === 'missing') await expect(fs.stat(output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('retains the preview path for an incompatible original without generating it', async () => {
+  it('offers an unverified WebM original before probing or generating any fallback', async () => {
     const { post } = await fixture('preview', 'clip.webm');
-    expect(await resolve(post.id)).toMatchObject({ previewReady: false, originalUrl: null, originalMimeType: null, previewUrl: expect.stringContaining('/previews/clips/clip.mp4?v=') });
+    expect(await resolve(post.id)).toMatchObject({ previewReady: false, originalUrl: expect.stringContaining(`/api/reels/${post.id}/original?v=`), originalMimeType: 'video/webm', previewUrl: expect.stringContaining('/previews/clips/clip.mp4?v=') });
+    expect(inspect).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('resolves readiness=%s without waiting for an active preview writer or listing the feed', async (warm) => {
@@ -169,11 +170,12 @@ describe.sequential('scoped reel playback resolution', () => {
     }
   });
 
-  it('does not infer compatibility when the stored strategy is unknown', async () => {
+  it('does not let unknown legacy strategy prevent a browser original attempt', async () => {
     const { image, post } = await fixture();
-    // A legacy/unknown persisted value must not enable direct playback.
+    // Capability belongs to the browser, not the historic indexing policy.
     database.connection.prepare("UPDATE images SET playback_strategy = '' WHERE id = ?").run(image.id);
-    expect(await resolve(post.id)).toMatchObject({ originalUrl: null, originalMimeType: null });
+    expect(await resolve(post.id)).toMatchObject({ originalUrl: expect.stringContaining('/original?v='), originalMimeType: 'video/mp4' });
+    expect(inspect).not.toHaveBeenCalled();
   });
 
   it('resolves post IDs to the exact original image ID', async () => {
@@ -218,9 +220,9 @@ describe.sequential('scoped reel playback resolution', () => {
     const { image, post } = await fixture('preview', 'legacy.webm');
     await cache(image);
     inspect.mockResolvedValue({ mode: 'original', mimeType: 'video/webm; codecs="vp9, opus"' });
-    expect(await resolve(post.id)).toMatchObject({ originalUrl: expect.stringContaining(`/api/reels/${post.id}/original?v=`), originalMimeType: 'video/webm; codecs="vp9, opus"', remuxUrl: null });
+    expect(await resolve(post.id)).toMatchObject({ originalUrl: expect.stringContaining(`/api/reels/${post.id}/original?v=`), originalMimeType: 'video/webm', remuxUrl: null });
     expect(repositories.imageRepository.getById(image.id)?.playback_strategy).toBe('preview');
-    expect(inspect).toHaveBeenCalledWith(image.absolute_path, versions.derivativeSourceVersion(image.file_size, image.mtime_ms));
+    expect(inspect).not.toHaveBeenCalled();
   });
 
   it('returns a separate remux recipe and readiness without creating the output', async () => {
@@ -229,7 +231,9 @@ describe.sequential('scoped reel playback resolution', () => {
     const { getReelRemuxLocation } = await import('../src/services/reel-playback-service.js');
     const remux = getReelRemuxLocation(image);
     expect(remux.version).not.toBe(versions.imageDerivativeVersion(image, 'preview'));
-    expect(await resolve(post.id)).toMatchObject({ originalUrl: null, remuxUrl: `/api/reels/${post.id}/remux?v=${remux.version}`, remuxReady: false, remuxMimeType: 'video/mp4' });
+    expect(await resolve(post.id)).toMatchObject({ originalUrl: expect.stringContaining('/original?v='), originalMimeType: 'video/quicktime', remuxUrl: null });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(await resolve(post.id, true)).toMatchObject({ originalUrl: expect.stringContaining('/original?v='), remuxUrl: `/api/reels/${post.id}/remux?v=${remux.version}`, remuxReady: false, remuxMimeType: 'video/mp4' });
     await expect(fs.stat(remux.output)).rejects.toMatchObject({ code: 'ENOENT' });
     await fs.mkdir(path.dirname(remux.output), { recursive: true });
     await fs.writeFile(remux.output, 'remux');
@@ -243,16 +247,16 @@ describe.sequential('scoped reel playback resolution', () => {
       database.connection.prepare('UPDATE posts SET is_trashed = 1 WHERE id = ?').run(post.id);
       return { mode: 'remux', mimeType: 'video/mp4' };
     });
-    await expect(resolve(post.id)).rejects.toMatchObject({ status: 404 });
+    await expect(resolve(post.id, true)).rejects.toMatchObject({ status: 404 });
   });
 
   it('keeps a valid preview when ffprobe fails, but does not hide a changed source', async () => {
     const { image, post } = await fixture('preview', 'legacy.mov');
     await cache(image);
     inspect.mockRejectedValue(new Error('probe unavailable'));
-    expect(await resolve(post.id)).toMatchObject({ previewReady: true, originalUrl: null });
+    expect(await resolve(post.id, true)).toMatchObject({ previewReady: true, originalUrl: expect.stringContaining('/original?v=') });
     inspect.mockRejectedValue(new versions.SourceIndexOutdatedError());
-    await expect(resolve(post.id)).rejects.toMatchObject({ code: 'SOURCE_INDEX_OUTDATED' });
+    await expect(resolve(post.id, true)).rejects.toMatchObject({ code: 'SOURCE_INDEX_OUTDATED' });
   });
 
   it.each(['hidden', 'source-path', 'version', 'membership'] as const)('rechecks %s after asynchronous cache reads', async (change) => {
@@ -313,11 +317,11 @@ describe.sequential('scoped reel playback resolution', () => {
     return { status: vi.fn().mockReturnThis(), json: vi.fn().mockReturnThis(), setHeader: vi.fn(), locals: {} };
   }
 
-  async function invoke(id: number) {
+  async function invoke(id: number, query: Record<string, unknown> = {}) {
     const layers = (apiRouter as unknown as { stack: Array<{ route?: { path: string; stack: Array<{ handle: express.RequestHandler }> } }> }).stack;
     const handler = layers.find(layer => layer.route?.path === '/reels/:id/playback')!.route!.stack[0].handle;
     const res = response();
-    await handler({ params: { id: String(id) } } as express.Request, res as unknown as express.Response, vi.fn());
+    await handler({ params: { id: String(id) }, query } as unknown as express.Request, res as unknown as express.Response, vi.fn());
     return res;
   }
 
@@ -346,5 +350,26 @@ describe.sequential('scoped reel playback resolution', () => {
     vi.spyOn(auth, 'isAuthenticatedRequest').mockReturnValue(true);
     protection(req, response() as unknown as express.Response, next);
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  it.each(['clip.mp4', 'clip.mov', 'clip.m4v', 'clip.mkv', 'clip.webm'])('offers %s without probing even when historic strategy is preview', async filename => {
+    const { post } = await fixture('preview', filename);
+    inspect.mockRejectedValue(new Error('ffprobe must not gate original playback'));
+    expect(await resolve(post.id)).toMatchObject({ originalUrl: expect.stringContaining('/original?v='), originalMimeType: getMimeTypeFromExtension(path.extname(filename)), remuxUrl: null });
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it('only inspects fallback when explicitly requested and retains original for an unknown codec', async () => {
+    const { post } = await fixture('preview', 'hevc.mp4');
+    expect((await invoke(post.id)).json.mock.calls[0][0]).toMatchObject({ originalUrl: expect.stringContaining('/original?v='), remuxUrl: null });
+    expect(inspect).not.toHaveBeenCalled();
+    expect((await invoke(post.id, { fallback: '1' })).json.mock.calls[0][0]).toMatchObject({ originalUrl: expect.stringContaining('/original?v='), remuxUrl: null });
+    expect(inspect).toHaveBeenCalledOnce();
+  });
+
+  it.each([{ fallback: 'true' }, { fallback: ['1', '1'] }, { unexpected: '1' }])('rejects invalid fallback query %j without probing', async query => {
+    const { post } = await fixture();
+    await expect(invoke(post.id, query)).rejects.toMatchObject({ name: 'ZodError' });
+    expect(inspect).not.toHaveBeenCalled();
   });
 });
