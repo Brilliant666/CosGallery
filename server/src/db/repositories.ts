@@ -1795,6 +1795,20 @@ export const postRepository = {
       : this.hydratePostItems(posts);
   },
 
+  getReelPlaybackImage(postId: number): ImageRecord | undefined {
+    return database.prepare(`
+      SELECT images.* FROM posts
+      JOIN folders ON folders.id = posts.folder_id
+      JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
+      JOIN images ON images.id = post_items.image_id
+      WHERE posts.id = ? AND ${VISIBLE_POST_WHERE_SQL}
+        AND posts.post_type = 'single' AND images.media_type = 'video'
+        AND images.is_deleted = 0 AND images.is_trashed = 0
+        AND LOWER(images.filename) NOT IN (${COVER_FILENAME_SQL})
+        AND (SELECT COUNT(*) FROM post_items WHERE post_id = posts.id) = 1
+    `).get(postId) as ImageRecord | undefined;
+  },
+
   listVisibleVideoCandidates(): ReelCandidate[] {
     const posts = database.prepare(
       `

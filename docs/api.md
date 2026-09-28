@@ -211,6 +211,26 @@ Notes:
 - `recent` ignores recommendation hints and returns newest indexed videos first.
 - `random` and `recommended` stay stable across pages when the same `seed` is reused.
 
+### `GET /api/reels/:id/playback`
+
+Read-only playback resolution for one visible, single-video **post ID** from the reels feed. Uses the normal viewer authentication boundary and no-store responses. It does not scan, probe, generate previews or wait for an in-progress transcode.
+
+```json
+{
+  "previewUrl": "/previews/example.mp4?v=current-version",
+  "previewReady": false,
+  "originalUrl": "/api/originals/123",
+  "originalMimeType": "video/mp4"
+}
+```
+
+- A current stamped preview is preferred. In this case original fields are `null`; resolving a warm preview does not require its source disk to be online.
+- For a cold preview, original fields are populated only when the indexed compatibility assessment permits direct playback and the source size/mtime still match. The original URL uses the exact media ID, which can differ from the post ID.
+- The active reels player uses a browser-compatible original immediately when the preview is cold. Otherwise it requests the preview with a visible preparing state. Inactive cards have no video source; this does not prewarm the library.
+- Readiness is advisory: preview delivery independently rechecks version and holds its existing output lease. No version, authentication or Range protections are bypassed.
+- Invalid IDs return `400`; unavailable/non-reel media `404`; stale source/index or a required rebuild `409`. Unknown errors retain the standard protected `500` response.
+- Autoplay permission failures request a user click, not a different source. Cancellation does not trigger a fallback loop; genuine format/network failures allow at most one alternate source per attempt.
+
 ### `GET /api/feed/moments`
 
 Returns the current Home Moments or Highlights definition.

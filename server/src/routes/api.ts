@@ -45,6 +45,8 @@ import {
   folderShareService
 } from '../services/folder-share-service.js';
 import { galleryService } from '../services/gallery-service.js';
+import { ReelPlaybackError, resolveReelPlayback } from '../services/reel-playback-service.js';
+import { SourceIndexOutdatedError } from '../utils/derivative-version.js';
 import { requireCapability } from '../middleware/auth-protection.js';
 import { createRateLimiter } from '../middleware/rate-limit.js';
 import { LIBRARY_REBUILD_REQUIRED_MESSAGE, scannerService } from '../services/scanner-service.js';
@@ -822,6 +824,20 @@ router.get('/reels', (request, response) => {
       recentOpenedFolderSlugs
     })
   );
+});
+
+router.get('/reels/:id/playback', async (request, response) => {
+  const params = imageIdSchema.parse(request.params);
+  authService.setNoStoreHeaders(response);
+  try {
+    response.json(await resolveReelPlayback(params.id));
+  } catch (error) {
+    if (error instanceof ReelPlaybackError || error instanceof SourceIndexOutdatedError) {
+      response.status(error instanceof ReelPlaybackError ? error.status : 409).json({ code: error.code, message: error.message });
+    } else {
+      sendUnexpectedError(response, error);
+    }
+  }
 });
 
 router.get('/feed/search', (request, response) => {

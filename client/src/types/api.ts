@@ -77,6 +77,13 @@ export interface PostMediaItem {
   exif?: ImageExifData | null;
 }
 
+export interface ReelPlayback {
+  previewUrl: string;
+  previewReady: boolean;
+  originalUrl: string | null;
+  originalMimeType: string | null;
+}
+
 export interface FeedItem {
   id: number;
   folderId: number;

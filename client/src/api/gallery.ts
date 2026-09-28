@@ -1,4 +1,5 @@
 import type {
+  ReelPlayback,
   AppLocaleSetting,
   AppStatus,
   AppStats,
@@ -71,6 +72,10 @@ export function fetchFeed(page = 1, limit = 24, mode: FeedMode = 'random', seed?
   }
 
   return requestJson<PaginatedFeed>(`/api/feed?${params.toString()}`);
+}
+
+export function fetchReelPlayback(id: number, signal?: AbortSignal) {
+  return requestJson<ReelPlayback>(`/api/reels/${id}/playback`, { signal });
 }
 
 export function fetchReels(
