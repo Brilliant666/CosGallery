@@ -48,6 +48,7 @@
           <button v-if="state === 'blocked' || state === 'error'" type="button" @click.stop="toggle">
             {{ state === 'blocked' ? '点击播放' : '重试' }}
           </button>
+          <button v-if="canUsePreview" type="button" @click.stop="usePreview">使用兼容预览（可能需要转换）</button>
         </div>
 
         <div
@@ -139,7 +140,7 @@ const props = defineProps<{
 }>();
 const appStore = useAppStore();
 const playerElement = ref<MediaPlayerElement | null>(null);
-const { videoSource, state, statusText, toggle, play } = useReelPlayback(
+const { videoSource, state, statusText, toggle, play, canUsePreview, usePreview } = useReelPlayback(
   () => props.item, () => props.active, playerElement, () => appStore.videoMuted
 );
 const playerLoadMode = computed(() => (props.active ? 'eager' : 'visible'));

@@ -394,6 +394,66 @@ describe('ReelPlayerCard', () => {
     expect(getPlayerElement(wrapper).src).toEqual({ src: coldCompatible.originalUrl, type: 'video/mp4' });
   });
 
+  it('checks WebM codecs and sends its real MIME type to the player', async () => {
+    const mime = 'video/webm; codecs="vp9, opus"';
+    vi.mocked(fetchReelPlayback).mockResolvedValue({ ...coldCompatible, originalMimeType: mime });
+    const wrapper = mountActive();
+    await flushPromises();
+    expect(HTMLMediaElement.prototype.canPlayType).toHaveBeenCalledWith(mime);
+    expect(getPlayerElement(wrapper).src).toEqual({ src: coldCompatible.originalUrl, type: 'video/webm' });
+  });
+
+  const remuxCandidate: ReelPlayback = {
+    ...coldCompatible, originalUrl: null, originalMimeType: null,
+    remuxUrl: '/api/reels/7/remux?v=current', remuxMimeType: 'video/mp4', remuxReady: false
+  };
+
+  it('selects lossless remux before a lossy preview without requiring an original URL', async () => {
+    autoReady = false;
+    vi.mocked(fetchReelPlayback).mockResolvedValue(remuxCandidate);
+    const wrapper = mountActive();
+    await flushPromises();
+    expect(getPlayerElement(wrapper).src).toEqual({ src: remuxCandidate.remuxUrl, type: 'video/mp4' });
+    expect(wrapper.text()).toContain('无损换封装');
+    expect(wrapper.text()).not.toContain('兼容预览，首次');
+  });
+
+  it('skips an unsupported original MIME before choosing the compatible remux', async () => {
+    vi.mocked(HTMLMediaElement.prototype.canPlayType).mockImplementation(mime => mime === 'video/mp4' ? 'probably' : '');
+    vi.mocked(fetchReelPlayback).mockResolvedValue({ ...remuxCandidate, originalUrl: '/source', originalMimeType: 'video/webm; codecs="vp9"' });
+    const wrapper = mountActive();
+    await flushPromises();
+    expect(getPlayerElement(wrapper).src).toEqual({ src: remuxCandidate.remuxUrl, type: 'video/mp4' });
+  });
+
+  it('falls through original, remux and preview at most once each on decoding failures', async () => {
+    vi.mocked(fetchReelPlayback).mockResolvedValue({ ...remuxCandidate, originalUrl: coldCompatible.originalUrl, originalMimeType: 'video/mp4' });
+    const wrapper = mountActive();
+    await flushPromises();
+    const player = getPlayerElement(wrapper);
+    for (const expected of [remuxCandidate.remuxUrl, coldCompatible.previewUrl, coldCompatible.previewUrl]) {
+      player.dispatchEvent(new CustomEvent('error', { detail: { code: 3 } }));
+      await flushPromises();
+      expect((player.src as { src: string }).src).toBe(expected);
+    }
+    expect(wrapper.text()).toContain('视频暂时无法播放');
+  });
+
+  it('does not automatically transcode failed remux, but offers an explicit preview action', async () => {
+    vi.mocked(fetchReelPlayback).mockResolvedValue(remuxCandidate);
+    const wrapper = mountActive();
+    await flushPromises();
+    const player = getPlayerElement(wrapper);
+    player.dispatchEvent(new CustomEvent('error', { detail: { code: 4 } }));
+    await flushPromises();
+    expect((player.src as { src: string }).src).toBe(remuxCandidate.remuxUrl);
+    const button = wrapper.findAll('button').find(b => b.text().includes('使用兼容预览'))!;
+    await button.trigger('click');
+    await flushPromises();
+    expect((player.src as { src: string }).src).toBe(coldCompatible.previewUrl);
+    expect(wrapper.text()).not.toContain('使用兼容预览');
+  });
+
   it.each([false, true])('does not switch sources on network or ambiguous unsupported errors with previewReady=%s', async (previewReady) => {
     vi.mocked(fetchReelPlayback).mockResolvedValue({ ...coldCompatible, previewReady });
     const wrapper = mountActive();

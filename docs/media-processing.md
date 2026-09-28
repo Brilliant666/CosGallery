@@ -188,7 +188,41 @@ When that happens:
 - `playbackStrategy` is set to `original`
 - generated previews still remain the default playback source
 - the detail player can expose an `HD` switch when the original is compatible and higher resolution than the generated preview
-- feed cards and other list surfaces continue to use generated preview media
+- ordinary feed cards and other list surfaces continue to use generated preview media
+
+### Reels: original, lossless remux, then compatible preview
+
+The Reels player uses a separate, on-demand playback decision for the active
+video. It does not require rescanning an existing library or changing original
+media. Only the active card requests media; selecting a source does not prewarm
+the whole feed.
+
+1. Compatible MP4/M4V (H.264, `yuv420p`, AAC or no audio) and WebM
+   (VP8/VP9, `yuv420p`, Opus/Vorbis or no audio) use the original when the
+   browser reports support. The actual container is checked, not only its suffix.
+   Already indexed compatible MP4 records retain their no-probe fast path.
+2. Compatible H.264/AAC content in MOV or MKV can use a lossless MP4 remux:
+   `-c copy` preserves the video/audio streams and resolution. This still creates
+   a derived file and may take time on first use; it is not a renamed original
+   or a lower-quality transcode.
+3. Other combinations use the existing H.264/AAC preview. This is a conservative
+   support set, not a guarantee that every codec or browser can play originals.
+
+Old preview-only records are probed per requested file, with bounded concurrency
+and a bounded source-version cache; no database migration or bulk scan occurs.
+Remux files have a separate recipe/version and live under
+`PREVIEWS_DIR/.reel-remux/`. They are served only through the scoped Reels media
+route, with visibility, identity, version, Range and output-lock checks. Valid
+existing caches remain usable when the source is offline or probing fails.
+Cold remuxes and cold previews finish before delivery; subsequent requests reuse
+their valid caches. Remux files can be similar in size to the original and are
+not application recovery points or original-media backups.
+
+An explicit decoding error may fall back along this chain once per source.
+Network errors, cancellation, buffering, user pause and autoplay restrictions
+do not automatically trigger conversion. After a playback error, users can
+retry or explicitly choose **使用兼容预览（可能需要转换）**. Autoplay rejection
+instead asks for a click. The ordinary gallery/Viewer playback policy is unchanged.
 
 ## GIF handling
 

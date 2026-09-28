@@ -1,5 +1,4 @@
 import express from 'express';
-import pLimit from 'p-limit';
 import fs from 'node:fs/promises';
 
 import { appConfig } from '../config/env.js';
@@ -15,10 +14,10 @@ import { resolveOriginalPath } from '../utils/media-paths.js';
 import { applyDerivativeErrorHeaders, applyNoStoreMediaHeaders, applyProtectedMediaHeaders } from '../utils/media-response.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
 import { sendUnexpectedError } from '../middleware/http-errors.js';
+import { mediaGenerationLimit } from '../services/media-generation-queue.js';
 
 // Singleflight is per actual output, independent of the URL used to request it.
 const inflightGenerations = new Map<string, Promise<void>>();
-const generationLimit = pLimit(appConfig.scanDerivativeConcurrency);
 type SendDerivativeResult = 'sent' | 'aborted';
 class DerivativeRecordNotFoundError extends Error {}
 class DerivativeVersionChangedError extends Error {}
@@ -52,7 +51,7 @@ function sendError(response: express.Response, status: number, message: string, 
 function queueLazyGeneration(output: string, requestedPath: string, kind: DerivativeKind, expectedId: number, expectedVersion: string): Promise<void> {
   const pending = inflightGenerations.get(output);
   if (pending) return pending;
-  const work = generationLimit(() => maintenanceOperationLock.runGeneration(async () => {
+  const work = mediaGenerationLimit(() => maintenanceOperationLock.runGeneration(async () => {
     const record = findCurrentImageRecord(requestedPath, kind, expectedId);
     if (!record) throw new DerivativeRecordNotFoundError();
     const validate = () => {

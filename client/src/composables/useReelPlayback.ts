@@ -16,29 +16,44 @@ export function useReelPlayback(
 ) {
   const state = ref<PlaybackState>('idle');
   const source = ref('');
+  const sourceMime = ref<'video/mp4' | 'video/webm'>('video/mp4');
   const plan = ref<ReelPlayback | null>(null);
   const videoSource = computed<PlayerSrc>(() => active() && source.value
-    ? { src: source.value, type: 'video/mp4' } : '');
+    ? { src: source.value, type: sourceMime.value } : '');
   const statusText = computed(() => ({
-    idle: '', resolving: '正在选择播放源…', preparing: '正在准备播放…',
+    idle: '', resolving: '正在选择播放源…', preparing: source.value === plan.value?.remuxUrl
+      ? '正在准备播放（无损换封装，不降低清晰度）…'
+      : source.value === plan.value?.previewUrl && !plan.value?.previewReady
+        ? '正在准备播放（兼容预览，首次可能需要转换）…' : '正在准备播放…',
     playing: '', paused: '', blocked: '浏览器阻止了自动播放，请点击播放。',
     error: '视频暂时无法播放，请重试。'
   })[state.value]);
   let controller: AbortController | null = null;
   let epoch = 0;
   let pendingPlay: number | null = null;
-  let fallbackUsed = false;
+  const attemptedSources = new Set<string>();
   let userPaused = false;
   let removeListeners: (() => void) | undefined;
 
   function canPlayOriginal(candidate: ReelPlayback) {
-    return Boolean(candidate.originalUrl && candidate.originalMimeType === 'video/mp4'
+    return Boolean(candidate.originalUrl && candidate.originalMimeType
+      && ['video/mp4', 'video/webm'].includes(candidate.originalMimeType.split(';')[0]!.trim())
       && document.createElement('video').canPlayType(candidate.originalMimeType));
   }
 
-  function selectSource(url: string) {
+  function canPlayRemux(candidate: ReelPlayback) {
+    return Boolean(candidate.remuxUrl && candidate.remuxMimeType
+      && document.createElement('video').canPlayType(candidate.remuxMimeType));
+  }
+
+  const canUsePreview = computed(() => state.value === 'error' && Boolean(plan.value)
+    && source.value !== plan.value?.previewUrl);
+
+  function selectSource(url: string, mime = 'video/mp4') {
     epoch += 1;
     pendingPlay = null;
+    attemptedSources.add(url);
+    sourceMime.value = mime.split(';')[0]!.trim() === 'video/webm' ? 'video/webm' : 'video/mp4';
     source.value = url;
     state.value = 'preparing';
   }
@@ -49,7 +64,7 @@ export function useReelPlayback(
     pendingPlay = null;
     source.value = '';
     plan.value = null;
-    fallbackUsed = false;
+    attemptedSources.clear();
     userPaused = false;
     if (!active()) { state.value = 'idle'; return; }
     state.value = 'resolving';
@@ -59,7 +74,9 @@ export function useReelPlayback(
       if (token !== epoch || !active()) return;
       plan.value = candidate;
       if (canPlayOriginal(candidate)) {
-        selectSource(candidate.originalUrl!);
+        selectSource(candidate.originalUrl!, candidate.originalMimeType!);
+      } else if (canPlayRemux(candidate)) {
+        selectSource(candidate.remuxUrl!, candidate.remuxMimeType!);
       } else {
         selectSource(candidate.previewUrl);
       }
@@ -82,20 +99,27 @@ export function useReelPlayback(
     // automatic conversion. Code 4 / NotSupportedError can also mean an initial
     // HTTP or network failure, so those ambiguous errors must offer retry instead.
     // Even a reported warm cache can expire: network errors must never switch src.
-    if (code === 3 && plan.value && !fallbackUsed) {
+    if (code === 3 && plan.value) {
       const candidate = plan.value;
-      if (source.value === candidate.originalUrl) {
-        fallbackUsed = true;
-        selectSource(candidate.previewUrl);
+      if (source.value === candidate.originalUrl && canPlayRemux(candidate)
+          && !attemptedSources.has(candidate.remuxUrl!)) {
+        selectSource(candidate.remuxUrl!, candidate.remuxMimeType!);
         return;
       }
-      if (canPlayOriginal(candidate)) {
-        fallbackUsed = true;
-        selectSource(candidate.originalUrl!);
+      if (source.value !== candidate.previewUrl && !attemptedSources.has(candidate.previewUrl)) {
+        selectSource(candidate.previewUrl);
         return;
       }
     }
     state.value = 'error';
+  }
+
+  // Ambiguous HTTP/network failures never trigger conversion automatically.
+  // The user can explicitly opt into a compatible preview after retrying.
+  function usePreview() {
+    if (!active() || !canUsePreview.value || !plan.value) return;
+    userPaused = false;
+    selectSource(plan.value.previewUrl);
   }
 
   function matchesSource(target: MediaPlayerElement) {
@@ -172,5 +196,5 @@ export function useReelPlayback(
     removeListeners?.();
     void player.value?.pause().catch(() => undefined);
   });
-  return { videoSource, state, statusText, toggle, play };
+  return { videoSource, state, statusText, toggle, play, canUsePreview, usePreview };
 }

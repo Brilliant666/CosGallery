@@ -82,6 +82,9 @@ export interface ReelPlayback {
   previewReady: boolean;
   originalUrl: string | null;
   originalMimeType: string | null;
+  remuxUrl?: string | null;
+  remuxMimeType?: string | null;
+  remuxReady?: boolean;
 }
 
 export interface FeedItem {

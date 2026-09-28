@@ -46,6 +46,7 @@ import {
 } from '../services/folder-share-service.js';
 import { galleryService } from '../services/gallery-service.js';
 import { ReelPlaybackError, resolveReelPlayback } from '../services/reel-playback-service.js';
+import { serveReelMedia } from './reel-media.js';
 import { SourceIndexOutdatedError } from '../utils/derivative-version.js';
 import { requireCapability } from '../middleware/auth-protection.js';
 import { createRateLimiter } from '../middleware/rate-limit.js';
@@ -839,6 +840,13 @@ router.get('/reels/:id/playback', async (request, response) => {
     }
   }
 });
+
+for (const kind of ['original', 'remux'] as const) {
+  router.get(`/reels/:id/${kind}`, async (request, response) => {
+    const params = imageIdSchema.parse(request.params);
+    await serveReelMedia(request, response, params.id, kind);
+  });
+}
 
 router.get('/feed/search', (request, response) => {
   const query = mediaSearchQuerySchema.parse(request.query);
