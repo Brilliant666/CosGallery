@@ -172,13 +172,13 @@ function toggleSound() {
   --reel-stage-gap: 0.75rem;
   --reel-stage-inline-gap: 1.25rem;
   --reel-stage-max-width: 24.4rem;
-  --reel-stage-max-height: calc(var(--reel-stage-max-width) * 16 / 9);
   display: grid;
   place-items: center;
   box-sizing: border-box;
   width: 100%;
   height: 100%;
   padding: calc(var(--reel-stage-gap) / 2) 0;
+  container-type: size;
 }
 
 .reel-player-card__stage {
@@ -186,10 +186,7 @@ function toggleSound() {
   justify-self: center;
   align-self: center;
   width: min(100%, var(--reels-desktop-stage-width, var(--reel-stage-max-width)));
-  height: min(
-    calc(100% - var(--reel-stage-gap)),
-    var(--reels-desktop-stage-height, var(--reel-stage-max-height))
-  );
+  height: auto;
   max-height: 100%;
   max-width: calc(100% - var(--reel-stage-inline-gap));
   aspect-ratio: 9 / 16;
@@ -197,6 +194,14 @@ function toggleSound() {
   border-radius: 0.6rem;
   background: #000;
   box-shadow: none;
+}
+
+@supports (width: 1cqw) {
+  .reel-player-card__stage {
+    /* Fit the card's actual content box, then derive height from width. Do not
+       independently clamp both axes: that overrides the 9:16 aspect ratio. */
+    width: min(calc(100cqw - var(--reel-stage-inline-gap)), calc(100cqh * 9 / 16));
+  }
 }
 
 .reel-player-card__surface {
@@ -409,13 +414,12 @@ function toggleSound() {
 @media (max-width: 768px) {
   .reel-player-card {
     --reel-stage-gap: 0;
+    --reel-stage-inline-gap: 0;
     padding: 0;
   }
 
   .reel-player-card__stage {
-    width: 100%;
     max-width: none;
-    height: 100%;
     max-height: none;
     border-radius: 0;
   }
