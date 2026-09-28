@@ -1,8 +1,8 @@
 # Companion 最小只读接口（v1）
 
-本契约供独立 **CosGallery Companion** 浏览辅助插件使用，不是 CostuanArchiveManager 改名，也不是采集 bridge 的另一组权限。PR49持续迭代；部署版本以实际构建信息与`/connection`能力为准，文档出现不等于旧实例已支持新增接口。
+本契约供独立 **CosGallery Companion** 浏览辅助插件使用，不是 CostuanArchiveManager 改名，也不是采集 bridge 的另一组权限。部署版本以实际构建信息与`/connection`能力为准，文档出现不等于旧实例已支持新增接口。
 
-基线：PR48合并后的 `c5ef42abf0795ec59499f83431b3eb5b81ba9699`。插件在 `costuan.com` / `www.costuan.com`、`ecytt02.com`、`sndiary02.com` 页面提取有限身份线索；服务端不访问这些网站、不代理任意 URL、不登记来源、不增别名、不触发下载或入库。
+插件在 `costuan.com` / `www.costuan.com`、`ecytt02.com`、`sndiary02.com` 页面提取有限身份线索；服务端不访问这些网站、不代理任意 URL、不登记来源、不增别名、不触发下载或入库。
 
 可先使用[完整合成响应样例](/examples/companion-v1.json)开发插件。样例中的实例、人物、数量和授权均非真实数据，也不含可用连接密钥。合成测试见 `server/test/companion-*.test.ts`。
 
