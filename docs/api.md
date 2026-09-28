@@ -224,12 +224,12 @@ Read-only playback resolution for one visible, single-video **post ID** from the
 }
 ```
 
-- A current stamped preview is preferred. In this case original fields are `null`; resolving a warm preview does not require its source disk to be online.
-- For a cold preview, original fields are populated only when the indexed compatibility assessment permits direct playback and the source size/mtime still match. The original URL uses the exact media ID, which can differ from the post ID.
-- The active reels player uses a browser-compatible original immediately when the preview is cold. Otherwise it requests the preview with a visible preparing state. Inactive cards have no video source; this does not prewarm the library.
+- A browser-compatible original is preferred, even when a current stamped preview exists. Original fields are populated only when the indexed compatibility assessment permits direct playback and the source size/mtime still match. The original URL uses the exact media ID, which can differ from the post ID.
+- A valid preview remains available when the source is missing, requires conversion, or direct original access is blocked pending a library rebuild. Original fields are then `null`. When checking an eligible original, a source/index version mismatch is still rejected rather than silently falling back to stale content.
+- The active reels player requests a preview only when no browser-compatible original is available or decoding fails. The preview is generated on demand and cached through the existing pipeline. Inactive cards have no video source; this does not prewarm the library or modify originals.
 - Readiness is advisory: preview delivery independently rechecks version and holds its existing output lease. No version, authentication or Range protections are bypassed.
 - Invalid IDs return `400`; unavailable/non-reel media `404`; stale source/index or a required rebuild `409`. Unknown errors retain the standard protected `500` response.
-- Autoplay permission failures request a user click, not a different source. Cancellation does not trigger a fallback loop; genuine format/network failures allow at most one alternate source per attempt.
+- Autoplay permission failures request a user click, not a different source. Cancellation, buffering, user pause and network failures do not trigger automatic conversion. Only decoding failures (media error code 3) allow at most one alternate source per attempt. Network failures and ambiguous unsupported-source errors (code 4 / `NotSupportedError`, which can also indicate initial HTTP/network failure) instead offer retry.
 
 ### `GET /api/feed/moments`
 

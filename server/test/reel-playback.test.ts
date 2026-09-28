@@ -91,7 +91,7 @@ describe.sequential('scoped reel playback resolution', () => {
     return output;
   }
 
-  it('prefers a stamped current preview without touching an unavailable source', async () => {
+  it('retains a stamped current preview when the compatible source is unavailable', async () => {
     const { image, post } = await fixture();
     await cache(image);
     await fs.rm(image.absolute_path);
@@ -100,6 +100,25 @@ describe.sequential('scoped reel playback resolution', () => {
       previewUrl: `/previews/clips/clip.mp4?v=${versions.imageDerivativeVersion(image, 'preview')}`,
       previewReady: true, originalUrl: null, originalMimeType: null
     });
+    expect(stat.mock.calls.some(([target]) => target === image.absolute_path)).toBe(true);
+  });
+
+  it('offers a compatible original even when a current preview exists', async () => {
+    const { image, post } = await fixture();
+    await cache(image);
+    expect(await resolve(post.id)).toMatchObject({
+      previewReady: true, originalUrl: `/api/originals/${image.id}`, originalMimeType: 'video/mp4'
+    });
+    await fs.appendFile(image.absolute_path, 'changed');
+    await expect(resolve(post.id)).rejects.toMatchObject({ code: 'SOURCE_INDEX_OUTDATED' });
+  });
+
+  it('does not require an incompatible source for a valid cached preview', async () => {
+    const { image, post } = await fixture('preview', 'clip.webm');
+    await cache(image);
+    await fs.rm(image.absolute_path);
+    const stat = vi.spyOn(fs, 'stat');
+    expect(await resolve(post.id)).toMatchObject({ previewReady: true, originalUrl: null });
     expect(stat.mock.calls.some(([target]) => target === image.absolute_path)).toBe(false);
   });
 
@@ -135,7 +154,7 @@ describe.sequential('scoped reel playback resolution', () => {
         resolve(post.id),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Resolver waited for the active writer')), 1000); })
       ]);
-      expect(result).toMatchObject({ previewReady: warm, originalUrl: warm ? null : `/api/originals/${image.id}` });
+      expect(result).toMatchObject({ previewReady: warm, originalUrl: `/api/originals/${image.id}` });
       expect(list).not.toHaveBeenCalled();
     } finally {
       clearTimeout(timer);
@@ -218,6 +237,29 @@ describe.sequential('scoped reel playback resolution', () => {
       return result;
     });
     await expect(resolve(post.id)).rejects.toMatchObject({ code: 'SOURCE_INDEX_OUTDATED' });
+  });
+
+  it('rechecks identity before falling back to cache after a missing-source stat', async () => {
+    const { image, post } = await fixture();
+    await cache(image);
+    const stat = fs.stat.bind(fs);
+    vi.spyOn(fs, 'stat').mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+      if (args[0] === image.absolute_path) {
+        database.connection.prepare('UPDATE posts SET is_trashed = 1 WHERE id = ?').run(post.id);
+        throw Object.assign(new Error('source missing'), { code: 'ENOENT' });
+      }
+      return stat(...args);
+    });
+    await expect(resolve(post.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it.each([false, true])('preserves the rebuild boundary with previewReady=%s', async (warm) => {
+    const { image, post } = await fixture();
+    if (warm) await cache(image);
+    const { scannerService } = await import('../src/services/scanner-service.js');
+    vi.spyOn(scannerService, 'isLibraryRebuildRequired').mockReturnValue(true);
+    if (warm) expect(await resolve(post.id)).toMatchObject({ previewReady: true, originalUrl: null });
+    else await expect(resolve(post.id)).rejects.toMatchObject({ status: 409, code: 'LIBRARY_REBUILD_REQUIRED' });
   });
 
   function response() {

@@ -387,11 +387,50 @@ describe('ReelPlayerCard', () => {
     expect(fetchReelPlayback).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps current previews first even if an original is eligible', async () => {
+  it('prefers a compatible original even when a current preview exists', async () => {
     vi.mocked(fetchReelPlayback).mockResolvedValue({ ...coldCompatible, previewReady: true });
     const wrapper = mountActive();
     await flushPromises();
-    expect(getPlayerElement(wrapper).src).toEqual({ src: coldCompatible.previewUrl, type: 'video/mp4' });
+    expect(getPlayerElement(wrapper).src).toEqual({ src: coldCompatible.originalUrl, type: 'video/mp4' });
+  });
+
+  it.each([false, true])('does not switch sources on network or ambiguous unsupported errors with previewReady=%s', async (previewReady) => {
+    vi.mocked(fetchReelPlayback).mockResolvedValue({ ...coldCompatible, previewReady });
+    const wrapper = mountActive();
+    await flushPromises();
+    const player = getPlayerElement(wrapper);
+    for (const detail of [{ code: 2 }, { name: 'NetworkError' }, { code: 4 }, { name: 'NotSupportedError' }]) {
+      player.dispatchEvent(new CustomEvent('error', { detail }));
+      await flushPromises();
+      expect(player.src).toEqual({ src: coldCompatible.originalUrl, type: 'video/mp4' });
+      expect(wrapper.text()).toContain('视频暂时无法播放');
+    }
+  });
+
+  it.each([{ code: 1 }, { name: 'AbortError' }, { name: 'NotAllowedError' }])('does not transcode an original after cancellation or autoplay rejection: %j', async (detail) => {
+    vi.mocked(fetchReelPlayback).mockResolvedValue(coldCompatible);
+    const wrapper = mountActive();
+    await flushPromises();
+    const player = getPlayerElement(wrapper);
+    player.dispatchEvent(new CustomEvent('error', { detail }));
+    await flushPromises();
+    expect(player.src).toEqual({ src: coldCompatible.originalUrl, type: 'video/mp4' });
+  });
+
+  it('does not switch to a preview on stalled playback or an error while user-paused', async () => {
+    vi.mocked(fetchReelPlayback).mockResolvedValue(coldCompatible);
+    const wrapper = mountActive();
+    await flushPromises();
+    const player = getPlayerElement(wrapper);
+    player.dispatchEvent(new Event('stalled'));
+    player.dispatchEvent(new Event('waiting'));
+    await flushPromises();
+    expect(player.src).toEqual({ src: coldCompatible.originalUrl, type: 'video/mp4' });
+    await wrapper.get('.reel-player-card__surface').trigger('click');
+    player.dispatchEvent(new CustomEvent('error', { detail: { code: 3 } }));
+    await flushPromises();
+    expect(player.src).toEqual({ src: coldCompatible.originalUrl, type: 'video/mp4' });
+    expect(player.paused).toBe(true);
   });
 
   it('waits for the current provider can-play instead of treating preparation as failure', async () => {
@@ -423,12 +462,12 @@ describe('ReelPlayerCard', () => {
     expect(getPlayerElement(wrapper).paused).toBe(false);
   });
 
-  it('falls back only once for a real media failure, never ping-pongs sources', async () => {
+  it('falls back only once for a decoding failure, never ping-pongs sources', async () => {
     vi.mocked(fetchReelPlayback).mockResolvedValue(coldCompatible);
     const wrapper = mountActive();
     await flushPromises();
     const player = getPlayerElement(wrapper);
-    player.dispatchEvent(new CustomEvent('error', { detail: { code: 3, message: 'Decode failed' } }));
+    player.dispatchEvent(new CustomEvent('error', { detail: { code: 3 } }));
     // A second old-provider event before Vue applies the replacement src is stale.
     player.dispatchEvent(new CustomEvent('error', { detail: { code: 3, message: 'Old provider' } }));
     await flushPromises();

@@ -46,16 +46,23 @@ export async function resolveReelPlayback(postId: number): Promise<ReelPlayback>
     originalUrl: null,
     originalMimeType: null
   };
-  // A reliable warm preview remains playable even when its original is offline.
-  if (previewReady) return result;
+  // A cache hit does not displace a compatible original. Preview-only media can
+  // still use a reliable cache without requiring the source disk to be online.
+  if (previewReady && initial.playback_strategy !== 'original') return result;
   if (scannerService.isLibraryRebuildRequired()) {
+    if (previewReady) return result;
     throw new ReelPlaybackError(409, 'LIBRARY_REBUILD_REQUIRED', 'Library rebuild required before resolving original media.');
   }
   let source: string;
   try { source = resolveOriginalPath(initial.relative_path); } catch { throw notFound(); }
   let stat;
   try { stat = await fs.stat(source); } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) throw notFound();
+    if (error && typeof error === 'object' && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+      recheck();
+      // Missing source is not a reason to discard an already valid preview.
+      if (previewReady) return result;
+      throw notFound();
+    }
     throw error;
   }
   recheck();

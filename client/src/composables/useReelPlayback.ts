@@ -58,7 +58,7 @@ export function useReelPlayback(
       const candidate = await fetchReelPlayback(item().id, controller.signal);
       if (token !== epoch || !active()) return;
       plan.value = candidate;
-      if (!candidate.previewReady && canPlayOriginal(candidate)) {
+      if (canPlayOriginal(candidate)) {
         selectSource(candidate.originalUrl!);
       } else {
         selectSource(candidate.previewUrl);
@@ -76,10 +76,13 @@ export function useReelPlayback(
     // Cancellation is normal when changing src/cards. Autoplay policy is not a
     // broken preview and must not switch URLs or retry in a timer loop.
     if (name === 'AbortError' || code === 1) return;
+    if (userPaused) return;
     if (name === 'NotAllowedError') { state.value = 'blocked'; return; }
-    const resourceError = name === 'NotSupportedError' || name === 'NetworkError'
-      || code === 2 || code === 3 || code === 4;
-    if (resourceError && plan.value && !fallbackUsed) {
+    // Only a decoding failure after media was established as usable justifies
+    // automatic conversion. Code 4 / NotSupportedError can also mean an initial
+    // HTTP or network failure, so those ambiguous errors must offer retry instead.
+    // Even a reported warm cache can expire: network errors must never switch src.
+    if (code === 3 && plan.value && !fallbackUsed) {
       const candidate = plan.value;
       if (source.value === candidate.originalUrl) {
         fallbackUsed = true;
