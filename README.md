@@ -22,6 +22,7 @@ CosGallery 基于 [Foldergram](https://github.com/foldergram/foldergram)，沿�
 - **自有目录**：按 Work 编目，不因多个来源或副本重复计数；持久化派生目录由后台 Worker 更新，普通翻页不重新编目全库。
 - **来源与补缺**：原始资料、精确作品对应、本地版本接受及实际入库历史分别保存。不以“来源套数减本地套数”直接推定缺失。
 - **异常审核**：针对具体计划 / Job 与具体文件审核，不提供“忽略所有错误”的通行开关。
+- **短片播放**：`/reels` 先由原生视频元素尝试已索引原件，兼容性失败后才检查无损换封装，必要时使用兼容预览；冷生成仍需等待完整文件，不能保证所有格式秒开。详见[媒体处理](docs/media-processing.md#reels-original-lossless-remux-then-compatible-preview)。
 
 日常入口为 `/archive-catalog` 和 `/creator-admission`。旧链接保留兼容跳转；详细操作见[页面地图](docs/creator-admission-navigation.md)。
 
@@ -59,6 +60,8 @@ pnpm start
 
 正常路径不需要 agent、CLI 或手写 JSON，来源也不是必填项。复杂合集仍需先人工划分作品边界；文件或目录范围改动后使用重新读取 / 检查入口，确认新范围。离开页面不会主动取消已提交任务，但未提交的选择不是跨设备永久草稿。详见[本地入库与审核](docs/local-admission-web.md)。
 
+标题相似、同名、编号或文件数量都不自动证明重复；候选只供人工核对。已移动的范围须回到所属原计划处理，不能新建重叠批次；用户移走等待目录后可重新读取并确认剩余或空范围，不代表被移走的作品已经入库。
+
 ### Costuan 补缺资源
 
 网页与插件限定本次博主范围，检查来源并精确暂存；用户通过百度客户端下载，再由本机后端检查、解压、校验与入库。
@@ -73,13 +76,15 @@ pnpm start
 - **SQLite** 保存身份、索引、来源、确认与执行历史；目录读取表是可重建的派生结果，不是第二套权威作品库。
 - **原始媒体** 与缩略图 / 预览缓存分开。浏览通常读取索引和缓存；已授权入库会移动选定目录，回收或删除是另外的文件操作，不能笼统理解为“原件永远不会移动”。
 
-备份应包含一致性数据库、原媒体、配置及必要本地密钥。网页保存的解压密码依赖独立 key 文件；不能只备份数据库。见[架构](docs/how-it-works.md)、[安全与备份](docs/security.md)、[资源目录](docs/own-resource-catalog.md)。
+应用恢复点包含一致性数据库、必要配置及本地密钥，**不包含原媒体**；图库原件需要另行备份。网页保存的解压密码依赖独立 key 文件，不能只备份数据库。见[应用恢复点](docs/application-recovery-points.md)、[安全与备份](docs/security.md)、[资源目录](docs/own-resource-catalog.md)。
 
 ## 配套插件与来源资料
 
 [CostuanArchiveManager](https://github.com/Brilliant666/Script/tree/main/CostuanArchiveManager)是独立浏览器扩展，不随 CosGallery 自动安装或重载。
 
-当前配套 0.11.9 支持部分来源资料留存与同请求重传；这不绕过严格检查 / 自动暂存的校验，也不会自动恢复历史队列。安装、连接和版本核对请使用 Script 仓库的 README 与交接说明。
+已核对的配套版本 0.11.10 支持来源资料留存与范围审核协议；这不绕过严格检查 / 自动暂存的校验，也不会自动恢复历史队列。文件更新不等于浏览器已重载，安装、连接和后续版本核对以 Script 仓库的 README 与 manifest 为准。
+
+**CosGallery Companion** 是另一款独立浏览辅助插件，不是 CostuanArchiveManager 改名。CosGallery 提供可撤销、会到期的专用只读授权，用于身份查询、独立 Work 摘要、分页名单和别名同步；名单中的喜欢 / 保留偏好只读，仍在 CosGallery 修改。离线同步由插件手动发起，不触发采集或入库；未知统计不是零，跨页须保持共同身份版本。接口与权限见[Companion 只读契约](docs/companion-readonly-api.md)。
 
 来源原文可以先留存，再确认归属和具体 Work 对应；留存资料不等于创建作品或证明本地已满足。ecytt / sndiary 可作为手工出处，但当前不宣称有专用自动采集适配器。见[来源资料](docs/source-evidence-local-admission.md)。
 
@@ -99,6 +104,7 @@ pnpm start
 - [功能与页面地图](docs/features.md) · [本地入库](docs/local-admission-web.md) · [Costuan 入库](docs/local-ingest-closed-loop.md)
 - [来源资料](docs/source-evidence-local-admission.md) · [自有资源目录](docs/own-resource-catalog.md)
 - [FAQ](docs/faq.md) · [排错](docs/troubleshooting.md) · [开发](docs/development.md)
+- [Companion 只读接口](docs/companion-readonly-api.md) · [运行时与仓库治理](docs/governance-runtime.md)
 - [维护与历史参考索引](docs/reference-index.md) · [贡献约定](CONTRIBUTING.md)
 
 感谢 Foldergram 作者 **Sajjad Ali** 及上游贡献者。上游媒体浏览、处理与分享文档保留为技术参考；其中 Foldergram 专属目录规则应结合当前 CosGallery 模式阅读，不作为本地入库的替代步骤。

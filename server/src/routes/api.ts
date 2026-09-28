@@ -19,6 +19,7 @@ import { createSourceEvidenceRouter } from './source-evidence-routes.js';
 import { createLocalAdmissionWebRouter } from './local-admission-web-routes.js';
 import { createLocalReviewRouter } from './local-review-routes.js';
 import { createApplicationRecoveryRouter } from './application-recovery-routes.js';
+import { createCompanionGrantRouter } from './companion-grant-routes.js';
 import {
   localIngestService,
   type LocalIngestJob,
@@ -44,6 +45,9 @@ import {
   folderShareService
 } from '../services/folder-share-service.js';
 import { galleryService } from '../services/gallery-service.js';
+import { ReelPlaybackError, resolveReelPlayback } from '../services/reel-playback-service.js';
+import { serveReelMedia } from './reel-media.js';
+import { SourceIndexOutdatedError } from '../utils/derivative-version.js';
 import { requireCapability } from '../middleware/auth-protection.js';
 import { createRateLimiter } from '../middleware/rate-limit.js';
 import { LIBRARY_REBUILD_REQUIRED_MESSAGE, scannerService } from '../services/scanner-service.js';
@@ -67,6 +71,7 @@ function managedResponse(response: express.Response, action: () => unknown, stat
 }
 
 const managedAccess = requireCapability('canManageLibrary', 'Admin access is required.');
+router.use('/admin/companion/grants', requireCapability('canAccessSettings', 'Admin access is required.'), createCompanionGrantRouter());
 router.use('/admin/recovery-points', requireCapability('canAccessSettings', 'Admin access is required.'), createApplicationRecoveryRouter());
 router.use('/admin/local-admission', managedAccess, createLocalAdmissionWebRouter());
 router.use('/admin/local-review', managedAccess, createLocalReviewRouter());
@@ -821,6 +826,28 @@ router.get('/reels', (request, response) => {
     })
   );
 });
+
+router.get('/reels/:id/playback', async (request, response) => {
+  const params = imageIdSchema.parse(request.params);
+  const query = z.object({ fallback: z.literal('1').optional() }).strict().parse(request.query);
+  authService.setNoStoreHeaders(response);
+  try {
+    response.json(await resolveReelPlayback(params.id, query.fallback === '1'));
+  } catch (error) {
+    if (error instanceof ReelPlaybackError || error instanceof SourceIndexOutdatedError) {
+      response.status(error instanceof ReelPlaybackError ? error.status : 409).json({ code: error.code, message: error.message });
+    } else {
+      sendUnexpectedError(response, error);
+    }
+  }
+});
+
+for (const kind of ['original', 'remux'] as const) {
+  router.get(`/reels/:id/${kind}`, async (request, response) => {
+    const params = imageIdSchema.parse(request.params);
+    await serveReelMedia(request, response, params.id, kind);
+  });
+}
 
 router.get('/feed/search', (request, response) => {
   const query = mediaSearchQuerySchema.parse(request.query);

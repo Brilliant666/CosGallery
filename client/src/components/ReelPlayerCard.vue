@@ -21,7 +21,7 @@
           :load="playerLoadMode"
           preload="metadata"
         >
-          <media-provider />
+            <media-provider :loaders.prop="originalLoaders" />
           <media-poster
             :src.prop="item.thumbnailUrl"
             :alt.prop="item.filename"
@@ -42,6 +42,14 @@
             </media-time-slider>
           </div>
         </media-player>
+
+        <div v-if="active && statusText" class="reel-player-card__status" role="status" aria-live="polite" @click.stop>
+          <span>{{ statusText }}</span>
+          <button v-if="state === 'blocked' || state === 'error'" type="button" @click.stop="toggle">
+            {{ state === 'blocked' ? '点击播放' : '重试' }}
+          </button>
+          <button v-if="canUsePreview" type="button" @click.stop="usePreview">使用兼容预览（可能需要转换）</button>
+        </div>
 
         <div
           v-if="showPausedIndicator"
@@ -115,287 +123,52 @@
 import { folderReadingRoute } from '../utils/work-gallery';
 import 'vidstack/bundle';
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { RouterLink } from 'vue-router';
-import type { PlayerSrc } from 'vidstack';
 import type { MediaPlayerElement } from 'vidstack/elements';
 
 import { useAppStore } from '../stores/app';
+import { useReelPlayback } from '../composables/useReelPlayback';
 import type { FeedItem, FolderSummary } from '../types/api';
 import { formatFolderTitle } from '../utils/folder-titles';
-import { getOriginalMediaUrl } from '../utils/original-media';
 import Avatar from './Avatar.vue';
+import { ReelOriginalLoader } from '../utils/reel-original-loader';
+
+const originalLoaders = [new ReelOriginalLoader()];
 
 const props = defineProps<{
   item: FeedItem;
   folder: FolderSummary | null;
   active: boolean;
 }>();
-
 const appStore = useAppStore();
 const playerElement = ref<MediaPlayerElement | null>(null);
-const isPaused = ref(false);
-const isUsingOriginalFallback = ref(false);
+const { videoSource, state, statusText, toggle, play, canUsePreview, usePreview } = useReelPlayback(
+  () => props.item, () => props.active, playerElement, () => appStore.videoMuted
+);
 const playerLoadMode = computed(() => (props.active ? 'eager' : 'visible'));
-const currentVideoSrc = computed(() => (isUsingOriginalFallback.value ? getOriginalMediaUrl(props.item.id) : props.item.previewUrl));
-const videoSource = computed<PlayerSrc>(() => ({
-  src: currentVideoSrc.value,
-  type: 'video/mp4'
-}));
-const showPausedIndicator = computed(() => props.active && isPaused.value);
+const showPausedIndicator = computed(() => props.active && state.value === 'paused');
 const displayFolderTitle = computed(() => formatFolderTitle(props.folder ?? props.item, appStore.nestedFolderTitleFormat));
 const folderDescription = computed(() => {
-  const normalizedFolderPath = props.item.folderPath.replace(/\\/g, '/');
-  const folderSegments = normalizedFolderPath.split('/').filter(Boolean);
-  const currentFolderName = folderSegments.at(-1);
-
-  return currentFolderName ? `${currentFolderName}/${props.item.filename}` : props.item.filename;
+  const segments = props.item.folderPath.replace(/\\/g, '/').split('/').filter(Boolean);
+  return segments.at(-1) ? `${segments.at(-1)}/${props.item.filename}` : props.item.filename;
 });
-
-let muteSyncToken = 0;
-let removePlayerEventListeners: (() => void) | null = null;
-let autoplayRetryAttempts = 0;
-let autoplayRetryTimer = 0;
-
-const AUTOPLAY_RETRY_DELAY_MS = 140;
-const MAX_AUTOPLAY_RETRIES = 3;
-
-function clearAutoplayRetry() {
-  if (autoplayRetryTimer !== 0) {
-    window.clearTimeout(autoplayRetryTimer);
-    autoplayRetryTimer = 0;
-  }
-}
-
-function resetAutoplayRetry() {
-  clearAutoplayRetry();
-  autoplayRetryAttempts = 0;
-}
-
-function scheduleAutoplayRetry() {
-  if (!props.active || autoplayRetryTimer !== 0 || autoplayRetryAttempts >= MAX_AUTOPLAY_RETRIES) {
-    return;
-  }
-
-  autoplayRetryAttempts += 1;
-  autoplayRetryTimer = window.setTimeout(() => {
-    autoplayRetryTimer = 0;
-    void syncPlayback();
-  }, AUTOPLAY_RETRY_DELAY_MS * autoplayRetryAttempts);
-}
-
-function switchToOriginalFallback() {
-  if (isUsingOriginalFallback.value) {
-    return;
-  }
-
-  resetAutoplayRetry();
-  isUsingOriginalFallback.value = true;
-}
-
-function syncMuted(player: MediaPlayerElement, muted: boolean) {
-  const token = ++muteSyncToken;
-  player.muted = muted;
-
-  requestAnimationFrame(() => {
-    if (muteSyncToken === token) {
-      muteSyncToken = 0;
-    }
-  });
-}
-
-async function syncPlayback() {
-  const player = playerElement.value;
-  if (!player) {
-    return;
-  }
-
-  if (!props.active) {
-    resetAutoplayRetry();
-    isPaused.value = false;
-    void player.pause().catch(() => {
-      // Ignore pause rejections before the provider is ready.
-    });
-    syncMuted(player, appStore.videoMuted);
-    return;
-  }
-
-  syncMuted(player, appStore.videoMuted);
-
-  try {
-    await player.play();
-    resetAutoplayRetry();
-    isPaused.value = false;
-    return;
-  } catch {
-    if (appStore.videoMuted) {
-      if (!isUsingOriginalFallback.value && autoplayRetryAttempts >= MAX_AUTOPLAY_RETRIES) {
-        switchToOriginalFallback();
-        return;
-      }
-
-      scheduleAutoplayRetry();
-      return;
-    }
-  }
-}
-
-function bindPlayerEventListeners(player: MediaPlayerElement | null) {
-  removePlayerEventListeners?.();
-  removePlayerEventListeners = null;
-
-  if (!player) {
-    return;
-  }
-
-  const handleReady = () => {
-    void syncPlayback();
-  };
-  const handlePlay = () => {
-    isPaused.value = false;
-    if (!props.active) {
-      void player.pause().catch(() => {
-        // Ignore pause rejections before the provider is ready.
-      });
-    }
-  };
-  const handlePause = () => {
-    isPaused.value = props.active;
-  };
-
-  player.addEventListener('loaded-metadata', handleReady);
-  player.addEventListener('can-play', handleReady);
-  player.addEventListener('play', handlePlay);
-  player.addEventListener('pause', handlePause);
-
-  removePlayerEventListeners = () => {
-    player.removeEventListener('loaded-metadata', handleReady);
-    player.removeEventListener('can-play', handleReady);
-    player.removeEventListener('play', handlePlay);
-    player.removeEventListener('pause', handlePause);
-  };
-
-  if (player.hasAttribute('data-can-play')) {
-    void syncPlayback();
-  }
-}
-
-async function toggleSound() {
-  const nextMuted = !appStore.videoMuted;
-  appStore.setVideoMuted(nextMuted);
-
-  const player = playerElement.value;
-  if (!player || !props.active) {
-    return;
-  }
-
-  syncMuted(player, nextMuted);
-
-  if (player.paused) {
-    await syncPlayback();
-  }
-}
-
-async function handleSurfaceClick(event?: MouseEvent) {
-  if (event && isInteractiveTarget(event.target)) {
-    return;
-  }
-
-  const player = playerElement.value;
-  if (!player || !props.active) {
-    return;
-  }
-
-  if (player.paused) {
-    await syncPlayback();
-    return;
-  }
-
-  isPaused.value = true;
-  void player.pause().catch(() => {
-    // Ignore pause rejections before the provider is ready.
-  });
-}
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest('a, button, media-time-slider'));
 }
-
-function handleSurfaceKeydown(event: KeyboardEvent) {
-  if (isInteractiveTarget(event.target)) {
-    return;
-  }
-
-  if (event.key !== 'Enter' && event.key !== ' ') {
-    return;
-  }
-
-  event.preventDefault();
-  void handleSurfaceClick();
+function handleSurfaceClick(event?: MouseEvent) {
+  if (!event || !isInteractiveTarget(event.target)) void toggle();
 }
-
-watch(
-  () => props.active,
-  (active) => {
-    if (active) {
-      resetAutoplayRetry();
-    }
-
-    void syncPlayback();
-  }
-);
-
-watch(
-  () => props.item.id,
-  () => {
-    resetAutoplayRetry();
-    isUsingOriginalFallback.value = false;
-    isPaused.value = false;
-  }
-);
-
-watch(
-  () => appStore.videoMuted,
-  (videoMuted) => {
-    const player = playerElement.value;
-    if (!player) {
-      return;
-    }
-
-    syncMuted(player, videoMuted);
-  }
-);
-
-watch(playerElement, (player) => {
-  bindPlayerEventListeners(player);
-});
-
-watch(
-  currentVideoSrc,
-  () => {
-    if (!props.active) {
-      return;
-    }
-
-    void syncPlayback();
-  }
-);
-
-onMounted(() => {
-  void syncPlayback();
-  if (props.active) {
-    scheduleAutoplayRetry();
-  }
-});
-
-onBeforeUnmount(() => {
-  clearAutoplayRetry();
-  removePlayerEventListeners?.();
-  removePlayerEventListeners = null;
-  void playerElement.value?.pause().catch(() => {
-    // Ignore pause rejections before the provider is ready.
-  });
-});
+function handleSurfaceKeydown(event: KeyboardEvent) {
+  if (isInteractiveTarget(event.target) || (event.key !== 'Enter' && event.key !== ' ')) return;
+  event.preventDefault();
+  void toggle();
+}
+function toggleSound() {
+  appStore.setVideoMuted(!appStore.videoMuted);
+  if (props.active && playerElement.value?.paused) void play(true);
+}
 </script>
 
 <style scoped>
@@ -403,13 +176,13 @@ onBeforeUnmount(() => {
   --reel-stage-gap: 0.75rem;
   --reel-stage-inline-gap: 1.25rem;
   --reel-stage-max-width: 24.4rem;
-  --reel-stage-max-height: calc(var(--reel-stage-max-width) * 16 / 9);
   display: grid;
   place-items: center;
   box-sizing: border-box;
   width: 100%;
   height: 100%;
   padding: calc(var(--reel-stage-gap) / 2) 0;
+  container-type: size;
 }
 
 .reel-player-card__stage {
@@ -417,10 +190,7 @@ onBeforeUnmount(() => {
   justify-self: center;
   align-self: center;
   width: min(100%, var(--reels-desktop-stage-width, var(--reel-stage-max-width)));
-  height: min(
-    calc(100% - var(--reel-stage-gap)),
-    var(--reels-desktop-stage-height, var(--reel-stage-max-height))
-  );
+  height: auto;
   max-height: 100%;
   max-width: calc(100% - var(--reel-stage-inline-gap));
   aspect-ratio: 9 / 16;
@@ -428,6 +198,14 @@ onBeforeUnmount(() => {
   border-radius: 0.6rem;
   background: #000;
   box-shadow: none;
+}
+
+@supports (width: 1cqw) {
+  .reel-player-card__stage {
+    /* Fit the card's actual content box, then derive height from width. Do not
+       independently clamp both axes: that overrides the 9:16 aspect ratio. */
+    width: min(calc(100cqw - var(--reel-stage-inline-gap)), calc(100cqh * 9 / 16));
+  }
 }
 
 .reel-player-card__surface {
@@ -463,6 +241,25 @@ onBeforeUnmount(() => {
 .reel-player-card__player :deep(img) {
   object-fit: contain;
   background: #000;
+}
+
+.reel-player-card__status {
+  position: absolute;
+  inset: 40% 1rem auto;
+  z-index: 2;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  color: #fff;
+  background: rgb(0 0 0 / 70%);
+  text-align: center;
+}
+
+.reel-player-card__status button {
+  display: block;
+  margin: 0.5rem auto 0;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 0.35rem;
 }
 
 .reel-player-card__pause-indicator {
@@ -621,13 +418,12 @@ onBeforeUnmount(() => {
 @media (max-width: 768px) {
   .reel-player-card {
     --reel-stage-gap: 0;
+    --reel-stage-inline-gap: 0;
     padding: 0;
   }
 
   .reel-player-card__stage {
-    width: 100%;
     max-width: none;
-    height: 100%;
     max-height: none;
     border-radius: 0;
   }

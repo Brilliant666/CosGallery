@@ -474,6 +474,8 @@
           </div>
         </template>
 
+        <CompanionGrantPanel v-if="currentCategory === 'access'" />
+
         <!-- CATEGORY: GENERAL -->
         <template v-if="currentCategory === 'general'">
           <section
@@ -1358,6 +1360,7 @@ import { useRoute } from 'vue-router';
 
 import ConfirmDialog from '../components/ConfirmDialog.vue';
 import ApplicationRecoveryPanel from '../components/ApplicationRecoveryPanel.vue';
+import CompanionGrantPanel from '../components/CompanionGrantPanel.vue';
 import {
   fetchAdminStats,
   triggerLibraryRebuild,

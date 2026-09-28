@@ -35,7 +35,7 @@ describe('admission action provenance and safe candidates',()=>{
   });
   it('requires every safety condition before considering an A item automatically selectable',()=>{
     expect(isAdmissionSafeCandidate(item)).toBe(true);
-    for(const changed of [{group:'B' as const},{candidates:[{workId:1}]},{conflicts:['collision']},{structureWarnings:['nested']},{needsBoundaryReview:true},{currentDisposition:{status:'unresolved' as const}}])expect(isAdmissionSafeCandidate({...item,...changed} as AdmissionItem)).toBe(false);
+    for(const changed of [{group:'B' as const},{candidates:[{workId:1}]},{conflicts:['collision']},{structureWarnings:['nested']},{needsBoundaryReview:true},{reviewIssues:['title_similar']},{candidatesTruncated:true},{peerCandidates:[{sourceRelativePath:'peer',reasons:['similar']}]},{peerCandidatesTruncated:true},{currentDisposition:{status:'unresolved' as const}}])expect(isAdmissionSafeCandidate({...item,...changed} as AdmissionItem)).toBe(false);
   });
   it('demotes only an automatic new choice when historical coverage is unresolved, retaining manual decisions',()=>{
     const unknown={...item,currentDisposition:{status:'unresolved' as const}};

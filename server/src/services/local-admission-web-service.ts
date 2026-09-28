@@ -12,6 +12,8 @@ import { LOCAL_ADMISSION_LOCK_KEY, runAdmissionCollectionExclusive } from './loc
 import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { recycleEmptyAdmissionParent, type AdmissionParentCleanupResult } from './local-admission-parent-cleanup.js';
 import { laterAdmissionCompletions, admissionItemIdentity, assertNoLaterAdmissionCompletion, type CurrentAdmissionDisposition } from './local-admission-later-completion.js';
+import { LocalAdmissionTitleCandidates, type AdmissionMatchEvidence, type AdmissionPeerCandidate } from './local-admission-title-candidates.js';
+import { assertNewAdmissionOwnership, ownershipErrorPlan, ownershipErrorText } from './local-admission-plan-ownership.js';
 
 const ROOT_KEY = 'local-admission.waiting-root.v1';
 const reservedDirectory = (name:string) => /^\.local-(?:admission|review)-/i.test(name);
@@ -35,7 +37,7 @@ type Preview = Awaited<ReturnType<LocalFolderAdmissionService['preview']>>;
 type PreviewItem = Preview['items'][number];
 type Source = {sourceWorkId:number;title:string;sourceOrder:number|null;mediaSummary:string|null;taskIds:number[]};
 export type AdmissionWorkChoice = {workId:number;title:string;catalogNo:string|null;images:number;videos:number;
-  thumbnailUrl:string|null;primaryLocalWorkId:number|null;localState:string;originalDirectories:string[];sources:Source[]};
+  thumbnailUrl:string|null;primaryLocalWorkId:number|null;localState:string;originalDirectories:string[];sources:Source[];matchEvidence?:AdmissionMatchEvidence};
 type Batch = {id:string;creator_id:number;input_root:string;source_evidence_id:number|null;state:string;created_at:string;updated_at:string;
   error:string|null;context_json:string;confirmed_json:string|null;owner_pid:number|null;owner_token:string|null};
 type DirectoryRefresh = {added:{creatorId:number;parent:string;name:string}[];removed:{creatorId:number;parent:string;name:string}[];warnings:string[]};
@@ -46,8 +48,10 @@ type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTi
   summary:{images:number;videos:number;other:number;bytes:number};candidates:AdmissionWorkChoice[];conflicts:string[];
   ads:{relativePath:string;size:number;automatic?:boolean}[];advertisementRulesVersion?:number;suggestedAction?:z.input<typeof actionSchema>;
   scopeReviewRequired?:boolean;
+  reviewIssues?:('title_exact'|'title_similar'|'multiple_candidates'|'existing_path'|'target_conflict'|'structure'|'read_error'|'batch_candidate')[];candidatesTruncated?:boolean;
+  peerCandidates?:AdmissionPeerCandidate[];peerCandidatesTruncated?:boolean;
   structureWarnings?:string[];needsBoundaryReview?:boolean;reviewFingerprint?:string};
-type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[]};
+type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[];titleCandidates:LocalAdmissionTitleCandidates};
 type PreparedExecution={batch:Batch;request:z.infer<typeof webExecuteSchema>;plan:AdmissionPlan|null;saved:Record<string,unknown>[]};
 type Collection={id:string;state:string;created_at:string;updated_at:string;confirmed_json:string|null;error:string|null;owner_pid:number|null;owner_token:string|null};
 const advertisementRulesVersion=1;
@@ -71,12 +75,19 @@ const hash = (value:unknown) => createHash('sha256').update(JSON.stringify(value
 const same = (a:string,b:string) => process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b);
 const message = (e:unknown) => e instanceof Error ? e.message : String(e);
 export class AdmissionWebError extends Error { constructor(text:string,readonly status=409){super(text);} }
+function confirmationOwnershipError(error:unknown):unknown {
+  const planId=ownershipErrorPlan(message(error));
+  return planId?new AdmissionWebError(`${ownershipErrorText(message(error))} 所属批次：${planId}。`):error;
+}
 function alive(pid:number|null) { if (!pid) return false; try {process.kill(pid,0);return true;} catch(e) {return (e as NodeJS.ErrnoException).code !== 'ESRCH';} }
 async function strictDirectory(value:string) {
   if (!path.isAbsolute(value)) throw new AdmissionWebError('等待区必须是绝对路径',400);
   // Reject linked ancestors as well as a linked final component; do not treat a junction as permission.
   let cursor=path.resolve(value);
-  for (;;) { const stat=await fs.lstat(cursor); if(!stat.isDirectory()||stat.isSymbolicLink()) throw new AdmissionWebError('目录链接或重解析点不能作为导入路径');
+  for (;;) { const stat=await fs.lstat(cursor).catch(error=>{
+      if((error as NodeJS.ErrnoException).code==='ENOENT')throw new AdmissionWebError('所需目录已不存在，请核对当前目录范围；已保存的执行记录保持。');
+      throw error;
+    }); if(!stat.isDirectory()||stat.isSymbolicLink()) throw new AdmissionWebError('目录链接或重解析点不能作为导入路径');
     const parent=path.dirname(cursor); if(parent===cursor)break; cursor=parent; }
   return path.resolve(value);
 }
@@ -208,21 +219,53 @@ export class LocalAdmissionWebService {
     const siblings=await this.siblingEntries(inputRoot);
     if(new Set(scope.directories.map(d=>process.platform==='win32'?d.toLowerCase():d)).size!==scope.directories.length)throw new AdmissionWebError('选择了重复目录',400);
     const id=randomUUID(),items:{summary:Summary;preview:PreviewItem|null}[]=[];let creatorDirectory='';const version=this.thumbnailVersion();
+    const titleCandidates=new LocalAdmissionTitleCandidates(this.db,scope.creatorId);
+    const choiceCache=new Map<number,AdmissionWorkChoice|null>();
+    const getChoice=(workId:number)=>{if(!choiceCache.has(workId))choiceCache.set(workId,this.workChoice(workId,scope.creatorId,version));return choiceCache.get(workId);};
     for(const name of scope.directories){
       try {
         const preview=await this.admission.preview({...scope,inputRoot,directories:[name]});creatorDirectory=preview.creatorDirectory;
         const item=preview.items[0]!;
-        const workIds=new Set([...(item.review.candidates as unknown as {workId:number}[]).map(c=>Number(c.workId)),...item.review.existingRelations.map(c=>Number(c.workId))].filter(Boolean));
-        // Include source-free same-title Works as suggestions too; never implicitly merge.
-        for(const w of this.db.prepare('SELECT id FROM archive_catalog_works WHERE creator_id=? AND display_title=?').all(scope.creatorId,item.displayTitle))workIds.add(Number(w.id));
-        const candidates=[...workIds].slice(0,50).flatMap(workId=>{const choice=this.workChoice(workId,scope.creatorId,version);return choice?[choice]:[];});
+        const evidence=titleCandidates.find(name);
+        for(const candidate of item.review.candidates as unknown as {workId:number;title:string}[]){
+          const workId=Number(candidate.workId);if(!titleCandidates.workIds.has(workId))continue;
+          const previous=evidence.get(workId),source=titleCandidates.sourceEvidence(name,candidate.title);
+          evidence.set(workId,{level:previous?.level==='exact'?'exact':source.level,reasons:[...new Set([...(previous?.reasons??[]),...source.reasons])]});
+        }
+        for(const relation of item.review.existingRelations){
+          const workId=Number(relation.workId);if(!titleCandidates.workIds.has(workId))continue;
+          evidence.set(workId,{level:'path',reasons:[...(evidence.get(workId)?.reasons??[]),'目标路径已有本地副本关系；不能覆盖目标']});
+        }
+        const matching:(AdmissionWorkChoice&{matchEvidence:AdmissionMatchEvidence})[]=[];
+        for(const [workId,matchEvidence] of [...evidence].sort(([a,ea],[b,eb])=>({path:0,exact:1,similar:2}[ea.level]-{path:0,exact:1,similar:2}[eb.level])||a-b)){
+          const choice=getChoice(workId);if(choice)matching.push({...choice,matchEvidence});
+          if(matching.length===51)break;
+        }
+        const candidates=matching.slice(0,50),candidatesTruncated=matching.length>50;
         const warnings=structureWarnings(item.manifest);
-        const group:Summary['group']=warnings.length?'D':item.review.existingRelations.length?'C':item.review.conflicts.length?'D':candidates.length===1?'B':candidates.length>1?'D':'A';
+        const reviewIssues:NonNullable<Summary['reviewIssues']>=[];
+        if(matching.some(c=>c.matchEvidence.level==='exact'))reviewIssues.push('title_exact');
+        if(matching.some(c=>c.matchEvidence.level==='similar'))reviewIssues.push('title_similar');
+        if(matching.length>1)reviewIssues.push('multiple_candidates');
+        if(item.review.existingRelations.length)reviewIssues.push('existing_path');
+        if(item.review.conflicts.length)reviewIssues.push('target_conflict');
+        if(warnings.length)reviewIssues.push('structure');
+        const group:Summary['group']=warnings.length||item.review.conflicts.length||matching.length>1?'D':item.review.existingRelations.length?'C':
+          candidates.length===1?(candidates[0]!.matchEvidence.level==='exact'?'B':'C'):'A';
         items.push({preview:item,summary:{key:item.key,sourceRelativePath:name,targetPath:item.targetPath,displayTitle:item.displayTitle,group,
-          summary:item.review.summary,candidates,conflicts:item.review.conflicts,ads:advertisementCandidates(item.manifest),advertisementRulesVersion,
+          summary:item.review.summary,candidates,candidatesTruncated,reviewIssues,conflicts:item.review.conflicts,ads:advertisementCandidates(item.manifest),advertisementRulesVersion,
           ...(warnings.length?{structureWarnings:warnings,needsBoundaryReview:true}:{})}});
       } catch(e) {items.push({preview:null,summary:{key:randomUUID(),sourceRelativePath:name,targetPath:'',displayTitle:name,group:'D',
-        summary:{images:0,videos:0,other:0,bytes:0},candidates:[],conflicts:[message(e)],ads:[]}});}
+        summary:{images:0,videos:0,other:0,bytes:0},candidates:[],reviewIssues:['read_error'],candidatesTruncated:false,conflicts:[message(e)],ads:[]}});}
+    }
+    const peerCandidates=titleCandidates.peers(items.filter(item=>item.preview).map(item=>item.summary.sourceRelativePath));
+    for(const item of items){
+      const peers=peerCandidates.get(item.summary.sourceRelativePath);
+      item.summary.peerCandidates=peers?.items??[];item.summary.peerCandidatesTruncated=peers?.truncated??false;
+      if(peers?.items.length||peers?.truncated){
+        item.summary.reviewIssues=[...(item.summary.reviewIssues??[]),'batch_candidate'];
+        if(item.summary.group!=='D')item.summary.group='C';
+      }
     }
     const context:Context={galleryRoot:this.galleryRoot,creatorDirectory,parent:scope.parent,waitingRoot:root,workFacts:{},sourceFacts:{}};
     for(const w of this.db.prepare('SELECT id FROM archive_catalog_works WHERE creator_id=?').all(scope.creatorId))context.workFacts[String(w.id)]=this.workFact(Number(w.id));
@@ -234,19 +277,25 @@ export class LocalAdmissionWebService {
       creatorId:scope.creatorId,parent:scope.parent,sourceEvidenceId:scope.sourceEvidenceId??null,inputRoot,context,
       manifest:item.preview.manifest,sourceRelativePath:item.summary.sourceRelativePath,targetPath:item.summary.targetPath,
       displayTitle:item.summary.displayTitle,group:item.summary.group,conflicts:item.summary.conflicts,
+      candidates:item.summary.candidates.map(c=>({workId:c.workId,matchEvidence:c.matchEvidence})),
+      reviewIssues:item.summary.reviewIssues,candidatesTruncated:item.summary.candidatesTruncated,
+      ...(item.summary.peerCandidates?.length||item.summary.peerCandidatesTruncated?{peerCandidates:item.summary.peerCandidates,peerCandidatesTruncated:item.summary.peerCandidatesTruncated}:{}),
       ads:item.summary.ads,advertisementRulesVersion,structureWarnings:item.summary.structureWarnings??[]
     });
     // Operational scope metadata must not invalidate unchanged per-work review facts.
     context.knownSiblingDirectories=siblings.filter(entry=>entry.directory).map(entry=>entry.name);
     if(hash(siblings)!==hash(await this.siblingEntries(inputRoot)))throw new AdmissionWebError('核对期间父目录范围发生变化，请待整理结束后重新读取');
-    return {id,scope,inputRoot,context,items};
+    return {id,scope,inputRoot,context,items,titleCandidates};
   }
   private async siblingEntries(inputRoot:string) {
     return (await fs.readdir(inputRoot,{withFileTypes:true})).filter(entry=>!reservedDirectory(entry.name))
       .map(entry=>({name:entry.name,directory:entry.isDirectory()&&!entry.isSymbolicLink(),link:entry.isSymbolicLink()}))
       .sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans-CN'));
   }
-  private savePreview({id,scope,inputRoot,context,items}:PreparedPreview) {
+  private savePreview({id,scope,inputRoot,context,items,titleCandidates}:PreparedPreview) {
+      // BEGIN IMMEDIATE already encloses every caller. Refuse stale recall
+      // rather than saving a false A-group after an asynchronous inventory.
+      if(!titleCandidates.unchanged())throw new AdmissionWebError('核对期间博主名称、别名或已有作品目录信息发生变化，请重新核对。');
       this.db.prepare(`INSERT INTO local_admission_web_batches(id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,context_json)
         VALUES(?,?,?,?,'draft',?,?,?)`).run(id,scope.creatorId,inputRoot,scope.sourceEvidenceId??null,now(),now(),JSON.stringify(context));
       for(const [position,item] of items.entries())this.db.prepare('INSERT INTO local_admission_web_items(batch_id,item_key,position,summary_json,preview_json) VALUES(?,?,?,?,?)')
@@ -276,6 +325,11 @@ export class LocalAdmissionWebService {
     }
   }
   private effectiveState(row:Pick<Batch,'state'|'owner_pid'>){return ['queued','running'].includes(row.state)&&!alive(row.owner_pid)?'interrupted':row.state;}
+  private blockingBatch(error:string|null,creatorId:number) {
+    const id=ownershipErrorPlan(error);if(!id)return undefined;
+    const row=this.db.prepare('SELECT id FROM local_admission_web_batches WHERE id=? AND creator_id=?').get(id,creatorId);
+    return row?{batchId:id,collectionId:this.collectionId(id)}:undefined;
+  }
   get(id:string,later=laterAdmissionCompletions(this.db,[id])) {
     // No manifest/content reads, hashing or directory traversal on progress polling.
     const row=this.db.prepare(`SELECT id,creator_id,input_root,source_evidence_id,state,created_at,updated_at,error,owner_pid,context_json FROM local_admission_web_batches WHERE id=?`).get(id) as Omit<Batch,'confirmed_json'|'owner_token'>|undefined;
@@ -292,7 +346,8 @@ export class LocalAdmissionWebService {
     const cleanupMessage=cleanup?({recycled:'空博主目录已放入回收站',not_empty:'父目录仍有内容，已保留',not_applicable:'父目录已不存在，无需清理',failed:'空目录清理未完成，已入库作品不受影响'}[cleanup.status]
       +(cleanup.message?`：${cleanup.message}`:'')+(cleanup.retainedPath?`；保留位置：${cleanup.retainedPath}`:'')):undefined;
     return {id,planId:id,collectionId:this.collectionId(id),creatorId:row.creator_id,creatorName:String(this.db.prepare('SELECT canonical_name FROM archive_catalog_creators WHERE id=?').get(row.creator_id)?.canonical_name??''),
-      inputRoot:row.input_root,sourceEvidenceId:row.source_evidence_id,state:reconciled?'completed':this.effectiveState(row),createdAt:row.created_at,updatedAt:row.updated_at,error:reconciled?null:row.error,
+      inputRoot:row.input_root,sourceEvidenceId:row.source_evidence_id,state:reconciled?'completed':this.effectiveState(row),createdAt:row.created_at,updatedAt:row.updated_at,error:reconciled?null:ownershipErrorText(row.error),
+      ...(!reconciled?{blockingBatch:this.blockingBatch(row.error,row.creator_id)}:{}),
       ...(cleanup?{parentCleanup:{...cleanup,message:cleanupMessage!}}:{}),
       currentTotals:{completedLater,pending:Math.max(0,Number(counts.total)-Number(counts.skipped??0)-completed-completedLater),unresolved},
       totals:{total:Number(counts.total),selected:Number(counts.selected??0),completed,skipped:Number(counts.skipped??0),deferred:Number(counts.deferred??0)}};
@@ -345,7 +400,8 @@ export class LocalAdmissionWebService {
       return {...summary,action:String(r.action),state,executionState:r.state??null,...this.itemNextAction(batch,r,blocked),
         ...(currentDisposition?{currentDisposition}:{}),
         ...(currentDisposition?.status==='completed_later'?{nextAction:'none' as const,nextActionReason:'历史批次未完成；本项已在后续批次完成，请查看后续结果。'}:{}),
-        lastError:r.last_error??null,workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
+        ...(currentDisposition?.status!=='completed_later'&&ownershipErrorPlan(r.last_error==null?null:String(r.last_error))?{nextAction:'none' as const,nextActionReason:'请查看上方提示中的所属批次；这不是文件损坏审核，不要移动或删除文件。'}:{}),
+        lastError:ownershipErrorText(r.last_error==null?null:String(r.last_error)),workId:r.work_id??null,localWorkId:r.local_work_id??null,postId:r.post_id??null};})};
   }
   private itemNextAction(batch:ReturnType<LocalAdmissionWebService['get']>,item:Record<string,unknown>,blocked:string|null):NextAction {
     const none=(nextActionReason:string):NextAction=>({nextAction:'none',nextActionReason});
@@ -516,6 +572,8 @@ export class LocalAdmissionWebService {
     this.assertIdle();
     const report:DirectoryRefresh={added:[],removed:[],warnings:[]};
     const prepared:PreparedPreview[]=[];
+    const empty:PreparedPreview[]=[];
+    const observations:{inputRoot:string;entries:Awaited<ReturnType<LocalAdmissionWebService['refreshEntries']>>}[]=[];
     const normalize=(name:string)=>process.platform==='win32'?name.toLowerCase():name;
     for(const scope of this.collectionScope(id).scopes){
       this.assertCreatorIdle(scope.creatorId);
@@ -529,11 +587,12 @@ export class LocalAdmissionWebService {
       const later=laterAdmissionCompletions(this.db,[String(old.id)]);
       const covered=new Set(this.db.prepare("SELECT item_key,json_extract(summary_json,'$.sourceRelativePath') relative FROM local_admission_web_items WHERE batch_id=?").all(old.id)
         .filter(row=>later.get(admissionItemIdentity(String(old.id),String(row.item_key)))?.status==='completed_later').map(row=>normalize(String(row.relative))));
-      if(scope.directories.every(name=>covered.has(normalize(name)))){
+      if(scope.directories.length&&scope.directories.every(name=>covered.has(normalize(name)))){
         report.warnings.push(`${scope.parent}：原范围已在后续批次完成，未重新读取或加入本次核对。`);continue;
       }
-      await this.validateRoot();await strictDirectory(inputRoot);await assertPathInsideLocalIngestRoot(context.waitingRoot,inputRoot,{directChild:true});
-      const entries=await this.siblingEntries(inputRoot),byName=new Map(entries.map(entry=>[normalize(entry.name),entry]));
+      const observed=await this.refreshEntries(inputRoot);observations.push({inputRoot,entries:observed});
+      const entries=observed??[],byName=new Map(entries.map(entry=>[normalize(entry.name),entry]));
+      if(observed===null)report.warnings.push(`${scope.parent}：等待区父目录已不存在，原预览保留；本次没有移动或删除文件。`);
       const selected=new Set(scope.directories.map(normalize));
       const known=new Set(context.knownSiblingDirectories?.map(normalize)??[]);
       const retained=scope.directories.filter(name=>byName.has(normalize(name))&&!covered.has(normalize(name)));
@@ -551,7 +610,14 @@ export class LocalAdmissionWebService {
       for(const entry of added)report.added.push({creatorId:scope.creatorId,parent:scope.parent,name:entry.name});
       if(entries.some(entry=>entry.link&&!selected.has(normalize(entry.name))))report.warnings.push(`${scope.parent}：目录链接未加入核对范围。`);
       if(added.length&&!context.knownSiblingDirectories)report.warnings.push(`${scope.parent}：旧预览未记录完整父目录范围，新发现的 ${added.length} 个目录先暂缓，请核对是否属于本批拆分后的作品。`);
-      if(!retained.length&&!added.length)continue;
+      if(!retained.length&&!added.length){
+        // Keep a zero-item child so the persisted empty preview retains lineage
+        // and the removal report without rewriting the historical draft.
+        empty.push({id:randomUUID(),scope:{...scope,directories:[]},inputRoot,
+          context:{...context,workFacts:{},sourceFacts:{},knownSiblingDirectories:entries.filter(entry=>entry.directory).map(entry=>entry.name)},
+          items:[],titleCandidates:new LocalAdmissionTitleCandidates(this.db,scope.creatorId)});
+        continue;
+      }
       const child=await this.preparePreview({...scope,directories:[...retained,...added.map(entry=>entry.name)]});
       if(hash(entries)!==hash(await this.siblingEntries(inputRoot)))throw new AdmissionWebError('重新读取期间目录范围发生变化，请待整理结束后重试；原草稿保持');
       for(const item of child.items)if(unresolvedScope.has(item.summary.sourceRelativePath)||!context.knownSiblingDirectories&&added.some(entry=>entry.name===item.summary.sourceRelativePath)){
@@ -560,10 +626,25 @@ export class LocalAdmissionWebService {
       }
       prepared.push(child);
     }
+    if(!prepared.length)prepared.push(...empty);
     if(!prepared.length)throw new AdmissionWebError('本批博主下没有可核对的作品目录，原草稿保留；请先完成目录整理或调整导入范围');
+    for(const observation of observations)if(hash(observation.entries)!==hash(await this.refreshEntries(observation.inputRoot)))
+      throw new AdmissionWebError('重新读取期间目录范围发生变化，请待整理结束后重试；原草稿保持');
     this.assertIdle();for(const child of prepared)this.assertCreatorIdle(child.scope.creatorId);
     prepared[0]!.context.directoryRefresh=report;
     return prepared;
+  }
+  private async refreshEntries(inputRoot:string) {
+    const root=await this.validateRoot();
+    if(!same(path.dirname(inputRoot),root))throw new AdmissionWebError('等待区范围已改变，请重新选择目录');
+    try{await fs.lstat(inputRoot);}catch(error){
+      if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+      // A missing child is a scope change, not proof that a disconnected root
+      // or inaccessible drive is an empty waiting area.
+      await this.validateRoot();return null;
+    }
+    await strictDirectory(inputRoot);await assertPathInsideLocalIngestRoot(root,inputRoot,{directChild:true});
+    return this.siblingEntries(inputRoot);
   }
   private remainingItems(id:string,completedLater?:Map<string,CurrentAdmissionDisposition>) {
     // DB-only projection: progress reads never re-inventory files or parse full manifests.
@@ -683,6 +764,8 @@ export class LocalAdmissionWebService {
     const record=this.collectionRow(id);if(record.state!=='draft'||record.has_confirmation)throw new AdmissionWebError('集中确认已保存，请继续原集合');
     this.assertIdle();
     const children=this.db.prepare('SELECT batch_id FROM local_admission_web_collection_batches WHERE collection_id=? ORDER BY position').all(id);
+    if(!children.length||!this.db.prepare(`SELECT 1 FROM local_admission_web_items i JOIN local_admission_web_collection_batches c ON c.batch_id=i.batch_id WHERE c.collection_id=? LIMIT 1`).get(id))
+      throw new AdmissionWebError('已无待入库目录，无需提交；原预览与历史记录保留。');
     const requested=new Map(request.batches.map(child=>[child.batchId,child]));
     if(requested.size!==request.batches.length||requested.size!==children.length||children.some(row=>!requested.has(String(row.batch_id))))throw new AdmissionWebError('集中确认必须覆盖本集合所有博主批次',400);
     const prepared:PreparedExecution[]=[],targets=new Set<string>();
@@ -696,7 +779,8 @@ export class LocalAdmissionWebService {
         await this.admission.verifyUnstarted(next.plan);
       }
       prepared.push(next);
-    }}catch(e){if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);throw e;}
+    }}catch(e){if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);
+      throw confirmationOwnershipError(e);}
     // Filesystem reads above do not hold a SQLite read snapshot. Commit all children
     // under one fresh write transaction; no child can run before the last validates.
     if(this.collectionRequest(request.requestKey,id,'execute',request))return this.collection(id);
@@ -849,6 +933,7 @@ export class LocalAdmissionWebService {
     if(!same(context.waitingRoot,this.settings().waitingRoot)||!same(context.galleryRoot,this.galleryRoot))throw new AdmissionWebError('配置已改变，请重新预览');
     this.creator(batch.creator_id);this.assertCreatorIdle(batch.creator_id);
     this.assertNotCompletedLater(batch.id,plan?.items.map(item=>item.key)??[]);
+    if(plan){try{assertNewAdmissionOwnership(this.db,plan);}catch(error){throw confirmationOwnershipError(error);}}
     for(const item of plan?.items??[]) {
       if(item.identity.kind==='existing'&&context.workFacts[String(item.identity.workId)]!==this.workFact(item.identity.workId!))throw new AdmissionWebError('准备期间作品身份已变化，请重新预览');
       if(item.acceptVersions.some(a=>context.sourceFacts[String(a.sourceWorkId)]!==this.sourceFact(a.sourceWorkId)))throw new AdmissionWebError('准备期间来源或任务已变化，请重新预览');

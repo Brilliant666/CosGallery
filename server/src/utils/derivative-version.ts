@@ -25,6 +25,8 @@ export interface DerivativeGenerationExpectation {
 export function derivativeVersion(sourceVersion: string, kind: DerivativeKind, mediaType = 'image'): string {
   const recipe = kind === 'thumbnail'
     ? `thumb-v${DERIVATIVE_RECIPE_VERSION}:${THUMBNAIL_SIZE}:${THUMBNAIL_QUALITY}:${WEBP_EFFORT}`
+    : mediaType.startsWith('video-remux:')
+      ? 'reel-remux-v1:h264-yuv420p:aac-or-silent:single-tracks:copy:mp4-faststart'
     : mediaType === 'video'
       ? `video-v${DERIVATIVE_RECIPE_VERSION}:${VIDEO_PREVIEW_MAX_LONG_EDGE}:${VIDEO_PREVIEW_MAX_SHORT_EDGE}:${appConfig.ffmpegVideoEncoder}:${VIDEO_PREVIEW_QUALITY}:aac${VIDEO_AUDIO_BITRATE}`
       : `preview-v${DERIVATIVE_RECIPE_VERSION}:${PREVIEW_MAX_WIDTH}:${PREVIEW_QUALITY}:${WEBP_EFFORT}:animated`;

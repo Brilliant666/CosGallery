@@ -26,6 +26,7 @@ const referenceItems = [
   { text: '安全与备份', link: '/security' },
   { text: '应用恢复点', link: '/application-recovery-points' },
   { text: '开发', link: '/development' },
+  { text: 'Companion 只读接口', link: '/companion-readonly-api' },
   { text: '排错', link: '/troubleshooting' },
   { text: '常见问题', link: '/faq' },
   { text: '技术与历史索引', link: '/reference-index' }

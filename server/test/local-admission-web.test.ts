@@ -277,6 +277,124 @@ describe.sequential('web directory admission delegates to original plans',()=>{
       expect(db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)).toEqual(saved);
     }finally{for(const read of reads)read.mockRestore();}
   });
+  it('grades source-free title, local-folder and version evidence without selecting an existing identity',async()=>{
+    const db=manager.connection;
+    const add=(title:string)=>Number(db.prepare('INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,?)').run(creator,title).lastInsertRowid);
+    const exact=add('RecallGarden'),similar=add('Recall-Picnic'),version=add('RecallMaid RED.Ver');
+    const names=['NO.081 RecallGarden','NO.082 recall picnic','NO.083 RecallMaid'];
+    const batch=await preview(names);
+    expect(batch.items.map(item=>item.group)).toEqual(['B','C','C']);
+    expect(batch.items.map(item=>item.candidates[0]?.workId)).toEqual([exact,similar,version]);
+    expect(batch.items.map(item=>item.candidates[0]?.matchEvidence?.level)).toEqual(['exact','similar','similar']);
+    expect(batch.items.map(item=>item.reviewIssues)).toEqual([['title_exact'],['title_similar'],['title_similar']]);
+    expect(batch.items.every(item=>item.suggestedAction===undefined)).toBe(true);
+    // Preview does not turn a title suggestion into either identity reuse or a plan.
+    expect(db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)).toBeUndefined();
+    const raw=db.prepare('SELECT preview_json FROM local_admission_web_items WHERE batch_id=?').all(batch.id);
+    expect(raw.every(row=>JSON.parse(String(row.preview_json)).identity.kind==='new')).toBe(true);
+    // Reuse an existing source-free Work explicitly, without changing its canonical title.
+    await service.execute(batch.id,request(batch,{actions:[{key:batch.items[0].key,action:'new'},
+      {key:batch.items[1].key,action:'existing',workId:similar},{key:batch.items[2].key,action:'defer'}]}));
+    await service.waitForIdle();
+    expect(service.items(batch.id).items[0].workId).not.toBe(exact);
+    expect(service.items(batch.id).items[1].workId).toBe(similar);
+    expect(db.prepare('SELECT display_title FROM archive_catalog_works WHERE id=?').get(similar)!.display_title).toBe('Recall-Picnic');
+    const originalFolder=await preview(['NO.084 recall picnic']);
+    expect(originalFolder.items[0].candidates[0]?.matchEvidence?.reasons.join(' ')).toContain('目录名');
+  });
+  it('marks multiple candidates and the real 50-result truncation, never a definite unique match',async()=>{
+    const db=manager.connection;
+    for(let i=0;i<51;i++)db.prepare('INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,?)').run(creator,'RecallMany');
+    const batch=await preview(['NO.085 RecallMany']);
+    expect(batch.items[0]).toMatchObject({group:'D',candidatesTruncated:true,reviewIssues:['title_exact','multiple_candidates']});
+    expect(batch.items[0].candidates).toHaveLength(50);
+    expect(batch.items[0].suggestedAction).toBeUndefined();
+  });
+  it('keeps path relations visible and prevents an occupied target from being graded as an ordinary title candidate',async()=>{
+    const db=manager.connection,name='NO.086 RecallPath';
+    const batch=await preview([name]);await service.execute(batch.id,request(batch));await service.waitForIdle();
+    const completed=service.items(batch.id).items[0];await make(name);
+    const collision=await service.preview({creatorId:creator,parent,directories:[name]});
+    expect(collision.items[0]).toMatchObject({group:'D',candidatesTruncated:false});
+    expect(collision.items[0].reviewIssues).toEqual(expect.arrayContaining(['existing_path','target_conflict']));
+    expect(collision.items[0].candidates.find(c=>c.workId===completed.workId)?.matchEvidence?.level).toBe('path');
+    expect(db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(collision.id)).toBeUndefined();
+  });
+  it('includes candidate review evidence in fingerprints without rewriting original manual defer decisions',async()=>{
+    const name='NO.087 RecallManual',db=manager.connection;
+    db.prepare('INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,?)').run(creator,'RecallManual RED.Ver');
+    const batch=await preview([name]);const item=batch.items[0];
+    const fresh=await service.repreview(batch.id,[item.key]);
+    expect(fresh.items[0].reviewFingerprint).toBe(item.reviewFingerprint);
+    await service.execute(batch.id,request(batch,{actions:[{key:item.key,action:'defer',reason:'用户决定稍后再核对'}]}));await service.waitForIdle();
+    const confirmed=db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(batch.id);
+    const again=await service.repreview(batch.id,[item.key]);
+    expect(again.items[0].suggestedAction).toBeUndefined();
+    expect(service.items(batch.id).items[0].state).toBe('defer');
+    expect(db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(batch.id)).toEqual(confirmed);
+    const before=again.items[0].reviewFingerprint;
+    db.prepare('INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,?)').run(creator,'RecallManual');
+    const changed=await service.repreview(again.id,[again.items[0].key]);
+    expect(changed.items[0].reviewFingerprint).not.toBe(before);
+    expect(changed.items[0].group).toBe('D');
+  });
+  it.each(['work','alias'] as const)('rejects and does not persist stale recall when %s facts change during asynchronous inventory',async mutation=>{
+    const db=manager.connection;
+    const title=`RecallWindow${mutation}`,name=mutation==='alias'?`ConcurrencyAlias NO.089 ${title}`:`NO.088 ${title}`;
+    await make(name);
+    if(mutation==='alias')db.prepare('INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,?)').run(creator,title);
+    const beforeBatches=db.prepare('SELECT COUNT(*) n FROM local_admission_web_batches').get()!.n;
+    const beforeItems=db.prepare('SELECT COUNT(*) n FROM local_admission_web_items').get()!.n;
+    const {LocalFolderAdmissionService}=await import('../src/services/local-folder-admission-service.js');
+    const engine=new LocalFolderAdmissionService(db,gallery),original=engine.preview.bind(engine);
+    const inventory=vi.spyOn(LocalFolderAdmissionService.prototype,'preview').mockImplementationOnce(async input=>{
+      const result=await original(input);
+      if(mutation==='work')db.prepare('INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,?)').run(creator,title);
+      else db.prepare('INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,?,?,?)').run(creator,'ConcurrencyAlias','concurrencyalias','manual');
+      return result;
+    });
+    try{
+      await expect(service.preview({creatorId:creator,parent,directories:[name]})).rejects.toMatchObject({status:409,message:expect.stringContaining('信息发生变化')});
+    }finally{inventory.mockRestore();}
+    expect(db.prepare('SELECT COUNT(*) n FROM local_admission_web_batches').get()!.n).toBe(beforeBatches);
+    expect(db.prepare('SELECT COUNT(*) n FROM local_admission_web_items').get()!.n).toBe(beforeItems);
+    await expect(fs.stat(path.join(waiting,parent,name))).resolves.toBeTruthy();
+    const fresh=await service.preview({creatorId:creator,parent,directories:[name]});
+    expect(fresh.items[0].group).toBe('B');
+    expect(fresh.items[0].candidates[0]?.title).toBe(title);
+  });
+  it('provides sibling candidates bidirectionally and changes fingerprints only when peer evidence changes',async()=>{
+    const names=['NO.090 PeerGarden_RED','NO.091 PeerGarden (RED.Ver)'];
+    const batch=await preview(names),first=batch.items[0],second=batch.items[1];
+    expect(batch.items.map(item=>item.group)).toEqual(['C','C']);
+    expect(first.peerCandidates).toEqual([{sourceRelativePath:names[1],reasons:[expect.stringContaining('版本')]}]);
+    expect(second.peerCandidates?.[0]?.sourceRelativePath).toBe(names[0]);
+    expect(first.reviewIssues).toContain('batch_candidate');
+    expect(batch.items.every(item=>item.suggestedAction===undefined)).toBe(true);
+    const fresh=await service.repreview(batch.id,batch.items.map(item=>item.key));
+    expect(fresh.items.map(item=>item.reviewFingerprint)).toEqual(batch.items.map(item=>item.reviewFingerprint));
+    const single=await service.preview({creatorId:creator,parent,directories:[names[0]]});
+    expect(single.items[0].peerCandidates).toEqual([]);
+    expect(single.items[0].reviewFingerprint).not.toBe(first.reviewFingerprint);
+    // Same byte count of synthesized files is not enough to make unrelated peers.
+    const unrelated=await preview(['NO.092 DistinctPeerTitleA','NO.093 DistinctPeerTitleB']);
+    expect(unrelated.items[0].summary).toEqual(unrelated.items[1].summary);
+    expect(unrelated.items.every(item=>item.peerCandidates?.length===0)).toBe(true);
+    // Explicit separate Works remain permitted even after a peer suggestion.
+    await service.execute(batch.id,request(batch));await service.waitForIdle();
+    const completed=service.items(batch.id).items;
+    expect(completed[0].workId).not.toBe(completed[1].workId);
+  });
+  it('keeps collection peer recall inside each explicitly selected creator scope',async()=>{
+    const {ManagedCreatorService}=await import('../src/services/managed-creator-service.js');
+    const otherParent='Synthetic Peer Other Creator';
+    const other=new ManagedCreatorService(manager.connection,gallery).create({name:otherParent,rating:'R15',preference:'liked'}).id;
+    const name='NO.094 CrossCreatorPeer';await make(name);
+    await fs.mkdir(path.join(waiting,otherParent,name),{recursive:true});
+    await fs.copyFile(path.join(waiting,parent,name,'图片 1.jpg'),path.join(waiting,otherParent,name,'image.jpg'));
+    const collection=await service.previewCollection({scopes:[{creatorId:creator,parent,directories:[name]},{creatorId:other,parent:otherParent,directories:[name]}]});
+    for(const batch of collection.batches)expect(service.items(batch.id).items[0].peerCandidates).toEqual([]);
+  });
   it('viewer and unauthenticated requests cannot browse disk, inspect batches or submit operations',async()=>{
     const {authService}=await import('../src/services/auth-service.js');authService.setAdminPassword('synthetic-admin-pass');authService.setViewerAccess('password','synthetic-viewer-pass');
     const app=App(),login=await requestTestApp(app,'POST','/api/auth/login',{'x-foldergram-intent':'1'},{password:'synthetic-viewer-pass'});

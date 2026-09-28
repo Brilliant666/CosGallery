@@ -37,6 +37,50 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     return service.previewCollection({scopes:creators.map((creatorId,n)=>({creatorId,parent:names[n],directories:[prefix]}))});}
   function request(collection:ReturnType<typeof service.collection>){return {requestKey:randomUUID(),confirmed:true as const,
     batches:collection.batches.map(batch=>({batchId:batch.id,acceptExistingVersion:true,actions:service.items(batch.id).items.map(item=>({key:item.key,action:'new' as const}))}))};}
+  it('rejects an overlapping confirmation and rechecks ownership inside the final confirmation transaction',async()=>{
+    const db=manager.connection,title='Ownership race shared scope';
+    await make(0,title);
+    const scope={scopes:[{creatorId:creators[0],parent:names[0],directories:[title]}]};
+    const old=await service.previewCollection(scope),next=await service.previewCollection(scope),input=request(next);
+    const oldBatch=old.batches[0],item=JSON.parse(String(db.prepare('SELECT preview_json FROM local_admission_web_items WHERE batch_id=?').get(oldBatch.id)!.preview_json));
+    const {review,...base}=item;
+    const {admissionPlanSchema}=await import('../src/services/local-folder-admission-service.js');
+    const plan=admissionPlanSchema.parse({version:1,confirmed:true,planId:oldBatch.id,creatorId:creators[0],inputRoot:oldBatch.inputRoot,galleryRoot:gallery,
+      creatorDirectory:path.basename(path.dirname(base.targetPath)),items:[{...base,reason:'Historical fixture confirmation'}]});
+    const persist=()=>{
+      db.prepare('INSERT INTO archive_local_admission_plans(plan_id,payload_json,content_hash) VALUES(?,?,?)').run(plan.planId,JSON.stringify(plan),'historical');
+      db.prepare("INSERT INTO archive_local_admission_items(plan_id,item_key,state,manifest_json) VALUES(?,?,'move_intent',?)").run(plan.planId,plan.items[0].key,JSON.stringify(plan.items[0].manifest));
+    };
+    const original=Admission.prototype.verifyUnstarted;
+    vi.spyOn(Admission.prototype,'verifyUnstarted').mockImplementationOnce(async function(this:InstanceType<typeof Admission>,raw){await original.call(this,raw);persist();});
+    await expect(service.executeCollection(next.id,input)).rejects.toThrow('原批次已有移动');
+    expect(service.collection(next.id).state).toBe('draft');
+    expect(db.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(next.batches[0].id)!.confirmed_json).toBeNull();
+    expect(db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE collection_id=?').all(next.id)).toHaveLength(0);
+    await expect(fs.stat(path.join(waiting,names[0],title))).resolves.toBeTruthy();
+    await expect(fs.stat(base.targetPath)).rejects.toThrow();
+    vi.restoreAllMocks();
+    await expect(service.executeCollection(next.id,input)).rejects.toThrow('原批次已有移动');
+    const {createApp}=await import('../src/app.js');
+    const response=await requestTestApp(createApp(),'POST',`/api/admin/local-admission/collections/${next.id}/execute`,{'x-foldergram-intent':'1'},input);
+    expect(response.status).toBe(409);expect(response.body.message).toContain('原批次已有移动');expect(response.body.message).not.toContain('ADMISSION_PLAN_CONFLICT');
+    // A wholly unstarted old plan must not disable the existing re-preview workflow.
+    db.prepare("UPDATE archive_local_admission_items SET state='planned' WHERE plan_id=?").run(plan.planId);
+    await expect(new Admission(db,gallery).verifyUnstarted({...plan,planId:next.batches[0].id})).resolves.toBeUndefined();
+    expect(db.prepare('SELECT payload_json FROM archive_local_admission_plans WHERE plan_id=?').get(plan.planId)!.payload_json).toBe(JSON.stringify(plan));
+  });
+  it('exposes a read-only owning-batch link instead of suggesting damaged-file review',async()=>{
+    const collection=await preview('Ownership link fixture'),[owner,current]=collection.batches;
+    const {planOwnershipError}=await import('../src/services/local-admission-plan-ownership.js');
+    // A same-creator historical batch is the only linkable owner; arbitrary IDs cannot become routes.
+    const followup=await service.previewCollection({scopes:[{creatorId:owner.creatorId,parent:names[0],directories:['Ownership link fixture']}]});
+    const batch=followup.batches[0],error=planOwnershipError(owner.id,'请先处理原检查点').message;
+    manager.connection.prepare("UPDATE local_admission_web_batches SET state='needs_review',error=? WHERE id=?").run(error,batch.id);
+    expect(service.get(batch.id)).toMatchObject({blockingBatch:{batchId:owner.id,collectionId:collection.id},error:expect.not.stringContaining('ADMISSION_PLAN_CONFLICT')});
+    const noOwner=planOwnershipError(current.id,'different creator').message;
+    manager.connection.prepare('UPDATE local_admission_web_batches SET error=? WHERE id=?').run(noOwner,batch.id);
+    expect(service.get(batch.id).blockingBatch).toBeUndefined();
+  });
   it('discovers only one directory layer and matches active canonical identities or registered aliases without creating anyone',async()=>{
     const db=manager.connection;
     db.prepare("INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source) VALUES(?,?,?,'manual')").run(creators[0],'甲的别名','甲的别名');
@@ -402,16 +446,55 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     const reread=await service.repreviewCollection(remaining.id,{refreshDirectories:true});
     expect(service.items(reread.batches[0].id).items.every(item=>item.scopeReviewRequired===undefined)).toBe(true);expect(apply).not.toHaveBeenCalled();
   });
-  it('does not replace the original draft when rereading leaves no eligible selected directories',async()=>{
+  it('persists an empty refreshed scope without replacing the original draft or executing files',async()=>{
     const db=manager.connection,parent='刷新后无可选目录',title='已移出作品';await makeWithin(parent,title);
     const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]});
     await fs.rename(path.join(waiting,parent,title),path.join(root,'刷新移出的作品'));await makeWithin(parent,'.local-admission-attachments');
     const count=Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n),saved=db.prepare('SELECT * FROM local_admission_web_collections WHERE id=?').get(original.id);
     const apply=vi.spyOn(Admission.prototype,'apply'),move=vi.spyOn(fs,'rename');
-    await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow(/目录|范围/);
+    const empty=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(empty.totals.total).toBe(0);expect(empty.previousCollectionId).toBe(original.id);
+    expect(empty.directoryRefresh?.removed).toEqual([{creatorId:creators[0],parent,name:title}]);
+    expect(service.collection(empty.id).directoryRefresh).toEqual(empty.directoryRefresh);
     expect(db.prepare('SELECT * FROM local_admission_web_collections WHERE id=?').get(original.id)).toEqual(saved);
-    expect(service.collection(original.id).nextCollectionIds).toEqual([]);expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count);
+    expect(service.collection(original.id).nextCollectionIds).toEqual([empty.id]);expect(Number(db.prepare('SELECT COUNT(*) n FROM local_admission_web_collections').get()!.n)).toBe(count+1);
+    await expect(service.executeCollection(empty.id,{requestKey:randomUUID(),confirmed:true,batches:[{batchId:empty.batches[0].id,acceptExistingVersion:true,actions:[{key:'not-present',action:'new'}]}]})).rejects.toThrow('已无待入库目录');
     expect(apply).not.toHaveBeenCalled();expect(move).not.toHaveBeenCalled();
+  });
+  it('rejects an original submission with HTTP 409 after its parent disappears and rereads an empty scope',async()=>{
+    const db=manager.connection,parent='移出父目录',title='待核对作品';await makeWithin(parent,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]}),input=request(original);
+    input.batches[0].actions[0].action='defer' as 'new';
+    await fs.rename(path.join(waiting,parent),path.join(root,parent));
+    const {createApp}=await import('../src/app.js');
+    const response=await requestTestApp(createApp(),'POST',`/api/admin/local-admission/collections/${original.id}/execute`,{'x-foldergram-intent':'1'},input);
+    expect(response.status).toBe(409);expect(response.body.message).toContain('目录已不存在');
+    expect(db.prepare('SELECT * FROM local_admission_web_collection_requests WHERE collection_id=?').all(original.id)).toHaveLength(0);
+    expect(service.collection(original.id).state).toBe('draft');
+    const empty=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(empty.totals.total).toBe(0);expect(empty.directoryRefresh?.removed).toHaveLength(1);
+    expect((await service.repreviewCollection(empty.id,{refreshDirectories:true})).totals.total).toBe(0);
+  });
+  it('keeps the remaining creator executable when another creator parent was removed',async()=>{
+    const parent='移出多博主父目录',other='保留多博主父目录',title='独立作品';await makeWithin(parent,title);await makeWithin(other,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]},{creatorId:creators[1],parent:other,directories:[title]}]});
+    await fs.rename(path.join(waiting,parent),path.join(root,parent));
+    const refreshed=await service.repreviewCollection(original.id,{refreshDirectories:true});
+    expect(refreshed.batches.map(b=>b.parent)).toEqual([other]);expect(refreshed.totals.total).toBe(1);
+    expect(refreshed.directoryRefresh?.removed).toEqual([{creatorId:creators[0],parent,name:title}]);
+    expect(request(refreshed).batches.every(b=>b.actions.length>0)).toBe(true);
+  });
+  it('does not interpret missing storage, permission errors or a replaced parent as empty scope',async()=>{
+    const parent='不可解释为空的范围',title='保留作品';await makeWithin(parent,title);
+    const original=await service.previewCollection({scopes:[{creatorId:creators[0],parent,directories:[title]}]});
+    const lstat=fs.lstat;
+    for(const [target,code] of [[waiting,'ENOENT'],[gallery,'ENOENT'],[path.join(waiting,parent),'EACCES']] as const){
+      const spy=vi.spyOn(fs,'lstat').mockImplementation((async(...args:Parameters<typeof fs.lstat>)=>{if(String(args[0])===target)throw Object.assign(new Error('unavailable'),{code});return lstat(...args);}) as typeof fs.lstat);
+      await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow();spy.mockRestore();
+    }
+    await fs.rename(path.join(waiting,parent),path.join(root,parent));await fs.writeFile(path.join(waiting,parent),'not a directory');
+    await expect(service.repreviewCollection(original.id,{refreshDirectories:true})).rejects.toThrow('目录链接或重解析点');
+    expect(service.collection(original.id).nextCollectionIds).toEqual([]);
   });
   it('rejects refreshed-directory requests for confirmed or active collections before touching the filesystem',async()=>{
     const db=manager.connection,parent='刷新确认保护',title='保持原记录';await makeWithin(parent,title);

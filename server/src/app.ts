@@ -13,6 +13,7 @@ import { createTextCompression, mountClientDelivery } from './middleware/text-de
 import { denyRecoveryFileRequests } from './middleware/protected-recovery-files.js';
 import { apiRouter } from './routes/api.js';
 import { archiveBridgeRouter } from './routes/archive-bridge.js';
+import { createCompanionRouter } from './routes/companion-routes.js';
 import { authService } from './services/auth-service.js';
 import { lazyThumbnailsRouter, lazyPreviewsRouter } from './routes/lazy-derivatives.js';
 import { securityHeaders } from './middleware/security-headers.js';
@@ -36,6 +37,10 @@ export function createApp() {
   app.use(createAllowedRequestHost({ serverHost: appConfig.host, allowedHosts: appConfig.allowedHosts }));
   app.use(denyRecoveryFileRequests());
   app.use(createTextCompression());
+
+  // Separate bounded read-only bearer protocol. Global Host/security/error
+  // boundaries remain; no normal API/session/bridge privileges or CORS changes.
+  app.use('/api/companion/v1', createCompanionRouter());
 
   // Only bounded source-evidence text needs more than the default JSON limit.
   // The service separately caps raw text, lines, URLs and diagnostics; no uploads.

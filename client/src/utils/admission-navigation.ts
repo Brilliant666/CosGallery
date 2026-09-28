@@ -7,7 +7,10 @@ export interface DraftEntry { batchId:string; creatorId:number; item:AdmissionIt
 interface SavedEntry { batchId:string; creatorId:number; key:string; evidence:string; action:AdmissionAction; work?:AdmissionWork; sourceRelativePath?:string; ads?:AdmissionItem['ads'] }
 // One tab's navigation/unsent choices only. Always fetch the authorized server
 // collection first; this is never an execution receipt or an ownership proof.
-const evidence = (item:AdmissionItem) => JSON.stringify([item.key,item.sourceRelativePath,item.targetPath,item.group,item.summary,item.candidates,item.conflicts,item.structureWarnings,item.needsBoundaryReview,item.ads,item.reviewFingerprint,item.displayTitle]);
+const evidence = (item:AdmissionItem) => JSON.stringify([item.key,item.sourceRelativePath,item.targetPath,item.group,item.summary,item.candidates,item.conflicts,item.structureWarnings,item.needsBoundaryReview,item.ads,item.reviewFingerprint,item.displayTitle,
+  // Keep old tab evidence identical when these new optional risk fields are absent/empty.
+  ...(item.reviewIssues?.length||item.candidatesTruncated?[item.reviewIssues??[],!!item.candidatesTruncated]:[]),
+  ...(item.peerCandidates?.length||item.peerCandidatesTruncated?[{peerCandidates:item.peerCandidates??[],peerCandidatesTruncated:!!item.peerCandidatesTruncated}]:[])]);
 const savedEntry = ({batchId,creatorId,item,action,work}:DraftEntry):SavedEntry => ({batchId,creatorId,key:item.key,evidence:evidence(item),sourceRelativePath:item.sourceRelativePath,ads:item.ads,action,work});
 export function lastAdmissionCollection():string|null {
   try { const id=sessionStorage.getItem(lastKey);return id&&/^[\w-]{1,150}$/.test(id)?id:null; } catch { return null; }
