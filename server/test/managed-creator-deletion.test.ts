@@ -77,13 +77,14 @@ describe('global controlled creator deletion', () => {
     retained();
   });
 
-  it('blocks an inactive local copy even when owned by another folder and hidden from available counts', () => {
+  it.each(['back-reference', 'primary-only'])('blocks an inactive local copy via %s even under another creator folder', relationship => {
     const f = sourceOnly(), other = service.create({ name: 'Other folder owner' }).id;
     const folder = Number(db.prepare(`INSERT INTO archive_catalog_local_creator_folders(creator_id,root_path,relative_path,absolute_path,folder_name,match_status,is_active,scanned_at)
       VALUES(?,'fixture','fixture','fixture','fixture','matched',0,'fixed')`).run(other).lastInsertRowid);
-    db.prepare(`INSERT INTO archive_catalog_local_works(local_creator_folder_id,work_id,relative_path,absolute_path,folder_name,match_status,is_active,scanned_at)
-      VALUES(?,?,'fixture','fixture','fixture','matched',0,'fixed')`).run(folder, f.work);
-    expect(service.deletionPreview(id).blockers.map(b => b.code)).toContain('REFERENCE:archive_catalog_local_works');
+    const copy = Number(db.prepare(`INSERT INTO archive_catalog_local_works(local_creator_folder_id,work_id,relative_path,absolute_path,folder_name,match_status,is_active,scanned_at)
+      VALUES(?,?,'fixture','fixture','fixture','matched',0,'fixed')`).run(folder, relationship === 'primary-only' ? null : f.work).lastInsertRowid);
+    if (relationship === 'primary-only') db.prepare('UPDATE archive_catalog_works SET primary_local_work_id=? WHERE id=?').run(copy, f.work);
+    expect(service.deletionPreview(id).blockers.map(b => b.code)).toContain(relationship === 'primary-only' ? 'PRIMARY_LOCAL_COPY' : 'REFERENCE:archive_catalog_local_works');
     expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('不能删除'); retained();
   });
 

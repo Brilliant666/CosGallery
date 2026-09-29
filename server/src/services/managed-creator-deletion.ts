@@ -127,6 +127,8 @@ export function inspectCreatorDeletion(db: DatabaseSync, id: number): CreatorDel
   };
   if (creator.is_active !== 0) add('ACTIVE', '请先停用博主；停用不会删除任何资料');
   if (creator.preferred_local_creator_folder_id !== null) add('PREFERRED_FOLDER', '已设置入库目标目录');
+  add('PRIMARY_LOCAL_COPY', '独立作品仍指定本地主要副本',
+    works.filter(work => work.primary_local_work_id !== null).length);
   add('UNCLASSIFIED_WORK', '缺少来源记录的独立作品，不能证明为纯来源资料',
     works.filter(work => !sourcedWorkIds.has(String(work.id))).length);
   add('SHARED_SOURCE_WORK', '来源作品指向其他博主的独立作品', sourceWorks.filter(sw => !workIds.has(String(sw.work_id))).length);
