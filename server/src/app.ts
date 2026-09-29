@@ -12,12 +12,14 @@ import { blockPublicDemoMutations } from './middleware/public-demo-mode.js';
 import { createTextCompression, mountClientDelivery } from './middleware/text-delivery.js';
 import { denyRecoveryFileRequests } from './middleware/protected-recovery-files.js';
 import { apiRouter } from './routes/api.js';
+import { createWorkRemovalRouter } from './routes/work-removal-routes.js';
 import { archiveBridgeRouter } from './routes/archive-bridge.js';
 import { createCompanionRouter } from './routes/companion-routes.js';
 import { authService } from './services/auth-service.js';
 import { lazyThumbnailsRouter, lazyPreviewsRouter } from './routes/lazy-derivatives.js';
 import { securityHeaders } from './middleware/security-headers.js';
 import { createHttpErrorHandler, requestIdentity } from './middleware/http-errors.js';
+import { MediaTrashError } from './services/media-trash-service.js';
 
 export function applyApiNoStoreHeaders(response: Pick<express.Response, 'setHeader'>) {
   authService.setNoStoreHeaders(response as express.Response);
@@ -60,6 +62,7 @@ export function createApp() {
     next();
   });
   app.use('/api/archive-bridge', archiveBridgeRouter);
+  app.use('/api', blockPublicDemoMutations, requireTrustedMutationRequest, requireApiAuthentication, createWorkRemovalRouter());
   app.use('/api', blockPublicDemoMutations, requireTrustedMutationRequest, requireApiAuthentication, apiRouter);
 
   if (appConfig.nodeEnv === 'production') {
@@ -69,7 +72,9 @@ export function createApp() {
   }
 
   app.use(createHttpErrorHandler(error => error instanceof ArchiveMetadataTaskError
-    ? { status: error.status, code: 'ARCHIVE_METADATA_TASK_REJECTED', message: error.message } : null));
+    ? { status: error.status, code: 'ARCHIVE_METADATA_TASK_REJECTED', message: error.message }
+    : error instanceof MediaTrashError
+      ? { status: error.status, code: error.code, message: error.message } : null));
 
   return app;
 }

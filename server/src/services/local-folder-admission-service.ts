@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/local-ingest-paths.js';
 import { LocalIngestDestinationService } from './local-ingest-destination-service.js';
 import { WorkIdentityService } from './work-identity-service.js';
+import { assertPathNotRemoved, assertWorkNotRemoved } from './work-removal-guards.js';
 import { SourceEvidenceService } from './source-evidence-service.js';
 import { runAdmissionExclusive } from './local-admission-lock.js';
 import { extractWorkDisplayTitle } from '../utils/work-title.js';
@@ -123,11 +124,13 @@ export class LocalFolderAdmissionService {
     if(isSameOrNestedPath(plan.inputRoot,plan.galleryRoot)||isSameOrNestedPath(plan.galleryRoot,plan.inputRoot))throw Error('Roots overlap');
     const keys=new Set<string>(),targets=new Set<string>();
     for(const item of plan.items){
+      assertPathNotRemoved(this.db,item.targetPath);
       if(keys.has(item.key)||targets.has(cmp(item.targetPath)))throw Error('Duplicate item or target');
       if(item.identity.kind==='existing'&&!item.identity.workId&&!item.identity.sourceWorkId)throw Error('Existing identity requires a Work or SourceWork ID');
       if(item.identity.kind==='existing'){
         const existing=this.db.prepare(`SELECT w.id,w.creator_id,w.display_title FROM archive_catalog_works w WHERE w.id=? OR w.id=(SELECT work_id FROM archive_catalog_source_works WHERE id=?)`).all(item.identity.workId??null,item.identity.sourceWorkId??null) as {id:number;creator_id:number;display_title:string}[];
         if(existing.length!==1||existing[0].creator_id!==plan.creatorId)throw Error('Existing Work/source identity conflict');
+        assertWorkNotRemoved(this.db,existing[0].id);
         if(item.displayTitle!==existing[0].display_title)throw Error(`Existing Work keeps its canonical title; confirm displayTitle as: ${existing[0].display_title}`);
       }
       if(item.identity.kind==='same-as'&&!keys.has(item.identity.itemKey))throw Error('same-as must reference an earlier explicitly confirmed item');
@@ -598,6 +601,7 @@ export class LocalFolderAdmissionService {
     for(const item of plan.items){
       let state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key) as ItemState;
       if(!state)throw Error('Plan checkpoint missing; cannot infer progress');
+      assertWorkNotRemoved(this.db,state.work_id);
       try {
         assertItemOwnership(item);
         assertCaseCheckpoint(item);

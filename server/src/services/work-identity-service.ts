@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import { assertPathNotRemoved, assertWorkNotRemoved } from './work-removal-guards.js';
 
 export type LocalIdentityInput = {
   creatorId: number; rootPath: string; creatorFolderName: string; absolutePath: string;
@@ -46,9 +47,11 @@ export class WorkIdentityService {
   registerLocal(input: LocalIdentityInput): { workId: number; localWorkId: number; decisionId: number } {
     if (!input.title.trim() || !input.reason.trim() || !input.key.trim()) throw new Error('Title, reason and key are required');
     return this.transaction(() => {
+      assertPathNotRemoved(this.database, input.absolutePath);
       const old = this.database.prepare('SELECT * FROM archive_catalog_work_decisions WHERE decision_key=?')
         .get(input.key) as { work_id: number; local_work_id: number; id: number; payload_json: string; state: string } | undefined;
       if (old) {
+        assertWorkNotRemoved(this.database, old.work_id);
         if (old.payload_json !== JSON.stringify(input) || old.state !== 'active') throw new Error('Admission identity content changed; a new confirmation is required');
         return { workId: old.work_id, localWorkId: old.local_work_id, decisionId: old.id };
       }
@@ -66,6 +69,7 @@ export class WorkIdentityService {
         workId = same.work_id;
       }
       if (workId !== undefined) {
+        assertWorkNotRemoved(this.database, workId);
         if (!this.database.prepare('SELECT id FROM archive_catalog_works WHERE id=? AND creator_id=?').get(workId,input.creatorId)) throw new Error('Work belongs to a different creator');
       } else workId = Number(this.database.prepare("INSERT INTO archive_catalog_works(creator_id,display_title,title_policy) VALUES(?,?,'manual')").run(input.creatorId,input.title).lastInsertRowid);
       const creatorPath = path.resolve(input.rootPath,input.creatorFolderName);
@@ -96,6 +100,7 @@ export class WorkIdentityService {
     if (!owner || path.relative(owner.root_path,owner.absolute_path).split(path.sep).join('/') !== post.source_path) throw new Error('Post path does not match the explicit local copy');
     const local = this.database.prepare('SELECT work_id,post_id FROM archive_catalog_local_works WHERE id=?').get(localWorkId) as {work_id:number;post_id:number|null}|undefined;
     if (!local || (local.post_id !== null && local.post_id !== postId)) throw new Error('Local Post identity conflict');
+    assertWorkNotRemoved(this.database, local.work_id);
     if (this.database.prepare('SELECT id FROM archive_catalog_local_works WHERE post_id=? AND id<>?').get(postId,localWorkId)) throw new Error('Post already belongs to another local copy');
     this.database.prepare('UPDATE archive_catalog_local_works SET post_id=? WHERE id=?').run(postId,localWorkId);
     const count = this.database.prepare('SELECT COUNT(*) n FROM archive_catalog_local_works WHERE work_id=?').get(local.work_id) as {n:number};
@@ -106,6 +111,7 @@ export class WorkIdentityService {
     if (!reason.trim()) throw new Error('Primary choice reason required');
     const local = this.database.prepare('SELECT work_id FROM archive_catalog_local_works WHERE id=? AND is_active=1 AND post_id IS NOT NULL').get(localWorkId) as {work_id:number}|undefined;
     if (!local) throw new Error('Usable indexed local copy required');
+    assertWorkNotRemoved(this.database, local.work_id);
     const previous = this.database.prepare('SELECT primary_local_work_id FROM archive_catalog_works WHERE id=?').get(local.work_id) as {primary_local_work_id:number|null};
     if (previous.primary_local_work_id === localWorkId) return;
     this.decision(randomUUID(),'primary_copy',local.work_id,localWorkId,null,reason,{previousLocalId:previous.primary_local_work_id,localWorkId});
@@ -124,6 +130,7 @@ export class WorkIdentityService {
   }
 
   bindSource(input: {workId:number;collectionId:number;sourceWorkId:string;reason:string;key:string}): number {
+    assertWorkNotRemoved(this.database, input.workId);
     const work = this.database.prepare('SELECT creator_id FROM archive_catalog_works WHERE id=?').get(input.workId) as {creator_id:number}|undefined;
     const collection = this.database.prepare('SELECT creator_id FROM archive_catalog_collections WHERE id=?').get(input.collectionId) as {creator_id:number}|undefined;
     if (!work || !collection || work.creator_id !== collection.creator_id) throw new Error('Source creator conflicts with Work');

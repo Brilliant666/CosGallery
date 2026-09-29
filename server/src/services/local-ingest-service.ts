@@ -17,6 +17,7 @@ import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogPipelineService } from './archive-catalog-pipeline-service.js';
 import { preserveDownloadStagedAt } from './archive-download-activity.js';
 import { acquisitionHeldSql } from './archive-local-fulfillment-service.js';
+import { assertPathNotRemoved, assertSourceWorkNotRemoved } from './work-removal-guards.js';
 import {
   localIngestSettingsService,
   type LocalIngestSettingsService,
@@ -1132,10 +1133,16 @@ export class LocalIngestService {
     ).run(this.timestamp(), id, token);
   }
 
+  private assertJobNotRemoved(job: LocalIngestJobRow): void {
+    assertSourceWorkNotRemoved(this.database, job.source_work_id);
+    assertPathNotRemoved(this.database, job.target_path);
+  }
+
   private async runWithClaimOutcome(
     id: number,
     executor: () => Promise<LocalIngestJob>
   ): Promise<{ job: LocalIngestJob; ownership: 'acquired' | 'joined' | 'unavailable' }> {
+    this.assertJobNotRemoved(this.getJobRow(id));
     const existing = this.inFlightJobs.get(id);
     if (existing) return { job: await existing, ownership: 'joined' };
     const token = this.tryClaim(id);
@@ -1302,12 +1309,15 @@ export class LocalIngestService {
     requireCreatorDirectory = false
   ): Promise<LocalIngestTargetPlan> {
     try {
-      return await this.destinationService(settings).validatePersistedTarget({
+      this.assertJobNotRemoved(job);
+      const plan = await this.destinationService(settings).validatePersistedTarget({
         creatorId: mapping.creator_id,
         targetPath: job.target_path,
         workTitle: this.mappedTargetTitle(mapping),
         requireCreatorDirectory
       });
+      assertPathNotRemoved(this.database, plan.targetPath);
+      return plan;
     } catch (error) {
       return this.destinationFailure(error);
     }
@@ -2794,6 +2804,7 @@ export class LocalIngestService {
 
   private async reconcile(jobId: number, newlyCommitted = false): Promise<LocalIngestJob> {
     const job = this.getJobRow(jobId);
+    this.assertJobNotRemoved(job);
     const mapping = this.mappingForJob(job);
     const settings = await this.checkedSettings();
     if (!job.target_path || !(await pathExists(job.target_path))) {
@@ -3136,6 +3147,8 @@ export class LocalIngestService {
         summary.reviewCommit = { hash: reviewed.hash, dev: stat.dev.toString(), ino: stat.ino.toString() };
         this.updateJob(id, { summaryJson: JSON.stringify(summary) });
       }
+      this.assertJobNotRemoved(this.getJobRow(id));
+      assertPathNotRemoved(this.database, summary.plannedTargetPath);
       await this.timed(id, 'final_commit', () => fs.rename(summary.readyPath, summary.plannedTargetPath));
       this.updateJob(id, { status: 'reconciling', phase: 'rescanning', targetPath: summary.plannedTargetPath });
       return await this.reconcile(id, true);

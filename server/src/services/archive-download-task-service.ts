@@ -4,6 +4,7 @@ import { databaseManager } from '../db/database.js';
 import {directShareMetadata,currentBaiduDeliverySql} from './archive-baidu-delivery.js';
 import { preserveDownloadStagedAt, recordDownloadStagedAt } from './archive-download-activity.js';
 import { acquisitionHeldSql, fulfillmentValidSql, sourceNeedsAcquisitionSql } from './archive-local-fulfillment-service.js';
+import { workRemovedSql } from './work-removal-guards.js';
 
 export type ArchiveDownloadTaskStatus =
   | 'pending'
@@ -448,7 +449,8 @@ export class ArchiveDownloadTaskService {
           AND EXISTS (SELECT 1 FROM archive_catalog_source_works active_source
             JOIN archive_catalog_works active_work ON active_work.id=active_source.work_id
             JOIN archive_catalog_creators active_creator ON active_creator.id=active_work.creator_id
-            WHERE active_source.id=archive_catalog_download_tasks.source_work_id AND active_creator.is_active=1)
+            WHERE active_source.id=archive_catalog_download_tasks.source_work_id AND active_creator.is_active=1
+              AND NOT ${workRemovedSql('active_work.id')})
           ${creatorFilter}
           AND NOT EXISTS (
            SELECT 1

@@ -4,6 +4,7 @@ import { effectivePostSortSql } from './work-sort-sql.js';
 import { SHARE_SESSION_SECRET_SETTING_KEY } from '../constants/app-setting-keys.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
 import { resolveUniqueSlug, slugifyFolderName } from '../utils/slug.js';
+import { RequestInputError } from '../utils/request-input-error.js';
 import type {
   AppSettingRecord,
   CollectionMembershipRecord,
@@ -62,6 +63,10 @@ const EFFECTIVE_FEED_TIME_SQL = 'COALESCE(posts.taken_at, posts.sort_timestamp)'
 const EFFECTIVE_IMAGE_FEED_TIME_SQL = 'COALESCE(images.taken_at, images.sort_timestamp)';
 const DEFAULT_COLLECTION_SLUG = 'saved';
 const DEFAULT_COLLECTION_NAME = 'Saved';
+const LEGACY_TRASH_SCOPE_SQL = `NOT EXISTS (
+  SELECT 1 FROM archive_catalog_local_works removed_local JOIN work_removals removed_work ON removed_work.work_id=removed_local.work_id
+  WHERE removed_local.post_id=posts.id)
+  AND NOT EXISTS (SELECT 1 FROM media_trash_entries removed_media WHERE removed_media.post_id=posts.id AND removed_media.active=1)`;
 const COVER_FILENAMES = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp', 'cover.avif', 'cover.gif'] as const;
 const COVER_FILENAME_SQL = COVER_FILENAMES.map((name) => `'${name}'`).join(', ');
 const NORMAL_FOLDER_ROLE_SQL = "folders.role = 'normal'";
@@ -2049,6 +2054,7 @@ export const postRepository = {
       JOIN images ON images.id = post_items.image_id
       LEFT JOIN places ON places.id = posts.place_id
       WHERE posts.is_deleted = 0 AND posts.is_trashed = 1
+        AND ${LEGACY_TRASH_SCOPE_SQL}
       ORDER BY posts.trashed_at DESC, posts.id DESC
       LIMIT ? OFFSET ?
       `
@@ -2059,7 +2065,7 @@ export const postRepository = {
 
   countTrashed(): number {
     return Number(
-      (database.prepare('SELECT COUNT(*) AS count FROM posts WHERE is_deleted = 0 AND is_trashed = 1').get() as { count: number }).count
+      (database.prepare(`SELECT COUNT(*) AS count FROM posts WHERE is_deleted = 0 AND is_trashed = 1 AND ${LEGACY_TRASH_SCOPE_SQL}`).get() as { count: number }).count
     );
   },
 
@@ -2409,7 +2415,9 @@ export const canonicalCreatorGalleryRepository = {
       LEFT JOIN archive_catalog_local_works copy ON copy.id=work.primary_local_work_id AND copy.work_id=work.id
       LEFT JOIN archive_catalog_local_creator_folders local_folder ON local_folder.id=copy.local_creator_folder_id
       LEFT JOIN posts ON posts.id=copy.post_id
-      WHERE work.creator_id=? AND work.primary_local_work_id IS NOT NULL ORDER BY work.id`).all(creatorId) as unknown as Array<{
+      WHERE work.creator_id=? AND work.primary_local_work_id IS NOT NULL
+        AND NOT EXISTS(SELECT 1 FROM work_removals removed WHERE removed.work_id=work.id)
+      ORDER BY work.id`).all(creatorId) as unknown as Array<{
         workId: number; title: string; postId: number | null; absolutePath: string | null; indexedAvailable: number;
       }>;
   },
@@ -4335,9 +4343,26 @@ export const appSettingsRepository = {
 };
 
 export const maintenanceRepository = {
+  assertLibraryIndexResetAllowed(): void {
+    // Reassigning index IDs would break retained Work and recycle-bin identities.
+    // A full identity migration is required before these libraries can be reset.
+    if (database.prepare(`SELECT 1 WHERE
+      EXISTS (SELECT 1 FROM archive_catalog_local_works) OR
+      EXISTS (SELECT 1 FROM work_removals) OR
+      EXISTS (SELECT 1 FROM work_removal_paths) OR
+      EXISTS (SELECT 1 FROM media_trash_entries)`).get()) {
+      throw new RequestInputError(
+        '当前图库保留了独立作品身份或回收记录，暂不支持重建索引。请使用普通扫描更新图库；现有作品、回收记录和恢复材料均已保留。',
+        'LIBRARY_REBUILD_RETAINED_IDENTITIES'
+      );
+    }
+  },
   resetLibraryIndex(): void {
-    database.exec(`
-      BEGIN;
+    this.assertLibraryIndexResetAllowed();
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      this.assertLibraryIndexResetAllowed();
+      database.exec(`
       UPDATE folders SET avatar_image_id = NULL;
       DELETE FROM likes;
       DELETE FROM collection_items;
@@ -4352,8 +4377,12 @@ export const maintenanceRepository = {
       DELETE FROM scan_runs;
       DELETE FROM app_settings WHERE key = '${SHARE_SESSION_SECRET_SETTING_KEY}';
       DELETE FROM sqlite_sequence WHERE name IN ('folders', 'images', 'posts', 'scan_runs');
-      COMMIT;
-    `);
+      `);
+      database.exec('COMMIT');
+    } catch (error) {
+      if (database.isTransaction) database.exec('ROLLBACK');
+      throw error;
+    }
   }
 };
 

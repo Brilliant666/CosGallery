@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 
 import { appConfig } from '../config/env.js';
 import { imageRepository } from '../db/repositories.js';
+import { databaseManager } from '../db/database.js';
 import type { ImageRecord } from '../types/models.js';
 import { log } from '../services/log-service.js';
 import { generatePreviewDerivative, generateThumbnailDerivative } from '../services/derivative-service.js';
@@ -37,9 +38,15 @@ function findCurrentImageRecord(requestedPath: string, kind: DerivativeKind, exp
   const record = kind === 'thumbnail'
     ? imageRepository.getByThumbnailPath(requestedPath)
     : imageRepository.getByPreviewPath(requestedPath);
-  // Trashed media retain their existing recycle-bin preview contract. Deleted or
-  // unindexed/retained originals cannot enter ordinary generation.
+  // Legacy Post trash retains its preview contract. Whole-Work removals have an
+  // administrative recycle-bin entry and must also close ordinary cached URLs.
   if (!record || record.is_deleted || (expectedId !== undefined && record.id !== expectedId)) return null;
+  const removed = databaseManager.connection.prepare(`SELECT 1 FROM post_items pi
+    JOIN posts p ON p.id=pi.post_id WHERE pi.image_id=? AND (
+      EXISTS (SELECT 1 FROM archive_catalog_local_works l JOIN work_removals r ON r.work_id=l.work_id WHERE l.post_id=p.id)
+      OR EXISTS (SELECT 1 FROM work_removal_paths held JOIN work_removals r ON r.work_id=held.work_id
+        WHERE held.relative_path=p.source_path)) LIMIT 1`).get(record.id);
+  if (removed) return null;
   return record;
 }
 

@@ -1,4 +1,5 @@
 import { ManagedCreatorService } from './managed-creator-service.js';
+import { assertLegacyPostRemovalAllowed, assertLegacyPostRestoreAllowed } from './media-trash-service.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -2255,6 +2256,8 @@ export const galleryService = {
       return null;
     }
 
+    assertLegacyPostRemovalAllowed(post.id);
+
     const folder = folderRepository.getById(post.folder_id);
     if (!folder) {
       return null;
@@ -2280,6 +2283,8 @@ export const galleryService = {
     if (!post || post.is_deleted || post.is_trashed === 0) {
       return null;
     }
+
+    assertLegacyPostRestoreAllowed(post.id);
 
     const folder = folderRepository.getById(post.folder_id);
     if (!folder) {
@@ -2510,6 +2515,8 @@ export const galleryService = {
     if (!post) {
       return null;
     }
+
+    assertLegacyPostRemovalAllowed(post.id);
 
     return permanentDeletionService.deletePost(post.id);
   },

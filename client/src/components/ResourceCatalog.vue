@@ -176,6 +176,13 @@
                     >
                       复制单条
                     </button>
+                    <button
+                      type="button"
+                      :disabled="stale || loading || !payload.readModel.complete || payload.readModel.status !== 'ready'"
+                      @click="removalTarget = item"
+                    >
+                      移入回收站
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -275,9 +282,24 @@
         </button>
       </footer>
     </template>
+    <WorkRemovalDialog
+      v-if="removalTarget"
+      :work-id="removalTarget.workId"
+      :creator-id="removalTarget.creatorId"
+      mode="trash"
+      :unavailable="stale || loading"
+      :revision="payload?.revision"
+      :revision-scope="creatorId === null ? 'all' : 'creator'"
+      @close="removalTarget = null"
+      @stale="stale = true"
+      @changed="workRemoved"
+    />
   </section>
 </template>
 <script setup lang="ts">
+import WorkRemovalDialog from './WorkRemovalDialog.vue';
+import { refreshLibraryAfterRemoval } from '../utils/refresh-library';
+
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 import { RequestError } from '../api/http';
@@ -335,12 +357,22 @@ const loading = ref(false),
   expanded = ref<number | null>(null),
   detailLoading = ref(false);
 const details = ref<Record<number, ResourceDetail>>({});
+const removalTarget = ref<ResourceRow | null>(null);
+async function workRemoved() {
+  removalTarget.value = null;
+  stale.value = true;
+  await refreshLibraryAfterRemoval().catch(() => {});
+  await loadPage(1, true);
+  notice.value = '整个作品已移入回收站，可在回收站整体恢复。';
+}
+
 const metadataDownload = ref<{ url: string; name: string } | null>(null);
 function clearMetadataDownload() {
   if (metadataDownload.value) URL.revokeObjectURL(metadataDownload.value.url);
   metadataDownload.value = null;
 }
 const filters = reactive({ q: '', localState: 'all', source: 'all', order: 'oldest' as 'oldest' | 'newest' });
+watch(() => [props.creatorId, props.globalScope, filters.q, filters.localState, filters.source, filters.order], () => { removalTarget.value = null; });
 const statusTags = computed(() => [
   { value: 'indexed', label: '已索引', count: Math.max(0, (payload.value?.summary.totalWorks ?? 0) - (payload.value?.summary.unarrangedWorks ?? 0) - (payload.value?.summary.unavailableWorks ?? 0)) },
   { value: 'unarranged', label: '待核对/未编排', count: payload.value?.summary.unarrangedWorks ?? 0 },

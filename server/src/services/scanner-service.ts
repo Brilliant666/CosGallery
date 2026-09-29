@@ -776,6 +776,7 @@ class ScannerService {
   }
 
   async rebuildLibraryIndex(reason = 'rebuild'): Promise<ScanRunRecord | undefined> {
+    maintenanceRepository.assertLibraryIndexResetAllowed();
     // Backup runs before queue/maintenance/admission locks, so a failed backup
     // cannot clear the index or deadlock recursively with the scan barrier.
     const { createPreRebuildRecoveryPoint } = await import('./application-recovery-service.js');
@@ -1080,7 +1081,11 @@ class ScannerService {
   }
 
   private isManagedGalleryPath(relativePath: string): boolean {
-    return matchesRelativeRoot(relativePath, appConfig.managedGalleryRelativeIgnores);
+    const fold = (value:string) => process.platform==='win32' ? value.toLocaleLowerCase() : value;
+    const value = fold(normalizePath(relativePath));
+    const removed = databaseManager.connection.prepare('SELECT relative_path FROM work_removal_paths').all() as Array<{relative_path:string}>;
+    return removed.some(row => value === fold(row.relative_path) || value.startsWith(`${fold(row.relative_path)}/`))
+      || matchesRelativeRoot(relativePath, appConfig.managedGalleryRelativeIgnores);
   }
 
   private getCustomExcludedFolderRules(): string[] {
@@ -1315,6 +1320,11 @@ class ScannerService {
     const statFile = async (file: IndexedFileReference) => {
       const normalizedRelativePath = normalizePath(file.relativePath);
       activeRelativePaths.push(normalizedRelativePath);
+      // A user-recycled media original remains on disk but must not be indexed
+      // back into the Post, including when it was the final visible member.
+      if (databaseManager.connection.prepare(`SELECT 1 FROM media_trash_entries m JOIN images i ON i.id=m.image_id
+        WHERE m.active=1 AND ${process.platform==='win32'?'lower(i.relative_path)=lower(?)':'i.relative_path=?'}`).get(normalizedRelativePath)) return;
+      if (this.isManagedGalleryPath(normalizedRelativePath)) return;
 
       try {
         const stats = await fs.stat(file.absolutePath);

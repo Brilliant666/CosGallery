@@ -127,15 +127,15 @@ describe('PostViewer work context', () => {
     expect(cover).toHaveBeenLastCalledWith('creator', 703);
   });
 
-  it('keeps likes, bookmarks, caption and delete at Post level', async () => {
+  it('keeps likes, bookmarks and caption at Post level but trashes the selected media', async () => {
     const like = vi.spyOn(useLikesStore(), 'toggleLike').mockResolvedValue();
     const { wrapper } = await render();
     await wrapper.get('button[aria-label="Like post"]').trigger('click');
     expect(like.mock.calls[0]?.[0].id).toBe(123);
     expect(wrapper.getComponent(CollectionBookmark).props('item').id).toBe(123);
     expect(wrapper.get('.viewer__sidebar-caption').text()).toContain('Creator NO.033 Work');
-    await wrapper.get('button[aria-label="Delete post"]').trigger('click');
-    expect(wrapper.emitted('delete')).toHaveLength(1);
+    await wrapper.get('button[aria-label="Move this image or video to Trash"]').trigger('click');
+    expect(wrapper.emitted('delete')).toEqual([[702]]);
   });
 
   it('disables both outer post links and clamps keys, wheel and swipes at the work boundary', async () => {

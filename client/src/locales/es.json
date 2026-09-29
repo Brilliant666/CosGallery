@@ -1192,5 +1192,56 @@
     "emptyDescription": "Indexa algunas carpetas y esta página empezará a mostrar publicaciones aquí.",
     "folderPostsOne": "{count} publicación",
     "folderPostsOther": "{count} publicaciones"
+  },
+  "mediaRemoval": {
+    "legacyTitle": "Otras galerías en la papelera",
+    "legacyEmpty": "No hay otras galerías en la papelera",
+    "legacyDescription": "Las obras completas y los archivos individuales se muestran arriba.",
+    "action": "Mover esta imagen o vídeo a la papelera",
+    "title": "¿Mover este archivo a la papelera?",
+    "confirm": "Mover a la papelera",
+    "message": "Mover solo {filename} a la papelera. El archivo original se conserva y se puede restaurar.",
+    "lastMessage": "Mover {filename} a la papelera. Es el último archivo de esta obra; la obra dejará de mostrarse hasta restaurarlo.",
+    "failed": "No se pudo mover el archivo a la papelera.",
+    "trashTitle": "Imágenes y vídeos eliminados individualmente",
+    "restore": "Restaurar archivo",
+    "empty": "No hay archivos eliminados individualmente.",
+    "loadFailed": "No se pudo cargar la papelera."
+  },
+  "workRemoval": {
+    "pendingTitle": "Operaciones de obras sin terminar",
+    "retry": "Continuar procesando",
+    "recoveryPending": "La eliminación no se confirmó; la restauración de archivos sigue pendiente. Continuar solo restaura los archivos de esta operación.",
+    "rolledBack": "Los archivos se restauraron; esta eliminación no tuvo efecto. Revisa el alcance de nuevo para eliminar.",
+    "copies": "copias locales",
+    "trash": {
+      "title": "¿Mover la obra completa a la papelera?",
+      "message": "Se moverán todas las copias locales de esta obra. Los archivos originales se conservan y se pueden restaurar juntos. Los archivos eliminados individualmente conservarán su estado.",
+      "confirm": "Mover obra completa"
+    },
+    "restore": {
+      "title": "¿Restaurar la obra completa?",
+      "message": "Se restaurarán todas las copias. Los archivos eliminados individualmente seguirán en su papelera.",
+      "confirm": "Restaurar obra completa"
+    },
+    "permanent": {
+      "title": "¿Eliminar la obra completa permanentemente?",
+      "message": "Se eliminarán los archivos de todas las copias locales, incluidos los eliminados individualmente. Esta acción no se puede deshacer. Revisa el alcance completo.",
+      "confirm": "Eliminar obra permanentemente"
+    },
+    "loading": "Comprobando todas las copias…",
+    "scope": "{copies} copias locales, {files} archivos.",
+    "files": "{count} archivos",
+    "pending": "Registros actualizados; la limpieza del disco sigue pendiente. Conserva el registro de la operación.",
+    "completed": "Operación completada.",
+    "processing": "Procesando…",
+    "failed": "La operación falló. Revisa el alcance de nuevo.",
+    "scopeChanged": "El alcance cambió. Actualiza y vuelve a revisarlo.",
+    "refreshPreview": "Revisar el alcance",
+    "trashTitle": "Obras completas en la papelera",
+    "empty": "No hay obras completas en la papelera.",
+    "loadFailed": "No se pudo cargar la papelera de obras.",
+    "restoreAction": "Restaurar obra completa",
+    "permanentAction": "Eliminar permanentemente"
   }
 }

@@ -1145,6 +1145,8 @@ export class ArchiveCatalogService {
         const activeWorkPaths = new Set<string>();
 
         for (const workSnapshot of creatorSnapshot.works) {
+          const oldLink = existingByRelativePath.get(this.localWorkRelativePath(workSnapshot));
+          if (oldLink?.work_id && this.database.prepare('SELECT 1 FROM work_removals WHERE work_id=?').get(oldLink.work_id)) continue;
           result.localWorks += 1;
           const relativePath = this.localWorkRelativePath(workSnapshot);
           activeWorkPaths.add(relativePath);

@@ -1192,5 +1192,56 @@
     "emptyDescription": "先为几个文件夹建立索引，这个页面就会开始在这里展示帖子。",
     "folderPostsOne": "{count} 篇帖子",
     "folderPostsOther": "{count} 篇帖子"
+  },
+  "mediaRemoval": {
+    "legacyTitle": "其他图集回收记录",
+    "legacyEmpty": "没有其他图集回收记录",
+    "legacyDescription": "整作品与单独媒体的回收记录分别显示在上方。",
+    "action": "将这张图片或视频移入回收站",
+    "title": "将此媒体移入回收站？",
+    "confirm": "移入回收站",
+    "message": "仅回收 {filename}。原文件保留，可从应用回收站恢复。",
+    "lastMessage": "回收 {filename}。这是图集最后一个媒体，图集将暂时从浏览列表移除；可在回收站恢复。",
+    "failed": "无法回收此媒体。",
+    "trashTitle": "单独回收的图片和视频",
+    "restore": "恢复此媒体",
+    "empty": "没有单独回收的媒体。",
+    "loadFailed": "无法读取媒体回收站。"
+  },
+  "workRemoval": {
+    "pendingTitle": "未完成的作品操作",
+    "retry": "继续处理",
+    "recoveryPending": "删除尚未提交，文件回滚恢复尚未完成。继续处理会仅恢复本次操作的文件。",
+    "rolledBack": "文件已回滚恢复；该次删除没有生效。需要删除时请重新核对范围。",
+    "copies": "个本地副本",
+    "trash": {
+      "title": "将整个作品移入回收站？",
+      "message": "回收这个独立作品的全部本地副本。原文件保留，可在回收站整体恢复。此前单独回收的媒体仍保持回收状态。",
+      "confirm": "回收整个作品"
+    },
+    "restore": {
+      "title": "恢复整个作品？",
+      "message": "恢复这个作品的全部已回收副本。此前单独回收的媒体仍留在单媒体回收站。",
+      "confirm": "恢复整个作品"
+    },
+    "permanent": {
+      "title": "永久删除整个作品？",
+      "message": "将永久删除这个作品全部本地副本的文件，包括已单独回收的媒体。此操作无法从回收站恢复，请核对以下完整范围。",
+      "confirm": "永久删除整个作品"
+    },
+    "loading": "正在核对全部副本…",
+    "scope": "共 {copies} 个本地副本，{files} 个文件。",
+    "files": "{count} 个文件",
+    "pending": "记录已处理，磁盘清理尚未完成。请保留此操作记录，稍后核对。",
+    "completed": "操作已完成。",
+    "processing": "正在处理…",
+    "failed": "操作失败，请重新核对。",
+    "scopeChanged": "操作范围已变化，请刷新后重新核对。",
+    "refreshPreview": "重新核对范围",
+    "trashTitle": "按作品回收的全部图集",
+    "empty": "没有整作品回收记录。",
+    "loadFailed": "无法读取作品回收站。",
+    "restoreAction": "恢复整个作品",
+    "permanentAction": "永久删除"
   }
 }

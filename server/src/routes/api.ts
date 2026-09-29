@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { AUTH_PASSWORD_MAX_LENGTH, AUTH_PASSWORD_MIN_LENGTH, authService } from '../services/auth-service.js';
 import { ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY } from '../constants/app-setting-keys.js';
-import { appSettingsRepository } from '../db/repositories.js';
+import { appSettingsRepository, maintenanceRepository } from '../db/repositories.js';
 import {
   ArchiveCatalogPipelineService,
   type ArchiveCatalogPipelineResult
@@ -20,6 +20,7 @@ import { createLocalAdmissionWebRouter } from './local-admission-web-routes.js';
 import { createLocalReviewRouter } from './local-review-routes.js';
 import { createApplicationRecoveryRouter } from './application-recovery-routes.js';
 import { createCompanionGrantRouter } from './companion-grant-routes.js';
+import { createMediaTrashRouter } from './media-trash-routes.js';
 import {
   localIngestService,
   type LocalIngestJob,
@@ -58,6 +59,7 @@ import { logRequestFailure, sendUnexpectedError } from '../middleware/http-error
 import { buildInfo } from '../build-info.js';
 
 const router = express.Router();
+router.use(createMediaTrashRouter());
 
 function managedResponse(response: express.Response, action: () => unknown, status = 200) {
   try { response.status(status).json(action()); } catch (error) {
@@ -2130,6 +2132,7 @@ router.post(
   adminMutationRateLimiter,
   requireNoScanInProgress,
   async (_request, response) => {
+  maintenanceRepository.assertLibraryIndexResetAllowed();
   await watcherService.stop();
 
   try {
