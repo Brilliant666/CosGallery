@@ -92,7 +92,8 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     expect(workspace.items.find(item=>item.name==='甲的别名')?.matches).toEqual([{creatorId:creators[0],creatorName:names[0],matchedName:'甲的别名',matchKind:'alias'}]);
     expect(workspace.items.find(item=>item.name==='未知名称')?.matches).toEqual([]);expect(workspace.items.some(item=>item.name.startsWith('.local-'))).toBe(false);
     expect(workspace.items.find(item=>item.name===names[0])?.matches).toEqual([{creatorId:creators[0],creatorName:names[0],matchedName:names[0],matchKind:'canonical'}]);
-    expect(service.creators('甲的别名').items).toMatchObject([{id:creators[0],name:names[0],aliases:expect.arrayContaining(['甲的别名',names[0]])}]);
+    expect(service.creators('甲的别名').items).toMatchObject([{id:creators[0],name:names[0],aliases:['甲的别名','甲的别名']}]);
+    expect(service.creators(names[0]).items).toMatchObject([{id:creators[0],name:names[0],aliases:['甲的别名','甲的别名']}]);
     db.prepare('UPDATE archive_catalog_creators SET is_active=0 WHERE id=?').run(creators[1]);
     expect((await service.workspace()).items.find(item=>item.name===names[1])?.matches).toEqual([]);expect(service.creators(names[1]).items).toEqual([]);
     db.prepare('UPDATE archive_catalog_creators SET is_active=1 WHERE id=?').run(creators[1]);expect(db.prepare('SELECT * FROM archive_catalog_creators ORDER BY id').all()).toEqual(before);
