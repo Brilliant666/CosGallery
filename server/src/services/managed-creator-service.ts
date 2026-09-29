@@ -32,8 +32,11 @@ export const deleteManagedCreatorSchema = z.object({
 export const managedFolderLinkSchema = z.object({ creatorId: z.number().int().positive() }).strict();
 export const managedFolderRatingSchema = z.object({ contentRating: rating }).strict();
 const revision = z.string().regex(/^[a-f0-9]{64}$/u);
+// Preserve an existing alias's literal spelling in editor drafts. Validation
+// still uses the name rules; normalization is applied only to new input below.
+const manualAliasDraft = z.string().refine(value => name.safeParse(value).success, '别名必须包含有效字符且不超过 255 字符');
 export const managedProfileSettingsSchema = z.object({
-  name, preference, rating, manualAliases: z.array(name).max(100),
+  name, preference, rating, manualAliases: z.array(manualAliasDraft).max(100),
   confirmDistinct: z.boolean().default(false), expectedRevision: revision
 }).strict();
 export const managedDirectorySettingsSchema = z.object({
@@ -146,9 +149,19 @@ export class ManagedCreatorService {
     return this.transaction(() => {
       this.assertRevision(data.expectedRevision, this.editingFacts(id).profileRevision);
       const current = this.requireCreator(id);
-      const wanted = new Map(data.manualAliases.map(alias => [normalizeCreatorIdentity(alias), alias]));
       const existing = this.database.prepare(`SELECT normalized_alias,alias FROM archive_catalog_creator_aliases
         WHERE creator_id=? AND source='manual'`).all(id) as Array<{ normalized_alias: string; alias: string }>;
+      // A canonical spelling is already searchable through the creator row.
+      // Exact comparison preserves genuine case/punctuation variants. The old
+      // name moves to history on rename, even if a stale draft still lists it.
+      const wanted = new Map(data.manualAliases
+        .map(alias => {
+          const row = existing.find(item => item.alias === alias);
+          if (row) return [row.normalized_alias, row.alias] as const;
+          const normalizedInput = name.parse(alias);
+          return [normalizeCreatorIdentity(normalizedInput), normalizedInput] as const;
+        })
+        .filter(([, alias]) => alias !== data.name && (data.name === current.name || alias !== current.name)));
       this.checkCandidates([
         ...(data.name !== current.name ? [data.name] : []),
         ...[...wanted].filter(([normalized]) => !existing.some(row => row.normalized_alias === normalized)).map(([, alias]) => alias)
@@ -238,7 +251,7 @@ export class ManagedCreatorService {
         VALUES (?,?,?,?,'manual',?,?,?)`).run(data.name, normalizeCreatorIdentity(data.name), data.preference,
         data.rating, `manual:${randomUUID()}`, timestamp, timestamp);
       const id = Number(result.lastInsertRowid);
-      for (const alias of [data.name, ...data.aliases]) this.addAliasRow(id, alias);
+      for (const alias of data.aliases) if (alias !== data.name) this.addAliasRow(id, alias);
       return this.requireCreator(id);
     });
   }
@@ -251,9 +264,9 @@ export class ManagedCreatorService {
       if (newName !== current.name) {
         this.checkCandidates([newName], id, data.confirmDistinct);
         this.addAliasRow(id, current.name, 'manual-history');
-        this.database.prepare(`DELETE FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual' AND normalized_alias=?`)
-          .run(id, normalizeCreatorIdentity(current.name));
-        this.addAliasRow(id, newName);
+        this.database.prepare(`DELETE FROM archive_catalog_creator_aliases
+          WHERE creator_id=? AND source='manual' AND alias IN (?,?)`)
+          .run(id, current.name, newName);
       }
       this.database.prepare(`UPDATE archive_catalog_creators SET canonical_name=?, normalized_name=?,
         preference=?, effective_rating=?, updated_at=? WHERE id=?`).run(newName, normalizeCreatorIdentity(newName),
@@ -266,7 +279,9 @@ export class ManagedCreatorService {
   addAlias(id: number, input: unknown) {
     const data = managedAliasSchema.parse(input);
     return this.transaction(() => {
-      this.requireCreator(id);
+      const current = this.requireCreator(id);
+      if (data.alias === current.name) throw new ManagedCreatorError(400, 'ALIAS_EQUALS_CANONICAL_NAME',
+        '别名不能与规范名完全相同；规范名已可直接用于搜索和匹配。');
       this.checkCandidates([data.alias], id, data.confirmDistinct);
       this.addAliasRow(id, data.alias);
       return this.requireCreator(id);

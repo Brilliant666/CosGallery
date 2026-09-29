@@ -344,7 +344,9 @@ export class ArchiveCatalogQueryService {
           JOIN archive_catalog_source_works sw ON sw.id=tasks.source_work_id JOIN archive_catalog_works works ON works.id=sw.work_id
           WHERE works.creator_id=? AND tasks.status NOT IN ('ingested','cancelled')`).get(creatorId) as {count:number}).count
       },
-      aliases: aliases.map((alias) => ({
+      // Same-name source/history rows are evidence. Only redundant manual rows
+      // are omitted from the editor while older databases await migration.
+      aliases: aliases.filter(alias => alias.source !== 'manual' || alias.alias !== item.name).map((alias) => ({
         id:Buffer.from(JSON.stringify([alias.source,alias.normalized_alias])).toString('base64url'),
         alias:alias.alias,source:alias.source,editable:alias.source==='manual'
       })),
@@ -407,7 +409,7 @@ export class ArchiveCatalogQueryService {
   private buildCreatorItems(): ArchiveCatalogCreatorListItem[] {
     const creators = this.database.prepare(
        `SELECT creators.*,
-       (SELECT count(*) FROM archive_catalog_creator_aliases WHERE creator_id=creators.id AND (source='manual' OR alias<>creators.canonical_name)) AS alias_count,
+       (SELECT count(*) FROM archive_catalog_creator_aliases WHERE creator_id=creators.id AND alias COLLATE BINARY<>creators.canonical_name COLLATE BINARY) AS alias_count,
        (SELECT count(*) FROM archive_catalog_creator_sources WHERE creator_id=creators.id AND source NOT IN ('hentaiclub','manual-history')) AS source_count,
        (SELECT count(*) FROM archive_catalog_local_creator_folders WHERE creator_id=creators.id AND is_active=1 AND gallery_folder_id IS NOT NULL) AS local_folder_count
        FROM archive_catalog_creators creators`

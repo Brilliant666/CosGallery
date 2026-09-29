@@ -37,8 +37,8 @@ describe('global controlled creator deletion', () => {
   it('deletes a seeded source-only identity with exact scope, immutable detached evidence and reusable names', () => {
     const fixture = sourceOnly();
     const preview = service.deletionPreview(id);
-    expect(preview).toMatchObject({ eligible: true, removableAliases: 2, removalScope: [
-      { kind: 'aliases', count: 2 }, { kind: 'sources', count: 1 }, { kind: 'collections', count: 1 },
+    expect(preview).toMatchObject({ eligible: true, removableAliases: 1, removalScope: [
+      { kind: 'aliases', count: 1 }, { kind: 'sources', count: 1 }, { kind: 'collections', count: 1 },
       { kind: 'sourceWorks', count: 1 }, { kind: 'works', count: 1 }
     ] });
     service.deleteUnusedManualCreator(id, confirm());
@@ -148,7 +148,7 @@ describe('global controlled creator deletion', () => {
     const stalePrepared = model.prepare(id);
     const beforeOriginal = db.prepare('SELECT * FROM archive_catalog_creators WHERE id=?').get(original.id);
     const publication = Number(db.prepare('SELECT publication FROM resource_catalog_meta').get()?.publication);
-    expect(service.deletionPreview(id)).toMatchObject({ eligible: true, removableAliases: 3, blockers: [] });
+    expect(service.deletionPreview(id)).toMatchObject({ eligible: true, removableAliases: 2, blockers: [] });
     expect(service.deleteUnusedManualCreator(id, confirm())).toEqual({ deleted: true, creatorId: id });
     expect(db.prepare('SELECT * FROM archive_catalog_creators WHERE id=?').get(id)).toBeUndefined();
     expect(db.prepare('SELECT * FROM archive_catalog_creator_aliases WHERE creator_id=?').all(id)).toEqual([]);
@@ -189,7 +189,7 @@ describe('global controlled creator deletion', () => {
     const oldConfirmation = confirm(); db.prepare(sql).run(id);
     expect(service.deletionPreview(id).eligible).toBe(false);
     expect(() => service.deleteUnusedManualCreator(id, oldConfirmation)).toThrow('不能删除');
-    retained(); expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases WHERE creator_id=?').get(id)?.n).toBe(2);
+    retained(); expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases WHERE creator_id=?').get(id)?.n).toBe(1);
   });
 
   it.each(['candidate_creator_id', 'creator_id'])('discovers additional FK/soft %s refs instead of cascading', column => {
@@ -276,7 +276,7 @@ describe('global controlled creator deletion', () => {
     const before = db.prepare('SELECT * FROM resource_catalog_state WHERE creator_id=?').get(id);
     db.exec("CREATE TRIGGER fail_publication BEFORE UPDATE ON resource_catalog_meta BEGIN SELECT RAISE(ABORT,'test publication failure'); END");
     expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('test publication failure');
-    retained(); expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases WHERE creator_id=?').get(id)?.n).toBe(2);
+    retained(); expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases WHERE creator_id=?').get(id)?.n).toBe(1);
     expect(db.prepare('SELECT * FROM resource_catalog_state WHERE creator_id=?').get(id)).toEqual(before);
     expect(db.prepare('SELECT * FROM archive_catalog_source_works WHERE id=?').get(fixture.sourceWork)).toEqual(sourceBefore);
     expect(db.prepare('SELECT id FROM archive_catalog_works WHERE id=?').get(fixture.work)).toBeTruthy();

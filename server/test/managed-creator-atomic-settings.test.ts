@@ -53,6 +53,61 @@ describe('managed creator atomic editing scopes', () => {
     expect(snapshot()).toEqual(before);
     expect(db.isTransaction).toBe(false);
   });
+  it('filters current and retired canonical spellings from a rename draft but preserves variants and source/history evidence', async () => {
+    db.prepare(`INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source)
+      VALUES(?,'Original','original','manual'),(?,'Changed','changed','manual'),(?,'Changed','changed','costuan')`).run(id, id, id);
+    service.saveProfile(id, { ...await profile(), manualAliases: ['Original', ' Changed ', 'changed', 'original', 'New alias'] });
+    const aliases = () => db.prepare('SELECT alias,source FROM archive_catalog_creator_aliases WHERE creator_id=? ORDER BY source,alias').all(id);
+    expect(aliases()).toEqual([
+      { alias: 'Changed', source: 'costuan' },
+      { alias: 'New alias', source: 'manual' }, { alias: 'changed', source: 'manual' }, { alias: 'original', source: 'manual' },
+      { alias: 'Original', source: 'manual-history' }
+    ]);
+    const state = await service.editingState(id);
+    service.saveProfile(id, { ...await profile(), name: 'Original', manualAliases: ['Changed', 'Original', 'changed', 'original'], expectedRevision: state.profileRevision });
+    expect(aliases()).toEqual([
+      { alias: 'Changed', source: 'costuan' }, { alias: 'changed', source: 'manual' }, { alias: 'original', source: 'manual' },
+      { alias: 'Changed', source: 'manual-history' }, { alias: 'Original', source: 'manual-history' }
+    ]);
+  });
+  it('gives legacy rename and atomic profile rename the same persisted aliases, including a return to a historical name', async () => {
+    const legacy = service.create({ name: 'Original', aliases: ['Old alias'], confirmDistinct: true }).id;
+    for (const target of [id, legacy]) db.prepare(`INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source)
+      VALUES(?,'Original','original','manual'),(?,'Changed','changed','manual'),(?,'Changed','changed','fixture-source')`).run(target, target, target);
+    const aliases = (target: number) => db.prepare('SELECT alias,normalized_alias,source FROM archive_catalog_creator_aliases WHERE creator_id=? ORDER BY source,alias').all(target);
+    for (const nextName of ['Changed', 'Original']) {
+      const state = await service.editingState(id);
+      service.saveProfile(id, { name: nextName, preference: null, rating: null,
+        manualAliases: ['Original', 'Changed', 'Old alias'], expectedRevision: state.profileRevision, confirmDistinct: true });
+      service.update(legacy, { name: nextName, confirmDistinct: true });
+      expect(aliases(id)).toEqual(aliases(legacy));
+    }
+  });
+  it('removes a redundant canonical spelling in a no-rename draft without changing normalized-equivalent variants', async () => {
+    const state = await service.editingState(id);
+    service.saveProfile(id, { name: 'Original', preference: null, rating: null,
+      manualAliases: [' Ｏriginal ', 'original'], expectedRevision: state.profileRevision });
+    expect(db.prepare("SELECT alias FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual'").all(id))
+      .toEqual([{ alias: 'original' }]);
+  });
+  it.each([['Ｏriginal', 'original'], [' Original ', 'original'], ['Ｏriginal', 'historical-normalization']])
+    ('preserves existing literal alias %j and key %j during preference edits and rename', async (variant, storedKey) => {
+    db.prepare(`INSERT INTO archive_catalog_creator_aliases(creator_id,alias,normalized_alias,source)
+      VALUES(?,?,?,'manual')`).run(id, variant, storedKey);
+    const originalRows = db.prepare("SELECT * FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual' ORDER BY normalized_alias").all(id);
+    let state = await service.editingState(id);
+    service.saveProfile(id, { name: 'Original', preference: 'kept', rating: null,
+      manualAliases: ['Old alias', variant], expectedRevision: state.profileRevision });
+    expect(db.prepare("SELECT * FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual' ORDER BY normalized_alias").all(id))
+      .toEqual(originalRows);
+    state = await service.editingState(id);
+    service.saveProfile(id, { name: 'Changed', preference: 'kept', rating: null,
+      manualAliases: ['Old alias', variant, 'Original', ' Changed '], expectedRevision: state.profileRevision });
+    expect(db.prepare("SELECT * FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual' ORDER BY normalized_alias").all(id))
+      .toEqual(originalRows);
+    expect(db.prepare("SELECT alias FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual-history'").all(id))
+      .toEqual([{ alias: 'Original' }]);
+  });
 
   it('requires explicit identity collision confirmation and rejects forged source alias edits', async () => {
     const other = service.create({ name: 'Another', aliases: ['Clashing'] });

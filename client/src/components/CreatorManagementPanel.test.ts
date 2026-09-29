@@ -104,6 +104,29 @@ describe('creator management panel lifecycle and save scopes',()=>{
     pending.resolve(savedState({...value,name:'Renamed',preference:'kept',rating:'R15',aliases:[value.aliases[0]!,{id:'new',alias:'New alias',source:'manual',editable:true}]}));await flushPromises();
     expect(w.text()).toContain('资料已保存');expect(w.vm.dirtyTabs).toEqual([]);expect(useCreatorReadingStore(pinia).generation).toBe(1);expect(api.updateManagedCreator).not.toHaveBeenCalled();
   });
+  it('rejects aliases exactly equal to the draft canonical name after NFKC and trim',async()=>{
+    const w=panel('profile');await flushPromises();await w.get('.inline-input input').setValue('　Ａｌｐｈａ　');await button(w,'添加').trigger('click');
+    expect(w.get('[data-test=alias-notice]').text()).toContain('与当前规范名相同');expect(w.findAll('.editable-list li')).toHaveLength(0);expect(api.addManagedAlias).not.toHaveBeenCalled();
+    expect(w.get('.profile-form .records').text()).toContain('Alpha');expect(w.get('.profile-form .records').findAll('button')).toHaveLength(0);
+    await w.get('.profile-form input').setValue('New Name');await w.get('.inline-input input').setValue('New Name');await button(w,'添加').trigger('click');expect(w.findAll('.editable-list li')).toHaveLength(0);
+  });
+  it('preserves case and punctuation variants as actual manual aliases',async()=>{
+    const w=panel('profile');await flushPromises();
+    for(const alias of ['alpha','Al-pha','Al.pha']){await w.get('.inline-input input').setValue(alias);await button(w,'添加').trigger('click');}
+    expect(w.findAll('.editable-list li span').map(item=>item.text())).toEqual(['alpha','Al-pha','Al.pha']);expect(w.find('[data-test=alias-notice]').exists()).toBe(false);
+    await w.get('.profile-form').trigger('submit');await flushPromises();expect(api.saveManagedCreatorProfile).toHaveBeenCalledWith(1,expect.objectContaining({name:'Alpha',manualAliases:['alpha','Al-pha','Al.pha']}));
+  });
+  it('preserves existing raw full-width and spaced aliases when only changing preferences',async()=>{
+    const value=structuredClone(creator);value.aliases.push({id:'full-width',alias:'Ａｌｐｈａ',source:'manual',editable:true},{id:'spaced',alias:' Alpha ',source:'manual',editable:true});chooseIdentity(value);
+    const w=panel('profile');await flushPromises();await w.get('.profile-form').findAll('select')[0]!.setValue('kept');await w.get('.profile-form').trigger('submit');await flushPromises();
+    expect(api.saveManagedCreatorProfile).toHaveBeenCalledExactlyOnceWith(1,expect.objectContaining({name:'Alpha',preference:'kept',manualAliases:['Ａｌｐｈａ',' Alpha ']}));
+  });
+  it('filters an alias promoted to canonical name when saving while retaining source and old-name records',async()=>{
+    const value=structuredClone(creator);value.aliases.push({id:'new-name',alias:'New Name',source:'manual',editable:true},{id:'variant',alias:'new-name',source:'manual',editable:true});chooseIdentity(value);
+    const after={...value,name:'New Name',aliases:[value.aliases[0]!,{id:'history',alias:'Alpha',source:'manual-history',editable:false},value.aliases[2]!]};vi.mocked(api.saveManagedCreatorProfile).mockResolvedValue(savedState(after));
+    const w=panel('profile');await flushPromises();await w.get('.profile-form input').setValue('　Ｎｅｗ Ｎａｍｅ　');await w.get('.profile-form').trigger('submit');await flushPromises();
+    expect(api.saveManagedCreatorProfile).toHaveBeenCalledExactlyOnceWith(1,expect.objectContaining({manualAliases:['new-name']}));expect(w.findAll('.editable-list li span').map(item=>item.text())).toEqual(['new-name']);expect(w.get('.profile-form .records').findAll('li')).toHaveLength(2);expect(w.get('.profile-form .records').findAll('button')).toHaveLength(0);expect(w.vm.dirtyTabs).toEqual([]);
+  });
   it('retains the exact profile draft and collision confirmation after a failed atomic save',async()=>{
     const w=panel('profile');await flushPromises();await w.get('.profile-form input').setValue('Other');await w.get('.inline-input input').setValue('Uncommitted alias');
     vi.mocked(api.saveManagedCreatorProfile).mockRejectedValueOnce(new RequestError('停用身份仍参与重名检查',409,{candidates:[{id:9,name:'Other'}]}));await w.get('.profile-form').trigger('submit');await flushPromises();

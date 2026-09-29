@@ -30,6 +30,10 @@ describe.sequential('managed creator admin API', () => {
     const result=await requestTestApp(app,'POST',base+'/creators',headers,{name:'A',rating:'R18'});
     expect(result.status).toBe(201);id=result.body.id;
     expect(result.body).toMatchObject({name:'A',isActive:true,rating:'R18',preference:null});
+    expect(result.body.aliases).toEqual([]);
+    const redundantAlias=await requestTestApp(app,'POST',base+`/creators/${id}/aliases`,headers,{alias:' Ａ '});
+    expect(redundantAlias.status).toBe(400);
+    expect(redundantAlias.body.code).toBe('ALIAS_EQUALS_CANONICAL_NAME');
     expect((await requestTestApp(app,'POST',base+'/creators',headers,{name:'A'})).body).toMatchObject({code:'CREATOR_IDENTITY_AMBIGUOUS',candidates:[{id,name:'A'}]});
     expect((await requestTestApp(app,'PATCH',base+'/creators/9999',headers,{rating:null})).status).toBe(404);
     expect((await requestTestApp(app,'DELETE',base+`/creators/${id}`,headers)).status).toBe(400);
