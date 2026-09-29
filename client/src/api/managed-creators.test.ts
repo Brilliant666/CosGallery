@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deleteUnusedManagedCreator, previewManagedCreatorDeletion, fetchManagedCreatorEditingState,
   saveManagedCreatorProfile, saveManagedCreatorDirectories } from './managed-creators';
 
-describe('unused managed creator deletion API',()=>{
+describe('managed creator deletion API',()=>{
   afterEach(()=>vi.unstubAllGlobals());
   it('reads a preview without mutation and sends the exact explicit confirmation token when deleting',async()=>{
-    const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({creatorId:7,eligible:true,blockers:[],name:'Sample',confirmationToken:'fixed-preview',removableAliases:1}),{status:200}));
+    const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({creatorId:7,eligible:true,blockers:[],name:'Sample',confirmationToken:'fixed-preview',removableAliases:1,removalScope:[{kind:'sources',label:'来源身份',count:2}]}),{status:200}));
     vi.stubGlobal('fetch',fetchMock);
     const preview=await previewManagedCreatorDeletion(7);
+    expect(preview.removalScope).toEqual([{kind:'sources',label:'来源身份',count:2}]);
     expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/archive-catalog/creators/7/deletion-preview',expect.objectContaining({credentials:'same-origin',cache:'no-store'}));
     expect(fetchMock.mock.calls[0]![1].headers.has('x-foldergram-intent')).toBe(false);
     fetchMock.mockResolvedValue(new Response(JSON.stringify({deleted:true,creatorId:7}),{status:200}));

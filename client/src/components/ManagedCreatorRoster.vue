@@ -155,7 +155,7 @@ function closePanel(){void selectPanel('');}
 function changePanelTab(tab:CreatorPanelTab){void selectPanel(panelSelection.value,tab);}
 function created(id:number){void selectPanel(String(id),'overview',true);}
 async function changed(){await load();emit('changed');}
-async function deleted(){await selectPanel('','overview',true);if(payload.value?.items.length===1&&page.value>1){page.value--;syncFilters();}await load();notice.value='已删除未使用身份；未删除作品或文件。';}
+async function deleted(){await selectPanel('','overview',true);if(payload.value?.items.length===1&&page.value>1){page.value--;syncFilters();}await load();notice.value='已删除博主及预览范围内的资料；未删除本地文件。';}
 defineExpose({refresh:()=>load()});
 onMounted(()=>{void load(false);});
 onBeforeUnmount(()=>{disposed=true;clearQueryTimer();invalidateLoad();removeGuard?.();});

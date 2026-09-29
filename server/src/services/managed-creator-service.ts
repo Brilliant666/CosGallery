@@ -8,7 +8,7 @@ import { databaseManager } from '../db/database.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogQueryService } from './archive-catalog-query-service.js';
 import { normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
-import { inspectCreatorDeletion } from './managed-creator-deletion.js';
+import { creatorDeletionRows, inspectCreatorDeletion } from './managed-creator-deletion.js';
 import { LocalIngestDestinationService } from './local-ingest-destination-service.js';
 
 const name = z.string().transform(value => value.normalize('NFKC').trim()).pipe(z.string().min(1).max(255))
@@ -318,8 +318,18 @@ export class ManagedCreatorService {
         `不能删除：${preview.blockers.map(item => `${item.label}（${item.count}）`).join('；')}`);
       if (preview.confirmationToken !== data.confirmationToken) throw new ManagedCreatorError(409,
         'CREATOR_DELETE_PREVIEW_CHANGED', '博主资料已变化，请重新检查并确认删除');
-      // The full audit holds the reserved writer. No historical/business rows may
-      // cascade or become NULL; only the explicit own metadata whitelist is removed.
+      // Keep a detached snapshot before removing the exact previewed whitelist.
+      // Its names are historical evidence, never live aliases or name reservations.
+      const snapshot = creatorDeletionRows(this.database, id);
+      this.database.prepare(`INSERT INTO creator_deletion_audits
+        (creator_id,canonical_name,confirmation_token,scope_json,snapshot_json,deleted_at) VALUES(?,?,?,?,?,?)`)
+        .run(id, preview.name, preview.confirmationToken, JSON.stringify(preview.removalScope),
+          JSON.stringify(snapshot), new Date().toISOString());
+      for (const row of snapshot.archive_catalog_source_works)
+        this.database.prepare('DELETE FROM archive_catalog_source_works WHERE id=?').run(Number(row.id));
+      this.database.prepare('DELETE FROM archive_catalog_works WHERE creator_id=?').run(id);
+      this.database.prepare('DELETE FROM archive_catalog_collections WHERE creator_id=?').run(id);
+      this.database.prepare('DELETE FROM archive_catalog_creator_sources WHERE creator_id=?').run(id);
       this.database.prepare('DELETE FROM archive_catalog_creator_aliases WHERE creator_id=?').run(id);
       this.database.prepare('DELETE FROM archive_catalog_creators WHERE id=?').run(id);
       // Creator/alias delete triggers dirty the catalog: clean AFTER those triggers,

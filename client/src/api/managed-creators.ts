@@ -9,6 +9,7 @@ export type ManagedCreatorDeletionPreview = {
   creatorId:number; name:string; eligible:boolean;
   blockers:Array<{code:string;label:string;count:number}>;
   confirmationToken:string; removableAliases:number;
+  removalScope:Array<{kind:string;label:string;count:number}>;
 };
 export type ManagedCreatorSavedState = {
   creator: ArchiveCatalogCreatorDetail;

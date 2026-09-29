@@ -5,6 +5,7 @@ import { localAdmissionWebSchemaSql } from './local-admission-web-schema.js';
 import { localReviewWebSchemaSql } from './local-review-web-schema.js';
 import { localAdmissionCollectionSchemaSql } from './local-admission-collection-schema.js';
 import { workRemovalSchemaSql } from './work-removal-schema.js';
+import { creatorDeletionSchemaSql } from './creator-deletion-schema.js';
 
 export const schemaSql = `
 PRAGMA foreign_keys = ON;
@@ -608,4 +609,5 @@ ${localAdmissionWebSchemaSql}
 ${localReviewWebSchemaSql}
 ${localAdmissionCollectionSchemaSql}
 ${workRemovalSchemaSql}
+${creatorDeletionSchemaSql}
 `;
