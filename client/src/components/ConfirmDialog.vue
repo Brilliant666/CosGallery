@@ -21,11 +21,11 @@
         <slot name="details" />
       </div>
       <!-- Actions -->
-      <div class="flex justify-end gap-3 mt-[1.4rem]">
-        <button class="min-h-[2.5rem] px-4 py-[0.6rem] border border-transparent rounded-[0.75rem] font-semibold cursor-pointer bg-surface-hover text-text disabled:opacity-70 disabled:cursor-wait" type="button" @click="$emit('cancel')">
+      <div class="flex flex-wrap justify-end gap-3 mt-[1.4rem]">
+        <button class="removal-button removal-neutral" type="button" @click="$emit('cancel')">
           {{ cancelLabel }}
         </button>
-        <button class="min-h-[2.5rem] px-4 py-[0.6rem] border border-transparent rounded-[0.75rem] font-semibold cursor-pointer bg-[#d93025] text-white disabled:opacity-70 disabled:cursor-wait" type="button" :disabled="loading" @click="$emit('confirm')">
+        <button class="removal-button removal-danger" type="button" :disabled="loading" @click="$emit('confirm')">
           {{ loading ? loadingLabel : confirmLabel }}
         </button>
       </div>

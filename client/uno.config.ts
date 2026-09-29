@@ -51,6 +51,23 @@ export default defineConfig({
     },
   },
   shortcuts: [
+    // Consistent, visibly bounded actions for recycle/restore confirmations.
+    [
+      "removal-button",
+      "inline-flex shrink-0 items-center justify-center min-h-10 px-4 py-2 rounded-[0.65rem] border border-solid text-sm font-semibold leading-5 cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50 disabled:cursor-not-allowed",
+    ],
+    [
+      "removal-neutral",
+      "border-[color-mix(in_srgb,var(--border)_65%,var(--muted)_35%)] bg-surface text-text enabled:hover:bg-surface-hover",
+    ],
+    [
+      "removal-danger-outline",
+      "border-[#b42318] bg-[#fff4f2] text-[#b42318] enabled:hover:bg-[#ffe4df]",
+    ],
+    [
+      "removal-danger",
+      "border-[#b42318] bg-[#b42318] text-white enabled:hover:bg-[#912018]",
+    ],
     // Card / panel surface
     [
       "card",

@@ -40,12 +40,13 @@
       </template>
       <p v-if="error" role="alert" class="text-[#b42318]">{{ error }}</p>
       <p v-if="result" role="status">{{ t(workRemovalStatusKey(result)) }}</p>
-      <div class="mt-4 flex justify-end gap-3">
-        <button type="button" :disabled="executing" @click="close">
+      <div class="mt-4 flex flex-wrap justify-end gap-3">
+        <button class="removal-button removal-neutral" type="button" :disabled="executing" @click="close">
           {{ t(result ? 'common.close' : 'common.cancel') }}
         </button>
         <button
           v-if="!result && !loading && (!preview || invalidated)"
+          class="removal-button removal-neutral"
           type="button"
           :disabled="executing || unavailable"
           @click="load"
@@ -55,7 +56,9 @@
         <button
           v-if="!result"
           type="button"
-          class="btn bg-[#b42318] text-white"
+          class="removal-button"
+          data-test="confirm-work-removal"
+          :class="mode === 'restore' ? 'removal-neutral' : 'removal-danger'"
           :disabled="
             loading ||
             executing ||

@@ -168,15 +168,18 @@
                 <td>
                   <div class="row-actions" @click.stop>
                     <a
+                      class="removal-button removal-neutral hover:bg-surface-hover"
                       v-if="item.primaryPostId && item.localState === 'indexed'"
                       :href="`/library/${item.creatorId}/works/${item.primaryPostId}`"
                       title="查看图集">查看图集</a><button
+                      class="removal-button removal-neutral"
                       :disabled="stale || loading"
                       title="复制单条目录" @click="copyOne(item)"
                     >
                       复制单条
                     </button>
                     <button
+                      class="removal-button removal-danger-outline"
                       type="button"
                       :disabled="stale || loading || !payload.readModel.complete || payload.readModel.status !== 'ready'"
                       @click="removalTarget = item"
@@ -765,7 +768,7 @@ label {
 }
 input,
 select,
-button {
+button:not(.removal-button) {
   border: 1px solid var(--color-border, #ddd);
   border-radius: 0.6rem;
   padding: 0.5rem 0.7rem;
@@ -805,9 +808,11 @@ th {
   gap: 0.3rem 0.5rem;
   min-width: 9rem;
 }
-.row-actions button {
-  padding: 0.3rem 0.45rem;
+.row-actions .removal-button {
   white-space: nowrap;
+}
+.row-actions a.removal-button {
+  color: var(--text);
 }
 .detail {
   background: var(--color-bg, #f5f6f8);

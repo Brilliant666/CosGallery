@@ -63,7 +63,7 @@ describe('whole-work removal confirmation', () => {
     );
     expect(wrapper.text()).toContain('/library/copy1');
     expect(wrapper.text()).toContain('/library/copy2');
-    await wrapper.get('.btn').trigger('click');
+    await wrapper.get('[data-test="confirm-work-removal"]').trigger('click');
     await flushPromises();
     expect(executeWorkRemoval).toHaveBeenCalledExactlyOnceWith(22, 'frozen');
     expect(wrapper.emitted('changed')).toHaveLength(1);
@@ -77,7 +77,7 @@ describe('whole-work removal confirmation', () => {
       props: { workId: 22, creatorId: 1, mode: 'trash' },
     });
     await flushPromises();
-    expect(wrapper.get('.btn').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="confirm-work-removal"]').attributes('disabled')).toBeDefined();
     expect(executeWorkRemoval).not.toHaveBeenCalled();
   });
   it('invalidates a stale execution token and never repeats the mutation', async () => {
@@ -88,9 +88,9 @@ describe('whole-work removal confirmation', () => {
       props: { workId: 22, creatorId: 1, mode: 'trash' },
     });
     await flushPromises();
-    await wrapper.get('.btn').trigger('click');
+    await wrapper.get('[data-test="confirm-work-removal"]').trigger('click');
     await flushPromises();
-    expect(wrapper.get('.btn').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="confirm-work-removal"]').attributes('disabled')).toBeDefined();
     expect(wrapper.emitted('stale')).toHaveLength(1);
     expect(executeWorkRemoval).toHaveBeenCalledTimes(1);
   });

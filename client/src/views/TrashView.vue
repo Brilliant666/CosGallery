@@ -17,10 +17,10 @@
 
     <header v-if="trashStore.items.length" class="flex flex-wrap items-center justify-between gap-3">
       <h2>{{ t('mediaRemoval.legacyTitle') }}</h2>
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-3">
         <span class="text-[0.82rem] text-muted tabular-nums">{{ selectedCountLabel }}</span>
         <button
-          class="min-h-[2.35rem] px-4 py-[0.6rem] rounded-[0.75rem] border border-border bg-surface text-text font-semibold disabled:opacity-55 disabled:cursor-not-allowed"
+          class="removal-button removal-neutral"
           type="button"
           :disabled="selectedCount === 0 || processing"
           @click="restoreConfirmOpen = true"
@@ -28,7 +28,7 @@
           {{ t('trashPage.restoreButton') }}
         </button>
         <button
-          class="min-h-[2.35rem] px-4 py-[0.6rem] rounded-[0.75rem] border border-transparent bg-[#b42318] text-white font-semibold disabled:opacity-55 disabled:cursor-not-allowed"
+          class="removal-button removal-danger-outline"
           type="button"
           :disabled="selectedCount === 0 || processing"
           @click="permanentConfirmOpen = true"

@@ -8,7 +8,7 @@
       <li
         v-for="item in items"
         :key="`${item.postId}:${item.mediaId}`"
-        class="flex items-center gap-3"
+        class="flex flex-wrap items-center gap-3"
       >
         <img
           v-if="item.thumbnailUrl"
@@ -21,7 +21,7 @@
           <strong>{{ item.filename }}</strong>
           <p>{{ item.postTitle }} · {{ item.trashedAt }}</p>
         </div>
-        <button type="button" :disabled="busy" @click="restore(item)">
+        <button class="removal-button removal-neutral" type="button" :disabled="busy" @click="restore(item)">
           {{ t('mediaRemoval.restore') }}
         </button>
       </li>

@@ -24,6 +24,7 @@
           <p>#{{ operation.operationId }}</p>
           <p v-if="operation.message">{{ operation.message }}</p>
           <button
+            class="removal-button removal-neutral"
             type="button"
             :disabled="retrying !== null"
             @click="retry(operation)"
@@ -53,6 +54,7 @@
           </p>
         </div>
         <button
+          class="removal-button removal-neutral"
           type="button"
           :disabled="retrying !== null || hasPending(item.workId)"
           @click="select(item, 'restore')"
@@ -61,7 +63,7 @@
         </button>
         <button
           type="button"
-          class="text-[#b42318]"
+          class="removal-button removal-danger-outline"
           :disabled="retrying !== null || hasPending(item.workId)"
           @click="select(item, 'permanent')"
         >
