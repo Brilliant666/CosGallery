@@ -1,6 +1,8 @@
 import { databaseManager } from './database.js';
 import { createUnchangedReadCache } from './unchanged-read-cache.js';
 import { effectivePostSortSql } from './work-sort-sql.js';
+import { getReelOriginalVersion } from '../utils/reel-source-version.js';
+import { derivativeVersion, derivativeSourceVersion } from '../utils/derivative-version.js';
 import { SHARE_SESSION_SECRET_SETTING_KEY } from '../constants/app-setting-keys.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
 import { resolveUniqueSlug, slugifyFolderName } from '../utils/slug.js';
@@ -251,6 +253,44 @@ const POST_SAVED_SELECT_SQL = `
 const WORK_DISPLAY_TITLE_SQL = `(SELECT work.display_title FROM archive_catalog_local_works copy
   JOIN archive_catalog_works work ON work.id=copy.work_id
   WHERE copy.post_id=posts.id AND copy.identity_policy IN ('manual','local_only') ORDER BY copy.id LIMIT 1)`;
+
+const VISIBLE_REEL_WHERE_SQL = `${VISIBLE_POST_WHERE_SQL}
+  AND images.media_type='video' AND images.is_deleted=0 AND images.is_trashed=0
+  AND LOWER(images.filename) NOT IN (${COVER_FILENAME_SQL})
+  AND NOT EXISTS(SELECT 1 FROM media_trash_entries recycled WHERE recycled.image_id=images.id AND recycled.active=1)
+  AND NOT EXISTS(SELECT 1 FROM archive_catalog_local_works copy JOIN work_removals removed ON removed.work_id=copy.work_id WHERE copy.post_id=posts.id)
+  AND NOT EXISTS(SELECT 1 FROM work_removal_paths held JOIN work_removals removed ON removed.work_id=held.work_id WHERE held.relative_path=posts.source_path)`;
+const REEL_FROM_SQL = `FROM images JOIN post_items ON post_items.image_id=images.id
+  JOIN posts ON posts.id=post_items.post_id JOIN folders ON folders.id=posts.folder_id`;
+const REEL_ORDER_SQL = 'images.sort_timestamp DESC, images.id DESC';
+const REEL_SELECT_SQL = `SELECT images.id,images.id AS mediaId,posts.id AS postId,post_items.position AS mediaPosition,
+  (SELECT CASE WHEN COUNT(DISTINCT cf.creator_id)=1 THEN MIN(cf.creator_id) ELSE NULL END FROM archive_catalog_local_creator_folders cf
+    JOIN archive_catalog_creators cc ON cc.id=cf.creator_id AND cc.is_active=1
+    WHERE cf.gallery_folder_id=posts.folder_id AND cf.is_active=1 AND cf.match_status='matched') AS creatorId,
+  posts.folder_id AS folderId,folders.slug AS folderSlug,folders.name AS folderName,folders.folder_path AS folderPath,
+  images.filename,posts.caption,posts.post_type AS postType,posts.content_rating AS contentRating,posts.source_path AS sourcePath,
+  ${WORK_DISPLAY_TITLE_SQL} AS workDisplayTitle,images.width,images.height,images.media_type AS mediaType,
+  images.duration_ms AS durationMs,images.is_animated AS isAnimated,images.mime_type AS mimeType,images.file_size AS fileSize,
+  printf('%lld:%lld',images.file_size,round(images.mtime_ms)) AS derivativeSourceVersion,
+  images.thumbnail_path AS thumbnailUrl,images.preview_path AS previewUrl,images.playback_strategy AS playbackStrategy,
+  images.sort_timestamp AS sortTimestamp,images.taken_at AS takenAt,1 AS itemCount,${POST_SAVED_SELECT_SQL},
+  places.id AS placeId,places.slug AS placeSlug,places.display_name AS placeName,places.kind AS placeKind,places.is_approximate AS placeIsApproximate,
+  likes.created_at AS likedAt,images.relative_path AS reelSourcePath,images.checksum_or_fingerprint AS reelFingerprint,images.mtime_ms AS reelMtimeMs
+  ${REEL_FROM_SQL} LEFT JOIN places ON places.id=posts.place_id LEFT JOIN likes ON likes.post_id=posts.id`;
+
+function mapReelCandidates(rows: unknown[], withMedia: boolean): ReelCandidate[] {
+  return (rows as Array<ReelCandidate & {reelSourcePath:string;reelFingerprint:string;reelMtimeMs:number}>).map(row=>{
+    const {reelSourcePath,reelFingerprint,reelMtimeMs,...item}=row;
+    const version=getReelOriginalVersion({id:item.id,relative_path:reelSourcePath,checksum_or_fingerprint:reelFingerprint,file_size:item.fileSize,mtime_ms:reelMtimeMs});
+    const previewVersion=derivativeVersion(derivativeSourceVersion(item.fileSize,reelMtimeMs),'preview','video');
+    return {...item,sourceIdentity:`${item.postId}:${version}`,scopedPreviewUrl:`/api/reels/media/${item.mediaId}/preview?v=${previewVersion}`,originalDownloadUrl:`/api/reels/media/${item.mediaId}/original?v=${version}&download=1`,mediaItems:withMedia?[{
+      imageId:item.mediaId,position:item.mediaPosition,filename:item.filename,width:item.width,height:item.height,mediaType:item.mediaType,
+      durationMs:item.durationMs,isAnimated:item.isAnimated??false,thumbnailUrl:item.thumbnailUrl,previewUrl:item.previewUrl,
+      derivativeSourceVersion:item.derivativeSourceVersion,playbackStrategy:(item as ReelCandidate & {playbackStrategy?:PlaybackStrategy}).playbackStrategy,
+      mimeType:item.mimeType,fileSize:item.fileSize
+    }]:[]};
+  });
+}
 
 const BASE_POST_SELECT_SQL = `
   SELECT
@@ -1801,66 +1841,43 @@ export const postRepository = {
   },
 
   getReelPlaybackImage(postId: number): ImageRecord | undefined {
-    return database.prepare(`
-      SELECT images.* FROM posts
-      JOIN folders ON folders.id = posts.folder_id
-      JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
-      JOIN images ON images.id = post_items.image_id
-      WHERE posts.id = ? AND ${VISIBLE_POST_WHERE_SQL}
-        AND posts.post_type = 'single' AND images.media_type = 'video'
-        AND images.is_deleted = 0 AND images.is_trashed = 0
-        AND LOWER(images.filename) NOT IN (${COVER_FILENAME_SQL})
-        AND (SELECT COUNT(*) FROM post_items WHERE post_id = posts.id) = 1
-    `).get(postId) as ImageRecord | undefined;
+    return database.prepare(`SELECT images.* ${REEL_FROM_SQL}
+      WHERE posts.id=? AND ${VISIBLE_REEL_WHERE_SQL} AND posts.post_type='single'
+        AND (SELECT COUNT(*) FROM post_items member WHERE member.post_id=posts.id)=1`).get(postId) as ImageRecord | undefined;
+  },
+
+  getVisiblePostSummary(postId: number): CanonicalWorkSummary | undefined {
+    const row = database.prepare(`${BASE_POST_SELECT_SQL} WHERE posts.id=? AND ${VISIBLE_POST_WHERE_SQL}
+      AND NOT EXISTS(SELECT 1 FROM archive_catalog_local_works copy JOIN work_removals removed ON removed.work_id=copy.work_id WHERE copy.post_id=posts.id)
+      AND NOT EXISTS(SELECT 1 FROM work_removal_paths held JOIN work_removals removed ON removed.work_id=held.work_id WHERE held.relative_path=posts.source_path)`)
+      .get(postId) as Omit<FeedPost, 'mediaItems'> | undefined;
+    if (!row) return undefined;
+    const counts = database.prepare(`SELECT COUNT(*) AS itemCount,
+      SUM(CASE WHEN img.media_type='image' THEN 1 ELSE 0 END) AS imageCount,
+      SUM(CASE WHEN img.media_type='video' THEN 1 ELSE 0 END) AS videoCount
+      FROM post_items pi JOIN images img ON img.id=pi.image_id WHERE pi.post_id=?`).get(postId) as {itemCount:number;imageCount:number;videoCount:number};
+    return {...row, ...counts, representation:'summary', isAnimated:Boolean(row.isAnimated)};
+  },
+
+  getReelPlaybackMedia(mediaId: number): (ImageRecord & {post_id:number;media_position:number}) | undefined {
+    return database.prepare(`SELECT images.*,posts.id AS post_id,post_items.position AS media_position ${REEL_FROM_SQL}
+      WHERE images.id=? AND ${VISIBLE_REEL_WHERE_SQL}`).get(mediaId) as (ImageRecord & {post_id:number;media_position:number}) | undefined;
+  },
+
+  countVisibleVideoCandidates(): number {
+    return Number(database.prepare(`SELECT COUNT(*) n ${REEL_FROM_SQL} WHERE ${VISIBLE_REEL_WHERE_SQL}`).get()!.n);
   },
 
   listVisibleVideoCandidates(): ReelCandidate[] {
-    const posts = database.prepare(
-      `
-      SELECT
-        posts.id,
-        posts.folder_id AS folderId,
-        folders.slug AS folderSlug,
-        folders.name AS folderName,
-        folders.folder_path AS folderPath,
-        images.filename,
-        posts.caption AS caption,
-        posts.post_type AS postType,
-        posts.source_path AS sourcePath,
-        ${WORK_DISPLAY_TITLE_SQL} AS workDisplayTitle,
-        images.width,
-        images.height,
-        images.media_type AS mediaType,
-        images.duration_ms AS durationMs,
-        images.is_animated AS isAnimated,
-        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
-        images.thumbnail_path AS thumbnailUrl,
-        images.preview_path AS previewUrl,
-        images.playback_strategy AS playbackStrategy,
-        posts.sort_timestamp AS sortTimestamp,
-        posts.taken_at AS takenAt,
-        ${POST_SAVED_SELECT_SQL},
-        places.id AS placeId,
-        places.slug AS placeSlug,
-        places.display_name AS placeName,
-        places.kind AS placeKind,
-        places.is_approximate AS placeIsApproximate,
-        likes.created_at AS likedAt
-      FROM posts
-      INNER JOIN folders ON folders.id = posts.folder_id
-      JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
-      JOIN images ON images.id = post_items.image_id
-      LEFT JOIN places ON places.id = posts.place_id
-      LEFT JOIN likes ON likes.post_id = posts.id
-      WHERE ${VISIBLE_POST_WHERE_SQL}
-        AND posts.post_type = 'single'
-        AND images.media_type = 'video'
-        AND LOWER(images.filename) NOT IN (${COVER_FILENAME_SQL})
-      ORDER BY posts.sort_timestamp DESC, posts.id DESC
-      `
-    ).all() as unknown as ReelCandidate[];
+    return mapReelCandidates(database.prepare(`${REEL_SELECT_SQL} WHERE ${VISIBLE_REEL_WHERE_SQL} ORDER BY ${REEL_ORDER_SQL}`).all(),false);
+  },
 
-    return this.hydratePostItems(posts) as ReelCandidate[];
+  listVisibleVideoCandidatesByIds(mediaIds: number[]): ReelCandidate[] {
+    if(!mediaIds.length)return [];
+    const unique=[...new Set(mediaIds)];
+    const rows=mapReelCandidates(database.prepare(`${REEL_SELECT_SQL} WHERE images.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND ${VISIBLE_REEL_WHERE_SQL}`).all(JSON.stringify(unique)),true);
+    const byId=new Map(rows.map(row=>[row.mediaId,row]));
+    return unique.flatMap(id=>byId.has(id)?[byId.get(id)!]:[]);
   },
 
   listVisibleSearch(query: string, page: number, limit: number): FeedPost[] {
@@ -3125,6 +3142,9 @@ export const imageRepository = {
   listVisibleVideoCandidates(): ReelCandidate[] {
     return postRepository.listVisibleVideoCandidates();
   },
+
+  countVisibleVideoCandidates(): number { return postRepository.countVisibleVideoCandidates(); },
+  listVisibleVideoCandidatesByIds(mediaIds:number[]): ReelCandidate[] { return postRepository.listVisibleVideoCandidatesByIds(mediaIds); },
 
   listVisibleSearch(query: string, page: number, limit: number): FeedImage[] {
     return postRepository.listVisibleSearch(query, page, limit);

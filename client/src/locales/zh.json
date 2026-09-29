@@ -843,6 +843,7 @@
   },
   "reels": {
     "view": {
+      "reload": "重新加载",
       "libraryUnavailableTitle": "图库存储不可用",
       "loadErrorTitle": "无法加载短片",
       "loadingTitle": "正在加载短片",
@@ -854,9 +855,12 @@
       "next": "下一条短片"
     },
     "rail": {
+      "parentLoadError": "无法读取所属帖子，请重试。",
       "hideDetails": "隐藏短片详情",
       "showDetails": "显示短片详情",
       "downloadOriginal": "下载原始文件",
+      "openAlbum": "打开图集中的当前视频",
+      "parentPostActions": "喜欢、收藏和说明作用于所属帖子或整个图集。",
       "openFolder": "打开文件夹"
     },
     "info": {

@@ -339,6 +339,36 @@ describe.sequential('scoped reel playback resolution', () => {
     expect(missing.status).toHaveBeenCalledWith(404);
   });
 
+  it('exposes media playback, post summary counts, and explicit expired-cursor responses through API handlers', async () => {
+    const photo = await fixture('original', 'photo.jpg');
+    const video = await fixture('original', 'inside.mp4');
+    const db=database.connection;
+    db.prepare('DELETE FROM post_items WHERE post_id=?').run(video.post.id);
+    db.prepare('DELETE FROM posts WHERE id=?').run(video.post.id);
+    db.prepare("UPDATE posts SET post_type='carousel' WHERE id=?").run(photo.post.id);
+    db.prepare('INSERT INTO post_items(post_id,image_id,position) VALUES(?,?,2)').run(photo.post.id,video.image.id);
+    const layers = (apiRouter as unknown as { stack: Array<{ route?: { path: string; stack: Array<{ handle: express.RequestHandler }> } }> }).stack;
+    async function request(route:string,id:number,query:Record<string,unknown>={}) {
+      const handler=layers.find(layer=>layer.route?.path===route)!.route!.stack[0].handle;
+      const res=response();
+      await handler({params:{id:String(id)},query} as unknown as express.Request,res as unknown as express.Response,vi.fn());
+      return res;
+    }
+    const media=await request('/reels/media/:id/playback',video.image.id);
+    expect(media.json.mock.calls[0][0].originalUrl).toContain(`/media/${video.image.id}/original?v=`);
+    const hydrate=vi.spyOn(repositories.postRepository,'hydratePostItems');
+    const summary=await request('/posts/:id/summary',photo.post.id);
+    expect(summary.json.mock.calls[0][0]).toMatchObject({id:photo.post.id,representation:'summary',itemCount:2,imageCount:1,videoCount:1});
+    expect(summary.json.mock.calls[0][0]).not.toHaveProperty('mediaItems');
+    expect(hydrate).not.toHaveBeenCalled();
+    const expired=await request('/reels',0,{page:2,limit:1,mode:'recent',seed:5,cursor:'expired'});
+    expect(expired.status).toHaveBeenCalledWith(409);
+    expect(expired.json.mock.calls[0][0]).toMatchObject({code:'REEL_QUEUE_EXPIRED'});
+    db.prepare('UPDATE posts SET is_trashed=1 WHERE id=?').run(photo.post.id);
+    expect((await request('/posts/:id/summary',photo.post.id)).status).toHaveBeenCalledWith(404);
+    expect((await request('/reels/media/:id/playback',video.image.id)).status).toHaveBeenCalledWith(404);
+  });
+
   it('uses existing API viewer authentication without requiring admin', () => {
     auth.setAdminPassword('playback-password-123');
     const req = { method: 'GET', path: '/reels/1/playback', get: () => undefined } as unknown as express.Request;

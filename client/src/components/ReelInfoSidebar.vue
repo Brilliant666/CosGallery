@@ -29,7 +29,7 @@
     <div class="reels-info-sidebar__folder-row">
       <RouterLink
         class="reels-info-sidebar__folder-link"
-        :to="folderReadingRoute(item.folderSlug)"
+        :to="folderReadingRoute(item.folderSlug, item.creatorId)"
         :aria-label="t('reels.info.openFolder')"
         :title="t('reels.info.openFolder')"
       >
@@ -52,6 +52,7 @@
     </div>
 
     <p class="reels-info-sidebar__caption">{{ caption }}</p>
+    <p class="reels-info-sidebar__notice">{{ t('reels.rail.parentPostActions') }}</p>
 
     <dl class="reels-info-sidebar__stats">
       <div class="reels-info-sidebar__stat">
@@ -72,18 +73,6 @@
       </div>
     </dl>
 
-    <p
-      v-if="loading"
-      class="reels-info-sidebar__notice"
-      role="status"
-      aria-live="polite"
-    >
-      {{ t('reels.info.loading') }}
-    </p>
-    <p v-else-if="error" class="reels-info-sidebar__notice reels-info-sidebar__notice--error" role="status">
-      {{ error }}
-    </p>
-
     <dl class="reels-info-sidebar__meta">
       <div class="reels-info-sidebar__meta-item">
         <dt class="reels-info-sidebar__meta-label">{{ t('reels.info.folderPath') }}</dt>
@@ -101,20 +90,19 @@
 
 <script setup lang="ts">
 import { folderReadingRoute } from '../utils/work-gallery';
-import { computed, ref, watch } from 'vue';
+import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 
-import { fetchImage } from '../api/gallery';
 import { useAppStore } from '../stores/app';
-import type { FeedItem, FolderSummary, ImageDetail } from '../types/api';
+import type { ReelItem, FolderSummary } from '../types/api';
 import { resolveDisplayCaption } from '../utils/caption';
 import { formatFolderTitle } from '../utils/folder-titles';
 import { formatMediaDuration } from '../utils/media';
 import Avatar from './Avatar.vue';
 
 const props = withDefaults(defineProps<{
-  item: FeedItem;
+  item: ReelItem;
   folder: FolderSummary | null;
   open: boolean;
   anchor?: 'left' | 'right';
@@ -128,25 +116,17 @@ defineEmits<{
 
 const { t, locale } = useI18n();
 const appStore = useAppStore();
-const detail = ref<ImageDetail | null>(null);
-const loading = ref(false);
-const error = ref<string | null>(null);
-
-const detailCache = new Map<number, ImageDetail>();
-let requestToken = 0;
-
-const hasExplicitItemCaption = computed(() => Object.hasOwn(props.item, 'caption'));
 const caption = computed(() =>
   resolveDisplayCaption({
     filename: props.item.filename,
-    caption: hasExplicitItemCaption.value ? props.item.caption ?? null : detail.value?.caption,
+    caption: props.item.caption,
     postType: props.item.postType,
     sourcePath: props.item.sourcePath,
     carouselTitle: props.item.carouselTitle
   })
 );
 const formattedDate = computed(() =>
-  new Date(detail.value?.takenAt ?? detail.value?.sortTimestamp ?? props.item.takenAt ?? props.item.sortTimestamp).toLocaleDateString(
+  new Date(props.item.takenAt ?? props.item.sortTimestamp).toLocaleDateString(
     locale.value,
     {
       month: 'short',
@@ -156,77 +136,20 @@ const formattedDate = computed(() =>
   )
 );
 const folderBreadcrumb = computed(
-  () => props.folder?.breadcrumb ?? detail.value?.folderBreadcrumb ?? props.item.folderBreadcrumb ?? t('reels.info.topLevelSourceFolder')
+  () => props.folder?.breadcrumb ?? props.item.folderBreadcrumb ?? t('reels.info.topLevelSourceFolder')
 );
 const displayFolderTitle = computed(() => formatFolderTitle(props.folder ?? props.item, appStore.nestedFolderTitleFormat));
-const dimensionsLabel = computed(() => `${detail.value?.width ?? props.item.width} x ${detail.value?.height ?? props.item.height}`);
-const durationLabel = computed(() => formatMediaDuration(detail.value?.durationMs ?? props.item.durationMs) || t('reels.info.unavailable'));
+const dimensionsLabel = computed(() => `${props.item.width} x ${props.item.height}`);
+const durationLabel = computed(() => formatMediaDuration(props.item.durationMs) || t('reels.info.unavailable'));
 const formatLabel = computed(() => {
-  if (!detail.value?.mimeType) {
+  if (!props.item.mimeType) {
     return t('reels.info.video');
   }
 
-  return detail.value.mimeType.replace(/^video\//, '').toUpperCase();
+  return props.item.mimeType.replace(/^video\//, '').toUpperCase();
 });
-const fileSizeLabel = computed(() => {
-  if (!detail.value) {
-    return loading.value ? t('common.loading') : t('reels.info.unavailable');
-  }
-
-  return `${(detail.value.fileSize / (1024 * 1024)).toFixed(2)} MB`;
-});
-const mimeLabel = computed(() => detail.value?.mimeType ?? null);
-
-watch(
-  () => [props.open, props.item.id] as const,
-  ([open, itemId]) => {
-    requestToken += 1;
-    const currentToken = requestToken;
-
-    if (!open) {
-      detail.value = detailCache.get(itemId) ?? null;
-      loading.value = false;
-      error.value = null;
-      return;
-    }
-
-    const cachedDetail = detailCache.get(itemId);
-    if (cachedDetail) {
-      detail.value = cachedDetail;
-      loading.value = false;
-      error.value = null;
-      return;
-    }
-
-    detail.value = null;
-    loading.value = true;
-    error.value = null;
-
-    void (async () => {
-      try {
-        const loadedDetail = await fetchImage(itemId, 'video');
-        if (currentToken !== requestToken) {
-          return;
-        }
-
-        detailCache.set(itemId, loadedDetail);
-        detail.value = loadedDetail;
-      } catch (loadError) {
-        if (currentToken !== requestToken) {
-          return;
-        }
-
-        detail.value = null;
-        error.value = loadError instanceof Error ? loadError.message : t('reels.info.loadError');
-      } finally {
-        if (currentToken === requestToken) {
-          loading.value = false;
-        }
-      }
-    })();
-  },
-  { immediate: true }
-);
+const fileSizeLabel = computed(() => `${(props.item.fileSize / (1024 * 1024)).toFixed(2)} MB`);
+const mimeLabel = computed(() => props.item.mimeType || null);
 </script>
 
 <style scoped>

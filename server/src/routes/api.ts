@@ -45,9 +45,10 @@ import {
   FOLDER_SHARE_PASSWORD_MIN_LENGTH,
   folderShareService
 } from '../services/folder-share-service.js';
+import { ReelQueueExpiredError } from '../services/reel-queue.js';
 import { galleryService } from '../services/gallery-service.js';
-import { ReelPlaybackError, resolveReelPlayback } from '../services/reel-playback-service.js';
-import { serveReelMedia } from './reel-media.js';
+import { ReelPlaybackError, resolveReelPlayback, resolveReelMediaPlayback } from '../services/reel-playback-service.js';
+import { serveReelMedia, serveReelPreview } from './reel-media.js';
 import { SourceIndexOutdatedError } from '../utils/derivative-version.js';
 import { requireCapability } from '../middleware/auth-protection.js';
 import { createRateLimiter } from '../middleware/rate-limit.js';
@@ -299,6 +300,7 @@ const feedQuerySchema = paginationQuerySchema.extend({
   seed: z.coerce.number().int().nonnegative().optional()
 });
 const reelsQuerySchema = paginationQuerySchema.extend({
+  cursor: z.string().min(1).max(256).optional(),
   mode: z.enum(['recommended', 'recent', 'random']).default('recommended'),
   seed: z.coerce.number().int().nonnegative().optional(),
   lastFolder: z.string().trim().min(1).max(240).optional(),
@@ -821,13 +823,43 @@ router.get('/reels', (request, response) => {
         .filter((slug, index, items) => slug.length > 0 && items.indexOf(slug) === index)
     : [];
 
-  response.json(
-    galleryService.getReels(query.page, query.limit, query.mode, query.seed, {
-      lastOpenedFolderSlug: query.lastFolder ?? null,
-      recentOpenedFolderSlugs
-    })
-  );
+  try {
+    response.json(
+      galleryService.getReels(query.page, query.limit, query.mode, query.seed, {
+        lastOpenedFolderSlug: query.lastFolder ?? null,
+        recentOpenedFolderSlugs
+      }, query.cursor)
+    );
+  } catch (error) {
+    if (!(error instanceof ReelQueueExpiredError)) throw error;
+    response.status(409).json({ code: 'REEL_QUEUE_EXPIRED', message: error.message });
+  }
 });
+
+router.get('/reels/media/:id/playback', async (request, response) => {
+  const params = imageIdSchema.parse(request.params);
+  const query = z.object({ fallback: z.literal('1').optional() }).strict().parse(request.query);
+  authService.setNoStoreHeaders(response);
+  try {
+    response.json(await resolveReelMediaPlayback(params.id, query.fallback === '1'));
+  } catch (error) {
+    if (error instanceof ReelPlaybackError || error instanceof SourceIndexOutdatedError) {
+      response.status(error instanceof ReelPlaybackError ? error.status : 409).json({ code: error.code, message: error.message });
+    } else {
+      sendUnexpectedError(response, error);
+    }
+  }
+});
+router.get('/reels/media/:id/preview', async (request, response) => {
+  const params = imageIdSchema.parse(request.params);
+  await serveReelPreview(request, response, params.id);
+});
+for (const kind of ['original', 'remux'] as const) {
+  router.get(`/reels/media/:id/${kind}`, async (request, response) => {
+    const params = imageIdSchema.parse(request.params);
+    await serveReelMedia(request, response, params.id, kind, 'media');
+  });
+}
 
 router.get('/reels/:id/playback', async (request, response) => {
   const params = imageIdSchema.parse(request.params);
@@ -1424,6 +1456,16 @@ router.delete(['/collections/:slug/posts/:id', '/collections/:slug/images/:id'],
 router.get('/trash/images', requireCapability('canDeleteMedia', 'Admin access is required.'), (request, response) => {
   const query = paginationQuerySchema.parse(request.query);
   response.json(galleryService.getTrashImages(query.page, query.limit));
+});
+
+router.get('/posts/:id/summary', (request, response) => {
+  const { id } = imageIdSchema.parse(request.params);
+  const summary = galleryService.getPostSummary(id);
+  if (!summary) {
+    response.status(404).json({ message: 'Post not found' });
+    return;
+  }
+  response.json(summary);
 });
 
 router.get(['/posts/:id', '/images/:id'], (request, response) => {

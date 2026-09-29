@@ -2,14 +2,14 @@ import { computed, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import type { MediaPlayerElement } from 'vidstack/elements';
 import type { PlayerSrc } from 'vidstack';
 import { fetchReelPlayback } from '../api/gallery';
-import type { FeedItem, ReelPlayback } from '../types/api';
+import type { ReelItem, ReelPlayback } from '../types/api';
 
 type PlaybackState = 'idle' | 'resolving' | 'preparing' | 'playing' | 'paused' | 'blocked' | 'error';
 
 // Only the active card resolves/loads media. No cold-preview request is issued
 // merely to discover whether it exists, and no background transcode is started.
 export function useReelPlayback(
-  item: () => FeedItem,
+  item: () => ReelItem,
   active: () => boolean,
   player: Ref<MediaPlayerElement | null>,
   muted: () => boolean
@@ -66,7 +66,7 @@ export function useReelPlayback(
     state.value = 'resolving';
     controller = new AbortController();
     try {
-      const candidate = await fetchReelPlayback(item().id, controller.signal);
+      const candidate = await fetchReelPlayback(item().mediaId, controller.signal);
       if (token !== epoch || !active()) return;
       plan.value = candidate;
       if (candidate.originalUrl && candidate.originalMimeType) {
@@ -100,7 +100,7 @@ export function useReelPlayback(
         }
       }
       if (previousSource === plan.value.originalUrl) {
-        const candidate = await fetchReelPlayback(item().id, controller?.signal, true);
+        const candidate = await fetchReelPlayback(item().mediaId, controller?.signal, true);
         if (!current()) return;
         // Never apply a fallback for a different source revision.
         if (candidate.originalUrl !== plan.value.originalUrl || candidate.previewUrl !== plan.value.previewUrl) {
@@ -211,7 +211,7 @@ export function useReelPlayback(
     };
   }, { flush: 'post' });
 
-  watch([active, () => item().id, () => item().previewUrl], () => {
+  watch([active, () => item().mediaId, () => item().previewUrl], () => {
     if (player.value && source.value) void player.value.pause().catch(() => undefined);
     void resolve();
   }, { immediate: true });

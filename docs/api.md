@@ -190,6 +190,7 @@ Query parameters:
 | `seed` | integer | unset | Optional seed used to keep `recommended` and `random` queues stable while paging. |
 | `lastFolder` | string | unset | Optional recent-navigation hint used by `recommended`. |
 | `recentFolders` | comma-separated string | unset | Optional recent-navigation hints used by `recommended`. |
+| `cursor` | string | unset | Opaque `nextCursor` from the previous page. Required after page 1; retain the same mode, seed and hints. |
 
 Response shape:
 
@@ -200,20 +201,29 @@ Response shape:
   "page": 1,
   "limit": 6,
   "total": 0,
-  "hasMore": false
+  "hasMore": false,
+  "nextCursor": null
 }
 ```
 
 Notes:
 
-- `items` contain videos only.
+- `items` contain every visible standalone or carousel video. `id` and `mediaId` identify the video, `postId` identifies its owning work/post, and `mediaPosition` identifies its position inside that post. Each row contains only the selected video's media, rather than all siblings. Work-level actions use `postId`.
 - `recommended` uses `lastFolder` and `recentFolders` to bias the queue toward folders you recently opened.
-- `recent` ignores recommendation hints and returns newest indexed videos first.
-- `random` and `recommended` stay stable across pages when the same `seed` is reused.
+- `recent` ignores recommendation hints and orders by the video's stored sort timestamp, then media ID, descending.
+- Each initial request freezes a bounded in-memory ordering snapshot. Later pages use `cursor`, recheck current visibility/source identity and skip deleted, recycled or no-longer-primary videos. Likes and additions do not reorder a running queue; reload to start a new one. `total` is the initial snapshot size, not a live availability count.
+- Snapshots expire after four hours without a page request and may be evicted by capacity limits. Invalid/expired cursors return `409` with `code: REEL_QUEUE_EXPIRED`; clear the old list and explicitly reload instead of appending a newly ordered page.
+- Recommendation weights and existing folder diversity rules are retained. There is no additional same-work penalty.
+
+### `GET /api/reels/media/:id/playback`
+
+Resolves the selected **media ID** for either a standalone video or a video within a multi-item work. The response provides versioned `/api/reels/media/:id/original`, `/remux` and `/preview` URLs. All delivery routes recheck the owning post, selected video, removal state and primary-copy visibility. `originalDownloadUrl` in the feed provides the same protected original with `download=1`.
+
+Original playback remains preferred, then eligible remux, then preview fallback. Playback metadata does not generate derivatives; explicitly requesting a missing remux/preview can generate it on demand. Authentication, source-version checks and range protections remain in effect.
 
 ### `GET /api/reels/:id/playback`
 
-Read-only playback resolution for one visible, single-video **post ID** from the reels feed. Uses the normal viewer authentication boundary and no-store responses. It does not scan, probe, generate previews or wait for an in-progress transcode.
+Legacy playback resolution for one visible, single-video **post ID**. Existing post-ID URLs remain supported; new clients use the media-ID routes above. Uses the normal viewer authentication boundary and no-store responses. Initial metadata resolution does not scan, probe, generate previews or wait for an in-progress transcode.
 
 ```json
 {
@@ -718,6 +728,10 @@ Each trash item uses the normal feed-item shape plus `trashedAt`.
 
 That shared shape also includes the nullable `caption` field used by feed and
 viewer surfaces.
+
+### `GET /api/posts/:id/summary`
+
+Returns a currently visible primary post as `CanonicalWorkSummary`: its representative cover, full `itemCount`, `imageCount`, `videoCount`, and `representation: "summary"`, without `mediaItems`. Reels uses this endpoint when adding a work-level favorite so a selected video cannot replace the owning album's cover or counts. Removed or unavailable posts return `404`; normal viewer authentication applies.
 
 ### `GET /api/posts/:id`
 
@@ -1848,6 +1862,6 @@ the number only as a physical `images.id`. They never fall back to a colliding
 post ID. `/post/:id` is canonical in the browser, while `/image/:id` remains an
 alias. Derivative routes remain image-oriented because they identify physical
 media assets. Status responses distinguish `indexedPosts`, `indexedMediaAssets`,
-`indexedCarousels`, and single-video `indexedVideos`; scan summaries may include
+`indexedCarousels`, and `indexedVideos` (all currently eligible standalone and carousel videos); scan summaries may include
 `warning_count` and `warning_text`. Carousel mode and migration state are
 available in `preferences.treatCarouselsAsFolders` and `carouselsMigration`.

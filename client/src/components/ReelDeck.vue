@@ -35,12 +35,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue';
 
-import type { FeedItem, FolderSummary } from '../types/api';
+import type { ReelItem, FolderSummary } from '../types/api';
 import { getActiveReelId, shouldPrefetchReels } from '../utils/reels';
 import ReelPlayerCard from './ReelPlayerCard.vue';
 
 const props = defineProps<{
-  items: FeedItem[];
+  items: ReelItem[];
   folders: FolderSummary[];
   activeReelId: number | null;
   loading?: boolean;

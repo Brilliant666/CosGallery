@@ -843,6 +843,7 @@
   },
   "reels": {
     "view": {
+      "reload": "Reload reels",
       "libraryUnavailableTitle": "Library storage unavailable",
       "loadErrorTitle": "Could not load reels",
       "loadingTitle": "Loading reels",
@@ -854,9 +855,12 @@
       "next": "Next reel"
     },
     "rail": {
+      "parentLoadError": "Could not load the parent post. Please try again.",
       "hideDetails": "Hide reel details",
       "showDetails": "Show reel details",
       "downloadOriginal": "Download original file",
+      "openAlbum": "Open album at this video",
+      "parentPostActions": "Likes, favorites and captions apply to the parent post or album.",
       "openFolder": "Open folder"
     },
     "info": {

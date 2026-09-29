@@ -346,8 +346,22 @@ export interface CanonicalWorkSummary extends Omit<FeedPost, 'mediaItems'> {
   mediaItems?: never;
 }
 
-export interface ReelCandidate extends FeedPost {
+export interface ReelItem extends FeedPost {
+  /** Reel identity is a media row; parent Post actions use postId. */
+  mediaId: number;
+  postId: number;
+  mediaPosition: number;
+  creatorId: number | null;
+  mimeType: string;
+  fileSize: number;
+  originalDownloadUrl: string;
+}
+
+export interface ReelCandidate extends ReelItem {
   likedAt: string | null;
+  /** Internal queue identity; do not serialize as a user-facing field. */
+  sourceIdentity: string;
+  scopedPreviewUrl: string;
 }
 
 export interface ImageDetail extends FeedImage {

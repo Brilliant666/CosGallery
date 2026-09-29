@@ -12,8 +12,23 @@ import { mediaGenerationLimit } from '../services/media-generation-queue.js';
 import { maintenanceOperationLock } from '../services/maintenance-operation-lock.js';
 import { scannerService } from '../services/scanner-service.js';
 import { sendUnexpectedError } from '../middleware/http-errors.js';
+import { serveDerivativeForImage } from './lazy-derivatives.js';
 
 const remuxes = new Map<string, Promise<void>>();
+
+export async function serveReelPreview(request:express.Request,response:express.Response,mediaId:number):Promise<void>{
+  try {
+    const {initial,version,recheck}=getReelSourceSnapshot(mediaId,'media');
+    if(request.query.v!==version)throw stale();
+    await serveDerivativeForImage(response,initial,'preview',{validate:recheck});
+  } catch(error){
+    if(response.headersSent)return;
+    applyDerivativeErrorHeaders(response);
+    if(error instanceof ReelPlaybackError)response.status(error.status).json({code:error.code,message:error.message});
+    else if(error instanceof SourceIndexOutdatedError)response.status(409).json({code:error.code,message:error.message});
+    else sendUnexpectedError(response,error);
+  }
+}
 const stale = () => new ReelPlaybackError(409, 'DERIVATIVE_VERSION_CHANGED', 'Media version changed; refresh the gallery.');
 function terminated(error: unknown): boolean {
   return !!error && typeof error === 'object' && 'code' in error && ['ECONNABORTED', 'ECONNRESET', 'ERR_STREAM_PREMATURE_CLOSE'].includes(String(error.code));
@@ -34,9 +49,9 @@ function sendFile(response: express.Response, source: string, mime: string, remu
   }));
 }
 
-export async function serveReelMedia(request: express.Request, response: express.Response, postId: number, kind: 'original' | 'remux'): Promise<void> {
+export async function serveReelMedia(request: express.Request, response: express.Response, id: number, kind: 'original' | 'remux', identity: 'post'|'media'='post'): Promise<void> {
   try {
-    const { initial, recheck } = getReelSourceSnapshot(postId);
+    const { initial, recheck } = getReelSourceSnapshot(id,identity);
     const remux = getReelRemuxLocation(initial);
     const expected = kind === 'original' ? getReelOriginalVersion(initial) : remux.version;
     if (request.query.v !== expected) throw stale();
@@ -51,10 +66,11 @@ export async function serveReelMedia(request: express.Request, response: express
     // Authoritative post identity/visibility and recipe version gate even warm
     // cache reads; the generic /previews route cannot serve these private paths.
     if (kind === 'remux' && await serveRemux()) return;
-    const playback = await resolveReelPlayback(postId, kind === 'remux');
+    const playback = await resolveReelPlayback(id, kind === 'remux',identity);
     validate();
     if (kind === 'original') {
       if (!playback.originalUrl || !playback.originalMimeType) throw new ReelPlaybackError(404, 'REEL_ORIGINAL_UNAVAILABLE', 'Original media is unavailable.');
+      if(request.query.download==='1') response.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(initial.filename).replaceAll("'",'%27')}`);
       await sendFile(response, source, playback.originalMimeType);
       return;
     }

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 
 import { useAppStore } from '../stores/app';
-import type { FeedItem, FolderSummary } from '../types/api';
+import type { ReelItem, FolderSummary } from '../types/api';
 import ReelPlayerCard from './ReelPlayerCard.vue';
 import { fetchReelPlayback } from '../api/gallery';
 import type { ReelPlayback } from '../types/api';
@@ -74,9 +74,16 @@ if (!customElements.get('media-time-slider')) {
   customElements.define('media-time-slider', FakeMediaTimeSliderElement);
 }
 
-function createFeedItem(id: number): FeedItem {
+function createReelItem(id: number): ReelItem {
   return {
     id,
+    mediaId: id,
+    postId: id + 1000,
+    mediaPosition: 1,
+    creatorId: null,
+    mimeType: 'video/mp4',
+    fileSize: 24 * 1024 * 1024,
+    originalDownloadUrl: `/api/reels/media/${id}/original?v=fixed&download=1`,
     folderId: 77,
     folderSlug: 'animal-planet',
     folderName: 'Animal Planet',
@@ -144,10 +151,19 @@ describe('ReelPlayerCard', () => {
     window.localStorage.clear();
   });
 
+  it('resolves each video separately when switching within the same carousel',async()=>{
+    const item={...createReelItem(70),postId:900,postType:'carousel' as const,mediaPosition:2};
+    const wrapper=mount(ReelPlayerCard,{props:{item,folder:createFolder(),active:true},global:{stubs:globalStubs}});await flushPromises();
+    expect(fetchReelPlayback).toHaveBeenLastCalledWith(70,expect.any(AbortSignal));
+    await wrapper.setProps({item:{...item,...createReelItem(71),postId:900,postType:'carousel',mediaPosition:3}});await flushPromises();
+    expect(fetchReelPlayback).toHaveBeenLastCalledWith(71,expect.any(AbortSignal));expect(fetchReelPlayback).toHaveBeenCalledTimes(2);
+    expect((wrapper.get('media-player').element as FakeMediaPlayerElement).src).toEqual({src:'/previews/71.mp4',type:'video/mp4'});
+  });
+
   it('shows the overlay only for the active reel', async () => {
     const wrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(1),
+        item: createReelItem(1),
         folder: createFolder(),
         active: true
       },
@@ -170,7 +186,7 @@ describe('ReelPlayerCard', () => {
   it('renders mobile action content inside the overlay controls', async () => {
     const wrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(8),
+        item: createReelItem(8),
         folder: createFolder(),
         active: true
       },
@@ -191,7 +207,7 @@ describe('ReelPlayerCard', () => {
     const wrapper = mount(ReelPlayerCard, {
       props: {
         item: {
-          ...createFeedItem(9),
+          ...createReelItem(9),
           folderPath: 'OnePlus5T/Videos',
           filename: 'filename.mp4'
         },
@@ -211,7 +227,7 @@ describe('ReelPlayerCard', () => {
   it('toggles playback when the active reel surface is clicked', async () => {
     const wrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(2),
+        item: createReelItem(2),
         folder: createFolder(),
         active: true
       },
@@ -246,7 +262,7 @@ describe('ReelPlayerCard', () => {
   it('keeps seek-bar interaction from toggling reel playback', async () => {
     const wrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(12),
+        item: createReelItem(12),
         folder: createFolder(),
         active: true
       },
@@ -272,7 +288,7 @@ describe('ReelPlayerCard', () => {
     const appStore = useAppStore();
     const wrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(3),
+        item: createReelItem(3),
         folder: createFolder(),
         active: true
       },
@@ -295,7 +311,7 @@ describe('ReelPlayerCard', () => {
 
     const nextWrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(4),
+        item: createReelItem(4),
         folder: createFolder(),
         active: true
       },
@@ -317,7 +333,7 @@ describe('ReelPlayerCard', () => {
 
     const wrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(7),
+        item: createReelItem(7),
         folder: createFolder(),
         active: true
       },
@@ -344,7 +360,7 @@ describe('ReelPlayerCard', () => {
   it('falls back to visible loading when the reel is inactive', async () => {
     const wrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(6),
+        item: createReelItem(6),
         folder: createFolder(),
         active: false
       },
@@ -362,7 +378,7 @@ describe('ReelPlayerCard', () => {
 
   function mountActive() {
     return mount(ReelPlayerCard, {
-      props: { item: createFeedItem(7), folder: createFolder(), active: true },
+      props: { item: createReelItem(7), folder: createFolder(), active: true },
       global: { stubs: globalStubs }
     });
   }
@@ -406,7 +422,7 @@ describe('ReelPlayerCard', () => {
 
   const remuxCandidate: ReelPlayback = {
     ...coldCompatible, originalUrl: null, originalMimeType: null,
-    remuxUrl: '/api/reels/7/remux?v=current', remuxMimeType: 'video/mp4', remuxReady: false
+    remuxUrl: '/api/reels/media/7/remux?v=current', remuxMimeType: 'video/mp4', remuxReady: false
   };
 
   it('selects lossless remux before a lossy preview without requiring an original URL', async () => {
@@ -617,7 +633,7 @@ describe('ReelPlayerCard', () => {
   it('makes the folder overlay clickable without toggling playback', async () => {
     const wrapper = mount(ReelPlayerCard, {
       props: {
-        item: createFeedItem(5),
+        item: createReelItem(5),
         folder: createFolder(),
         active: true
       },

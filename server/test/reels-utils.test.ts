@@ -31,6 +31,49 @@ function createCandidate(
 }
 
 describe('reels utils', () => {
+  it('preserves the previous recommendation order while comparing only folder heads', () => {
+    function previousQueue(candidates: ReelRecommendationCandidate[], seed: number) {
+      const remaining = [...rankReelCandidates(candidates, seed)];
+      const queue: ReelRecommendationCandidate[] = [];
+      const counts = new Map<string, number>();
+      while (remaining.length) {
+        let bestIndex = 0;
+        let bestScore = Number.NEGATIVE_INFINITY;
+        remaining.forEach((entry, index) => {
+          const slug = entry.candidate.folderSlug;
+          const alternative = remaining.some(other => other.candidate.folderSlug !== slug);
+          let score = entry.score;
+          if (alternative && queue.at(-1)?.folderSlug === slug) score -= 0.5;
+          if (alternative && queue.at(-2)?.folderSlug === slug) score -= 0.15;
+          score -= (counts.get(slug) ?? 0) * 0.03;
+          if (score > bestScore) { bestIndex = index; bestScore = score; }
+        });
+        const item = remaining.splice(bestIndex, 1)[0]!.candidate;
+        queue.push(item);
+        counts.set(item.folderSlug, (counts.get(item.folderSlug) ?? 0) + 1);
+      }
+      return queue.map(item => item.id);
+    }
+    for (let seed = 1; seed <= 30; seed++) {
+      const candidates = Array.from({ length: 40 }, (_, index) => createCandidate(index + 1, {
+        folderSlug: `folder-${(index * 7 + seed) % (seed % 9 + 1)}`,
+        takenAt: 1_778_000_000_000 + (index % 7) * 1000,
+        likedAt: index % 3 ? null : '2026-03-25T00:00:00Z',
+        durationMs: index % 2 ? 15_000 : 180_000
+      }));
+      expect(buildReelQueue(candidates, seed).map(item => item.id)).toEqual(previousQueue(candidates, seed));
+    }
+  });
+
+  it('handles a ten-thousand-video queue with every media retained exactly once', () => {
+    const candidates = Array.from({ length: 10_000 }, (_, index) => createCandidate(index + 1, {
+      folderSlug: `folder-${index % 500}`
+    }));
+    const queue = buildReelQueue(candidates, 42);
+    expect(queue).toHaveLength(candidates.length);
+    expect(new Set(queue.map(item => item.id)).size).toBe(candidates.length);
+  });
+
   it('keeps ranking stable for the same seed and affinity inputs', () => {
     const candidates = [
       createCandidate(1, { folderSlug: 'alpha' }),

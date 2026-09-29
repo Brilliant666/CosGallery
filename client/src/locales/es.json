@@ -843,6 +843,7 @@
   },
   "reels": {
     "view": {
+      "reload": "Volver a cargar vídeos",
       "libraryUnavailableTitle": "Almacenamiento de la biblioteca no disponible",
       "loadErrorTitle": "No se pudieron cargar los reels",
       "loadingTitle": "Cargando reels",
@@ -854,9 +855,12 @@
       "next": "Siguiente reel"
     },
     "rail": {
+      "parentLoadError": "No se pudo cargar la publicación. Inténtalo de nuevo.",
       "hideDetails": "Ocultar detalles del reel",
       "showDetails": "Mostrar detalles del reel",
       "downloadOriginal": "Descargar archivo original",
+      "openAlbum": "Abrir el álbum en este vídeo",
+      "parentPostActions": "Los me gusta, favoritos y descripciones se aplican a la publicación o al álbum completo.",
       "openFolder": "Abrir carpeta"
     },
     "info": {
