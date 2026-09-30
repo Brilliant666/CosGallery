@@ -8,7 +8,7 @@ import { requestTestApp } from './http-test-utils.js';
 
 const closes: Array<() => void> = [];
 const roots: string[] = [];
-async function fixture(extra: Record<string, Buffer> = { '坏图.jpg': Buffer.alloc(0) }) {
+async function fixture(extra: Record<string, Buffer> = { '坏图.jpg': Buffer.alloc(0) }, siblings: string[] = []) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'local-web-folder-review-')); roots.push(root);
   const inbox = path.join(root, '等待区'), gallery = path.join(root, '图库');
   vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('COS_GALLERY_MODE', '1'); vi.stubEnv('PUBLIC_DEMO_MODE', '0');
@@ -27,7 +27,11 @@ async function fixture(extra: Record<string, Buffer> = { '坏图.jpg': Buffer.al
   const directory = path.join(inbox, name); await fs.mkdir(directory);
   await sharp({ create: { width: 16, height: 24, channels: 3, background: '#112244' } }).jpeg().toFile(path.join(directory, '正常.jpg'));
   for (const [filename, bytes] of Object.entries(extra)) await fs.writeFile(path.join(directory, filename), bytes);
-  const preview = await folder.preview({ creatorId: creator, inputRoot: inbox, directories: [name] });
+  for (const sibling of siblings) {
+    const siblingDirectory = path.join(inbox, sibling); await fs.mkdir(siblingDirectory);
+    await sharp({ create: { width: 16, height: 24, channels: 3, background: '#335577' } }).jpeg().toFile(path.join(siblingDirectory, '正常.jpg'));
+  }
+  const preview = await folder.preview({ creatorId: creator, inputRoot: inbox, directories: [name, ...siblings] });
   const plan = { ...preview, confirmed: true, items: preview.items.map(item => ({ ...item, reason: '隔离用户确认独立作品' })) };
   const { scannerService } = await import('../src/services/scanner-service.js');
   const failure = vi.spyOn(scannerService, 'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic after-move interruption'));
@@ -51,6 +55,26 @@ afterEach(async () => {
 });
 
 describe.sequential('web precise review preserves original folder admission', () => {
+  it.each(['review', 'system'])('completes the exact reviewed item receipt when a sibling still has a %s issue', async kind => {
+    const f = await fixture(undefined, ['后续待核对图集']);
+    const immutable = f.db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(f.plan.planId);
+    const { scannerService } = await import('../src/services/scanner-service.js');
+    const original = scannerService.scanCosCreators.bind(scannerService);
+    const scan = vi.spyOn(scannerService, 'scanCosCreators').mockImplementationOnce((...args) => original(...args));
+    if (kind === 'review') scan.mockResolvedValueOnce({ id: 2, started_at: 'now', finished_at: 'now', status: 'failed', scanned_files: 1,
+      new_files: 0, updated_files: 0, removed_files: 0, error_text: 'Input file contains unsupported image format', warning_count: 0, warning_text: null,
+      admissionIssue: { kind: 'review', code: 'MEDIA_CONTENT_REVIEW_REQUIRED', message: '图集中有需要核对的媒体文件', detail: 'Input file contains unsupported image format' } });
+    else scan.mockRejectedValueOnce(Object.assign(new Error('Synthetic sibling storage unavailable'), { code: 'EIO' }));
+    expect((await f.confirm()).status).toBe(202); await f.web.wait(f.sessionId);
+    expect(f.web.get(f.sessionId)).toMatchObject({ status: 'completed', result: { completed: true, message: '本审核图集已完成；其余项目请查看原计划的执行状态。',
+      summary: { images: 1, quarantined: 1 } }, continuation: { totalItems: 2, completedItems: 1, pendingItems: 1 } });
+    expect(f.db.prepare('SELECT state,last_error FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(f.plan.planId, f.item.key)).toEqual({ state: 'completed', last_error: null });
+    const sibling = f.db.prepare('SELECT state,last_error FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(f.plan.planId, f.plan.items[1].key)!;
+    expect(sibling.state).toBe('files_verified'); expect(String(sibling.last_error)).toContain(kind === 'review' ? 'MEDIA_CONTENT_REVIEW_REQUIRED' : 'ADMISSION_EXECUTION_PAUSED');
+    expect(f.db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(f.plan.planId)).toEqual(immutable);
+    expect(f.db.prepare('SELECT COUNT(*) n FROM post_items').get()!.n).toBe(1);
+  });
+
   it.each(['异常.jpg', '异常.png'])('preserves undecodable %s byte-for-byte inside its work and indexes only display media', async filename => {
     const bytes = Buffer.from('synthetic undecodable image bytes'), f = await fixture({ [filename]: bytes });
     const original = f.db.prepare('SELECT * FROM archive_local_admission_plans').get();

@@ -20,6 +20,17 @@ describe('scoped review UI invokes original task instead of asking for JSON',()=
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchLocalReviewTarget).mockResolvedValue({target:{kind:'stage3',jobId:9},creatorId:17,title:'本项中文作品',eligible:true,reason:'媒体审核暂停',sessionId:null});vi.mocked(api.createLocalReviewSession).mockResolvedValue({sessionId:'review-synthetic',status:'preparing'});vi.mocked(api.fetchLocalReviewSession).mockResolvedValue(session());vi.mocked(api.fetchLocalReviewFiles).mockResolvedValue({items:files,total:104,page:1,limit:50});vi.mocked(api.executeLocalReview).mockResolvedValue(session('submitted'));});
   afterEach(()=>vi.useRealTimers());
+  it.each(['Scoped media indexing did not complete','EACCES: permission denied, open 中文目录/001.jpg'])('shows Chinese review errors and keeps the original %s only in technical details',async(raw)=>{
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session('failed'),error:raw,message:raw});
+    vi.mocked(api.fetchLocalReviewFiles).mockRejectedValueOnce(new Error('EIO: unable to read 中文清单'));
+    const {wrapper}=await render();
+    expect(wrapper.findAll('[data-test=admission-error-message]').every(message=>!message.text().includes(raw)&&!message.text().includes('EIO'))).toBe(true);
+    expect(wrapper.findAll('p').filter(paragraph=>!paragraph.element.closest('details')).every(paragraph=>!paragraph.text().includes(raw))).toBe(true);
+    expect(wrapper.findAll('[data-test=admission-error-detail]').some(detail=>detail.text().includes(raw))).toBe(true);
+    expect(wrapper.findAll('[data-test=admission-error-detail]').some(detail=>detail.text().includes('EIO: unable to read 中文清单'))).toBe(true);
+    expect(wrapper.text()).toContain('不能据此认定没有需处理文件');
+    expect(api.executeLocalReview).not.toHaveBeenCalled();expect(api.retryLocalReview).not.toHaveBeenCalled();
+  });
   it('returns a Costuan review to its stage and exact job, without starting that job',async()=>{
     const {wrapper}=await render();
     expect(wrapper.get('header a').attributes('href')).toBe('/creator-admission/costuan?workspace=ingest&jobId=9&creatorId=17');

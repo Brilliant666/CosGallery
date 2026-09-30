@@ -20,6 +20,35 @@ describe('web local admission without CLI or raw identity inputs',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchAdmissionSettings).mockResolvedValue({waitingRoot:'R:/等待区',galleryRoot:'R:/正式',archiveInboxRoot:'R:/压缩包'});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(_id,parent)=>dir(parent??null));vi.mocked(api.fetchAdmissionBatches).mockResolvedValue({items:[],total:0,page:1,pageSize:20});vi.mocked(api.fetchAdmissionBatch).mockResolvedValue(batch());vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[item(),item('skip'),item('defer')],total:3,page:1,pageSize:100});vi.mocked(api.createAdmissionPreview).mockResolvedValue(batch());vi.mocked(api.executeAdmission).mockResolvedValue(batch('queued'));vi.mocked(api.fetchAdmissionWorks).mockResolvedValue({items:[work],total:1,page:1,pageSize:20});vi.mocked(evidence.fetchSourceEvidence).mockResolvedValue({items:[],total:0,page:1,limit:20});});
   afterEach(()=>{vi.useRealTimers();});
+  it('shows retained review and dependency items while the same creator continues, with Chinese notices and raw details',async()=>{
+    const running={...batch('running'),totals:{total:5,selected:4,completed:1,skipped:0,deferred:1,review:1,dependency:1,unstarted:1}};
+    const records:AdmissionItem[]=[
+      {...item('done'),state:'completed'},
+      {...item('review'),state:'files_verified',lastError:'Scoped media indexing did not complete',executionIssue:{kind:'review',code:'MEDIA_INDEX_INCOMPLETE',message:'图集索引未完成，请核对异常文件'}},
+      {...item('copy'),state:'not_started',executionIssue:{kind:'dependency',code:'DEPENDENCY_NOT_READY',message:'同套目标尚未完成，等待其审核结果',blockedByItemKey:'review'}},
+      {...item('unstarted'),state:'not_started'},
+      {...item('manual'),state:'defer'}
+    ];
+    vi.mocked(api.fetchAdmissionBatch).mockResolvedValue(running);vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:records,total:5,page:1,pageSize:100});
+    const {wrapper}=await render('?batch=batch-synthetic');
+    expect(wrapper.get('[data-test=admission-execution-totals]').text()).toBe('1 已完成 · 1 待审核 · 1 等待依赖 · 1 尚未执行 · 1 人工暂缓 · 0 跳过');
+    expect(wrapper.get('[data-test=admission-queue-notice]').text()).toBe('异常项已保留，其余可执行图集继续处理');
+    expect(wrapper.findAll('[data-test=admission-error-message]').map(notice=>notice.text())).toEqual(['图集索引未完成，请核对异常文件','同套目标尚未完成，等待其审核结果']);
+    expect(wrapper.get('[data-test=admission-error-detail]').text()).toContain('Scoped media indexing did not complete');
+    expect(wrapper.findAll('[aria-label=执行结果] tbody tr').map(row=>row.findAll('td')[1]!.text())).toEqual(['待审核','等待依赖','尚未执行','人工暂缓，等待区保留']);
+    expect(api.resumeAdmission).not.toHaveBeenCalled();expect(api.executeAdmission).not.toHaveBeenCalled();
+  });
+  it('shows a Chinese system pause reason and preserves unknown technical errors',async()=>{
+    vi.mocked(api.fetchAdmissionBatch).mockResolvedValue({...batch('needs_review'),error:'SQLITE_BUSY: database is locked'});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('system'),lastError:'SQLITE_BUSY: database is locked',executionIssue:{kind:'system',code:'SQLITE_BUSY',message:'数据库暂时不可用，请核对后重试'}}],total:1,page:1,pageSize:100});
+    const {wrapper}=await render('?batch=batch-synthetic');
+    expect(wrapper.get('[data-test=admission-queue-notice]').text()).toBe('队列因异常暂停：数据库暂时不可用，请核对后重试');
+    expect(wrapper.findAll('.error').every(error=>!error.text().includes('SQLITE_BUSY'))).toBe(true);
+    expect(wrapper.findAll('[data-test=admission-error-detail]').some(detail=>detail.text().includes('SQLITE_BUSY: database is locked'))).toBe(true);
+    await button(wrapper,'核对后重试原计划').trigger('click');
+    expect(wrapper.get('[role=dialog]').text()).toContain('人工暂缓保持');expect(wrapper.get('[role=dialog]').text()).toContain('待审核、等待依赖及尚未完成');
+    expect(api.resumeAdmission).not.toHaveBeenCalled();
+  });
   it.each([null,'owner-collection'])('opens the owning %s batch from an error without resuming it',async(collectionId)=>{
     vi.mocked(api.fetchAdmissionBatch).mockImplementation(async id=>id==='owner-batch'?{...batch('needs_review'),id}:{...batch('needs_review'),error:'请先继续原批次',blockingBatch:{batchId:'owner-batch',collectionId}});
     const {wrapper,router}=await render('?batch=batch-synthetic');
@@ -55,7 +84,7 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item(),currentDisposition:completedLater,nextAction:'prepare_preview',lastError:'原文件阶段错误'},{...item('unknown','D'),currentDisposition:{status:'unresolved'},nextAction:'prepare_preview'}],total:2,page:1,pageSize:100});
     const {wrapper}=await render('?batch=batch-synthetic');expect(wrapper.get('[aria-label=批次状态]').text()).toContain('待审核');expect(wrapper.text()).toContain('原锁错误');expect(wrapper.text()).toContain('原文件阶段错误');expect(wrapper.text()).toContain('后续部分覆盖');
     expect(wrapper.get('[data-test=completed-later]').findAll('a').map(link=>link.attributes('href'))).toEqual(['/local-admission/17?batch=later-batch','/library/17/works/401']);expect(wrapper.text()).toContain('完成时间未单独记录');
-    const rows=wrapper.findAll('[aria-label=执行结果] tbody tr');expect(rows[0]!.find('input').exists()).toBe(false);expect(rows[1]!.get('input').attributes('value')).toBe('unknown');expect(wrapper.findAll('button').some(button=>button.text()==='核对后继续原计划')).toBe(false);
+    const rows=wrapper.findAll('[aria-label=执行结果] tbody tr');expect(rows[0]!.find('input').exists()).toBe(false);expect(rows[1]!.get('input').attributes('value')).toBe('unknown');expect(wrapper.findAll('button').some(button=>button.text()==='核对后重试原计划')).toBe(false);
     expect(api.resumeAdmission).not.toHaveBeenCalled();expect(api.repreviewAdmission).not.toHaveBeenCalled();
   });
   it('locks completed-later single-creator draft choices and excludes their previous ad selections',async()=>{
@@ -102,17 +131,17 @@ describe('web local admission without CLI or raw identity inputs',()=>{
     vi.mocked(api.fetchAdmissionBatch).mockResolvedValue(batch('needs_review'));
     vi.mocked(api.resumeAdmission).mockResolvedValue(batch('needs_review'));
     const {wrapper}=await render('?batch=batch-synthetic');
-    await button(wrapper,'核对后继续原计划').trigger('click');await button(wrapper,'确认继续本批').trigger('click');await flushPromises();
+    await button(wrapper,'核对后重试原计划').trigger('click');await button(wrapper,'确认重试原计划').trigger('click');await flushPromises();
     const first=vi.mocked(api.resumeAdmission).mock.calls[0]![1].requestKey;
-    await button(wrapper,'核对后继续原计划').trigger('click');await button(wrapper,'确认继续本批').trigger('click');await flushPromises();
+    await button(wrapper,'核对后重试原计划').trigger('click');await button(wrapper,'确认重试原计划').trigger('click');await flushPromises();
     expect(vi.mocked(api.resumeAdmission).mock.calls[1]![1].requestKey).not.toBe(first);
   });
   it('reuses the exact resume request after an uncertain response and a new browser view',async()=>{
     vi.mocked(api.fetchAdmissionBatch).mockResolvedValue(batch('needs_review'));
     vi.mocked(api.resumeAdmission).mockRejectedValueOnce(new Error('response lost')).mockResolvedValue(batch('running'));
-    const {wrapper}=await render('?batch=batch-synthetic');await button(wrapper,'核对后继续原计划').trigger('click');await button(wrapper,'确认继续本批').trigger('click');await flushPromises();
+    const {wrapper}=await render('?batch=batch-synthetic');await button(wrapper,'核对后重试原计划').trigger('click');await button(wrapper,'确认重试原计划').trigger('click');await flushPromises();
     const first=vi.mocked(api.resumeAdmission).mock.calls[0]![1];wrapper.unmount();
-    const returned=await render('?batch=batch-synthetic');await button(returned.wrapper,'核对后继续原计划').trigger('click');await button(returned.wrapper,'确认继续本批').trigger('click');await flushPromises();
+    const returned=await render('?batch=batch-synthetic');await button(returned.wrapper,'核对后重试原计划').trigger('click');await button(returned.wrapper,'确认重试原计划').trigger('click');await flushPromises();
     expect(vi.mocked(api.resumeAdmission).mock.calls[1]![1]).toEqual(first);
   });
   it('does not allow a late execution receipt to change the newly selected creator page',async()=>{

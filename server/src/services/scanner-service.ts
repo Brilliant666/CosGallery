@@ -1,4 +1,4 @@
-import type { Stats } from 'node:fs';
+import type { BigIntStats, Stats } from 'node:fs';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
@@ -95,9 +95,21 @@ import {
   type IndexedFileStatus
 } from '../utils/scan-utils.js';
 import { resolveUniqueSlug, slugifyFolderPath } from '../utils/slug.js';
+import { diagnosedMediaContentError, MediaContentError } from '../utils/media-content-error.js';
 import type { FolderRecord, FolderRole, FolderScanStateRecord, ImageRecord, ScanRunRecord } from '../types/models.js';
 
+export interface ScopedAdmissionIssue {
+  kind: 'review';
+  code: 'MEDIA_CONTENT_REVIEW_REQUIRED';
+  message: '图集含有无法解码或超出处理限制的文件，请核对文件处置';
+  detail?: string;
+}
+
+export type CosCreatorScanResult = ScanRunRecord & { admissionIssue?: ScopedAdmissionIssue };
+
 interface ScanSummary {
+  runId?: number;
+  admissionIssue?: ScopedAdmissionIssue;
   status: string;
   scanned_files: number;
   new_files: number;
@@ -128,6 +140,7 @@ interface IndexedFileCandidate {
   absolutePath: string;
   relativePath: string;
   stats: Stats;
+  sourceIdentity?: BigIntStats;
 }
 
 interface SourceFolderCandidate {
@@ -204,6 +217,7 @@ interface ImageProcessingContext {
   moveReconciliationEnabled: boolean;
   claimedMoveImageIds: Set<number>;
   rebuildDerivativeReuseIndex?: RebuildDerivativeReuseIndex;
+  admissionContentReview?: boolean;
 }
 
 interface RebuildDerivativeReuseIndex {
@@ -436,6 +450,8 @@ class ScanErrorCollector {
   private sampleLength = 0;
   private stream: fsSync.WriteStream | null = null;
   private reportError: string | null = null;
+  private operationalFailure = false;
+  private readonly contentFailures = new Set<string>();
   count = 0;
 
   constructor(
@@ -461,7 +477,21 @@ class ScanErrorCollector {
     return this.sampleLines.join('\n');
   }
 
-  async add(error: string): Promise<string> {
+  get hasOnlyContentFailures(): boolean {
+    return this.hasErrors && this.contentFailures.size > 0 && !this.operationalFailure;
+  }
+
+  markOperationalFailure(): void {
+    this.operationalFailure = true;
+  }
+
+  isKnownContentFailure(relativePath: string): boolean {
+    return this.contentFailures.has(normalizePath(relativePath));
+  }
+
+  async add(error: string, cause?: unknown): Promise<string> {
+    if (cause instanceof MediaContentError) this.contentFailures.add(normalizePath(cause.relativePath));
+    else this.markOperationalFailure();
     const normalizedError = truncateScanErrorLine(error.replace(/\s+/g, ' ').trim());
     this.count += 1;
     this.rememberSample(normalizedError);
@@ -536,6 +566,7 @@ class ScanErrorCollector {
         mode: 0o600
       });
       this.stream.on('error', (error) => {
+        this.markOperationalFailure();
         this.reportError = error.message;
       });
       this.stream.write([
@@ -549,6 +580,7 @@ class ScanErrorCollector {
         ''
       ].join('\n'));
     } catch (error) {
+      this.markOperationalFailure();
       this.reportError = error instanceof Error ? error.message : String(error);
       this.stream = null;
     }
@@ -565,11 +597,26 @@ class ScanErrorCollector {
     await new Promise<void>((resolve) => {
       stream.write(value, (error?: Error | null) => {
         if (error) {
+          this.markOperationalFailure();
           this.reportError = error.message;
         }
         resolve();
       });
     });
+  }
+}
+
+function sameMediaSourceIdentity(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode
+    && left.nlink === right.nlink && left.size === right.size
+    && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
+/** Missing index rows may stop this work only when every missing path has a diagnosed content failure. */
+class MediaContentReviewStop extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = 'MediaContentReviewStop';
   }
 }
 
@@ -707,7 +754,7 @@ class ScannerService {
     creatorNames: string[],
     reason = 'local-ingest',
     options: EnqueueScanOptions & { workFolderName?: string } = {}
-  ): Promise<ScanRunRecord | undefined> {
+  ): Promise<CosCreatorScanResult | undefined> {
     if (!appConfig.cosGalleryMode) {
       throw new Error('Creator-scoped scans are only available in CosGallery mode');
     }
@@ -729,14 +776,16 @@ class ScannerService {
       allowDerivativeMigration: false,
       ...options
     });
-    await this.enqueue(
+    const summary = await this.enqueue(
       async () => this.performFullScan(reason, resolvedOptions, {
         creatorNames: normalizedCreatorNames,
         workFolderName: options.workFolderName
       }),
       options
     );
-    return scanRunRepository.latest();
+    // Use this queued job's run, never the latest row from an unrelated queued scan.
+    const run = databaseManager.connection.prepare('SELECT * FROM scan_runs WHERE id=?').get(summary.runId!) as ScanRunRecord | undefined;
+    return run && summary.admissionIssue ? { ...run, admissionIssue: summary.admissionIssue } : run;
   }
 
   private async validateWorkScanScope(creatorName: string, workFolderName: string): Promise<void> {
@@ -996,8 +1045,10 @@ class ScannerService {
       log.error('Failed to write scan error report', reportResult.errorMessage);
     }
 
-    const sampleLimit = Math.max(0, MAX_SCAN_ERROR_TEXT_LENGTH - reportNotice.length);
-    summary.error_text = `${errors.sampleText.slice(0, sampleLimit)}${reportNotice}`;
+    reportNotice = reportNotice.slice(0, MAX_SCAN_ERROR_TEXT_LENGTH);
+    const sampleLimit = MAX_SCAN_ERROR_TEXT_LENGTH - reportNotice.length;
+    const failure = summary.status === 'failed' && summary.error_text ? `${summary.error_text}\n` : '';
+    summary.error_text = `${`${failure}${errors.sampleText}`.slice(0, sampleLimit)}${reportNotice}`;
   }
 
   private async applyScanWarnings(summary: ScanSummary, warnings: ScanErrorCollector): Promise<void> {
@@ -1031,6 +1082,7 @@ class ScannerService {
     const storageState = storageService.refreshAvailability();
     const summary = {
       ...createEmptySummary(),
+      runId,
       status: 'skipped_unavailable',
       error_text: storageState.reason ?? 'Configured library storage is unavailable'
     };
@@ -1312,7 +1364,7 @@ class ScannerService {
     return result;
   }
 
-  private async statIndexedFiles(files: IndexedFileReference[], errors: ScanErrorCollector): Promise<StatIndexedFilesResult> {
+  private async statIndexedFiles(files: IndexedFileReference[], errors: ScanErrorCollector, captureIdentity = false): Promise<StatIndexedFilesResult> {
     const activeRelativePaths: string[] = [];
     const discoveredFiles: IndexedFileCandidate[] = [];
     let folderHadErrors = false;
@@ -1327,11 +1379,18 @@ class ScannerService {
       if (this.isManagedGalleryPath(normalizedRelativePath)) return;
 
       try {
+        const identityBefore = captureIdentity ? await fs.lstat(file.absolutePath, { bigint: true }) : undefined;
         const stats = await fs.stat(file.absolutePath);
+        const sourceIdentity = captureIdentity ? await fs.lstat(file.absolutePath, { bigint: true }) : undefined;
+        if (sourceIdentity && (!sourceIdentity.isFile() || sourceIdentity.isSymbolicLink() || sourceIdentity.nlink !== 1n
+          || !identityBefore || !sameMediaSourceIdentity(identityBefore, sourceIdentity))) {
+          throw new Error('Media source identity changed during discovery or is not a regular single-link file');
+        }
         discoveredFiles.push({
           absolutePath: file.absolutePath,
           relativePath: normalizedRelativePath,
-          stats
+          stats,
+          ...(sourceIdentity ? { sourceIdentity } : {})
         });
       } catch (error) {
         folderHadErrors = true;
@@ -1668,7 +1727,7 @@ class ScannerService {
         discoveredImages: this.progress.discoveredImages + recursiveFiles.length
       });
 
-      const statResult = await this.statIndexedFiles(recursiveFiles, errors);
+      const statResult = await this.statIndexedFiles(recursiveFiles, errors, workFolderName !== undefined);
       const result = await this.scanIndexedFolderFiles({
         folderPath: workRelativePath,
         scannedFileCount: recursiveFiles.length,
@@ -1694,9 +1753,15 @@ class ScannerService {
 
       if (indexedImages.length > 0) {
         if (!result.folder || indexedImages.length !== statResult.discoveredFiles.length) {
-          throw new Error(
+          const error = new Error(
             `LEGACY_POST_SPLIT_UNMAPPED_ITEM: ${workRelativePath} indexed ${indexedImages.length} of ${statResult.discoveredFiles.length} discovered media files`
           );
+          const missing = statResult.discoveredFiles.filter(file => !imageRepository.getByRelativePath(normalizePath(file.relativePath)));
+          if (workFolderName !== undefined && result.folder && missing.length > 0
+            && errors.hasOnlyContentFailures && missing.every(file => errors.isKnownContentFailure(file.relativePath))) {
+            throw new MediaContentReviewStop(error);
+          }
+          throw error;
         }
         const firstItem = indexedImages[0]!;
         const newestItemTimestamp = Math.max(...indexedImages.map((image) => image.sort_timestamp));
@@ -2144,11 +2209,12 @@ class ScannerService {
         const detail = formatScanError(file.relativePath, message, {
           sourcePath: file.absolutePath
         });
-        await errors.add(detail);
+        await errors.add(detail, error);
         log.error(joinLogParts(['Failed to index media', formatStep('file', file.relativePath), message]));
 
         if (appConfig.scanMediaErrorMode === 'fail') {
-          throw new Error(detail);
+          if (error instanceof MediaContentError) throw error;
+          throw new Error(detail, { cause: error });
         }
       } finally {
         this.setProgress({
@@ -2326,6 +2392,7 @@ class ScannerService {
   ): Promise<ScanSummary> {
     const runId = scanRunRepository.start();
     const summary = createEmptySummary();
+    summary.runId = runId;
     const errors = new ScanErrorCollector(runId, reason);
     const warnings = new ScanErrorCollector(runId, reason, 'warning');
     const derivativeJobs = new Map<string, DerivativeJob>();
@@ -2363,7 +2430,8 @@ class ScannerService {
       avifMetadataRepairPending,
       moveReconciliationEnabled: false,
       claimedMoveImageIds: new Set<number>(),
-      rebuildDerivativeReuseIndex: contextOptions.rebuildDerivativeReuseIndex
+      rebuildDerivativeReuseIndex: contextOptions.rebuildDerivativeReuseIndex,
+      admissionContentReview: contextOptions.workFolderName !== undefined
     };
     const treatStoriesAsFolders = this.shouldTreatStoriesAsFolders();
     const treatCarouselsAsFolders = this.shouldTreatCarouselsAsFolders();
@@ -2696,6 +2764,7 @@ class ScannerService {
         await derivativeMigrationService.cleanupStaleDerivatives();
       }
     } catch (error) {
+      if (!(error instanceof MediaContentError) && !(error instanceof MediaContentReviewStop)) errors.markOperationalFailure();
       summary.status = 'failed';
       summary.error_text = error instanceof Error ? error.message : String(error);
       log.error('Full scan failed', summary.error_text);
@@ -2703,6 +2772,14 @@ class ScannerService {
 
     await this.applyScanErrors(summary, errors);
     await this.applyScanWarnings(summary, warnings);
+    if (workScoped && errors.hasOnlyContentFailures) {
+      summary.admissionIssue = {
+        kind: 'review',
+        code: 'MEDIA_CONTENT_REVIEW_REQUIRED',
+        message: '图集含有无法解码或超出处理限制的文件，请核对文件处置',
+        ...(summary.error_text ? { detail: summary.error_text } : {})
+      };
+    }
 
     if (!workScoped && summary.status !== 'failed') {
       appSettingsRepository.setMany([
@@ -3195,6 +3272,33 @@ class ScannerService {
     return selectedCandidate;
   }
 
+  private async readScanMediaMetadata(
+    file: IndexedFileCandidate,
+    mediaType: Parameters<typeof readMediaMetadata>[1],
+    context: ImageProcessingContext
+  ): Promise<Awaited<ReturnType<typeof readMediaMetadata>>> {
+    if (!context.admissionContentReview || mediaType !== 'image') {
+      return readMediaMetadata(file.absolutePath, mediaType, { fileSize: file.stats.size });
+    }
+    const before = await fs.lstat(file.absolutePath, { bigint: true });
+    const discovered = file.sourceIdentity;
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || !discovered
+      || !sameMediaSourceIdentity(before, discovered)) {
+      throw new Error('Media source identity changed since discovery or is not a regular single-link file');
+    }
+    try {
+      return await readMediaMetadata(file.absolutePath, mediaType, { fileSize: file.stats.size });
+    } catch (error) {
+      const contentError = diagnosedMediaContentError(error, file.absolutePath, file.relativePath);
+      if (!contentError) throw error;
+      const after = await fs.lstat(file.absolutePath, { bigint: true });
+      if (!after.isFile() || after.isSymbolicLink() || after.nlink !== 1n || !sameMediaSourceIdentity(before, after)) {
+        throw new Error('Media changed during metadata diagnosis; keep files and review the original scope', { cause: error });
+      }
+      throw contentError;
+    }
+  }
+
   private async processImageFile(
     folder: FolderRecord,
     file: IndexedFileCandidate,
@@ -3261,9 +3365,7 @@ class ScannerService {
         || needsExifBackfill
         || needsAvifMetadataRepair
       ) {
-        const metadata = await readMediaMetadata(file.absolutePath, mediaType, {
-          fileSize: file.stats.size
-        });
+        const metadata = await this.readScanMediaMetadata(file, mediaType, context);
         metadataTakenAt = metadata.takenAt;
         metadataDurationMs = metadata.durationMs;
         metadataWidth = metadata.width;
@@ -3353,9 +3455,7 @@ class ScannerService {
       };
     }
 
-    const metadata = await readMediaMetadata(file.absolutePath, mediaType, {
-      fileSize: file.stats.size
-    });
+    const metadata = await this.readScanMediaMetadata(file, mediaType, context);
     const sortTimestamp = getStableSortTimestamp(
       existing
         ? {

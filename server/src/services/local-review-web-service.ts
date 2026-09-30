@@ -523,7 +523,14 @@ export class LocalReviewWebService {
           this.update(sessionId, { recovery_json: encoded(recover) });
         }
         this.update(sessionId, { phase: 'resuming_original_plan' });
-        result = await this.folder.apply(data.plan);
+        try { result = await this.folder.apply(data.plan, { continueReviewable: true }); }
+        catch (error) {
+          if (this.folderState(target, row.creator_id).state.state !== 'completed') throw error;
+          result = { completed: false, planId: target.planId };
+        }
+        // Sibling content issues stay in the original queue. This receipt proves
+        // only that the exact reviewed item completed, never that all siblings did.
+        if (this.folderState(target, row.creator_id).state.state !== 'completed') throw new LocalReviewError('本项仍未完成，请查看原项目的具体原因后继续原审核。');
       } else {
         if (!row.recovery_json) throw new LocalReviewError('项目已由其他操作完成；本审核未执行，不修改已完成作品。');
         result = { completed: true, planId: target.planId };
@@ -531,7 +538,7 @@ export class LocalReviewWebService {
     }
     const summary = await this.completedSummary(row, target);
     this.update(sessionId, { status: 'completed', phase: 'completed', owner_pid: null, error: null,
-      result_json: encoded({ completed: true, message: '原任务已完成；可恢复附件和原件按确认范围保留。', summary,
+      result_json: encoded({ completed: true, message: target.kind === 'admission' ? '本审核图集已完成；其余项目请查看原计划的执行状态。' : '原任务已完成；可恢复附件和原件按确认范围保留。', summary,
         ...(target.kind === 'stage3' ? { jobId: target.jobId } : { planId: target.planId }) }) });
   }
 }

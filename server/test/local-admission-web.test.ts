@@ -74,7 +74,7 @@ describe.sequential('web directory admission delegates to original plans',()=>{
   });
   it('skipped/deferred source folders remain, deferred work can get a new preview without replaying completed items',async()=>{
     const batch=await preview(['NO.007 明确','NO.008 跳过','NO.009 暂缓']);const actions=batch.items.map((i,n)=>({key:i.key,action:['new','skip','defer'][n]}));
-    await service.execute(batch.id,request(batch,{actions}));await service.waitForIdle();expect(service.get(batch.id).totals).toEqual({total:3,selected:1,completed:1,skipped:1,deferred:1});
+    await service.execute(batch.id,request(batch,{actions}));await service.waitForIdle();expect(service.get(batch.id).totals).toEqual({total:3,selected:1,completed:1,skipped:1,deferred:1,review:0,dependency:0,unstarted:0});
     expect(service.items(batch.id).items.slice(1)).toMatchObject([
       {state:'skip',executionState:null,nextAction:'none'}, {state:'defer',executionState:null,nextAction:'prepare_preview'}]);
     for(const name of ['NO.008 跳过','NO.009 暂缓'])await expect(fs.stat(path.join(waiting,parent,name))).resolves.toBeTruthy();
@@ -90,7 +90,7 @@ describe.sequential('web directory admission delegates to original plans',()=>{
   it('pre-confirmation source changes and occupied targets fail without file moves',async()=>{
     const batch=await preview(['NO.011 变化']);await fs.writeFile(path.join(waiting,parent,'NO.011 变化','图片 1.jpg'),'changed');
     await service.execute(batch.id,request(batch));await service.waitForIdle();expect(service.get(batch.id).state).toBe('needs_review');expect(service.get(batch.id).error).toContain('Source changed');
-    expect(service.items(batch.id).items[0]).toMatchObject({state:'not_started',executionState:null,nextAction:'prepare_preview'});
+    expect(service.items(batch.id).items[0]).toMatchObject({state:'not_started',executionState:null,nextAction:'resume_plan'});
     await expect(fs.stat(path.join(waiting,parent,'NO.011 变化'))).resolves.toBeTruthy();
     const next=await preview(['NO.012 占用']);await fs.mkdir(next.items[0].targetPath);
     await service.execute(next.id,request(next));await service.waitForIdle();expect(service.get(next.id).error).toContain('Target exists');
@@ -233,7 +233,9 @@ describe.sequential('web directory admission delegates to original plans',()=>{
   it('derives recovery actions from immutable checkpoints and suppresses them while an owner is active',async()=>{
     const batch=await preview(['NO.026 恢复动作']),db=manager.connection;
     const {scannerService}=await import('../src/services/scanner-service.js');
-    const scan=vi.spyOn(scannerService,'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic media issue'));
+    const scan=vi.spyOn(scannerService,'scanCosCreators').mockResolvedValueOnce({id:1,started_at:'now',finished_at:'now',status:'failed',scanned_files:1,
+      new_files:0,updated_files:0,removed_files:0,error_text:'Synthetic media issue',warning_count:0,warning_text:null,
+      admissionIssue:{kind:'review',code:'MEDIA_CONTENT_REVIEW_REQUIRED',message:'图集中有需要核对的媒体文件',detail:'Synthetic media issue'}});
     await service.execute(batch.id,request(batch));await service.waitForIdle();scan.mockRestore();
     const get=()=>service.items(batch.id).items[0];
     expect(get()).toMatchObject({state:'files_verified',executionState:'files_verified',nextAction:'review_files',postId:null});

@@ -28,6 +28,13 @@ export interface AdmissionAction {
 }
 export type AdmissionCurrentDisposition = {status:'completed_later';batchId:string;collectionId:string|null;planId:string;itemKey:string;workId:number;localWorkId:number;postId:number|null;completedAt:string|null;completionTimeBasis:'batch_completed'|'unavailable';evidence:'exact_directory_scope'} | {status:'unresolved'};
 export interface AdmissionCurrentTotals { completedLater:number;pending:number;unresolved:number }
+export interface AdmissionExecutionIssue {
+  kind: 'review' | 'dependency' | 'system'; code: string; message: string; detail?: string; blockedByItemKey?: string;
+}
+export interface AdmissionExecutionTotals {
+  total: number; selected: number; completed: number; skipped: number; deferred: number;
+  review?: number; dependency?: number; unstarted?: number;
+}
 export interface AdmissionItem {
   key: string; sourceRelativePath: string; targetPath: string; displayTitle: string; group: 'A' | 'B' | 'C' | 'D';
   summary: { images: number; videos: number; other: number; bytes: number }; candidates: AdmissionWork[];
@@ -45,13 +52,15 @@ export interface AdmissionItem {
   nextAction?: 'review_files' | 'resume_plan' | 'prepare_preview' | 'none';
   nextActionReason?: string;
   executionState?: string | null;
+  executionIssue?: AdmissionExecutionIssue;
+  errorMessage?: string | null;
   currentDisposition?: AdmissionCurrentDisposition;
 }
 export type AdmissionState = 'draft' | 'queued' | 'running' | 'completed' | 'needs_review' | 'interrupted' | 'failed';
 export interface AdmissionBatch {
   id: string; planId: string | null; creatorId: number; creatorName: string; state: AdmissionState;
-  createdAt: string; updatedAt: string; error?: string | null; inputRoot: string; sourceEvidenceId?: number | null;
-  totals: { total: number; selected: number; completed: number; skipped: number; deferred: number };
+  createdAt: string; updatedAt: string; error?: string | null; errorMessage?: string | null; inputRoot: string; sourceEvidenceId?: number | null;
+  totals: AdmissionExecutionTotals;
   items?: AdmissionItem[];
   collectionId?: string | null;
   blockingBatch?: { batchId: string; collectionId: string | null };
@@ -71,8 +80,8 @@ export interface AdmissionWorkspace extends AdmissionSettings {
   items: Array<{name: string; selectable: boolean; reason?: string; matches: Array<{creatorId:number;creatorName:string;matchedName:string;matchKind:'canonical'|'alias'}>}>;
 }
 export interface AdmissionCollection {
-  id:string; state:'draft'|'queued'|'running'|'completed'|'partial'|'interrupted'; createdAt:string;updatedAt:string;error:string|null;
-  totals:{creators:number;total:number;selected:number;completed:number;skipped:number;deferred:number;failedCreators:number};
+  id:string; state:'draft'|'queued'|'running'|'completed'|'partial'|'interrupted'; createdAt:string;updatedAt:string;error:string|null;errorMessage?:string|null;
+  totals:AdmissionExecutionTotals & {creators:number;failedCreators:number};
   batches:Array<AdmissionBatch & {parent:string}>;
   previousCollectionId?:string|null;
   nextCollectionIds?:string[];

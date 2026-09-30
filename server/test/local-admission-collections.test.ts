@@ -234,19 +234,22 @@ describe.sequential('durable multi-creator local admission collections',()=>{
     expect(manager.connection.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(collection.batches[0].id)).toBeUndefined();
     for(const name of ['011 跳过','012 暂缓'])await expect(fs.stat(path.join(waiting,names[0],name))).resolves.toBeTruthy();
   });
-  it('keeps a real failed-move checkpoint, finishes later creators and resumes only unfinished immutable children',async()=>{
+  it('keeps a real failed-move checkpoint, pauses later creators and resumes the original immutable children',async()=>{
     const collection=await preview('004 中断恢复'),input=request(collection);const original=Admission.prototype.apply;let injected=false;
     const spy=vi.spyOn(Admission.prototype,'apply').mockImplementation(async function(this:InstanceType<typeof Admission>,raw:any,options){
-      if(!injected){injected=true;return original.call(this,raw,{stopAfterMove:true});}return original.call(this,raw,options);});
+      if(!injected){injected=true;return original.call(this,raw,{...options,stopAfterMove:true});}return original.call(this,raw,options);});
     await service.executeCollection(collection.id,input);await service.waitForIdle();spy.mockRestore();
-    const partial=service.collection(collection.id);expect(partial.state).toBe('partial');expect(partial.batches[0].state).toBe('needs_review');expect(partial.batches[1].state).toBe('completed');
+    const partial=service.collection(collection.id);expect(partial.state).toBe('partial');expect(partial.batches[0].state).toBe('needs_review');expect(partial.batches[1].state).toBe('interrupted');
     const db=manager.connection,plans=collection.batches.map(child=>db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(child.id));
     const first=service.items(collection.batches[0].id).items[0],second=service.items(collection.batches[1].id).items[0];
-    expect(first.state).toBe('move_intent');await expect(fs.stat(path.join(waiting,names[0],'004 中断恢复'))).rejects.toThrow();
+    expect(first.state).toBe('move_intent');expect(first.executionIssue?.kind).toBe('system');await expect(fs.stat(path.join(waiting,names[0],'004 中断恢复'))).rejects.toThrow();
+    expect(second.localWorkId).toBeNull();expect(plans[1]).toBeUndefined();
+    await expect(fs.stat(path.join(waiting,names[1],'004 中断恢复'))).resolves.toBeTruthy();
+    await expect(fs.stat(second.targetPath)).rejects.toThrow();
     const calls=vi.spyOn(Admission.prototype,'apply'),retry={requestKey:randomUUID(),confirmed:true};service.resumeCollection(collection.id,retry);service.resumeCollection(collection.id,retry);await service.waitForIdle();
-    expect(calls).toHaveBeenCalledTimes(1);expect(service.collection(collection.id).state).toBe('completed');
-    expect(service.items(collection.batches[0].id).items[0].workId).toBe(first.workId);expect(service.items(collection.batches[1].id).items[0]).toEqual(second);
-    expect(collection.batches.map(child=>db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(child.id))).toEqual(plans);
+    expect(calls).toHaveBeenCalledTimes(2);expect(service.collection(collection.id).state).toBe('completed');
+    expect(service.items(collection.batches[0].id).items[0].workId).toBe(first.workId);expect(service.items(collection.batches[1].id).items[0].state).toBe('completed');
+    expect(db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(collection.batches[0].id)).toEqual(plans[0]);
   });
   it('blocks standalone, settings and competing collections while holding the existing cross-process admission barrier',async()=>{
     const collection=await preview('005 集中互斥'),other=await preview('006 竞争集合');await make(0,'007 单入口');const standalone=await service.preview({creatorId:creators[0],parent:names[0],directories:['007 单入口']});
