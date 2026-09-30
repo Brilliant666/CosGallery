@@ -116,12 +116,16 @@ describe.sequential('web precise review preserves original folder admission', ()
   it.each(['EACCES', 'ENOMEM'])('does not turn %s into permission to preserve unreadable media', async code => {
     const f = await fixture({ '异常.jpg': Buffer.from('undecodable original') });
     f.db.prepare("UPDATE local_review_web_sessions SET baseline_json=json_remove(baseline_json,'$.rulesVersion') WHERE id=?").run(f.sessionId);
-    const originalRead = fs.readFile.bind(fs);
-    vi.spyOn(fs, 'readFile').mockImplementation(((filename: Parameters<typeof fs.readFile>[0], ...args: unknown[]) => {
-      if (String(filename) === path.join(f.item.targetPath, '异常.jpg')) return Promise.reject(Object.assign(new Error('Input buffer contains unsupported image format'), { code }));
-      return originalRead(filename, ...args as []);
-    }) as typeof fs.readFile);
+    // Linux Sharp opens files itself; inject at the shared metadata boundary so
+    // the I/O/resource error reaches classification on every platform.
+    const metadata = await import('../src/utils/movable-image-metadata.js');
+    const originalRead = metadata.readMovableImageMetadata;
+    const read = vi.spyOn(metadata, 'readMovableImageMetadata').mockImplementation(async filename => {
+      if (filename === path.join(f.item.targetPath, '异常.jpg')) throw Object.assign(new Error('Input buffer contains unsupported image format'), { code });
+      return originalRead(filename);
+    });
     await f.post(`/sessions/${f.sessionId}/refresh`, { requestKey: `refresh-${code}` }); await f.web.wait(f.sessionId);
+    expect(read).toHaveBeenCalledWith(path.join(f.item.targetPath, '异常.jpg'));
     expect(f.web.get(f.sessionId)).toMatchObject({ status: 'failed', confirmed: false });
     expect(f.db.prepare('SELECT state FROM archive_local_admission_items').get()!.state).toBe('files_verified');
     expect(f.db.prepare("SELECT COUNT(*) n FROM archive_catalog_work_decisions WHERE kind='admission_file_removal'").get()!.n).toBe(0);
