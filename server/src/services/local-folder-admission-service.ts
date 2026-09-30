@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/local-ingest-paths.js';
+import { isSupportedVideoFile } from '../utils/image-utils.js';
 import { LocalIngestDestinationService } from './local-ingest-destination-service.js';
 import { WorkIdentityService } from './work-identity-service.js';
 import { assertPathNotRemoved, assertWorkNotRemoved } from './work-removal-guards.js';
@@ -63,12 +64,19 @@ export async function inventoryAdmissionDirectory(root:string):Promise<Entry[]> 
       const s=await fs.lstat(absolute,{bigint:true});if(s.isSymbolicLink())throw Error('Linked entries are not supported');
       if(!s.isDirectory()&&!s.isFile())throw Error('Non-regular entry is not supported');
       const ext=path.extname(ent.name).toLowerCase();
-      const kind=s.isDirectory()?'directory':/\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(ext)?'image':/\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(ext)?'video':'other';
+      // Keep the legacy AVI inventory classification for immutable admission plans.
+      const kind=s.isDirectory()?'directory':/\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(ext)?'image':isSupportedVideoFile(ent.name)||ext==='.avi'?'video':'other';
       rows.push({relativePath:path.relative(root,absolute).split(path.sep).join('/'),kind,size:s.isDirectory()?0:Number(s.size),dev:String(s.dev),ino:String(s.ino),mtimeNs:s.isDirectory()?'0':String(s.mtimeNs)});
       if(s.isDirectory())await walk(absolute);
     }
   }
   await walk(root);if(!rows.some(r=>r.kind==='image'||r.kind==='video'))throw Error('No supported media found; nothing admitted');return rows;
+}
+
+/** Compare legacy plans with their original TS classification; do not rewrite their evidence. */
+export async function inventoryPlannedDirectory(root:string,manifest:Entry[]):Promise<Entry[]> {
+  const legacyTs=new Set(manifest.filter(entry=>entry.kind==='other'&&path.extname(entry.relativePath).toLowerCase()==='.ts').map(entry=>entry.relativePath));
+  return (await inventoryAdmissionDirectory(root)).map(entry=>entry.kind==='video'&&legacyTs.has(entry.relativePath)?{...entry,kind:'other' as const}:entry);
 }
 
 type ItemState={state:string;local_work_id:number|null;work_id:number|null;manifest_json:string;last_error:string|null};
@@ -431,7 +439,7 @@ export class LocalFolderAdmissionService {
 
   private async verifyTarget(plan:AdmissionPlan,item:AdmissionPlan['items'][number],additional:Removal[]=[],allowPendingRetention=false){
     await assertPathInsideLocalIngestRoot(plan.galleryRoot,item.targetPath);
-    const observed=await inventoryAdmissionDirectory(item.targetPath);
+    const observed=await inventoryPlannedDirectory(item.targetPath,item.manifest);
     for(const ad of item.approvedAds){
       const saved=this.attachmentPath(plan,item,ad);await this.assertAdvertisementPath(plan,saved);
       if(!await exists(saved))continue;
@@ -563,7 +571,7 @@ export class LocalFolderAdmissionService {
       await assertPathInsideLocalIngestRoot(plan.inputRoot,source,{directChild:true});
       await assertPathInsideLocalIngestRoot(plan.galleryRoot,item.targetPath);
       if(await exists(item.targetPath))throw Error(`${item.sourceRelativePath}: Target exists; never overwrite`);
-      if(hash(await inventoryAdmissionDirectory(source))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);
+      if(hash(await inventoryPlannedDirectory(source,item.manifest))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);
     }
   }
 
@@ -590,7 +598,7 @@ export class LocalFolderAdmissionService {
       if(cmp(expected)!==cmp(plan.creatorDirectory))throw Error('Destination is no longer the selected legal creator directory');
       // Validate every untouched source/target before the first move.
       for(const item of plan.items){if(await exists(item.targetPath))throw Error(`${item.sourceRelativePath}: Target exists; never overwrite`);
-        if(hash(await inventoryAdmissionDirectory(path.join(plan.inputRoot,item.sourceRelativePath)))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);}
+        if(hash(await inventoryPlannedDirectory(path.join(plan.inputRoot,item.sourceRelativePath),item.manifest))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);}
       this.db.exec('SAVEPOINT admission_plan');
       try {
         this.db.prepare('INSERT INTO archive_local_admission_plans(plan_id,payload_json,content_hash) VALUES(?,?,?)').run(plan.planId,payload,hash(plan));
@@ -632,7 +640,7 @@ export class LocalFolderAdmissionService {
         await assertPathInsideLocalIngestRoot(plan.galleryRoot,target);
         const sourceExists=await exists(source),targetExists=await exists(target);
         if(sourceExists===targetExists)throw Error('Both source and target exist or both are absent; review required');
-        if(sourceExists){if(hash(await inventoryAdmissionDirectory(source))!==hash(item.manifest))throw Error('Directory changed since confirmation; review required');}
+        if(sourceExists){if(hash(await inventoryPlannedDirectory(source,item.manifest))!==hash(item.manifest))throw Error('Directory changed since confirmation; review required');}
         else {await this.reconcileAdvertisementRecycling(plan,item);await this.retainRecoveredOriginals(plan,item);await this.verifyTarget(plan,item);}
         if(state.state==='planned'){
           if(!sourceExists)throw Error('No recorded move intent; cannot adopt target');
@@ -655,7 +663,7 @@ export class LocalFolderAdmissionService {
         if(state.state==='move_intent'){
           if(sourceExists){if(await exists(target))throw Error('Target occupied');await fs.rename(source,target);}
           if(options.stopAfterMove)throw Error('Simulated interruption after move');
-          if(hash(await inventoryAdmissionDirectory(target))!==hash(item.manifest))throw Error('Moved directory manifest differs');
+          if(hash(await inventoryPlannedDirectory(target,item.manifest))!==hash(item.manifest))throw Error('Moved directory manifest differs');
           this.db.prepare("UPDATE archive_local_admission_items SET state='files_verified' WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='files_verified';
         }
         if(state.state==='files_verified'){

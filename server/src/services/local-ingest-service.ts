@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 
 import { readMovableImageMetadata } from '../utils/movable-image-metadata.js';
+import { assertTransportStreamVideoProbe } from '../utils/transport-stream.js';
 import { imageRetentionReason, type ImageRetentionReason } from '../utils/image-retention-diagnosis.js';
 import { isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { inspectReviewFiles, matchReviewInventory, normalizeReviewPath, parseReviewArchiveInventory } from './local-ingest-review-inventory.js';
@@ -35,7 +36,7 @@ import {
   canonicalizeLocalIngestPath,
   LocalIngestPathError
 } from '../utils/local-ingest-paths.js';
-import { ProcessTimeoutError } from '../utils/run-process.js';
+import { ProcessTimeoutError, runProcessWithTimeout } from '../utils/run-process.js';
 import { trustedSevenZip } from '../utils/trusted-seven-zip.js';
 import {
   LocalIngestDestinationError,
@@ -46,7 +47,7 @@ import {
 const SOURCE_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip']);
 const NESTED_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip', '.rar', '.tar', '.gz', '.bz2', '.xz']);
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
-const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.ts']);
 const ADVERTISEMENT_EXTENSIONS = new Set(['.txt', '.html', '.htm', '.url']);
 const TEMPORARY_SUFFIXES = ['.crdownload', '.tmp', '.downloading', '.part'];
 const EXTRACTION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -600,13 +601,23 @@ async function validateImage(filePath: string): Promise<void> {
 }
 
 async function validateVideo(filePath: string): Promise<void> {
-  const result = await runCommand(
+  const transportStream = path.extname(filePath).toLowerCase() === '.ts';
+  const result = await runProcessWithTimeout(
     appConfig.ffprobePath,
-    ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath],
-    60_000
+    ['-v', 'error', '-show_entries', transportStream ? 'format=format_name:stream=codec_type,width,height' : 'format=duration',
+      '-of', transportStream ? 'json' : 'default=noprint_wrappers=1:nokey=1', filePath],
+    60_000,
+    { shell: false }
   ).catch(() => null);
   if (!result || result.code !== 0) {
     throw new LocalIngestFailure('MEDIA_UNREADABLE', `Video cannot be probed: ${path.basename(filePath)}`, true);
+  }
+  if (transportStream) {
+    try {
+      assertTransportStreamVideoProbe(filePath, JSON.parse(result.stdout));
+    } catch {
+      throw new LocalIngestFailure('MEDIA_UNREADABLE', `MPEG-TS 视频无法识别：${path.basename(filePath)}`, true);
+    }
   }
 }
 

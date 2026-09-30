@@ -13,6 +13,9 @@ import type { LocalIngestReviewPlan, LocalIngestReviewRequest } from '../src/ser
 import type { LocalIngestSettingsService } from '../src/services/local-ingest-settings-service.js';
 import type { RecycleBinAdapter } from '../src/services/recycle-bin-adapter.js';
 import * as imageMetadata from '../src/utils/movable-image-metadata.js';
+import { trustedSevenZip } from '../src/utils/trusted-seven-zip.js';
+import * as processRunner from '../src/utils/run-process.js';
+import { appConfig } from '../src/config/env.js';
 
 const fixtures: Array<{ root: string; database: DatabaseSync }> = [];
 const hash = (data: Buffer | string) => createHash('sha256').update(data).digest('hex').toUpperCase();
@@ -22,6 +25,19 @@ const jpeg = () => sharp({ create: { width: 8, height: 12, channels: 3, backgrou
 const webp = () => sharp({ create: { width: 8, height: 12, channels: 3, background: '#557799' } }).webp().toBuffer();
 const slt = (members: Record<string, Buffer>) => 'Path = synthetic.7z\nType = 7z\n\n----------\n'
   + Object.entries(members).map(([name, bytes]) => `Path = ${name}\nSize = ${bytes.length}\nCRC = ${checksum(bytes)}\nAttributes = A\n\n`).join('');
+
+const transportStreamProbe = JSON.stringify({ format: { format_name: 'mpegts' }, streams: [{ codec_type: 'video', width: 16, height: 9 }] });
+const mockFfprobe = (stdout: string, code = 0) => vi.spyOn(processRunner, 'runProcessWithTimeout').mockResolvedValue({ code, signal: null, stdout, stderr: '' });
+function expectFfprobeCalls(probe: ReturnType<typeof mockFfprobe>, transportStream = true) {
+  expect(probe).toHaveBeenCalled();
+  for (const [command, args, timeout, options] of probe.mock.calls) {
+    expect(command).toBe(appConfig.ffprobePath);
+    expect(args.slice(0, -1)).toEqual(['-v', 'error', '-show_entries', transportStream ? 'format=format_name:stream=codec_type,width,height' : 'format=duration',
+      '-of', transportStream ? 'json' : 'default=noprint_wrappers=1:nokey=1']);
+    expect(timeout).toBe(60_000);
+    expect(options).toEqual({ shell: false });
+  }
+}
 
 function seed(database: DatabaseSync, creatorName: string) {
   database.prepare(`INSERT INTO archive_catalog_creators(id,canonical_name,normalized_name,preference,effective_rating,
@@ -111,21 +127,24 @@ async function makeFixture(members: Record<string, Buffer>, options: { scanFailu
         if (entry.name === RETAINED_ORIGINALS_DIRECTORY) continue;
         const absolute = path.join(directory, entry.name);
         if (entry.isDirectory()) await walk(absolute);
-        else if (/\.(?:jpe?g|png|webp|gif)$/iu.test(entry.name)) mediaPaths.push(absolute);
+        else if (/\.(?:jpe?g|png|webp|gif|mp4|ts)$/iu.test(entry.name)) mediaPaths.push(absolute);
       }
     };
     await walk(row.target_path);
-    expect(mediaPaths).toHaveLength(summary.imageCount);
+    expect(mediaPaths.filter(filename => !/\.(?:mp4|ts)$/iu.test(filename))).toHaveLength(summary.imageCount);
+    expect(mediaPaths.filter(filename => /\.(?:mp4|ts)$/iu.test(filename))).toHaveLength(summary.videoCount);
     db.prepare(`INSERT OR IGNORE INTO folders(id,slug,name,folder_path,role) VALUES(700,'review-folder','review',?,'carousel_source')`).run(targetRelative);
     db.prepare(`INSERT OR IGNORE INTO posts(id,folder_id,source_path,post_type,sort_timestamp) VALUES(701,700,?,'carousel',1700000000000)`).run(targetRelative);
     for (const [index, filename] of mediaPaths.sort().entries()) {
-      const content = await fs.readFile(filename), stat = await fs.stat(filename), metadata = await sharp(filename).metadata();
+      const video = /\.(?:mp4|ts)$/iu.test(filename);
+      const mimeType = video ? path.extname(filename).toLowerCase() === '.ts' ? 'video/mp2t' : 'video/mp4' : 'image/jpeg';
+      const content = await fs.readFile(filename), stat = await fs.stat(filename), metadata = video ? { width: 16, height: 9 } : await sharp(filename).metadata();
       const relative = path.relative(canonicalLibrary, await fs.realpath(filename)).replace(/\\/g, '/');
       db.prepare(`INSERT OR IGNORE INTO images(id,folder_id,filename,extension,relative_path,absolute_path,file_size,width,height,
-        mime_type,checksum_or_fingerprint,mtime_ms,first_seen_at,sort_timestamp,thumbnail_path,preview_path)
-        VALUES(?,700,?,?,?,?,?,?,?,'image/jpeg',?,?,'2024-01-01',1700000000000,?,?)`)
+        media_type,mime_type,checksum_or_fingerprint,mtime_ms,first_seen_at,sort_timestamp,thumbnail_path,preview_path)
+        VALUES(?,700,?,?,?,?,?,?,?,?,?,?,?,'2024-01-01',1700000000000,?,?)`)
         .run(800 + index, path.basename(filename), path.extname(filename), relative, filename, content.length,
-          metadata.width!, metadata.height!, hash(content), stat.mtimeMs, `thumb-${index}.webp`, `preview-${index}.webp`);
+          metadata.width!, metadata.height!, video ? 'video' : 'image', mimeType, hash(content), stat.mtimeMs, `thumb-${index}.webp`, `preview-${index}.webp`);
       db.prepare('INSERT OR IGNORE INTO post_items(post_id,image_id,position) VALUES(701,?,?)').run(800 + index, index + 1);
     }
     db.prepare(`INSERT OR IGNORE INTO archive_catalog_local_creator_folders(id,creator_id,root_path,relative_path,absolute_path,folder_name,
@@ -133,8 +152,8 @@ async function makeFixture(members: Record<string, Buffer>, options: { scanFailu
       .run(libraryRoot, creatorName, path.join(libraryRoot, creatorName), creatorName);
     db.prepare(`INSERT OR IGNORE INTO archive_catalog_local_works(id,local_creator_folder_id,work_id,post_id,relative_path,absolute_path,folder_name,
       parsed_source_order,image_count,video_count,total_bytes,match_status,match_method,is_active,scanned_at)
-      VALUES(501,500,1,701,?,?,?,7,?,0,?,'matched','synthetic',1,'2024-01-01')`)
-      .run(targetRelative, row.target_path, path.basename(row.target_path), summary.imageCount, summary.totalBytes);
+      VALUES(501,500,1,701,?,?,?,7,?,?,?,'matched','synthetic',1,'2024-01-01')`)
+      .run(targetRelative, row.target_path, path.basename(row.target_path), summary.imageCount, summary.videoCount, summary.totalBytes);
     db.exec('UPDATE archive_catalog_works SET primary_local_work_id=501 WHERE id=1');
     db.exec("UPDATE archive_catalog_download_tasks SET status='ingested' WHERE id=1");
     return { scanRunId: 123, scanStatus: 'completed', scanError: null };
@@ -212,6 +231,83 @@ async function removableFixture(options: { scanFailures?: number } = {}) {
 }
 
 describe.sequential('explicit Stage3 review recovery', () => {
+  it.each(['clip.ts', 'clip.TS'])('admits probe-verified MPEG-TS %s and preserves each original byte-for-byte', async filename => {
+    const probe = mockFfprobe(transportStreamProbe);
+    const video = Buffer.from('synthetic MPEG-TS bytes'), original = Buffer.from('retained synthetic TIFF bytes');
+    const f = await makeFixture({ [filename]: video, 'original.tiff': original }, { normalIngest: true });
+    const job = f.service.getJob(f.jobId);
+    expect(job).toMatchObject({ status: 'ingested' });
+    expect(job.summary).toMatchObject({ imageCount: 0, videoCount: 1, totalMediaCount: 1, totalBytes: video.length, retainedOriginalCount: 1 });
+    expect(await fs.readFile(path.join(job.targetPath!, filename))).toEqual(video);
+    expect(await fs.readFile(path.join(job.targetPath!, RETAINED_ORIGINALS_DIRECTORY, 'original.tiff'))).toEqual(original);
+    expect(await fs.readFile(f.sourcePath, 'utf8')).toBe('synthetic outer archive');
+    expect(f.database.prepare('SELECT filename,media_type FROM images').all()).toEqual([{ filename, media_type: 'video' }]);
+    expect(f.counts).toMatchObject({ outer: 1, inner: 1, scan: 1, recycle: 0 });
+    expectFfprobeCalls(probe);
+  });
+
+  it.each([
+    ['audio-only MPEG-TS', JSON.stringify({ format: { format_name: 'mpegts' }, streams: [{ codec_type: 'audio' }] })],
+    ['a renamed MP4 container', JSON.stringify({ format: { format_name: 'mov,mp4,m4a,3gp,3g2,mj2' }, streams: [{ codec_type: 'video', width: 16, height: 9 }] })],
+    ['a video without dimensions', JSON.stringify({ format: { format_name: 'mpegts' }, streams: [{ codec_type: 'video', width: 0, height: 9 }] })],
+    ['malformed probe JSON', '{broken JSON']
+  ])('keeps %s in review without media success or changing extracted bytes', async (_reason, stdout) => {
+    const probe = mockFfprobe(stdout);
+    const video = Buffer.from('synthetic unverified transport stream'), f = await makeFixture({ 'clip.ts': video });
+    expect(f.service.getJob(f.jobId)).toMatchObject({ status: 'awaiting_review', phase: 'validating', errorCode: 'MEDIA_UNREADABLE' });
+    const plan = await f.service.previewReview(f.request());
+    const retried = await f.service.resumeReview(accepted(plan));
+    expect(retried).toMatchObject({ status: 'awaiting_review', phase: 'validating', errorCode: 'MEDIA_UNREADABLE' });
+    expect(await fs.readFile(path.join(f.levelTwo, 'clip.ts'))).toEqual(video);
+    expect(await fs.readdir(f.libraryRoot)).toEqual([]);
+    expect(f.database.prepare('SELECT COUNT(*) AS n FROM images').get()).toEqual({ n: 0 });
+    expect(f.counts).toMatchObject({ outer: 1, inner: 1, scan: 0, recycle: 0 });
+    expectFfprobeCalls(probe);
+  });
+
+  it.each(['rejected', 'timeout', 'non-zero exit'] as const)('retains an unprobed TS when ffprobe returns %s', async outcome => {
+    const probe = mockFfprobe(transportStreamProbe, 1);
+    if (outcome !== 'non-zero exit') probe.mockRejectedValue(outcome === 'timeout' ? new processRunner.ProcessTimeoutError() : new Error('Synthetic ffprobe launch failure'));
+    const video = Buffer.from('synthetic transport stream probe failure'), f = await makeFixture({ 'clip.ts': video });
+    expect(f.service.getJob(f.jobId)).toMatchObject({ status: 'awaiting_review', phase: 'validating', errorCode: 'MEDIA_UNREADABLE' });
+    const plan = await f.service.previewReview(f.request()), retried = await f.service.resumeReview(accepted(plan));
+    expect(retried).toMatchObject({ status: 'awaiting_review', phase: 'validating', errorCode: 'MEDIA_UNREADABLE' });
+    expect(await fs.readFile(path.join(f.levelTwo, 'clip.ts'))).toEqual(video);
+    expect(await fs.readdir(f.libraryRoot)).toEqual([]);
+    expect(f.database.prepare('SELECT COUNT(*) AS n FROM images').get()).toEqual({ n: 0 });
+    expect(f.counts).toMatchObject({ outer: 1, inner: 1, scan: 0, recycle: 0 });
+    expectFfprobeCalls(probe);
+  });
+
+  it('probes ordinary MP4 through ffprobe without sending its command to the trusted archive tool', async () => {
+    const probe = mockFfprobe('12.5\n'), archiveTool = vi.spyOn(trustedSevenZip, 'run');
+    const video = Buffer.from('synthetic MP4 bytes'), f = await makeFixture({ 'clip.mp4': video }, { normalIngest: true });
+    const job = f.service.getJob(f.jobId);
+    expect(job.status, job.errorDetail ?? '').toBe('ingested');
+    expect(job.summary).toMatchObject({ imageCount: 0, videoCount: 1, totalMediaCount: 1, totalBytes: video.length });
+    expect(await fs.readFile(path.join(job.targetPath!, 'clip.mp4'))).toEqual(video);
+    expectFfprobeCalls(probe, false);
+    expect(archiveTool).not.toHaveBeenCalled();
+  });
+
+  it('resumes a persisted uppercase TS video manifest without re-extracting or changing media identity', async () => {
+    const probe = mockFfprobe(transportStreamProbe);
+    const video = Buffer.from('synthetic uppercase TS bytes'), f = await makeFixture({ 'clip.TS': video }, { interruptCommit: true });
+    const manifestPath = path.join(f.processing, '.staging-move.json'), manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    expect(manifest.files).toMatchObject([{ relativePath: 'clip.TS', kind: 'video' }]);
+    const before = await fs.lstat(path.join(f.processing, 'ready', 'clip.TS'), { bigint: true });
+    const result = await f.restart().runJob(f.jobId);
+    expect(result.status, result.errorDetail ?? '').toBe('ingested');
+    expect(result.summary).toMatchObject({ imageCount: 0, videoCount: 1, totalMediaCount: 1, totalBytes: video.length });
+    expect(JSON.parse(await fs.readFile(manifestPath, 'utf8'))).toEqual(manifest);
+    expect(await fs.readFile(path.join(result.targetPath!, 'clip.TS'))).toEqual(video);
+    const after = await fs.lstat(path.join(result.targetPath!, 'clip.TS'), { bigint: true });
+    expect(after.ino).toBe(before.ino); expect(after.dev).toBe(before.dev);
+    expect(f.counts).toMatchObject({ outer: 1, inner: 1, scan: 1, recycle: 0 });
+    expect(f.database.prepare('SELECT COUNT(*) AS n FROM local_ingest_jobs').get()).toEqual({ n: 1 });
+    expectFfprobeCalls(probe);
+  });
+
   it('excludes exact known JPG ads before decoding and preserves them through ordinary cleanup', async () => {
     const cover = await jpeg(), normalJpeg = await jpeg();
     const members = { 'cover.jpg': cover, '492.jpeg': normalJpeg,

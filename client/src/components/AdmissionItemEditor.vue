@@ -3,7 +3,7 @@
     <div class="item-heading"><div><small>{{ item.group }} · {{ admissionGroups[item.group] }}</small><h3>{{ item.displayTitle }}</h3><p class="path">{{ item.sourceRelativePath }}</p></div><span>{{ item.summary.images }} 图 · {{ item.summary.videos }} 视频<small>{{ mediaSize(item.summary.bytes) }} · {{ item.summary.other }} 附件 / 其他</small></span></div>
     <p v-if="item.group==='A'" class="hint">目前未找到已有作品候选，不等于已证明从未收录。可查找已有作品；确认独立时仍可选择新作品。</p>
     <ul v-if="item.reviewIssues?.length" class="review-issues" aria-label="本项核对原因"><li v-for="issue in item.reviewIssues" :key="issue">{{ admissionReviewIssueLabels[issue] }}</li></ul>
-    <p v-for="warning in item.conflicts" :key="warning" class="warning">{{ warning==='target exists'?'目标路径已占用，不能覆盖；请核对现有目录，不要仅靠改名消除提示。':warning }}</p>
+    <template v-for="warning in item.conflicts" :key="warning"><AdmissionErrorNotice v-if="warning.includes('No supported media found; nothing admitted')" :error="warning" /><p v-else class="warning">{{ warning==='target exists'?'目标路径已占用，不能覆盖；请核对现有目录，不要仅靠改名消除提示。':warning }}</p></template>
     <div v-if="item.structureWarnings?.length" class="warning"><strong>目录边界提示</strong><p v-for="warning in item.structureWarnings" :key="warning">{{ warning }}</p><small>先核对是否属于一套；若确认保留整组，可明确选择新独立作品。本页不自动拆合。</small></div>
     <AdmissionCurrentDisposition :disposition="item.currentDisposition" :creator-id="creatorId" />
     <fieldset v-if="!isAdmissionCompletedLater(item)" :disabled="locked">
@@ -48,6 +48,7 @@
 import { ref } from 'vue';
 import AdmissionWorkPicker from './AdmissionWorkPicker.vue';
 import AdmissionCurrentDisposition from './AdmissionCurrentDisposition.vue';
+import AdmissionErrorNotice from './AdmissionErrorNotice.vue';
 import { admissionAction,admissionGroups,admissionMatchLabels,admissionReviewIssueLabels,admissionScopeReviewReason,isAdmissionCompletedLater,isAdmissionSelected,mediaSize,rememberAdmissionAdCancellations,type AdmissionEntry } from '../utils/admission-ui';
 import type { AdmissionAction,AdmissionActionKind,AdmissionItem,AdmissionWork } from '../types/local-admission';
 const props=defineProps<{item:AdmissionItem;creatorId:number;peers:AdmissionEntry[];locked:boolean;acceptExistingVersion:boolean;selectedWork?:AdmissionWork;recycleAds?:boolean}>();

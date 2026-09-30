@@ -30,6 +30,13 @@ cached on disk.
 - `.m4v`
 - `.webm`
 - `.mkv`
+- `.ts` (MPEG-TS video)
+
+TS files must contain a valid video stream in an MPEG-TS container. An audio-only
+stream, a renamed file in another container, or a TypeScript source file does
+not qualify as a video. Originals remain unchanged; album playback uses the
+existing MP4 preview, and reels can fall back to that preview when the browser
+cannot play the original.
 
 ## Output sizes
 

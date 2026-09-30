@@ -1,11 +1,13 @@
 import type { AdmissionBatch, AdmissionExecutionTotals, AdmissionItem } from '../types/local-admission';
 
 const indexingError = 'Scoped media indexing did not complete';
+const noSupportedMediaError = 'No supported media found; nothing admitted';
 const chineseMessageStart = /^\s*[“「（【]?\s*[\u3400-\u9fff]/;
 
 /** Keep raw errors available as evidence, while the visible notice stays in Chinese. */
-export function admissionErrorMessage(error?: string | null, message?: string | null): string {
+export function admissionErrorMessage(error?: string | null, message?: string | null, code?: string): string {
   if (message && chineseMessageStart.test(message)) return message;
+  if (code === 'NO_SUPPORTED_MEDIA' || error?.includes(noSupportedMediaError) || message?.includes(noSupportedMediaError)) return '目录中未找到支持入库的图片或视频，请核对文件格式';
   if (!error && !message) return '';
   if (error?.includes(indexingError) || message?.includes(indexingError)) return '图集索引未完成，请核对异常文件';
   if (error && chineseMessageStart.test(error)) return error;
@@ -13,7 +15,7 @@ export function admissionErrorMessage(error?: string | null, message?: string | 
 }
 
 export function admissionItemError(item: AdmissionItem): string {
-  return admissionErrorMessage(item.lastError, item.errorMessage ?? item.executionIssue?.message);
+  return admissionErrorMessage(item.lastError, item.errorMessage ?? item.executionIssue?.message, item.executionIssue?.code);
 }
 
 export function admissionIssueKind(item: AdmissionItem): 'review' | 'dependency' | 'system' | undefined {

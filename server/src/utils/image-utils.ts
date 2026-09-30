@@ -5,7 +5,7 @@ import type { MediaType } from '../types/models.js';
 import { normalizePath } from './path-utils.js';
 
 export const SUPPORTED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']);
-export const SUPPORTED_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
+export const SUPPORTED_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.ts']);
 
 export const THUMBNAIL_SIZE = 640;
 export const PREVIEW_MAX_WIDTH = 1500;
@@ -71,6 +71,8 @@ export function getMimeTypeFromExtension(extension: string): string {
       return 'video/webm';
     case '.mkv':
       return 'video/x-matroska';
+    case '.ts':
+      return 'video/mp2t';
     default:
       return 'application/octet-stream';
   }

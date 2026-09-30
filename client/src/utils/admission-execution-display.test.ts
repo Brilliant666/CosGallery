@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { mount } from '@vue/test-utils';
+import AdmissionErrorNotice from '../components/AdmissionErrorNotice.vue';
 import type { AdmissionBatch, AdmissionItem } from '../types/local-admission';
-import { admissionErrorMessage, admissionExecutionSummary, admissionIssueKind, admissionItemPhase, admissionQueueNotice } from './admission-execution-display';
+import { admissionErrorMessage, admissionExecutionSummary, admissionIssueKind, admissionItemError, admissionItemPhase, admissionQueueNotice } from './admission-execution-display';
 
 const item = (overrides: Partial<AdmissionItem> = {}): AdmissionItem => ({
   key: 'album', sourceRelativePath: '合成图集', targetPath: 'R:/图库/合成图集', displayTitle: '合成图集', group: 'A',
@@ -16,6 +18,27 @@ describe('local admission execution display', () => {
     expect(admissionErrorMessage('EACCES: permission denied, open 图集甲/001.jpg', 'EACCES: permission denied, open 图集甲/001.jpg')).toBe('入库未完成，请查看技术详情并核对原因');
     expect(admissionErrorMessage('raw English', '磁盘读取失败，请核对权限')).toBe('磁盘读取失败，请核对权限');
     expect(admissionErrorMessage(null)).toBe('');
+  });
+
+  it('explains historical and structured unsupported media failures in Chinese', () => {
+    const raw = 'No supported media found; nothing admitted';
+    const message = '目录中未找到支持入库的图片或视频，请核对文件格式';
+    expect(admissionErrorMessage(raw)).toBe(message);
+    expect(admissionErrorMessage(null, raw)).toBe(message);
+    expect(admissionErrorMessage(null, null, 'NO_SUPPORTED_MEDIA')).toBe(message);
+    const unsupported = item({lastError:'Unsupported media in fixture',executionIssue:{kind:'review',code:'NO_SUPPORTED_MEDIA',message:'Unsupported media'}});
+    expect(admissionItemError(unsupported)).toBe(message);
+    expect(admissionErrorMessage(raw, '目录没有支持的媒体，请先核对内容', 'NO_SUPPORTED_MEDIA')).toBe('目录没有支持的媒体，请先核对内容');
+    expect(admissionQueueNotice(false, [], [{state:'needs_review',error:raw} as AdmissionBatch])).toBe(`队列已暂停：${message}`);
+  });
+
+  it('shows the unsupported media code in Chinese while retaining the original technical evidence', () => {
+    const raw = 'No supported media found; nothing admitted';
+    const wrapper = mount(AdmissionErrorNotice, {props:{error:'Unsupported media in fixture',issue:{kind:'review',code:'NO_SUPPORTED_MEDIA',message:'Unsupported media',detail:raw}}});
+    expect(wrapper.get('[data-test=admission-error-message]').text()).toBe('目录中未找到支持入库的图片或视频，请核对文件格式');
+    expect(wrapper.get('[data-test=admission-error-detail]').text()).toContain(raw);
+    expect(wrapper.get('[data-test=admission-error-detail]').text()).toContain('NO_SUPPORTED_MEDIA');
+    wrapper.unmount();
   });
 
   it('keeps an explicit system failure classified as system even with an indexing error', () => {

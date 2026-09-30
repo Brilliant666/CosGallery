@@ -143,7 +143,7 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
     expect(inspect).not.toHaveBeenCalled();
   });
 
-  it.each(['.mov', '.mkv', '.m4v', '.webm'])('serves %s original GET and HEAD without probing or generating', async extension => {
+  it.each(['.mov', '.mkv', '.m4v', '.webm', '.ts'])('serves %s original GET and HEAD without probing or generating', async extension => {
     const { image, post } = await fixture(extension);
     inspect.mockClear();
     const result = await playback.resolveReelPlayback(post.id);

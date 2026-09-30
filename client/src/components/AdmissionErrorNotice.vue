@@ -14,7 +14,7 @@ import { computed } from 'vue';
 import { admissionErrorMessage } from '../utils/admission-execution-display';
 import type { AdmissionExecutionIssue } from '../types/local-admission';
 const props = defineProps<{ error?: string | null; message?: string | null; issue?: AdmissionExecutionIssue }>();
-const summary = computed(() => admissionErrorMessage(props.error, props.message ?? props.issue?.message));
+const summary = computed(() => admissionErrorMessage(props.error, props.message ?? props.issue?.message, props.issue?.code));
 </script>
 <style scoped>
 .error{color:#bb2938;white-space:pre-wrap;overflow-wrap:anywhere}.technical-detail{white-space:pre-wrap;overflow-wrap:anywhere}details{font-size:.8rem;line-height:1.6}summary{cursor:pointer}

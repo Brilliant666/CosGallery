@@ -4,12 +4,13 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { readMovableImageMetadata } from '../utils/movable-image-metadata.js';
+import { isSupportedVideoFile } from '../utils/image-utils.js';
 import { imageRetentionReason } from '../utils/image-retention-diagnosis.js';
 import { z } from 'zod';
 import { appConfig } from '../config/env.js';
 import { databaseManager } from '../db/database.js';
 import { assertPathInsideLocalIngestRoot } from '../utils/local-ingest-paths.js';
-import { LocalFolderAdmissionService, admissionPlanSchema, inventoryAdmissionDirectory, type AdmissionPlan } from './local-folder-admission-service.js';
+import { LocalFolderAdmissionService, admissionPlanSchema, inventoryAdmissionDirectory, inventoryPlannedDirectory, type AdmissionPlan } from './local-folder-admission-service.js';
 import { LocalIngestService, localIngestService } from './local-ingest-service.js';
 import { normalizeReviewPath } from './local-ingest-review-inventory.js';
 import { reviewPlanHash, type LocalIngestReviewPlan } from './local-ingest-review-plan.js';
@@ -247,7 +248,7 @@ export class LocalReviewWebService {
     const extension = path.extname(relativePath).toLowerCase();
     const file: LocalReviewFile = { relativePath, size, kind: 'other', issue: null, message: '原样保留', allowedActions: [], suggestedAction: null };
     const image = /\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(extension);
-    const video = /\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(extension);
+    const video = isSupportedVideoFile(relativePath) || extension === '.avi';
     if (image) {
       file.kind = 'image';
       const filename = await safePath(root, path.join(root, relativePath));
@@ -507,7 +508,7 @@ export class LocalReviewWebService {
           if (recover.removals.length) await this.folder.recover(recover, async () => {
             this.assertIdle(target, row.creator_id);
             await this.validateRemainingFiles(row, baseline);
-            const current = await inventoryAdmissionDirectory(baseline.root);
+            const current = await inventoryPlannedDirectory(baseline.root, baseline.inventory!);
             const removed = this.db.prepare('SELECT relative_path,source_path FROM local_review_web_file_actions WHERE session_id=?').all(row.id) as Array<{ relative_path: string; source_path: string }>;
             const absent = new Set<string>(); for (const file of removed) if (!await exists(file.source_path)) absent.add(file.relative_path);
             if (!same(current, baseline.inventory!.filter(entry => !absent.has(entry.relativePath)))) throw new LocalReviewError('未批准的目录成员或文件事实变化。');

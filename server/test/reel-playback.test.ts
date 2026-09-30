@@ -138,9 +138,9 @@ describe.sequential('scoped reel playback resolution', () => {
     if (state === 'missing') await expect(fs.stat(output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('offers an unverified WebM original before probing or generating any fallback', async () => {
-    const { post } = await fixture('preview', 'clip.webm');
-    expect(await resolve(post.id)).toMatchObject({ previewReady: false, originalUrl: expect.stringContaining(`/api/reels/${post.id}/original?v=`), originalMimeType: 'video/webm', previewUrl: expect.stringContaining('/previews/clips/clip.mp4?v=') });
+  it.each([['.webm', 'video/webm'], ['.ts', 'video/mp2t']])('offers an unverified %s original before probing or generating any fallback', async (extension, mimeType) => {
+    const { post } = await fixture('preview', `clip${extension}`);
+    expect(await resolve(post.id)).toMatchObject({ previewReady: false, originalUrl: expect.stringContaining(`/api/reels/${post.id}/original?v=`), originalMimeType: mimeType, previewUrl: expect.stringContaining('/previews/clips/clip.mp4?v=') });
     expect(inspect).not.toHaveBeenCalled();
   });
 
