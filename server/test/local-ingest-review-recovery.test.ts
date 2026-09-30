@@ -12,6 +12,7 @@ import { LocalIngestService, type LocalIngestRuntimeDependencies } from '../src/
 import type { LocalIngestReviewPlan, LocalIngestReviewRequest } from '../src/services/local-ingest-review-plan.js';
 import type { LocalIngestSettingsService } from '../src/services/local-ingest-settings-service.js';
 import type { RecycleBinAdapter } from '../src/services/recycle-bin-adapter.js';
+import * as imageMetadata from '../src/utils/movable-image-metadata.js';
 
 const fixtures: Array<{ root: string; database: DatabaseSync }> = [];
 const hash = (data: Buffer | string) => createHash('sha256').update(data).digest('hex').toUpperCase();
@@ -526,11 +527,59 @@ describe.sequential('explicit Stage3 review recovery', () => {
     expect(f.counts.scan).toBe(2);
   });
 
-  it('does not turn an ordinary JPEG into a retained original just because approval claims pixel_limit', async () => {
+  it.each(['pixel_limit', 'decode_failed'] as const)('does not turn an ordinary JPEG into a retained original just because approval claims %s', async reason => {
     const f = await removableFixture();
-    await expect(f.service.previewReview({ ...f.approvedRequest, retainedFiles: [{ relativePath: 'cover.jpg', reason: 'pixel_limit' }] }))
+    await expect(f.service.previewReview({ ...f.approvedRequest, retainedFiles: [{ relativePath: 'cover.jpg', reason }] }))
       .rejects.toThrow('did not confirm');
     expect(f.service.getJob(f.jobId).summary!.reviewRecovery).toBeUndefined();
+  });
+
+  it.each(['jpg', 'png'])('retains approved undecodable %s bytes outside display counts and replays the same plan', async extension => {
+    const cover = await jpeg(), filename = `broken.${extension}`;
+    const damaged = extension === 'jpg' ? cover.subarray(0, 12) : (await sharp(cover).png().toBuffer()).subarray(0, 24);
+    const f = await makeFixture({ 'nested/cover.jpg': cover, [`nested/${filename}`]: damaged });
+    expect(f.service.getJob(f.jobId).errorCode).toBe('MEDIA_UNREADABLE');
+    const plan = await f.service.previewReview(f.request({ retainedFiles: [{ relativePath: `nested/${filename}`, reason: 'decode_failed' }] }));
+    const completed = await f.service.resumeReview(accepted(plan));
+    expect(completed.status, completed.errorDetail ?? '').toBe('ingested');
+    expect(completed.summary).toMatchObject({ imageCount: 1, totalMediaCount: 1, totalBytes: cover.length,
+      retainedOriginalCount: 1, retainedAttachmentCount: 0, retainedOriginals: { files: [{ relativePath: filename, reason: 'decode_failed', sha256: hash(damaged) }] } });
+    expect(await fs.readFile(path.join(completed.targetPath!, RETAINED_ORIGINALS_DIRECTORY, filename))).toEqual(damaged);
+    expect(await fs.readFile(path.join(f.levelTwo, 'nested', filename))).toEqual(damaged);
+    expect(f.database.prepare('SELECT filename FROM images').all()).toEqual([{ filename: 'cover.jpg' }]);
+    const before = f.row(), counts = { ...f.counts };
+    expect((await f.restart().resumeReview(accepted(plan))).status).toBe('ingested');
+    expect(f.row()).toEqual(before);
+    expect(f.counts).toEqual(counts);
+    expect(f.counts).toMatchObject({ outer: 1, inner: 1, scan: 1, recycle: 0 });
+  });
+
+  it('refuses a corrupt JPEG falsely approved as pixel_limit', async () => {
+    const f = await makeFixture({ 'cover.jpg': await jpeg(), 'broken.jpg': Buffer.from('damaged image') });
+    await expect(f.service.previewReview(f.request({ retainedFiles: [{ relativePath: 'broken.jpg', reason: 'pixel_limit' }] })))
+      .rejects.toThrow('did not confirm');
+    expect(f.service.getJob(f.jobId).summary!.reviewRecovery).toBeUndefined();
+  });
+
+  it.each(['EACCES', 'EBUSY', 'ENOENT', 'ENOMEM'])('rejects %s during confirmation instead of retaining an unverified image', async code => {
+    const f = await makeFixture({ 'cover.jpg': await jpeg(), 'broken.png': Buffer.from('damaged image') });
+    const request = f.request({ retainedFiles: [{ relativePath: 'broken.png', reason: 'decode_failed' }] });
+    const plan = await f.service.previewReview(request);
+    vi.spyOn(imageMetadata, 'readMovableImageMetadata').mockRejectedValue(Object.assign(new Error('Input buffer has corrupt header: operation failed'), { code }));
+    await expect(f.service.previewReview(request)).rejects.toThrow('did not confirm');
+    await expect(f.service.resumeReview(accepted(plan))).rejects.toThrow('did not confirm');
+    expect(f.service.getJob(f.jobId).summary!.reviewRecovery).toBeUndefined();
+    expect(f.counts).toMatchObject({ scan: 0, recycle: 0, inner: 1 });
+    await expect(fs.stat(plan.targetPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects changed undecodable bytes after preview even when the failure reason is unchanged', async () => {
+    const f = await makeFixture({ 'cover.jpg': await jpeg(), 'broken.png': Buffer.from('damaged image') });
+    const plan = await f.service.previewReview(f.request({ retainedFiles: [{ relativePath: 'broken.png', reason: 'decode_failed' }] }));
+    await fs.writeFile(path.join(f.levelTwo, 'broken.png'), 'changed image');
+    await expect(f.service.resumeReview(accepted(plan))).rejects.toThrow();
+    expect(f.service.getJob(f.jobId).summary!.reviewRecovery).toBeUndefined();
+    expect(f.counts.scan).toBe(0);
   });
 
   it('refuses a replaced committed target even when its visible files have the same bytes', async () => {

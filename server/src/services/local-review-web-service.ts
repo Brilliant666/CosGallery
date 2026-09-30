@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { readMovableImageMetadata } from '../utils/movable-image-metadata.js';
+import { imageRetentionReason } from '../utils/image-retention-diagnosis.js';
 import { z } from 'zod';
 import { appConfig } from '../config/env.js';
 import { databaseManager } from '../db/database.js';
@@ -29,7 +30,7 @@ const choiceSchema = z.object({ relativePath: z.string().min(1).transform((value
   catch { context.addIssue({ code: z.ZodIssueCode.custom, message: 'Unsafe review relative path' }); return z.NEVER; }
 }),
   action: z.enum(['retain_original', 'retain_attachment', 'quarantine']),
-  reason: z.enum(['pixel_limit', 'attachment', 'damaged', 'advertisement']) }).strict();
+  reason: z.enum(['pixel_limit', 'decode_failed', 'attachment', 'damaged', 'advertisement']) }).strict();
 export const localReviewExecuteSchema = z.object({ requestKey: key, confirmed: z.literal(true),
   note: z.string().trim().min(1).max(2000), quarantineConfirmed: z.boolean().optional(),
   choices: z.array(choiceSchema).max(2000) }).strict();
@@ -38,10 +39,10 @@ type Confirmation = z.infer<typeof localReviewExecuteSchema>;
 type Status = 'preparing' | 'ready' | 'submitted' | 'running' | 'interrupted' | 'completed' | 'failed';
 type Fingerprint = { size: number; dev: string; ino: string; mtimeNs: string; sha256: string };
 export type LocalReviewFile = { relativePath: string; size: number; kind: 'image' | 'video' | 'attachment' | 'other';
-  issue: 'pixel_limit' | 'attachment' | 'damaged' | 'advertisement_candidate' | 'unsupported' | null;
+  issue: 'pixel_limit' | 'decode_failed' | 'attachment' | 'damaged' | 'advertisement_candidate' | 'unsupported' | null;
   message: string; allowedActions: Choice['action'][]; suggestedAction: Choice['action'] | null;
   fingerprint?: Fingerprint };
-type Baseline = { title: string; root: string; quarantineRoot: string; files: LocalReviewFile[];
+type Baseline = { rulesVersion?: number; title: string; root: string; quarantineRoot: string; files: LocalReviewFile[];
   stage3?: LocalIngestReviewPlan; admission?: AdmissionPlan; contentHash?: string;
   inventory?: Awaited<ReturnType<typeof inventoryAdmissionDirectory>> };
 type Row = { id: string; creator_id: number; target_key: string; target_json: string; request_key: string;
@@ -52,6 +53,7 @@ type Row = { id: string; creator_id: number; target_key: string; target_json: st
 type ActionRow = { relative_path: string; source_path: string; quarantine_path: string;
   fingerprint_json: string; state: 'intent' | 'moved' };
 const active = new Map<string, Promise<void>>();
+const reviewRulesVersion = 2;
 const encoded = (value: unknown) => JSON.stringify(value);
 const same = (left: unknown, right: unknown) => encoded(left) === encoded(right);
 const targetKey = (target: LocalReviewTarget) => target.kind === 'stage3' ? `stage3:${target.jobId}` : `admission:${target.planId}:${target.itemKey}`;
@@ -179,15 +181,45 @@ export class LocalReviewWebService {
 
   get(sessionId: string) {
     const row = this.row(sessionId, true);
+    const target = JSON.parse(row.target_json) as LocalReviewTarget;
+    const continuation = target.kind === 'admission' ? this.db.prepare(`SELECT COUNT(*) totalItems,
+      COALESCE(SUM(CASE WHEN state='completed' THEN 1 ELSE 0 END),0) completedItems,
+      COALESCE(SUM(CASE WHEN state<>'completed' THEN 1 ELSE 0 END),0) pendingItems
+      FROM archive_local_admission_items WHERE plan_id=?`).get(target.planId) as {totalItems:number;completedItems:number;pendingItems:number} : undefined;
     const actions = this.db.prepare(`SELECT COUNT(*) total,SUM(CASE WHEN state='moved' THEN 1 ELSE 0 END) completed
       FROM local_review_web_file_actions WHERE session_id=?`).get(sessionId) as { total: number; completed: number | null };
-    return { sessionId: row.id, creatorId: row.creator_id, target: JSON.parse(row.target_json) as LocalReviewTarget,
+    return { sessionId: row.id, creatorId: row.creator_id, target, continuation,
+      previewNeedsRefresh: !row.choices_json && row.status === 'ready' && this.previewNeedsRefresh(row.id),
       title: row.title, status: row.status, phase: row.phase,
       message: row.error ?? (row.status === 'ready' ? '请选择本次明确处置；未选择的附件保持。' : row.phase),
       totalFiles: row.total_files, issueCount: row.issue_count,
       error: row.error, confirmed: Boolean(row.choices_json), choices: row.choices_json ? JSON.parse(row.choices_json).choices as Choice[] : [],
       result: row.result_json ? JSON.parse(row.result_json) : null, createdAt: row.created_at, updatedAt: row.updated_at,
       completedFileActions: actions.completed ?? 0, fileActionCount: actions.total };
+  }
+
+  private previewNeedsRefresh(sessionId: string) {
+    const stored = this.db.prepare("SELECT json_extract(baseline_json,'$.rulesVersion') version FROM local_review_web_sessions WHERE id=?").get(sessionId);
+    return stored?.version !== reviewRulesVersion;
+  }
+
+  /** Only an explicit refresh may replace unconfirmed preview evidence. */
+  refresh(sessionId: string, requestKey: string) {
+    key.parse(requestKey); const row = this.row(sessionId);
+    if (row.choices_json || row.recovery_json || this.db.prepare('SELECT 1 FROM local_review_web_file_actions WHERE session_id=? LIMIT 1').get(sessionId))
+      throw new LocalReviewError('已确认或已有文件处置的审核不能刷新；请继续原请求。');
+    if (row.status === 'preparing') return this.get(sessionId);
+    if (row.status !== 'ready' || !this.previewNeedsRefresh(sessionId)) throw new LocalReviewError('当前预览不需要更新规则。');
+    const target = localReviewTargetSchema.parse(JSON.parse(row.target_json));
+    const overview = this.target(target, row.creator_id); if (!overview.eligible) throw new LocalReviewError(overview.reason!);
+    this.assertIdle(target, row.creator_id);
+    const changed = this.db.prepare(`UPDATE local_review_web_sessions SET status='preparing',phase='inspecting',owner_pid=?,error=NULL,updated_at=?
+      WHERE id=? AND status='ready' AND choices_json IS NULL AND recovery_json IS NULL AND updated_at=?
+      AND NOT EXISTS(SELECT 1 FROM local_review_web_file_actions WHERE session_id=?)`)
+      .run(process.pid, new Date().toISOString(), sessionId, row.updated_at, sessionId);
+    if (!changed.changes) throw new LocalReviewError('审核状态已变化，请读取最新状态。');
+    this.schedule(sessionId, () => this.inspect(sessionId));
+    return this.get(sessionId);
   }
 
   files(sessionId: string, query: { page?: number; limit?: number; issuesOnly?: boolean } = {}) {
@@ -218,12 +250,19 @@ export class LocalReviewWebService {
     const video = /\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(extension);
     if (image) {
       file.kind = 'image';
-      try { await readMovableImageMetadata(await safePath(root, path.join(root, relativePath))); file.message = '正常媒体，无需额外批准'; }
+      const filename = await safePath(root, path.join(root, relativePath));
+      const before = await fs.lstat(filename, { bigint: true });
+      try { await readMovableImageMetadata(filename); file.message = '正常媒体，无需额外批准'; }
       catch (error) {
+        const after = await fs.lstat(filename, { bigint: true });
+        if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
+          throw new LocalReviewError('解码检查期间文件变化，请保留现场重新核对。');
         const detail = error instanceof Error ? error.message : String(error);
-        file.issue = /Input image exceeds pixel limit/i.test(detail) && ['.jpg', '.jpeg'].includes(extension) ? 'pixel_limit' : 'damaged';
-        file.message = detail; file.allowedActions = file.issue === 'pixel_limit' ? ['retain_original', 'quarantine'] : ['quarantine'];
-        file.suggestedAction = file.issue === 'pixel_limit' ? 'retain_original' : null;
+        const reason = imageRetentionReason(error, filename);
+        if (!reason && !(size === 0 && !(error as NodeJS.ErrnoException)?.code && /^Input (?:Buffer is empty|(?:file|buffer) contains unsupported image format)$/i.test(detail))) throw error;
+        file.issue = size === 0 ? 'damaged' : reason!;
+        file.message = detail; file.allowedActions = size > 0 ? ['retain_original', 'quarantine'] : ['quarantine'];
+        file.suggestedAction = size > 0 ? 'retain_original' : null;
       }
     } else if (video) {
       file.kind = 'video'; file.message = '由原媒体校验继续验证';
@@ -264,6 +303,7 @@ export class LocalReviewWebService {
         contentHash: data.contentHash, inventory };
       for (const file of inventory) if (file.kind !== 'directory') baseline.files.push(await this.classify(baseline.root, file.relativePath, file.size, false));
     }
+    baseline.rulesVersion = reviewRulesVersion;
     this.update(sessionId, { baseline_json: encoded(baseline), title: baseline.title, total_files: baseline.files.length,
       issue_count: baseline.files.filter(file => file.issue !== null).length, status: 'ready', phase: 'ready', owner_pid: null, error: null });
   }
@@ -275,12 +315,13 @@ export class LocalReviewWebService {
       return this.get(sessionId);
     }
     if (row.status !== 'ready' || !row.baseline_json) throw new LocalReviewError('请等待实际文件审核预览完成。');
+    if (this.previewNeedsRefresh(sessionId)) throw new LocalReviewError('审核规则已更新，请按当前规则重新检查后确认。');
     const baseline = JSON.parse(row.baseline_json) as Baseline, seen = new Set<string>();
     for (const choice of confirmation.choices) {
       const file = baseline.files.find(value => value.relativePath === choice.relativePath);
       if (!file || seen.has(choice.relativePath) || !file.allowedActions.includes(choice.action)) throw new LocalReviewError('处置必须对应预览中的具体文件及支持动作。');
       seen.add(choice.relativePath);
-      if (choice.action === 'retain_original' && choice.reason !== 'pixel_limit'
+      if (choice.action === 'retain_original' && (!['pixel_limit', 'decode_failed'].includes(String(file.issue)) || choice.reason !== file.issue)
         || choice.action === 'retain_attachment' && choice.reason !== 'attachment'
         || choice.action === 'quarantine' && (file.issue === 'advertisement_candidate' ? choice.reason !== 'advertisement' : choice.reason !== 'damaged')) throw new LocalReviewError('处置原因与文件问题不符。');
     }
@@ -434,7 +475,7 @@ export class LocalReviewWebService {
           recovery = await this.ingest.previewReview({ jobId: target.jobId,
             removedFiles: confirmation.choices.filter(choice => choice.action === 'quarantine').map(choice => ({ relativePath: choice.relativePath, size: baseline.files.find(file => file.relativePath === choice.relativePath)!.size })),
             retainedFiles: [
-              ...confirmation.choices.filter(choice => choice.action !== 'quarantine').map(choice => ({ relativePath: choice.relativePath, reason: choice.action === 'retain_original' ? 'pixel_limit' as const : 'attachment' as const })),
+              ...confirmation.choices.filter(choice => choice.action !== 'quarantine').map(choice => ({ relativePath: choice.relativePath, reason: choice.action === 'retain_original' ? choice.reason as 'pixel_limit' | 'decode_failed' : 'attachment' as const })),
               ...baseline.files.filter(file => file.issue === 'advertisement_candidate'
                 && !confirmation.choices.some(choice => choice.relativePath === file.relativePath)).map(file => ({ relativePath: file.relativePath, reason: 'attachment' as const }))
             ],
@@ -470,10 +511,11 @@ export class LocalReviewWebService {
             const removed = this.db.prepare('SELECT relative_path,source_path FROM local_review_web_file_actions WHERE session_id=?').all(row.id) as Array<{ relative_path: string; source_path: string }>;
             const absent = new Set<string>(); for (const file of removed) if (!await exists(file.source_path)) absent.add(file.relative_path);
             if (!same(current, baseline.inventory!.filter(entry => !absent.has(entry.relativePath)))) throw new LocalReviewError('未批准的目录成员或文件事实变化。');
-            // Recheck the safety-limit diagnosis immediately before storing its recovery decision.
+            // Recheck the exact diagnosis immediately before storing its recovery decision.
             for (const choice of confirmation.choices.filter(value => value.action === 'retain_original')) {
               const check = await this.classify(baseline.root, choice.relativePath, data.item.manifest.find(file => file.relativePath === choice.relativePath)!.size, false);
-              if (check.issue !== 'pixel_limit') throw new LocalReviewError('当前解码器未确认JPEG像素上限，不授予其他解码例外。');
+              if (check.issue !== choice.reason || !check.allowedActions.includes('retain_original')) throw new LocalReviewError('当前文件不再符合已确认的原件保留原因，请重新核对。');
+              if (!same(check.fingerprint, baseline.files.find(file => file.relativePath === choice.relativePath)!.fingerprint)) throw new LocalReviewError('原件内容自审核预览后变化，未批准保留。');
             }
             this.update(sessionId, { phase: 'preserving_files' });
             await this.moveSelected(row, baseline, confirmation);

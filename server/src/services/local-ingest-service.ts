@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 
 import { readMovableImageMetadata } from '../utils/movable-image-metadata.js';
+import { imageRetentionReason, type ImageRetentionReason } from '../utils/image-retention-diagnosis.js';
 import { isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { inspectReviewFiles, matchReviewInventory, normalizeReviewPath, parseReviewArchiveInventory } from './local-ingest-review-inventory.js';
 import { readReviewRecovery, reviewHash, reviewPlanHash, reviewPlanSchema, reviewRequestSchema, type LocalIngestReviewPlan, type LocalIngestReviewRequest } from './local-ingest-review-plan.js';
@@ -353,7 +354,7 @@ type ValidationSummary = {
     automaticPolicy: 1;
     directory: string;
     count: number;
-    files: Array<{ relativePath: string; size: number; sha256: string; reason?: 'pixel_limit' | 'attachment' }>;
+    files: Array<{ relativePath: string; size: number; sha256: string; reason?: ImageRetentionReason | 'attachment' }>;
     verifiedAt: string;
   };
   reviewRecovery?: { plan: LocalIngestReviewPlan; hash: string; acceptedAt: string };
@@ -1910,12 +1911,14 @@ export class LocalIngestService {
       if (item.reason === 'attachment') {
         if (!['.pdf', '.txt', '.url'].includes(extension)) fail('Only an explicitly retained PDF/TXT/URL attachment is supported');
       } else {
-        if (!['.jpg', '.jpeg'].includes(extension)) fail('Pixel-limit retention requires a JPEG');
-        let pixelLimit = false;
+        let diagnosed: ImageRetentionReason | null = null;
         try { await readMovableImageMetadata(path.join(levelTwo, file!.relativePath)); }
-        catch (error) { pixelLimit = error instanceof Error && /Input image exceeds pixel limit/i.test(error.message); }
-        if (!pixelLimit) fail('Default decoder did not confirm the pixel safety limit; no decode exception granted');
+        catch (error) { diagnosed = imageRetentionReason(error, file!.relativePath); }
+        if (diagnosed !== item.reason) fail('Default decoder did not confirm the approved image retention reason; no decode exception granted');
       }
+      const approvedPath = path.join(levelTwo, file!.relativePath), after = await fs.lstat(approvedPath);
+      if (!after.isFile() || after.isSymbolicLink() || after.size !== file!.size
+        || (await this.hashFile(approvedPath)).toUpperCase() !== file!.sha256.toUpperCase()) fail('Retained file changed during decoder verification');
     }
     const afterSource = await fs.stat(job.source_archive_path);
     if (afterSource.size !== source.size || afterSource.mtimeMs !== source.mtimeMs) fail('Source changed during preview');
@@ -2181,7 +2184,7 @@ export class LocalIngestService {
         ? `来源声明${declaredImages[1]}张；可展示${imageCount}张，另保留${retainedImages}张未支持原件，数量与声明不符`
         : `Declared ${declaredImages[1]} images; extracted ${imageCount}`);
     }
-    if (retainedImages) warnings.push(reviewed ? `${retainedImages}张未支持格式或经明确批准的超限图片原件已保留，暂不支持展示` : `${retainedImages}张 HEIC/HEIF/TIFF 原件已保留，暂不支持展示`);
+    if (retainedImages) warnings.push(reviewed ? `${retainedImages}张未支持格式或经明确批准的超限、无法解码图片原件已保留，暂不支持展示` : `${retainedImages}张 HEIC/HEIF/TIFF 原件已保留，暂不支持展示`);
     if (retainedAttachments) warnings.push(`${retainedAttachments}个经明确批准的PDF/TXT/URL附件已保留，不计入图片/视频或未支持图片数量`);
     if (reviewed?.plan.request.removedFiles.length) warnings.push(`${reviewed.plan.request.removedFiles.length}项已明确批准移除的文件保持缺席，未重新解包恢复`);
     if (declaredVideos && Number(declaredVideos[1]) !== videoCount) warnings.push(`Declared ${declaredVideos[1]} videos; extracted ${videoCount}`);
@@ -2314,7 +2317,9 @@ export class LocalIngestService {
         const approval = reviewed?.plan.request.retainedFiles.find(item => comparableRelativePath(item.relativePath) === comparableRelativePath(reviewedPath));
         const original = reviewed?.plan.files.find(item => comparableRelativePath(item.relativePath) === comparableRelativePath(reviewedPath));
         if (!approval || !original || original.sha256 !== file.sha256.toUpperCase() || original.size !== file.size || file.reason !== approval.reason
-          || (approval.reason === 'attachment' ? !['.pdf', '.txt', '.url'].includes(extension) : !['.jpg', '.jpeg'].includes(extension))) fail();
+          || (approval.reason === 'attachment' ? !['.pdf', '.txt', '.url'].includes(extension)
+            : approval.reason === 'pixel_limit' ? !['.jpg', '.jpeg'].includes(extension)
+              : !IMAGE_EXTENSIONS.has(extension) && !['.bmp', '.avif'].includes(extension))) fail();
       }
       const key = comparableRelativePath(file.relativePath);
       if (keys.has(key)) fail();

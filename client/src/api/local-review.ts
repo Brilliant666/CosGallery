@@ -1,12 +1,12 @@
 import { requestJson } from './http';
 export type LocalReviewTarget = { kind: 'stage3'; jobId: number } | { kind: 'admission'; planId: string; itemKey: string };
 export type LocalReviewAction = 'retain_original' | 'retain_attachment' | 'quarantine';
-export type LocalReviewReason = 'pixel_limit' | 'attachment' | 'damaged' | 'advertisement';
+export type LocalReviewReason = 'pixel_limit' | 'decode_failed' | 'attachment' | 'damaged' | 'advertisement';
 export interface LocalReviewChoice { relativePath: string; action: LocalReviewAction; reason: LocalReviewReason }
 export interface LocalReviewEligibility { target: LocalReviewTarget; creatorId: number; title: string; eligible: boolean; reason: string | null; sessionId: string | null }
 export interface LocalReviewFile {
   relativePath: string; size: number; kind: 'image' | 'video' | 'attachment' | 'other';
-  issue: 'pixel_limit' | 'attachment' | 'damaged' | 'advertisement_candidate' | 'unsupported' | null;
+  issue: 'pixel_limit' | 'decode_failed' | 'attachment' | 'damaged' | 'advertisement_candidate' | 'unsupported' | null;
   allowedActions: LocalReviewAction[]; suggestedAction: LocalReviewAction | null; message?: string;
   preservedAt?: string | null; actionState?: string | null;
 }
@@ -17,6 +17,8 @@ export interface LocalReviewSession {
   status: 'preparing' | 'ready' | 'submitted' | 'running' | 'interrupted' | 'completed' | 'failed';
   totalFiles: number; issueCount: number; error: string | null; confirmed: boolean; choices: LocalReviewChoice[];
   phase: string; message: string; completedFileActions: number; fileActionCount: number;
+  previewNeedsRefresh?: boolean;
+  continuation?: { totalItems: number; completedItems: number; pendingItems: number };
   result: { completed: boolean; message: string; jobId?: number; planId?: string;
     summary?: { images: number; videos: number; retainedOriginals: number; retainedAttachments: number; quarantined: number };
   } | null;
@@ -31,6 +33,7 @@ export function fetchLocalReviewTarget(target: LocalReviewTarget, creatorId: num
 }
 export const createLocalReviewSession = (target: LocalReviewTarget, creatorId: number, requestKey: string) => send<{ sessionId: string; status: 'preparing' }>('/sessions', { target, creatorId, requestKey });
 export const fetchLocalReviewSession = (id: string) => requestJson<LocalReviewSession>(`${root}/sessions/${encodeURIComponent(id)}`);
+export const refreshLocalReviewSession = (id: string, requestKey: string) => send<LocalReviewSession>(`/sessions/${encodeURIComponent(id)}/refresh`, { requestKey });
 export const fetchLocalReviewFiles = (id: string, page = 1, issuesOnly = true) => requestJson<LocalReviewFiles>(`${root}/sessions/${encodeURIComponent(id)}/files?page=${page}&limit=50&issuesOnly=${issuesOnly}`);
 export const executeLocalReview = (id: string, input: LocalReviewExecuteInput) => send<LocalReviewSession>(`/sessions/${encodeURIComponent(id)}/execute`, input);
 export const retryLocalReview = (id: string, requestKey: string) => send<LocalReviewSession>(`/sessions/${encodeURIComponent(id)}/retry`, { requestKey });
