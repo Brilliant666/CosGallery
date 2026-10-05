@@ -55,7 +55,7 @@ type Summary = {key:string;sourceRelativePath:string;targetPath:string;displayTi
 type PreparedPreview={id:string;scope:z.infer<typeof webPreviewSchema>;inputRoot:string;context:Context;items:{summary:Summary;preview:PreviewItem|null}[];titleCandidates:LocalAdmissionTitleCandidates};
 type PreparedExecution={batch:Batch;request:z.infer<typeof webExecuteSchema>;plan:AdmissionPlan|null;saved:Record<string,unknown>[]};
 type Collection={id:string;state:string;created_at:string;updated_at:string;confirmed_json:string|null;error:string|null;owner_pid:number|null;owner_token:string|null};
-const advertisementRulesVersion=2;
+const advertisementRulesVersion=3;
 const legacyScopeReviewReason='旧预览未记录父目录完整范围，请核对新发现目录是否属于本批作品';
 function advertisementCandidates(manifest:PreviewItem['manifest']):Summary['ads'] {
   return manifest.filter(isAdmissionAdvertisementCandidate).map(e=>({relativePath:e.relativePath,size:e.size,
