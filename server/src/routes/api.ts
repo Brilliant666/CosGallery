@@ -47,7 +47,7 @@ import {
 } from '../services/folder-share-service.js';
 import { ReelQueueExpiredError } from '../services/reel-queue.js';
 import { galleryService } from '../services/gallery-service.js';
-import { ReelPlaybackError, resolveReelPlayback, resolveReelMediaPlayback } from '../services/reel-playback-service.js';
+import { ReelPlaybackError, resolveReelPlayback, resolveReelMediaPlayback, resolveGalleryMediaPlayback } from '../services/reel-playback-service.js';
 import { serveReelMedia, serveReelPreview } from './reel-media.js';
 import { SourceIndexOutdatedError } from '../utils/derivative-version.js';
 import { requireCapability } from '../middleware/auth-protection.js';
@@ -836,29 +836,32 @@ router.get('/reels', (request, response) => {
   }
 });
 
-router.get('/reels/media/:id/playback', async (request, response) => {
-  const params = imageIdSchema.parse(request.params);
-  const query = z.object({ fallback: z.literal('1').optional() }).strict().parse(request.query);
-  authService.setNoStoreHeaders(response);
-  try {
-    response.json(await resolveReelMediaPlayback(params.id, query.fallback === '1'));
-  } catch (error) {
-    if (error instanceof ReelPlaybackError || error instanceof SourceIndexOutdatedError) {
-      response.status(error instanceof ReelPlaybackError ? error.status : 409).json({ code: error.code, message: error.message });
-    } else {
-      sendUnexpectedError(response, error);
-    }
-  }
-});
-router.get('/reels/media/:id/preview', async (request, response) => {
-  const params = imageIdSchema.parse(request.params);
-  await serveReelPreview(request, response, params.id);
-});
-for (const kind of ['original', 'remux'] as const) {
-  router.get(`/reels/media/:id/${kind}`, async (request, response) => {
+for (const scope of ['reels', 'gallery'] as const) {
+  router.get(`/${scope}/media/:id/playback`, async (request, response) => {
     const params = imageIdSchema.parse(request.params);
-    await serveReelMedia(request, response, params.id, kind, 'media');
+    const query = z.object({ fallback: z.literal('1').optional() }).strict().parse(request.query);
+    authService.setNoStoreHeaders(response);
+    try {
+      const resolve = scope === 'gallery' ? resolveGalleryMediaPlayback : resolveReelMediaPlayback;
+      response.json(await resolve(params.id, query.fallback === '1'));
+    } catch (error) {
+      if (error instanceof ReelPlaybackError || error instanceof SourceIndexOutdatedError) {
+        response.status(error instanceof ReelPlaybackError ? error.status : 409).json({ code: error.code, message: error.message });
+      } else {
+        sendUnexpectedError(response, error);
+      }
+    }
   });
+  router.get(`/${scope}/media/:id/preview`, async (request, response) => {
+    const params = imageIdSchema.parse(request.params);
+    await serveReelPreview(request, response, params.id, scope === 'gallery' ? 'gallery-media' : 'media');
+  });
+  for (const kind of ['original', 'remux'] as const) {
+    router.get(`/${scope}/media/:id/${kind}`, async (request, response) => {
+      const params = imageIdSchema.parse(request.params);
+      await serveReelMedia(request, response, params.id, kind, scope === 'gallery' ? 'gallery-media' : 'media');
+    });
+  }
 }
 
 router.get('/reels/:id/playback', async (request, response) => {

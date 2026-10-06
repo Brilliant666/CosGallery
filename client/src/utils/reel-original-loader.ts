@@ -7,7 +7,7 @@ export class ReelOriginalLoader extends VideoProviderLoader {
   override canPlay(source: Src): boolean {
     if (typeof source.src !== 'string' || !source.type.startsWith('video/')) return false;
     const url = new URL(source.src, window.location.href);
-    return url.origin === window.location.origin && /^\/api\/reels\/(?:media\/)?\d+\/original$/.test(url.pathname);
+    return url.origin === window.location.origin && /^\/api\/(?:reels\/(?:media\/)?|gallery\/media\/)\d+\/original$/.test(url.pathname);
   }
 
   override async load(context: MediaContext) {

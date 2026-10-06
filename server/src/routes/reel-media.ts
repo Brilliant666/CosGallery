@@ -5,7 +5,7 @@ import { appConfig } from '../config/env.js';
 import { derivativeSourceVersion, hasCurrentDerivative, SourceIndexOutdatedError, writeVersionedDerivative } from '../utils/derivative-version.js';
 import { applyDerivativeErrorHeaders, applyProtectedMediaHeaders } from '../utils/media-response.js';
 import { resolveOriginalPath } from '../utils/media-paths.js';
-import { getReelOriginalVersion, getReelRemuxLocation, getReelSourceSnapshot, ReelPlaybackError, resolveReelPlayback } from '../services/reel-playback-service.js';
+import { getReelOriginalVersion, getReelRemuxLocation, getReelSourceSnapshot, ReelPlaybackError, resolveReelPlayback, type VideoPlaybackIdentity } from '../services/reel-playback-service.js';
 import { writeReelRemux } from '../services/reel-video-format.js';
 import { withDerivativeOutputRead } from '../services/derivative-output-lock.js';
 import { mediaGenerationLimit } from '../services/media-generation-queue.js';
@@ -16,9 +16,9 @@ import { serveDerivativeForImage } from './lazy-derivatives.js';
 
 const remuxes = new Map<string, Promise<void>>();
 
-export async function serveReelPreview(request:express.Request,response:express.Response,mediaId:number):Promise<void>{
+export async function serveReelPreview(request:express.Request,response:express.Response,mediaId:number,identity: Exclude<VideoPlaybackIdentity, 'post'> = 'media'):Promise<void>{
   try {
-    const {initial,version,recheck}=getReelSourceSnapshot(mediaId,'media');
+    const {initial,version,recheck}=getReelSourceSnapshot(mediaId,identity);
     if(request.query.v!==version)throw stale();
     await serveDerivativeForImage(response,initial,'preview',{validate:recheck});
   } catch(error){
@@ -49,7 +49,7 @@ function sendFile(response: express.Response, source: string, mime: string, remu
   }));
 }
 
-export async function serveReelMedia(request: express.Request, response: express.Response, id: number, kind: 'original' | 'remux', identity: 'post'|'media'='post'): Promise<void> {
+export async function serveReelMedia(request: express.Request, response: express.Response, id: number, kind: 'original' | 'remux', identity: VideoPlaybackIdentity = 'post'): Promise<void> {
   try {
     const { initial, recheck } = getReelSourceSnapshot(id,identity);
     const remux = getReelRemuxLocation(initial);

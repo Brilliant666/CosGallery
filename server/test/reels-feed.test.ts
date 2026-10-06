@@ -211,6 +211,8 @@ describe.sequential('reels feed', () => {
       expect(imageRepository.listVisibleVideoCandidatesByIds([video.id])).toEqual([]);
       expect(imageRepository.countVisibleVideoCandidates()).toBe(0);
       expect(postRepository.getReelPlaybackMedia(video.id)).toBeUndefined();
+      if (mode === 'secondary') expect(postRepository.getGalleryPlaybackMedia(video.id)?.id).toBe(video.id);
+      else expect(postRepository.getGalleryPlaybackMedia(video.id)).toBeUndefined();
       expect(postRepository.getReelPlaybackImage(post.id)).toBeUndefined();
       expect(postRepository.getVisiblePostSummary(post.id)).toBeUndefined();
     } finally { db.exec('ROLLBACK'); }

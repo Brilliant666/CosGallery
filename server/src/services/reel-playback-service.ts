@@ -25,10 +25,14 @@ export interface ReelPlayback {
   remuxReady: boolean;
 }
 
+export type VideoPlaybackIdentity = 'post' | 'media' | 'gallery-media';
+
 const notFound = () => new ReelPlaybackError(404, 'REEL_NOT_FOUND', 'Reel media not found.');
 
-export function getReelSourceSnapshot(id: number, identity: 'post'|'media' = 'post') {
-  const lookup=()=>identity==='media'?postRepository.getReelPlaybackMedia(id):postRepository.getReelPlaybackImage(id);
+export function getReelSourceSnapshot(id: number, identity: VideoPlaybackIdentity = 'post') {
+  const lookup = () => identity === 'gallery-media'
+    ? postRepository.getGalleryPlaybackMedia(id)
+    : identity === 'media' ? postRepository.getReelPlaybackMedia(id) : postRepository.getReelPlaybackImage(id);
   const initial = lookup();
   if (!initial) throw notFound();
   const version = imageDerivativeVersion(initial, 'preview');
@@ -51,9 +55,10 @@ export function getReelSourceSnapshot(id: number, identity: 'post'|'media' = 'po
 // Resolve one active post only. Browser capability is not inferred from an old
 // indexed strategy: every supported original gets an attempt without ffprobe.
 // Only an explicit fallback lookup probes remux eligibility after that attempt.
-export async function resolveReelPlayback(id: number, inspectFallback = false, identity: 'post'|'media' = 'post'): Promise<ReelPlayback> {
+export async function resolveReelPlayback(id: number, inspectFallback = false, identity: VideoPlaybackIdentity = 'post'): Promise<ReelPlayback> {
   const { initial, version, recheck } = getReelSourceSnapshot(id,identity);
-  const base=identity==='media'?`/api/reels/media/${id}`:`/api/reels/${id}`;
+  const base = identity === 'gallery-media' ? `/api/gallery/media/${id}`
+    : identity === 'media' ? `/api/reels/media/${id}` : `/api/reels/${id}`;
   let output: string;
   try { output = safeJoin(appConfig.previewsDir, initial.preview_path); } catch { throw notFound(); }
   // Readiness is advisory metadata, so never wait for a transcode's output lease.
@@ -61,7 +66,7 @@ export async function resolveReelPlayback(id: number, inspectFallback = false, i
   const previewReady = await hasCurrentDerivative(output, version);
   recheck();
   const result: ReelPlayback = {
-    previewUrl: identity==='media'?`${base}/preview?v=${version}`:`/previews/${initial.preview_path.split('/').map(encodeURIComponent).join('/')}?v=${version}`,
+    previewUrl: identity !== 'post' ? `${base}/preview?v=${version}` : `/previews/${initial.preview_path.split('/').map(encodeURIComponent).join('/')}?v=${version}`,
     previewReady,
     originalUrl: null,
     originalMimeType: null,
@@ -124,4 +129,8 @@ export async function resolveReelPlayback(id: number, inspectFallback = false, i
 
 export function resolveReelMediaPlayback(mediaId:number,inspectFallback=false):Promise<ReelPlayback> {
   return resolveReelPlayback(mediaId,inspectFallback,'media');
+}
+
+export function resolveGalleryMediaPlayback(mediaId: number, inspectFallback = false): Promise<ReelPlayback> {
+  return resolveReelPlayback(mediaId, inspectFallback, 'gallery-media');
 }

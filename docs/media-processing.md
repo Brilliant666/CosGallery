@@ -218,7 +218,7 @@ the whole feed.
 Only a requested fallback probes the file, with bounded concurrency
 and a bounded source-version cache; no database migration or bulk scan occurs.
 Remux files have a separate recipe/version and live under
-`PREVIEWS_DIR/.reel-remux/`. They are served only through the scoped Reels media
+`PREVIEWS_DIR/.reel-remux/`. They are served only through the scoped playback media
 route, with visibility, identity, version, Range and output-lock checks. Valid
 existing caches remain usable when the source is offline or probing fails.
 Cold remuxes and cold previews finish before delivery; subsequent requests reuse
@@ -231,7 +231,27 @@ An unsupported-source error first checks that the original endpoint is healthy
 Network errors, cancellation, buffering, user pause and autoplay restrictions
 do not automatically trigger conversion. After a playback error, users can
 retry or explicitly choose **使用兼容预览（可能需要转换）**. Autoplay rejection
-instead asks for a click. The ordinary gallery/Viewer playback policy is unchanged.
+instead asks for a click.
+
+### Videos inside gallery works
+
+Private gallery carousels and single-video Work viewers use this same
+original-first, on-demand compatibility policy for **videos**. Photos retain
+their cached preview path. Opening a video does not request or probe a cold
+video preview simply to find out whether it exists.
+
+The gallery resolves a media Image ID through
+`/api/gallery/media/:id/playback`; returned original, remux and preview URLs
+use the same gallery scope. This preserves readable secondary local copies
+without adding them to the Reels feed. Trashed media, deleted Posts and removed
+Works remain inaccessible. Share viewers keep their existing share-authorized
+media endpoints.
+
+Clicking the video surface or the playback button uses the same playback state.
+Horizontal dragging changes the selected item without also toggling playback;
+ordinary clicks remain available. The viewer displays source preparation,
+compatibility conversion, autoplay rejection and retry states, and uses the
+indexed video duration until the browser reports it.
 
 ## GIF handling
 

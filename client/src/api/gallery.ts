@@ -78,6 +78,10 @@ export function fetchReelPlayback(mediaId: number, signal?: AbortSignal, fallbac
   return requestJson<ReelPlayback>(`/api/reels/media/${mediaId}/playback${fallback ? '?fallback=1' : ''}`, { signal });
 }
 
+export function fetchGalleryVideoPlayback(mediaId: number, signal?: AbortSignal, fallback = false) {
+  return requestJson<ReelPlayback>(`/api/gallery/media/${mediaId}/playback${fallback ? '?fallback=1' : ''}`, { signal });
+}
+
 export function fetchReels(
   page = 1,
   limit = 6,

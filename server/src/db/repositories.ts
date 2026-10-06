@@ -254,12 +254,13 @@ const WORK_DISPLAY_TITLE_SQL = `(SELECT work.display_title FROM archive_catalog_
   JOIN archive_catalog_works work ON work.id=copy.work_id
   WHERE copy.post_id=posts.id AND copy.identity_policy IN ('manual','local_only') ORDER BY copy.id LIMIT 1)`;
 
-const VISIBLE_REEL_WHERE_SQL = `${VISIBLE_POST_WHERE_SQL}
+const READABLE_VIDEO_WHERE_SQL = `${READABLE_POST_WHERE_SQL}
   AND images.media_type='video' AND images.is_deleted=0 AND images.is_trashed=0
   AND LOWER(images.filename) NOT IN (${COVER_FILENAME_SQL})
   AND NOT EXISTS(SELECT 1 FROM media_trash_entries recycled WHERE recycled.image_id=images.id AND recycled.active=1)
   AND NOT EXISTS(SELECT 1 FROM archive_catalog_local_works copy JOIN work_removals removed ON removed.work_id=copy.work_id WHERE copy.post_id=posts.id)
   AND NOT EXISTS(SELECT 1 FROM work_removal_paths held JOIN work_removals removed ON removed.work_id=held.work_id WHERE held.relative_path=posts.source_path)`;
+const VISIBLE_REEL_WHERE_SQL = `${READABLE_VIDEO_WHERE_SQL} AND ${DEFAULT_WORK_COPY_SQL}`;
 const REEL_FROM_SQL = `FROM images JOIN post_items ON post_items.image_id=images.id
   JOIN posts ON posts.id=post_items.post_id JOIN folders ON folders.id=posts.folder_id`;
 const REEL_ORDER_SQL = 'images.sort_timestamp DESC, images.id DESC';
@@ -1862,6 +1863,13 @@ export const postRepository = {
   getReelPlaybackMedia(mediaId: number): (ImageRecord & {post_id:number;media_position:number}) | undefined {
     return database.prepare(`SELECT images.*,posts.id AS post_id,post_items.position AS media_position ${REEL_FROM_SQL}
       WHERE images.id=? AND ${VISIBLE_REEL_WHERE_SQL}`).get(mediaId) as (ImageRecord & {post_id:number;media_position:number}) | undefined;
+  },
+
+  // Direct gallery links retain readable secondary copies. Reels keep their
+  // separate primary-copy presentation contract.
+  getGalleryPlaybackMedia(mediaId: number): (ImageRecord & {post_id:number;media_position:number}) | undefined {
+    return database.prepare(`SELECT images.*,posts.id AS post_id,post_items.position AS media_position ${REEL_FROM_SQL}
+      WHERE images.id=? AND ${READABLE_VIDEO_WHERE_SQL}`).get(mediaId) as (ImageRecord & {post_id:number;media_position:number}) | undefined;
   },
 
   countVisibleVideoCandidates(): number {

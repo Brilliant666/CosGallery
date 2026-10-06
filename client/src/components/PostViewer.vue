@@ -133,13 +133,14 @@
         @pointerup="handleMediaPointerup"
       >
         <CarouselMediaStage
-          v-if="isCarousel"
+          v-if="usesMediaStage"
           v-model="carouselIndex"
           class="viewer__media-shell"
           :items="orderedItems"
           :follow-active-aspect-ratio="isWorkContext"
           :style="isWorkContext ? { '--work-media-ratio': Math.max(activeMediaWidth, 1) / Math.max(activeMediaHeight, 1) } : undefined"
           prefer-preview
+          native-video-playback
           :retry-while="appStore.isScanning"
           loading="eager"
           :muted="appStore.videoMuted"
@@ -667,7 +668,10 @@ import { folderReadingRoute } from '../utils/work-gallery';
 
   const WHEEL_NAVIGATION_THRESHOLD = 72
   const NAVIGATION_COOLDOWN_MS = 320
-  const isCarousel = computed(() => props.image?.postType === 'carousel' && orderedItems.value.length > 1)
+  const usesMediaStage = computed(() =>
+    (props.image?.postType === 'carousel' && orderedItems.value.length > 1) ||
+    (isWorkContext.value && orderedItems.value.length === 1 && orderedItems.value[0]?.mediaType === 'video')
+  )
   const activeMediaImageId = computed(() => activeMediaItem.value?.imageId ?? props.image?.id ?? null)
   const activeMediaFilename = computed(() => activeMediaItem.value?.filename ?? props.image?.filename ?? '')
   const activeMediaRelativePath = computed(() => activeMediaItem.value?.relativePath ?? props.image?.relativePath ?? '')
@@ -1263,25 +1267,25 @@ import { folderReadingRoute } from '../utils/work-gallery';
   }
 
   function handleMediaPointerdown(event: PointerEvent) {
-    if (isCarousel.value) return
+    if (usesMediaStage.value) return
     swipeNavigation.onPointerdown(event)
     handleMediaSheetRevealPointerdown(event)
   }
 
   function handleMediaPointermove(event: PointerEvent) {
-    if (isCarousel.value) return
+    if (usesMediaStage.value) return
     swipeNavigation.onPointermove(event)
     handleMediaSheetRevealPointermove(event)
   }
 
   async function handleMediaPointerup(event: PointerEvent) {
-    if (isCarousel.value) return
+    if (usesMediaStage.value) return
     await swipeNavigation.onPointerup(event)
     await handleMediaSheetRevealPointerup(event)
   }
 
   function handleMediaPointercancel(event: PointerEvent) {
-    if (isCarousel.value) return
+    if (usesMediaStage.value) return
     swipeNavigation.onPointercancel()
     handleMediaSheetRevealPointercancel(event)
   }

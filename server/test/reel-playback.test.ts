@@ -369,9 +369,25 @@ describe.sequential('scoped reel playback resolution', () => {
     expect((await request('/reels/media/:id/playback',video.image.id)).status).toHaveBeenCalledWith(404);
   });
 
-  it('uses existing API viewer authentication without requiring admin', () => {
+  it.each(['single', 'carousel'] as const)('resolves gallery %s videos through the API without probing or generating', async postType => {
+    const {image,post} = await fixture();
+    database.connection.prepare('UPDATE posts SET post_type=? WHERE id=?').run(postType,post.id);
+    const layer = apiRouter.stack.find(layer => layer.route?.path === '/gallery/media/:id/playback');
+    const handler = layer!.route!.stack.at(-1)!.handle;
+    const result = response();
+    await handler({params:{id:String(image.id)},query:{}} as unknown as express.Request,result as unknown as express.Response,vi.fn());
+    expect(result.json.mock.calls[0][0]).toMatchObject({
+      originalUrl:expect.stringContaining(`/api/gallery/media/${image.id}/original?v=`),
+      previewUrl:expect.stringContaining(`/api/gallery/media/${image.id}/preview?v=`),
+      remuxUrl:null,previewReady:false
+    });
+    expect(result.setHeader).toHaveBeenCalledWith('Cache-Control','no-store');
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it.each(['/reels/1/playback', '/gallery/media/1/playback', '/gallery/media/1/original', '/gallery/media/1/remux', '/gallery/media/1/preview'])('uses existing API viewer authentication for %s without requiring admin', route => {
     auth.setAdminPassword('playback-password-123');
-    const req = { method: 'GET', path: '/reels/1/playback', get: () => undefined } as unknown as express.Request;
+    const req = { method: 'GET', path: route, get: () => undefined } as unknown as express.Request;
     const blocked = response();
     const next = vi.fn();
     protection(req, blocked as unknown as express.Response, next);

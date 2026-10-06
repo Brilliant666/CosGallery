@@ -10,6 +10,11 @@ describe('scoped native reel loader', () => {
     const loader = new ReelOriginalLoader();
     expect(loader.canPlay({ src: '/api/reels/7/original?v=abc', type: 'video/quicktime' })).toBe(true);
     expect(loader.canPlay({ src: '/api/reels/media/70/original?v=abc', type: 'video/quicktime' })).toBe(true);
+    expect(loader.canPlay({ src: '/api/gallery/media/70/original?v=abc', type: 'video/x-matroska' })).toBe(true);
+    expect(loader.canPlay({ src: 'https://example.invalid/api/gallery/media/70/original', type: 'video/quicktime' })).toBe(false);
+    expect(loader.canPlay({ src: '/api/gallery/media/70/preview', type: 'video/mp4' })).toBe(false);
+    expect(loader.canPlay({ src: '/api/gallery/media/70/remux', type: 'video/mp4' })).toBe(false);
+    expect(loader.canPlay({ src: '/api/gallery/70/original', type: 'video/quicktime' })).toBe(false);
     expect(loader.canPlay({ src: 'https://example.invalid/api/reels/media/70/original', type: 'video/quicktime' })).toBe(false);
     expect(loader.canPlay({ src: '/api/reels/media/70/remux', type: 'video/mp4' })).toBe(false);
     expect(loader.canPlay({ src: 'https://example.invalid/api/reels/7/original', type: 'video/quicktime' })).toBe(false);
