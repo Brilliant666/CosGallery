@@ -733,6 +733,8 @@ viewer surfaces.
 
 Returns a currently visible primary post as `CanonicalWorkSummary`: its representative cover, full `itemCount`, `imageCount`, `videoCount`, and `representation: "summary"`, without `mediaItems`. Reels uses this endpoint when adding a work-level favorite so a selected video cannot replace the owning album's cover or counts. Removed or unavailable posts return `404`; normal viewer authentication applies.
 
+Canonical work summaries may also include `cardCover: { imageId, filename, thumbnailUrl }` when the work contains exactly one image and one video and both are available. The canonical creator's work cards use this image's versioned cached thumbnail. Top-level media fields still describe the original first member; detail order, media-type filtering and work IDs are unchanged. Other work shapes or unavailable members omit `cardCover`, so clients use the existing thumbnail fallback.
+
 ### `GET /api/posts/:id`
 
 Query parameters:

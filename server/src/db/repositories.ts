@@ -331,6 +331,44 @@ const BASE_POST_SELECT_SQL = `
   LEFT JOIN places ON places.id = posts.place_id
 `;
 
+type WorkSummaryProjection = Pick<CanonicalWorkSummary, 'itemCount' | 'imageCount' | 'videoCount' | 'cardCover'>;
+
+function readWorkSummaryProjections(postIds: number[]): Map<number, WorkSummaryProjection> {
+  if (postIds.length === 0) return new Map();
+  // Keep the existing member counts and first-media contract. Only an exact,
+  // available image/video pair gets a separate card cover, scoped to this page.
+  const rows = database.prepare(`
+    WITH member_counts AS (
+      SELECT pi.post_id AS postId, COUNT(*) AS itemCount,
+        SUM(CASE WHEN img.media_type = 'image' THEN 1 ELSE 0 END) AS imageCount,
+        SUM(CASE WHEN img.media_type = 'video' THEN 1 ELSE 0 END) AS videoCount,
+        MAX(CASE WHEN img.media_type = 'image' THEN img.id END) AS imageId,
+        SUM(CASE WHEN img.is_deleted != 0 OR img.is_trashed != 0 OR EXISTS (
+          SELECT 1 FROM media_trash_entries recycled WHERE recycled.image_id = img.id AND recycled.active = 1
+        ) THEN 1 ELSE 0 END) AS unavailableCount
+      FROM post_items pi JOIN images img ON img.id = pi.image_id
+      WHERE pi.post_id IN (${postIds.map(() => '?').join(', ')})
+      GROUP BY pi.post_id
+    )
+    SELECT counts.postId, counts.itemCount, counts.imageCount, counts.videoCount,
+      cover.id AS coverImageId, cover.filename AS coverFilename, cover.thumbnail_path AS coverThumbnailPath,
+      CASE WHEN cover.id IS NOT NULL THEN printf('%lld:%lld', cover.file_size, round(cover.mtime_ms)) END AS coverSourceVersion
+    FROM member_counts counts
+    LEFT JOIN images cover ON counts.itemCount = 2 AND counts.imageCount = 1 AND counts.videoCount = 1
+      AND counts.unavailableCount = 0 AND cover.id = counts.imageId
+  `).all(...postIds) as Array<{
+    postId: number; itemCount: number; imageCount: number; videoCount: number;
+    coverImageId: number | null; coverFilename: string | null; coverThumbnailPath: string | null; coverSourceVersion: string | null;
+  }>;
+  return new Map(rows.map(row => [row.postId, {
+    itemCount: row.itemCount, imageCount: row.imageCount, videoCount: row.videoCount,
+    ...(row.coverImageId === null ? {} : { cardCover: {
+      imageId: row.coverImageId, filename: row.coverFilename!, thumbnailUrl: row.coverThumbnailPath!,
+      derivativeSourceVersion: row.coverSourceVersion!
+    } })
+  }]));
+}
+
 const FOLDER_SUMMARY_SELECT_SQL = `
   SELECT
     folders.*,
@@ -1853,10 +1891,7 @@ export const postRepository = {
       AND NOT EXISTS(SELECT 1 FROM work_removal_paths held JOIN work_removals removed ON removed.work_id=held.work_id WHERE held.relative_path=posts.source_path)`)
       .get(postId) as Omit<FeedPost, 'mediaItems'> | undefined;
     if (!row) return undefined;
-    const counts = database.prepare(`SELECT COUNT(*) AS itemCount,
-      SUM(CASE WHEN img.media_type='image' THEN 1 ELSE 0 END) AS imageCount,
-      SUM(CASE WHEN img.media_type='video' THEN 1 ELSE 0 END) AS videoCount
-      FROM post_items pi JOIN images img ON img.id=pi.image_id WHERE pi.post_id=?`).get(postId) as {itemCount:number;imageCount:number;videoCount:number};
+    const counts = readWorkSummaryProjections([postId]).get(postId)!;
     return {...row, ...counts, representation:'summary', isAnimated:Boolean(row.isAnimated)};
   },
 
@@ -2649,20 +2684,7 @@ export const canonicalCreatorGalleryRepository = {
     ).all(...params) as unknown as Omit<FeedPost, 'mediaItems'>[];
     if (posts.length === 0) return [];
 
-    // Read only counts for the selected page. The cover is already selected by
-    // BASE_POST_SELECT_SQL; do not fetch/parse every image's URLs or EXIF here.
-    // Join exactly the same media rows as hydratePostItems to retain its counts.
-    const counts = database.prepare(`
-      SELECT pi.post_id AS postId, COUNT(*) AS itemCount,
-        SUM(CASE WHEN img.media_type = 'image' THEN 1 ELSE 0 END) AS imageCount,
-        SUM(CASE WHEN img.media_type = 'video' THEN 1 ELSE 0 END) AS videoCount
-      FROM post_items pi JOIN images img ON img.id = pi.image_id
-      WHERE pi.post_id IN (${posts.map(() => '?').join(', ')})
-      GROUP BY pi.post_id
-    `).all(...posts.map(post => post.id)) as Array<{
-      postId: number; itemCount: number; imageCount: number; videoCount: number;
-    }>;
-    const countsByPost = new Map(counts.map(row => [row.postId, row]));
+    const countsByPost = readWorkSummaryProjections(posts.map(post => post.id));
     return posts.map(post => {
       const count = countsByPost.get(post.id);
       const itemCount = count?.itemCount ?? 0;
@@ -2673,7 +2695,8 @@ export const canonicalCreatorGalleryRepository = {
         isAnimated: Boolean(post.isAnimated),
         itemCount,
         imageCount: count?.imageCount ?? 0,
-        videoCount: count?.videoCount ?? 0
+        videoCount: count?.videoCount ?? 0,
+        ...(count?.cardCover ? { cardCover: count.cardCover } : {})
       };
     });
   },

@@ -135,6 +135,7 @@ export interface CanonicalWorkSummary extends Omit<FeedItem, 'mediaItems'> {
   itemCount: number;
   imageCount: number;
   videoCount: number;
+  cardCover?: { imageId: number; filename: string; thumbnailUrl: string };
   mediaItems?: never;
 }
 

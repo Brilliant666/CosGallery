@@ -73,7 +73,7 @@ describe.sequential('canonical creator work summaries', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it('does not hydrate media for a full page; batches counts with only one extra query', () => {
+  it('does not hydrate media for a full page; batches counts and optional covers in one extra query', () => {
     const hydrate = vi.spyOn(repos.postRepository, 'hydratePostItems');
     const prepare = vi.spyOn(db.connection, 'prepare');
     try {
@@ -83,18 +83,20 @@ describe.sequential('canonical creator work summaries', () => {
       expect(prepare).toHaveBeenCalledTimes(2);
       const statements = prepare.mock.calls.map(call => call[0]);
       expect(statements.every(sql => !sql.includes('exif_json'))).toBe(true);
-      // Only the representative member supplies cache provenance, not complete
-      // media evidence for every card. The other query remains counts-only.
+      // Preserve first-media fields; the other query is scoped to this page
+      // and projects only a card image plus its thumbnail provenance.
       expect(statements[0]).toContain('post_items.position = 1');
       expect(statements[0]).toContain("printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion");
       expect(statements[0]!.match(/file_size/g)).toHaveLength(1);
-      expect(statements[1]).not.toContain('file_size');
-      expect(statements[1]).not.toContain('thumbnail_path');
+      expect(statements[1]).toContain('cover.file_size');
+      expect(statements[1]).toContain('cover.thumbnail_path');
+      expect(statements[1]).toContain(`WHERE pi.post_id IN (${page.map(() => '?').join(', ')})`);
       expect(statements[1]).not.toContain('preview_path');
       expect(statements[1]).toContain('GROUP BY pi.post_id');
       for (const item of page) {
         expect(item).toMatchObject({ representation: 'summary', itemCount: 3, imageCount: 2, videoCount: 1 });
         expect(item).not.toHaveProperty('mediaItems');
+        expect(item).not.toHaveProperty('cardCover');
         for (const key of ['fileSize', 'relativePath', 'exif', 'exifJson', 'originalUrl']) expect(item).not.toHaveProperty(key);
       }
     } finally { hydrate.mockRestore(); prepare.mockRestore(); }
@@ -215,4 +217,80 @@ describe.sequential('canonical creator work summaries', () => {
       } finally { db.connection.prepare(`UPDATE posts SET ${column}=0 WHERE id=?`).run(postId); }
     }
   });
+  async function withCardMembers(types: Array<'image' | 'video'>, inspect: (postId: number, mediaIds: number[]) => Promise<void> | void) {
+    const postId = postIds.at(-1)!;
+    const ids = mediaByPost.get(postId)!.slice(0, types.length);
+    db.connection.exec('BEGIN');
+    try {
+      db.connection.prepare('DELETE FROM post_items WHERE post_id=? AND position>?').run(postId, types.length);
+      for (const [index, type] of types.entries()) {
+        db.connection.prepare('UPDATE images SET media_type=?,filename=?,thumbnail_path=?,file_size=?,mtime_ms=? WHERE id=?')
+          .run(type, type === 'image' ? '封面 image.jpg' : 'clip.mp4', `covers/card cover ${ids[index]}.webp`, 500 + index, 12345 + index, ids[index]!);
+      }
+      await inspect(postId, ids);
+    } finally { db.connection.exec('ROLLBACK'); }
+  }
+
+  it.each([['image','video'], ['video','image']] as const)('uses a separate image card cover for %s then %s without changing the first media or detail order', async (first, second) => {
+    await withCardMembers([first,second], async (postId, ids) => {
+      const imageId = ids[first === 'image' ? 0 : 1]!;
+      const { imageDerivativeVersion } = await import('../src/utils/derivative-version.js');
+      const image = repos.imageRepository.getById(imageId)!;
+      const expectedCover = {
+        imageId, filename:'封面 image.jpg',
+        thumbnailUrl:`/thumbnails/covers/card%20cover%20${imageId}.webp?v=${imageDerivativeVersion(image,'thumbnail')}`
+      };
+      const orderBefore = db.connection.prepare('SELECT image_id,position FROM post_items WHERE post_id=? ORDER BY position').all(postId);
+      const response = await requestTestApp(app,'GET','/api/cos-gallery/creators/1/works?page=1&limit=1');
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({page:1,limit:1,total:27,hasMore:true});
+      expect(response.body.items).toHaveLength(1);
+      const card = response.body.items[0]!;
+      expect(card).toMatchObject({id:postId,mediaType:first,itemCount:2,imageCount:1,videoCount:1,cardCover:expectedCover});
+      expect(card.cardCover).toEqual(expectedCover);
+      expect(card.cardCover).not.toHaveProperty('derivativeSourceVersion');
+      expect(card).not.toHaveProperty('mediaItems');
+      const summary = await requestTestApp(app,'GET',`/api/posts/${postId}/summary`);
+      expect(summary.body.cardCover).toEqual(expectedCover);
+      const detail = gallery.getCanonicalCreatorWork(1,postId)!;
+      expect(detail).not.toHaveProperty('cardCover');
+      expect(detail.mediaItems!.map(item=>item.imageId)).toEqual(ids);
+      expect(detail.mediaItems!.map(item=>item.mediaType)).toEqual([first,second]);
+      for (const key of ['filename','thumbnailUrl','previewUrl','mediaType','width','height','durationMs'] as const) expect(card[key]).toEqual(detail[key]);
+      expect(repos.canonicalCreatorGalleryRepository.listVisibleWorks(1,1,100,'newest',first).some(item=>item.id===postId)).toBe(true);
+      expect(repos.canonicalCreatorGalleryRepository.listVisibleWorks(1,1,100,'newest',second).some(item=>item.id===postId)).toBe(false);
+      expect(db.connection.prepare('SELECT image_id,position FROM post_items WHERE post_id=? ORDER BY position').all(postId)).toEqual(orderBefore);
+      db.connection.prepare('UPDATE images SET mtime_ms=mtime_ms+1000 WHERE id=?').run(imageId);
+      expect(gallery.getPostSummary(postId)!.cardCover!.thumbnailUrl).not.toBe(expectedCover.thumbnailUrl);
+    });
+  });
+
+  it.each([
+    ['image'], ['video'], ['image','image'], ['video','video'], ['image','video','image'], ['video','image','video']
+  ] as Array<Array<'image' | 'video'>>)('omits the override for ordinary member types %j', async (...types) => {
+    await withCardMembers(types, postId => {
+      const card = repos.canonicalCreatorGalleryRepository.listVisibleWorks(1,1,1)[0]!;
+      expect(card.id).toBe(postId);
+      expect(card).not.toHaveProperty('cardCover');
+      expect(gallery.getPostSummary(postId)).not.toHaveProperty('cardCover');
+    });
+  });
+
+  it.each(['image','video'].flatMap(type => ['deleted','trashed','active-recycle'].map(state=>({type,state}))))('omits a card override when its $type member is $state', async ({type,state}) => {
+    await withCardMembers(['video','image'], (postId,ids) => {
+      const index = type === 'video' ? 0 : 1;
+      const imageId = ids[index]!;
+      if (state === 'active-recycle') {
+        db.connection.prepare(`INSERT INTO media_trash_entries(image_id,post_id,original_position,original_post_type,trashed_at,active)
+          VALUES(?,?,?,'carousel','2026-01-01',1)`).run(imageId,postId,index+1);
+      } else {
+        db.connection.prepare(`UPDATE images SET ${state==='deleted'?'is_deleted':'is_trashed'}=1 WHERE id=?`).run(imageId);
+      }
+      const card = repos.canonicalCreatorGalleryRepository.listVisibleWorks(1,1,1)[0]!;
+      expect(card).toMatchObject({id:postId,itemCount:2,imageCount:1,videoCount:1});
+      expect(card).not.toHaveProperty('cardCover');
+      expect(gallery.getPostSummary(postId)).not.toHaveProperty('cardCover');
+    });
+  });
+
 });

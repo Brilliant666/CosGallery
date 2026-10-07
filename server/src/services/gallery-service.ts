@@ -461,8 +461,15 @@ function mapFeedImage(image: IndexedFeedImage): FeedImage {
 }
 
 function mapCanonicalWorkSummary(item: CanonicalWorkSummary): CanonicalWorkSummary {
+  const { cardCover, ...firstMedia } = item;
   return {
-    ...mapFeedCover(item),
+    ...mapFeedCover(firstMedia),
+    ...(cardCover ? { cardCover: {
+      imageId: cardCover.imageId,
+      filename: cardCover.filename,
+      thumbnailUrl: toPublicMediaUrl('/thumbnails', cardCover.thumbnailUrl,
+        mediaVersion({ derivativeSourceVersion: cardCover.derivativeSourceVersion, mediaType: 'image' }, 'thumbnail'))
+    } } : {}),
     representation: 'summary',
     postType: item.postType,
     itemCount: item.itemCount,

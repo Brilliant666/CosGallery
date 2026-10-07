@@ -340,6 +340,13 @@ export interface FeedPost extends FeedImage {
 // A creator card is not an authorized, fully loaded album. Detail endpoints
 // retain FeedPost/PostDetail and their complete position-ordered mediaItems.
 export interface CanonicalWorkSummary extends Omit<FeedPost, 'mediaItems'> {
+  cardCover?: {
+    imageId: number;
+    filename: string;
+    thumbnailUrl: string;
+    /** Internal cache provenance; stripped when mapping the API response. */
+    derivativeSourceVersion?: string;
+  };
   representation: 'summary';
   imageCount: number;
   videoCount: number;
