@@ -68,7 +68,7 @@ describe.sequential('Local ingest durable staging moves', () => {
     expect((await readStagingMoveManifest(f.binding))!.summary).toEqual(f.summary);
   });
 
-  it.each(['492.jpg', '009-01.JPG', '252.jpg', '252.PNG', '101.1.jpg', '扫码获取更多列表网红COS作品写真.png'])('keeps exact known image advertisement %s recoverable outside staged media', async name => {
+  it.each(['492.jpg', '009-01.JPG', '252.jpg', '252.PNG', '101.1.jpg', '3211.jpg', '扫码获取更多列表网红COS作品写真.png'])('keeps exact known image advertisement %s recoverable outside staged media', async name => {
     const f = await fixture(name, 'advertisement');
     await finishStagingMove(f.binding, f.manifest);
     expect(await fs.readFile(path.join(f.contentRoot, name), 'utf8')).toBe('first image');

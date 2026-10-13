@@ -2,6 +2,14 @@ import {describe,it,expect} from 'vitest';
 import {isKnownAdvertisementImage,isAdmissionAdvertisementCandidate} from '../src/utils/local-advertisements.js';
 
 describe('user-confirmed global image advertisement filenames',()=>{
+  it('recognizes 3211.jpg exactly without matching similar filenames or directories',()=>{
+    for(const relativePath of ['3211.jpg','nested/3211.JPG','nested\\3211.jpg']){
+      expect(isKnownAdvertisementImage(relativePath)).toBe(true);
+      expect(isAdmissionAdvertisementCandidate({relativePath,kind:'image'})).toBe(true);
+    }
+    for(const filename of ['3211.png','3211.jpeg','3211 (1).jpg','03211.jpg','32110.jpg','3211.jpg.png'])expect(isKnownAdvertisementImage(filename)).toBe(false);
+    expect(isAdmissionAdvertisementCandidate({relativePath:'3211.jpg',kind:'directory'})).toBe(false);
+  });
   it('recognizes 101.1.jpg exactly without expanding to similar names or directories',()=>{
     for(const relativePath of ['101.1.jpg','nested/101.1.JPG','nested\\101.1.jpg']){
       expect(isKnownAdvertisementImage(relativePath)).toBe(true);
