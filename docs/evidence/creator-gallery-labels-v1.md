@@ -41,14 +41,14 @@ PR：[52](https://github.com/Brilliant666/CosGallery/pull/52)；分支：`codex/
 
 | 证据 | 结果及边界 |
 | --- | --- |
-| 服务端 8 个专项文件，122 项 | 通过。覆盖标签／版本冲突、匿名与 viewer 读取和写入限制、规范博主去重与分页、删除联动、迁移引导及既有相关路由 |
+| 服务端 9 个专项文件，144 项 | 通过。覆盖标签／版本冲突、匿名与 viewer 读取和写入限制、规范博主去重与分页、删除联动、迁移引导、作品摘要及既有相关路由 |
 | 前端相关专项，70 项 | 通过。覆盖图库与 API 参数、四项导航、多选弹窗与冲突、返回路径、身份切换缓存、App 初始化及路由守卫 |
 | `build:server`、`build:client` | 通过。客户端保留既有大包体积提示，未作为测试失败 |
 | 隔离 Chromium 交互 | 通过。1440×900 与 390×844；四项菜单、分级切换与清理、进入博主后返回、点击图库重置、多选保存、409 后重新读取、匿名与 viewer 旧链接、移动布局 |
 | 独立静态审阅 | 发现并修复退出管理员时旧喜欢子集可能残留的问题；审阅范围内无未关闭发现。此项不冒充动态测试 |
 | Git diff 格式 | 交付前核对；远端 Verify 结果按最终 PR Head 另行确认 |
 
-服务端专项文件：`creator-gallery-labels.test.ts`、`creator-gallery-label-routes.test.ts`、`library-joint-filter.test.ts`、`managed-creator-deletion.test.ts`、`migration-bootstrap.test.ts`、`manual-creator-alias-migration.test.ts`、`cos-gallery-mode.test.ts`、`managed-creator-routes.test.ts`。
+服务端专项文件：`creator-gallery-labels.test.ts`、`creator-gallery-label-routes.test.ts`、`library-joint-filter.test.ts`、`managed-creator-deletion.test.ts`、`migration-bootstrap.test.ts`、`manual-creator-alias-migration.test.ts`、`cos-gallery-mode.test.ts`、`managed-creator-routes.test.ts`、`canonical-work-summary.test.ts`。首次完整 CI 发现作品摘要的旧测试仍要求默认公开响应包含偏好；已改为同时检查公开字段省略与管理员读取，保留原聚合及限定查询断言，专项重新通过。
 
 浏览器脚本为 `client/test/creator-gallery-browser.mjs`，使用真实 Vue 页面组件与合成 API；普通应用入口、真实登录和正式后端未纳入本次浏览器检查。脚本在独立临时端口运行，API 请求仅允许合成端点，结束后关闭测试浏览器和 Vite。没有连接 4141/4241。
 
@@ -56,6 +56,6 @@ PR：[52](https://github.com/Brilliant666/CosGallery/pull/52)；分支：`codex/
 
 ## 版本与交付边界
 
-应用基线是已合并 PR50 的 main `3e31d560739798b23be47934d9da505e31397a73`；PR52 研究提交 `20ebb08` 之后开始本次实现。最终候选 Head 与 Node 22／24 Verify 结果以 PR 检查及阶段记录为准。既有 Verify 工作流运行完整客户端测试、开发服务边界检查、治理检查和双端构建；服务端 122 项专项属于本地证据。
+应用基线是已合并 PR50 的 main `3e31d560739798b23be47934d9da505e31397a73`；PR52 研究提交 `20ebb08` 之后开始本次实现。最终候选 Head 与 Node 22／24 Verify 结果以 PR 检查及阶段记录为准。既有 Verify 工作流运行完整服务端与迁移测试、完整客户端测试、开发服务边界检查、治理检查和双端构建；本地专项与远端完整检查分别记录。
 
 本阶段完成候选实现及验证，保持 Draft，等待用户验收。没有合并、安装到 4141、启动或停止正式服务，也没有执行正式数据库迁移、修改真实分类或操作媒体。新增 000031 仅在隔离测试库验证；旧运行快照中的 000030 不等于本轮重新核对的运行事实。
