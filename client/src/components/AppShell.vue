@@ -12,7 +12,7 @@
     <!-- Sidebar: fixed on desktop, hidden on mobile -->
     <SidebarNav class="hidden md:flex fixed top-0 left-0 h-screen z-30" />
     <!-- Content: margin-left matches sidebar width on desktop -->
-    <div class="app-shell__content flex flex-1 min-h-screen min-w-0 flex-col md:ml-[4.85rem]">
+    <div class="app-shell__content flex flex-1 min-h-screen min-w-0 flex-col">
       <TopNav />
       <main
         class="app-shell__main flex-1 min-h-0"
@@ -133,6 +133,9 @@ onMounted(() => {
 
 <style scoped>
 .app-shell {
+  --sidebar-collapsed-width: 4.85rem;
+  --sidebar-expanded-width: 15rem;
+  --sidebar-width-duration: 220ms;
   --mobile-safe-area-bottom: 0px;
   --mobile-bottom-nav-height: calc(3.55rem + var(--mobile-safe-area-bottom));
 }
@@ -165,6 +168,28 @@ onMounted(() => {
 
 .app-shell__scan-status {
   bottom: 1rem;
+}
+
+/* Match the desktop sidebar's generated md breakpoint and expansion states. */
+@media (min-width: 48rem) {
+  .app-shell__content {
+    margin-left: var(--sidebar-collapsed-width);
+    transition: margin-left var(--sidebar-width-duration) ease;
+  }
+
+  .app-shell:has(> .sidebar:is(:hover, :focus-within, .sidebar--library-open)) > .app-shell__content {
+    margin-left: var(--sidebar-expanded-width);
+  }
+
+  .app-shell:has(> .sidebar--library-open) > .app-shell__content {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell {
+    --sidebar-width-duration: 0ms;
+  }
 }
 
 @media (max-width: 767.98px) {

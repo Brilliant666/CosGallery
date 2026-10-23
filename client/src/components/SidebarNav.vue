@@ -1,6 +1,6 @@
 <template>
   <aside
-    class="sidebar group flex h-full w-[4.85rem] flex-col overflow-visible bg-bg px-[0.95rem] py-5 text-text transition-[width] duration-220 ease hover:w-60 focus-within:w-60"
+    class="sidebar group flex h-full flex-col overflow-visible bg-bg px-[0.95rem] py-5 text-text"
     :class="{ 'sidebar--library-open': libraryMenuOpen }"
   >
     <RouterLink
@@ -524,12 +524,17 @@ import { folderReadingRoute } from '../utils/work-gallery';
 </script>
 
 <style scoped>
+.sidebar {
+  width: var(--sidebar-collapsed-width, 4.85rem);
+  transition: width var(--sidebar-width-duration, 220ms) ease;
+}
+
 /* Keep the complete menu usable after the pointer leaves its toggle, and
    expand before a keyboard user tabs from the gallery link to the arrow. */
 .sidebar:hover,
 .sidebar:focus-within,
 .sidebar--library-open {
-  width: 15rem;
+  width: var(--sidebar-expanded-width, 15rem);
 }
 .sidebar--library-open {
   transition: none;
