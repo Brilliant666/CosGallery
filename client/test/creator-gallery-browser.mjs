@@ -16,7 +16,7 @@ for (const key of ['DATA_ROOT', 'DB_DIR', 'GALLERY_ROOT', 'THUMBNAILS_DIR', 'PRE
   mkdirSync(process.env[key]);
 }
 process.env.VITEST = 'true';
-const output = path.resolve('../.mocks/pr52/browser');
+const output = path.resolve(process.env.CREATOR_GALLERY_BROWSER_OUTPUT ?? '../.mocks/pr52/browser');
 mkdirSync(output, { recursive: true });
 const server = await createServer({ server: { host: '127.0.0.1', port: 0, strictPort: false, open: false }, logLevel: 'error' });
 const errors = [], unexpected = [], requests = [], evidence = [];
@@ -93,9 +93,19 @@ try {
     assert.equal(await cards().count(), count);
   };
   const nav = variant => page.locator(`.library-nav--${variant}`);
-  const saveScreenshot = async (name, action) => {
-    await page.screenshot({ path: path.join(output, `${name}.png`), animations: 'disabled' });
+  const saveScreenshot = async (name, action, target = page) => {
+    await target.screenshot({ path: path.join(output, `${name}.png`), animations: 'disabled' });
     evidence.push({ screenshot: `${name}.png`, url: page.url(), viewport: page.viewportSize(), time: new Date().toISOString(), role: new URL(page.url()).searchParams.get('role') ?? 'admin', action });
+  };
+  const expectOpenMenu = async variant => {
+    assert.equal(await nav(variant).getByRole('button', { name: '展开图库分类' }).getAttribute('aria-expanded'), 'true');
+    assert(await nav(variant).locator('.library-nav__menu').isVisible());
+    assert.equal(await nav(variant).locator('.library-nav__category-icon').count(), 4);
+    assert(await nav(variant).locator('.library-nav__category-icon').evaluateAll(icons => icons.every(icon => {
+      const style = getComputedStyle(icon);
+      return icon.getAttribute('aria-hidden') === 'true' && style.maskImage !== 'none'
+        && icon.getBoundingClientRect().width > 0 && icon.getBoundingClientRect().height > 0;
+    })), 'Each category must render its decorative Fluent icon');
   };
   await page.goto(`${entry}#/library`);
   await cards().first().waitFor();
@@ -105,7 +115,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('main h2').length === 1);
   await page.locator('.sidebar').hover();
   await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
-  assert.deepEqual(await nav('desktop').locator('.library-nav__menu a').allTextContents(), ['Cosplay', '写真', '自拍', '福利姬']);
+  assert.deepEqual((await nav('desktop').locator('.library-nav__menu a').allTextContents()).map(text => text.trim()), ['Cosplay', '写真', '自拍', '福利姬']);
   await page.mouse.move(600, 200);
   await page.waitForFunction(() => document.querySelector('.sidebar').getBoundingClientRect().width >= 200);
   assert(await nav('desktop').locator('.library-nav__menu').evaluate(menu => {
@@ -121,10 +131,34 @@ try {
   assert.equal(await page.getByRole('group', { name: '分级', exact: true }).count(), 0);
   assert.equal(await page.locator('main').getByText('R18', { exact: true }).count(), 0);
   await expectCards(1);
+  await expectOpenMenu('desktop');
+  for (const [label, title] of [['portrait', '写真'], ['selfie', '自拍'], ['fuliji', '福利姬'], ['cosplay', 'Cosplay'], ['cosplay', 'Cosplay']]) {
+    await nav('desktop').getByRole('link', { name: title, exact: true }).click();
+    await page.waitForURL(url => url.hash.includes(`label=${label}`));
+    await page.getByRole('heading', { level: 1, name: `${title}图库`, exact: true }).waitFor();
+    await expectOpenMenu('desktop');
+    assert.equal((await nav('desktop').locator('a[aria-current="page"]').textContent()).trim(), title);
+  }
+  await saveScreenshot('desktop-selected-menu', '连续切换四分类并重复选择后菜单保持展开，Cosplay选中');
+  await saveScreenshot('desktop-menu-detail', '四分类中性图标和缩进导航细节', nav('desktop'));
+  await nav('desktop').getByRole('button', { name: '展开图库分类' }).focus();
+  await page.keyboard.press('Tab');
+  assert(await nav('desktop').getByRole('link', { name: 'Cosplay', exact: true }).evaluate(link => link === document.activeElement && getComputedStyle(link).outlineStyle !== 'none'));
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
+  await saveScreenshot('desktop-dark-menu', '暗色主题下分类选中和键盘焦点清晰可见');
+  await page.evaluate(() => document.documentElement.dataset.theme = 'light');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.keyboard.press('Escape');
+  assert.equal(await nav('desktop').locator('.library-nav__menu').count(), 0);
+  assert(await nav('desktop').getByRole('button', { name: '展开图库分类' }).evaluate(button => button === document.activeElement));
+  await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
+  await expectOpenMenu('desktop');
   const categoryRequest = requests.filter(r => r.path === '/api/cos-gallery/creators' && r.query.label === 'cosplay').at(-1);
   assert(categoryRequest && !categoryRequest.query.contentRating);
   await page.getByRole('heading', { name: '合成博主甲', exact: true }).click();
   await page.waitForURL(/library\/1/);
+  assert.equal(await nav('desktop').locator('.library-nav__menu').count(), 0);
   await page.getByRole('heading', { level: 1, name: '合成博主甲', exact: true }).waitFor();
   await page.goBack();
   await page.waitForURL(/label=cosplay/);
@@ -166,22 +200,39 @@ try {
   await page.goto(`${entry}?role=anonymous#/library`);
   await cards().first().waitFor();
   await nav('mobile').getByRole('button', { name: '展开图库分类' }).click();
-  assert.deepEqual(await nav('mobile').locator('.library-nav__menu a').allTextContents(), ['Cosplay', '写真', '自拍', '福利姬']);
+  assert.deepEqual((await nav('mobile').locator('.library-nav__menu a').allTextContents()).map(text => text.trim()), ['Cosplay', '写真', '自拍', '福利姬']);
+  await expectOpenMenu('mobile');
   await saveScreenshot('mobile-menu', '390宽匿名图库展开四项分类菜单');
   await nav('mobile').getByRole('link', { name: '福利姬', exact: true }).click();
   await page.getByRole('heading', { level: 1, name: /福利姬/ }).waitFor();
   await expectCards(1);
+  await expectOpenMenu('mobile');
   assert.equal(await page.getByRole('group', { name: '分级', exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
-  await saveScreenshot('mobile-category', '390宽匿名福利姬分类，只显示匹配博主，无分级与管理偏好');
+  assert(await nav('mobile').evaluate(node => {
+    const menu = node.querySelector('.library-nav__menu').getBoundingClientRect();
+    const bar = node.closest('.mobile-nav__bar').getBoundingClientRect();
+    return menu.bottom < bar.top && menu.left >= 0 && menu.right <= innerWidth;
+  }), 'The open mobile category menu must leave the bottom navigation accessible');
+  await saveScreenshot('mobile-category', '390宽匿名福利姬分类保持菜单展开，底部导航仍可操作');
+  await nav('mobile').getByRole('button', { name: '展开图库分类' }).click();
+  assert.equal(await nav('mobile').locator('.library-nav__menu').count(), 0);
+  await nav('mobile').getByRole('button', { name: '展开图库分类' }).click();
+  await expectOpenMenu('mobile');
+  await page.locator('.mobile-nav').getByRole('link', { name: '搜索', exact: true }).click();
+  await page.waitForURL(url => url.hash === '#/explore');
+  assert.equal(await nav('mobile').locator('.library-nav__menu').count(), 0);
+  await nav('mobile').getByRole('button', { name: '展开图库分类' }).click();
+  await expectOpenMenu('mobile');
   await nav('mobile').getByRole('link', { name: '图库', exact: true }).click();
   await page.waitForURL(url => url.hash === '#/library');
   await page.getByRole('group', { name: '分级', exact: true }).waitFor();
   await expectCards(3);
+  assert.equal(await nav('mobile').locator('.library-nav__menu').count(), 0);
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
   writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, requests, errors, unexpected }, null, 2));
-  console.log(JSON.stringify({ status: 'PASS', output, screenshots: evidence.length, requests: requests.length, scenarios: ['desktop navigation and return', 'four menu options', 'category removes rating', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile layout and all reset'] }));
+  console.log(JSON.stringify({ status: 'PASS', output, screenshots: evidence.length, requests: requests.length, scenarios: ['desktop navigation and return', 'persistent category selections and rendered icons', 'category removes rating', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal'] }));
 } catch (error) {
   for (const context of browser?.contexts() ?? []) for (const page of context.pages()) {
     await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});

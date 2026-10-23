@@ -21,7 +21,8 @@ function become(role: AuthRole) {
 async function setup(path: string, variant: 'desktop' | 'mobile' = 'desktop') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/library', name: 'library', component: CosGalleryHomeView },
-    { path: '/library/:creatorId', name: 'canonical-creator', component: { template: '<div>Creator</div>' } }
+    { path: '/library/:creatorId', name: 'canonical-creator', component: { template: '<div>Creator</div>' } },
+    { path: '/', name: 'home', component: { template: '<div>Home</div>' } }
   ] });
   await router.push(path);
   await router.isReady();
@@ -50,6 +51,8 @@ describe('gallery navigation and public reading state', () => {
     await links[1].trigger('click');
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ label: 'portrait' });
+    expect(toggle.attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('[aria-label="图库分类"] a[aria-current="page"]').text()).toBe('写真');
     expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined, '', 1, 60, undefined, 'portrait');
     expect(wrapper.find('[aria-label="分级"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="creator-rating"]').exists()).toBe(false);
@@ -58,6 +61,8 @@ describe('gallery navigation and public reading state', () => {
     await wrapper.get('a[aria-label="图库"]').trigger('click');
     await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe('/library');
+    expect(toggle.attributes('aria-expanded')).toBe('false');
+    expect(wrapper.find('[aria-label="图库分类"]').exists()).toBe(false);
     expect(wrapper.get('h1').text()).toBe('全部图库');
     expect(wrapper.find('[aria-label="分级"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="creator-rating"]').exists()).toBe(true);
@@ -79,8 +84,53 @@ describe('gallery navigation and public reading state', () => {
     expect(window.scrollTo).toHaveBeenLastCalledWith({ top: 0 });
   });
 
-  it('reports the open state to its sidebar and Escape closes the menu while retaining keyboard focus', async () => {
-    const { wrapper } = await setup('/library');
+  it.each(['desktop', 'mobile'] as const)('%s keeps all four categories available through repeated selections', async variant => {
+    const { wrapper, router } = await setup('/library', variant);
+    const nav = wrapper.getComponent(LibraryNavigation);
+    const toggle = nav.get('button[aria-label="展开图库分类"]');
+    await toggle.trigger('click');
+    const options = [
+      ['cosplay', 'Cosplay', 'i-fluent-person-star-20-regular'],
+      ['portrait', '写真', 'i-fluent-camera-20-regular'],
+      ['selfie', '自拍', 'i-fluent-phone-20-regular'],
+      ['fuliji', '福利姬', 'i-fluent-sparkle-20-regular']
+    ] as const;
+    for (const [value, label, icon] of [...options, options[3]]) {
+      const link = nav.get(`.library-nav__menu a[href="/library?label=${value}"]`);
+      expect(link.text()).toBe(label);
+      expect(link.get('[aria-hidden="true"]').classes()).toContain(icon);
+      await link.trigger('click');
+      await flushPromises();
+      expect(router.currentRoute.value.query).toEqual({ label: value });
+      expect(toggle.attributes('aria-expanded')).toBe('true');
+      expect(nav.get('[aria-current="page"]').text()).toBe(label);
+    }
+    expect(nav.emitted('open-change')).toEqual([[true]]);
+    await toggle.trigger('click');
+    expect(nav.find('[aria-label="图库分类"]').exists()).toBe(false);
+  });
+
+  it.each(['desktop', 'mobile'] as const)('%s closes for outside clicks and routes outside a category list', async variant => {
+    const { wrapper, router } = await setup('/library?label=portrait', variant);
+    const nav = wrapper.getComponent(LibraryNavigation);
+    const toggle = nav.get('button[aria-label="展开图库分类"]');
+    await toggle.trigger('click');
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await flushPromises();
+    expect(toggle.attributes('aria-expanded')).toBe('false');
+    for (const path of ['/library/12?label=portrait', '/library', '/']) {
+      await router.push('/library?label=portrait');
+      await flushPromises();
+      await toggle.trigger('click');
+      await router.push(path);
+      await flushPromises();
+      expect(toggle.attributes('aria-expanded')).toBe('false');
+      expect(nav.find('[aria-label="图库分类"]').exists()).toBe(false);
+    }
+  });
+
+  it.each(['desktop', 'mobile'] as const)('%s reports its open state and Escape closes while retaining keyboard focus', async variant => {
+    const { wrapper } = await setup('/library', variant);
     const nav = wrapper.getComponent(LibraryNavigation);
     const toggle = nav.get('button[aria-label="展开图库分类"]');
     await toggle.trigger('click');
