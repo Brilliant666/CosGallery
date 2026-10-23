@@ -5,13 +5,8 @@
       'grid gap-[4rem] items-start justify-center mx-auto',
       isCompactHomeLayout
         ? 'grid-cols-1 w-full'
-        : 'grid-cols-[minmax(0,39.375rem)_19.9375rem] w-[min(100%,63.3125rem)] md:relative',
+        : 'grid-cols-[minmax(0,39.375rem)_19.9375rem] w-[min(100%,63.3125rem)]',
     ]"
-    :style="
-      isCompactHomeLayout
-        ? undefined
-        : { left: 'calc(var(--desktop-content-compensation) * -1)' }
-    "
   >
     <!-- Main feed column -->
     <div class="min-w-0">

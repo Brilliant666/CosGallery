@@ -37,7 +37,6 @@
       #feda75 360deg);
   --avatar-fallback: linear-gradient(135deg, #ff9e57, #ff5b7f);
   --desktop-sidebar-width: 4.85rem;
-  --desktop-content-compensation: 47px;
 }
 
 :root[data-theme="dark"] {

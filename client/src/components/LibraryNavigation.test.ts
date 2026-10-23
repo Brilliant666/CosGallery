@@ -26,7 +26,7 @@ async function setup(path: string, variant: 'desktop' | 'mobile' = 'desktop') {
   ] });
   await router.push(path);
   await router.isReady();
-  const wrapper = mount({ components: { LibraryNavigation }, template: `<main><LibraryNavigation variant="${variant}" /><RouterView /></main>` }, { attachTo: document.body, global: { plugins: [router], stubs: { Teleport: true } } });
+  const wrapper = mount({ components: { LibraryNavigation }, data: () => ({ collapsed: false }), template: `<main><aside class="sidebar"><button data-test="sidebar-toggle" @click="collapsed = !collapsed">Toggle sidebar</button><LibraryNavigation variant="${variant}" :collapsed="collapsed" /></aside><RouterView /></main>` }, { attachTo: document.body, global: { plugins: [router], stubs: { Teleport: true } } });
   await flushPromises();
   return { wrapper, router };
 }
@@ -212,6 +212,49 @@ describe('gallery navigation and public reading state', () => {
     expect(nav.find('[aria-label="图库分类"]').exists()).toBe(false);
     expect(toggle.attributes('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(toggle.element);
+  });
+
+  it('hides a desktop submenu on collapse, moves its focus and restores the open choice on expansion', async () => {
+    const { wrapper } = await setup('/library?label=portrait');
+    const nav = wrapper.getComponent(LibraryNavigation);
+    await nav.get('button[aria-label="展开图库分类"]').trigger('click');
+    (nav.get('.library-nav__menu a').element as HTMLAnchorElement).focus();
+    await wrapper.setData({ collapsed: true });
+    await flushPromises();
+    expect(nav.find('.library-nav__menu').exists()).toBe(false);
+    expect(document.activeElement).toBe(nav.get('a[aria-label="图库"]').element);
+    expect(nav.emitted('open-change')).toEqual([[true]]);
+    await wrapper.setData({ collapsed: false });
+    await flushPromises();
+    expect(nav.get('.library-nav__menu a[aria-current="page"]').text()).toBe('写真');
+    expect(nav.get('button[aria-label="展开图库分类"]').attributes('aria-expanded')).toBe('true');
+    expect(nav.emitted('open-change')).toEqual([[true]]);
+  });
+
+  it('keeps the category choice when the actual sidebar toggle receives pointerdown', async () => {
+    const { wrapper } = await setup('/library?label=cosplay');
+    const nav = wrapper.getComponent(LibraryNavigation);
+    await nav.get('button[aria-label="展开图库分类"]').trigger('click');
+    const shellToggle = wrapper.get('[data-test="sidebar-toggle"]');
+    await shellToggle.trigger('pointerdown');
+    await shellToggle.trigger('click');
+    await shellToggle.trigger('pointerdown');
+    await shellToggle.trigger('click');
+    await flushPromises();
+    expect(nav.get('.library-nav__menu a[aria-current="page"]').text()).toBe('Cosplay');
+    expect(nav.emitted('open-change')).toEqual([[true]]);
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await flushPromises();
+    expect(nav.find('.library-nav__menu').exists()).toBe(false);
+  });
+
+  it('does not let a desktop collapse preference hide mobile categories', async () => {
+    const { wrapper } = await setup('/library', 'mobile');
+    const nav = wrapper.getComponent(LibraryNavigation);
+    await nav.get('button[aria-label="展开图库分类"]').trigger('click');
+    await wrapper.setData({ collapsed: true });
+    expect(nav.findAll('.library-nav__menu a')).toHaveLength(4);
+    expect(nav.get('button[aria-label="展开图库分类"]').attributes('aria-expanded')).toBe('true');
   });
 
   it.each(['anonymous', 'viewer'] as const)('cleans %s private links and rejects stale admin data after a role switch', async role => {

@@ -1,7 +1,7 @@
 <template>
   <aside
-    class="sidebar group flex h-full flex-col overflow-visible bg-bg px-[0.95rem] py-5 text-text"
-    :class="{ 'sidebar--library-open': libraryMenuOpen }"
+    class="sidebar flex h-full flex-col overflow-visible bg-bg px-[0.95rem] py-5 text-text"
+    :class="{ 'sidebar--expanded': expanded }"
   >
     <RouterLink
       class="sidebar__brand relative inline-flex items-center justify-center w-12 h-12 p-[0.3rem] rounded-[1rem] color-inherit transition-[background-color,transform,opacity] duration-180 hover:bg-surface-hover hover:-translate-y-px"
@@ -36,12 +36,7 @@
             aria-hidden="true"
           />
           <span
-            class="sidebar__label max-w-0 overflow-hidden whitespace-nowrap text-[0.9rem] opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
+            class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]"
             >{{ t('nav.home') }}</span
           >
         </a>
@@ -68,12 +63,7 @@
             aria-hidden="true"
           />
           <span
-            class="sidebar__label max-w-0 overflow-hidden whitespace-nowrap text-[0.9rem] opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
+            class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]"
             >{{ t('nav.reels') }}</span
           >
         </a>
@@ -100,18 +90,13 @@
             aria-hidden="true"
           />
           <span
-            class="sidebar__label max-w-0 overflow-hidden whitespace-nowrap text-[0.9rem] opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
+            class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]"
             >{{ t('nav.search') }}</span
           >
         </a>
       </RouterLink>
 
-      <LibraryNavigation variant="desktop" @navigate="closeMoreMenu" @open-change="libraryMenuOpen = $event" />
+      <LibraryNavigation variant="desktop" :collapsed="!expanded" @navigate="closeMoreMenu" />
 
       <RouterLink
         v-if="showPlacesNav"
@@ -135,12 +120,7 @@
             aria-hidden="true"
           />
           <span
-            class="sidebar__label max-w-0 overflow-hidden whitespace-nowrap text-[0.9rem] opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
+            class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]"
             >{{ t('nav.places') }}</span
           >
         </a>
@@ -168,21 +148,11 @@
             aria-hidden="true"
           />
           <span
-            class="sidebar__label max-w-0 overflow-hidden whitespace-nowrap text-[0.9rem] opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
+            class="sidebar__label sidebar__label--saved overflow-hidden whitespace-nowrap text-[0.9rem]"
             >{{ likesStore.collectionLabel }}</span
           >
           <small
-            class="sidebar__badge sidebar__meta ml-auto max-w-0 min-w-[1.5rem] overflow-hidden whitespace-nowrap rounded-full bg-white/12 px-[0.45rem] py-[0.1rem] text-center text-[0.72rem] font-bold text-white/86 opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
+            class="sidebar__badge sidebar__meta ml-auto min-w-[1.5rem] overflow-hidden whitespace-nowrap rounded-full bg-white/12 px-[0.45rem] py-[0.1rem] text-center text-[0.72rem] font-bold text-white/86"
             >{{ likesStore.items.length }}</small
           >
         </a>
@@ -210,24 +180,14 @@
             aria-hidden="true"
           />
           <span
-            class="sidebar__label max-w-0 overflow-hidden whitespace-nowrap text-[0.9rem] opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
+            class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]"
             >{{ t('nav.collections') }}</span
           >
         </a>
       </RouterLink>
 
       <span
-        class="sidebar__section-label sidebar__meta inline-flex min-h-[1rem] items-center self-start mt-7 max-w-0 overflow-hidden whitespace-nowrap px-[0.75rem] text-[0.68rem] leading-[1.2] font-semibold uppercase tracking-[0.12em] text-muted opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-        style="
-          transition:
-            opacity 0.18s ease,
-            max-width 0.22s ease;
-        "
+        class="sidebar__section-label sidebar__meta inline-flex min-h-[1rem] items-center self-start mt-7 overflow-hidden whitespace-nowrap px-[0.75rem] text-[0.68rem] leading-[1.2] font-semibold uppercase tracking-[0.12em] text-muted"
         >{{ t('nav.foldersSpotlight') }}</span
       >
       <div
@@ -257,12 +217,7 @@
               class="h-[1.75rem] w-[1.75rem]"
             />
             <span
-              class="sidebar__folder-copy sidebar__meta flex min-w-0 max-w-0 flex-col gap-[0.05rem] overflow-hidden whitespace-nowrap opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-              style="
-                transition:
-                  opacity 0.18s ease,
-                  max-width 0.22s ease;
-              "
+              class="sidebar__folder-copy sidebar__meta flex min-w-0 flex-col gap-[0.05rem] overflow-hidden whitespace-nowrap"
             >
               <strong class="truncate text-[0.82rem]">{{ formatFeaturedFolderTitle(folder) }}</strong>
               <small class="truncate text-[0.68rem] text-muted">{{
@@ -281,6 +236,21 @@
     />
 
     <div class="z-50 mt-auto pt-10 pb-2">
+      <button
+        class="sidebar__toggle sidebar-item w-full mb-[0.4rem]"
+        data-test="sidebar-toggle"
+        type="button"
+        :aria-label="expanded ? '收起侧栏' : '展开侧栏'"
+        :aria-expanded="expanded"
+        :title="expanded ? '收起侧栏' : '展开侧栏'"
+        @click="toggleSidebar"
+      >
+        <span
+          class="sidebar__toggle-icon sidebar__icon i-fluent-chevron-right-20-regular flex-shrink-0 w-[1.45rem] h-[1.45rem]"
+          aria-hidden="true"
+        />
+        <span class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]">收起侧栏</span>
+      </button>
       <div class="relative">
         <div
           v-if="moreMenuOpen"
@@ -392,12 +362,7 @@
             aria-hidden="true"
           />
           <span
-            class="sidebar__label max-w-0 overflow-hidden whitespace-nowrap text-[0.9rem] opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
+            class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]"
             >{{ t('nav.more') }}</span
           >
         </button>
@@ -424,6 +389,8 @@ import { folderReadingRoute } from '../utils/work-gallery';
   import Avatar from "./Avatar.vue"
   import BrandMark from "./BrandMark.vue"
 
+  withDefaults(defineProps<{ expanded?: boolean }>(), { expanded: false })
+  const emit = defineEmits<{ toggle: [] }>()
   const { t } = useI18n()
   const appVersion = __APP_VERSION__
   const buildIdentity = `${__BUILD_INFO__.product} ${appVersion} · ${__BUILD_INFO__.commit?.slice(0, 12) ?? 'unverified'}${__BUILD_INFO__.dirty ? ' (modified build)' : ''}`
@@ -434,7 +401,6 @@ import { folderReadingRoute } from '../utils/work-gallery';
   const placesStore = usePlacesStore()
   const route = useRoute()
   const moreMenuOpen = ref(false)
-  const libraryMenuOpen = ref(false)
 
   const likedCountByFolder = computed(() =>
     buildLikedCountByFolder(likesStore.items),
@@ -473,6 +439,11 @@ import { folderReadingRoute } from '../utils/work-gallery';
 
   function toggleMoreMenu() {
     moreMenuOpen.value = !moreMenuOpen.value
+  }
+
+  function toggleSidebar() {
+    closeMoreMenu()
+    emit('toggle')
   }
 
   function handleAppearanceToggle() {
@@ -526,24 +497,67 @@ import { folderReadingRoute } from '../utils/work-gallery';
 <style scoped>
 .sidebar {
   width: var(--sidebar-collapsed-width, 4.85rem);
-  transition: width var(--sidebar-width-duration, 220ms) ease;
+  transition: width var(--sidebar-width-duration, 220ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
-/* Keep the complete menu usable after the pointer leaves its toggle, and
-   expand before a keyboard user tabs from the gallery link to the arrow. */
-.sidebar:hover,
-.sidebar:focus-within,
-.sidebar--library-open {
+.sidebar--expanded {
   width: var(--sidebar-expanded-width, 15rem);
 }
-.sidebar--library-open {
-  transition: none;
+
+.sidebar-item {
+  overflow: hidden;
+  flex-shrink: 0;
 }
-.sidebar:focus-within .sidebar__label,
-.sidebar:focus-within .sidebar__meta,
-.sidebar--library-open .sidebar__label,
-.sidebar--library-open .sidebar__meta {
-  max-width: 12rem;
+
+/* Keep text laid out at its final size while the row clips it during resizing. */
+.sidebar__label,
+.sidebar__meta {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--sidebar-width-duration, 220ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.sidebar__label {
+  max-width: calc(var(--sidebar-expanded-width, 15rem) - 5.85rem);
+  text-overflow: ellipsis;
+}
+
+.sidebar__label--saved {
+  max-width: calc(var(--sidebar-expanded-width, 15rem) - 8.35rem);
+}
+
+.sidebar__section-label {
+  max-width: 100%;
+}
+
+.sidebar__folder-copy {
+  width: calc(var(--sidebar-expanded-width, 15rem) - 6.15rem);
+}
+
+.sidebar--expanded .sidebar__label,
+.sidebar--expanded .sidebar__meta {
   opacity: 1;
+}
+
+.sidebar__toggle-icon {
+  transition: transform var(--sidebar-width-duration, 220ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.sidebar--expanded .sidebar__toggle-icon {
+  transform: rotate(180deg);
+}
+
+.sidebar__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar__label,
+  .sidebar__meta,
+  .sidebar__toggle-icon {
+    transition: none;
+  }
 }
 </style>

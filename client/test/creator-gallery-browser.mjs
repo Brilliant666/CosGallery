@@ -18,8 +18,20 @@ for (const key of ['DATA_ROOT', 'DB_DIR', 'GALLERY_ROOT', 'THUMBNAILS_DIR', 'PRE
 process.env.VITEST = 'true';
 const output = path.resolve(process.env.CREATOR_GALLERY_BROWSER_OUTPUT ?? '../.mocks/pr52/browser');
 mkdirSync(output, { recursive: true });
-const server = await createServer({ server: { host: '127.0.0.1', port: 0, strictPort: false, open: false }, logLevel: 'error' });
-const errors = [], unexpected = [], requests = [], evidence = [], layouts = [], classificationRows = [], sidebarFrames = [];
+const server = await createServer({
+  server: { host: '127.0.0.1', port: 0, strictPort: false, open: false }, logLevel: 'error',
+  plugins: [{
+    name: 'synthetic-home-unused-media', enforce: 'pre',
+    // The home fixture contains no feed posts and never opens a story viewer.
+    // Keep its actual root, story rail, Avatar and resize behavior without loading
+    // the unrelated video player graph through these unused components.
+    resolveId(source, importer) {
+      if (importer?.replaceAll('\\', '/').endsWith('/src/views/HomeView.vue') && /(?:FeedList|StoriesModal)\.vue$/.test(source)) return '\0synthetic-home-unused-media';
+    },
+    load(id) { if (id === '\0synthetic-home-unused-media') return 'export default { render: () => null }'; }
+  }]
+});
+const errors = [], unexpected = [], requests = [], evidence = [], layouts = [], classificationRows = [], sidebarFrames = [], homeLayouts = [], storageChecks = [];
 let browser;
 const sample = (id, name, galleryLabels, contentRating) => ({
   id, key: `creator:${id}`, identityType: 'creator', canonicalCreatorId: id, name, canonicalName: name,
@@ -84,6 +96,8 @@ try {
   });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') console.error(`Browser console: ${message.text()}`); });
+  page.on('requestfailed', request => console.error(`Browser request failed: ${new URL(request.url()).pathname} ${request.failure()?.errorText}`));
   page.setDefaultTimeout(15000);
   const entry = `${origin}/test/creator-gallery-browser.html`;
   const cards = () => page.getByRole('heading', { level: 2 }).filter({ hasText: '合成博主' });
@@ -151,15 +165,13 @@ try {
     evidence.push({ screenshot: `${name}.png`, url: page.url(), viewport: page.viewportSize(), time: new Date().toISOString(), role: new URL(page.url()).searchParams.get('role') ?? 'admin', action });
   };
   const saveLayoutScreenshot = async (name, action) => {
-    await page.mouse.move(page.viewportSize().width - 10, 10);
-    await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
-    if (page.viewportSize().width >= 768) {
-      await page.waitForFunction(() => document.querySelector('.sidebar').getBoundingClientRect().width < 100);
-    }
+    await setSidebar(false);
     await saveScreenshot(name, action);
   };
   const expectOpenMenu = async variant => {
     assert.equal(await nav(variant).getByRole('button', { name: '展开图库分类' }).getAttribute('aria-expanded'), 'true');
+    await nav(variant).locator('.library-nav__menu').waitFor({ state: 'visible' });
+    await page.waitForFunction(currentVariant => !document.querySelector(`.library-nav--${currentVariant} .library-nav__menu`)?.classList.contains('library-categories-enter-active'), variant);
     assert(await nav(variant).locator('.library-nav__menu').isVisible());
     assert.equal(await nav(variant).locator('.library-nav__category-icon').count(), 4);
     assert(await nav(variant).locator('.library-nav__category-icon').evaluateAll(icons => icons.every(icon => {
@@ -167,6 +179,10 @@ try {
       return icon.getAttribute('aria-hidden') === 'true' && style.maskImage !== 'none'
         && icon.getBoundingClientRect().width > 0 && icon.getBoundingClientRect().height > 0;
     })), 'Each category must render its decorative Fluent icon');
+  };
+  const expectClosedMenu = async variant => {
+    await page.waitForFunction(currentVariant => !document.querySelector(`.library-nav--${currentVariant} .library-nav__menu`), variant);
+    assert.equal(await nav(variant).locator('.library-nav__menu').count(), 0);
   };
   const checkSidebarTransition = async (name, action) => {
     // Sample the real AppShell throughout expansion/collapse, not just its end state.
@@ -178,8 +194,11 @@ try {
           const sidebar = document.querySelector('.sidebar').getBoundingClientRect();
           const content = document.querySelector('.app-shell__content').getBoundingClientRect();
           const firstCard = document.querySelector('[aria-label="博主目录"] article')?.getBoundingClientRect();
+          const firstStory = document.querySelector('.story-rail__item')?.getBoundingClientRect();
+          const firstStoryRing = document.querySelector('.story-rail__ring')?.getBoundingClientRect();
           window.__sidebarFrames.push({ elapsed: performance.now() - started, sidebarRight: sidebar.right, sidebarWidth: sidebar.width,
-            contentLeft: content.left, cardLeft: firstCard?.left ?? null, cardRight: firstCard?.right ?? null });
+            contentLeft: content.left, cardLeft: firstCard?.left ?? null, cardRight: firstCard?.right ?? null,
+            storyLeft: firstStory?.left ?? null, storyRingLeft: firstStoryRing?.left ?? null });
           if (performance.now() - started < 650) requestAnimationFrame(sample);
           else resolve(window.__sidebarFrames);
         };
@@ -192,6 +211,8 @@ try {
     for (const frame of frames) {
       assert(frame.contentLeft >= frame.sidebarRight - 1, `${page.viewportSize().width}px ${name}: content ${frame.contentLeft} overlaps sidebar ${frame.sidebarRight}`);
       if (frame.cardLeft !== null) assert(frame.cardLeft >= frame.sidebarRight - 1, `${page.viewportSize().width}px ${name}: first card ${frame.cardLeft} overlaps sidebar ${frame.sidebarRight}`);
+      if (frame.storyLeft !== null) assert(frame.storyLeft >= frame.sidebarRight - 1, `${page.viewportSize().width}px ${name}: first home story ${frame.storyLeft} overlaps sidebar ${frame.sidebarRight}`);
+      if (frame.storyRingLeft !== null) assert(frame.storyRingLeft >= frame.sidebarRight - 1, `${page.viewportSize().width}px ${name}: first home story ring overlaps the sidebar`);
     }
     return frames.at(-1);
   };
@@ -201,10 +222,23 @@ try {
   };
   const settleSidebar = () => page.waitForFunction(() => {
     const sidebar = document.querySelector('.sidebar');
+    if (!sidebar) return false; // Reload may finish before the router mounts AppShell.
     if (getComputedStyle(sidebar).display === 'none') return true;
-    const expanded = sidebar.matches(':hover, :focus-within, .sidebar--library-open');
+    const toggle = document.querySelector('[data-test="sidebar-toggle"]');
+    if (!toggle) return false;
+    const expanded = toggle.getAttribute('aria-expanded') === 'true';
     return Math.abs(sidebar.getBoundingClientRect().width - (expanded ? 240 : 77.6)) < 1;
   });
+  const sidebarToggle = () => page.locator('[data-test="sidebar-toggle"]');
+  const expectSidebarNoHorizontalScroll = async () => {
+    const metrics = await page.locator('.sidebar__nav').evaluate(node => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth, scrollLeft: node.scrollLeft }));
+    assert(metrics.scrollWidth <= metrics.clientWidth + 1 && metrics.scrollLeft === 0, `Sidebar navigation must not scroll horizontally: ${JSON.stringify(metrics)}`);
+  };
+  const setSidebar = async expanded => {
+    if (page.viewportSize().width < 768) return;
+    if ((await sidebarToggle().getAttribute('aria-expanded') === 'true') !== expanded) await sidebarToggle().click();
+    await settleSidebar();
+  };
   const shellGridBounds = () => page.locator('[aria-label="博主目录"]').evaluate(grid => {
     const { x, y, width } = grid.getBoundingClientRect();
     return { x, y, width };
@@ -218,22 +252,23 @@ try {
     assert(await page.locator('.sidebar').isVisible(), `${width}px uses the actual desktop breakpoint`);
     const collapsed = await checkSidebarTransition('collapsed', clearSidebarInteraction);
     assert(Math.abs(collapsed.sidebarWidth - 77.6) < 1);
-    const hovered = await checkSidebarTransition('hover-expand', () => page.locator('.sidebar').hover());
-    assert(Math.abs(hovered.sidebarWidth - 240) < 1);
-    await saveScreenshot(`sidebar-${width}-hover`, '真实AppShell侧栏hover展开；首列卡片完整位于侧栏右侧');
-    await checkSidebarTransition('hover-collapse', clearSidebarInteraction);
-    const focused = await checkSidebarTransition('keyboard-focus-expand', async () => {
+    await expectSidebarNoHorizontalScroll();
+    assert.equal(await sidebarToggle().getAttribute('aria-label'), '展开侧栏');
+    const hovered = await checkSidebarTransition('hover-stays-collapsed', () => page.locator('.sidebar').hover());
+    assert(Math.abs(hovered.sidebarWidth - 77.6) < 1);
+    const focused = await checkSidebarTransition('keyboard-focus-stays-collapsed', async () => {
       await page.locator('.sidebar__brand').focus();
       await page.keyboard.press('Tab');
     });
-    assert(Math.abs(focused.sidebarWidth - 240) < 1);
+    assert(Math.abs(focused.sidebarWidth - 77.6) < 1);
     assert(await page.locator('.sidebar').evaluate(sidebar => sidebar.contains(document.activeElement)));
-    await checkSidebarTransition('keyboard-focus-collapse', clearSidebarInteraction);
-    await checkSidebarTransition('persistent-menu-open', async () => {
-      await page.locator('.sidebar').hover();
-      await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
-      await clearSidebarInteraction();
-    });
+    const expanded = await checkSidebarTransition('click-expand', () => sidebarToggle().click());
+    assert(Math.abs(expanded.sidebarWidth - 240) < 1);
+    await expectSidebarNoHorizontalScroll();
+    assert.equal(await sidebarToggle().getAttribute('aria-label'), '收起侧栏');
+    assert.equal(await page.evaluate(() => localStorage.getItem('cosgallery.sidebar-expanded.v1')), 'true');
+    await saveScreenshot(`sidebar-${width}-expanded`, '点击展开真实侧栏；首列卡片完整位于侧栏右侧');
+    await checkSidebarTransition('independent-category-open', () => nav('desktop').getByRole('button', { name: '展开图库分类' }).click());
     await expectOpenMenu('desktop');
     const openGrid = await shellGridBounds();
     for (const [label, title, count] of [['cosplay', 'Cosplay', 1], ['portrait', '写真', 1], ['selfie', '自拍', 1], ['fuliji', '福利姬', 0]]) {
@@ -251,11 +286,63 @@ try {
           `${width}px ${label}: grid.${coordinate} stays stable while the sidebar remains expanded`);
       }
     }
-    await checkSidebarTransition('persistent-menu-close', async () => {
-      await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
-      await clearSidebarInteraction();
+    await checkSidebarTransition('hide-open-category-on-collapse', () => sidebarToggle().click());
+    await expectClosedMenu('desktop');
+    assert.equal(await page.evaluate(() => localStorage.getItem('cosgallery.sidebar-expanded.v1')), 'false');
+    for (let index = 0; index < 10; index += 1) {
+      await page.keyboard.press('Tab');
+      assert.equal(await page.evaluate(() => Boolean(document.activeElement?.closest('.library-nav__menu'))), false, 'Hidden submenu must not remain keyboard reachable');
+    }
+    await checkSidebarTransition('restore-open-category-on-expand', () => sidebarToggle().click());
+    await expectOpenMenu('desktop');
+    await checkSidebarTransition('rapid-pointer-reversal-with-open-menu', async () => {
+      const button = await sidebarToggle().boundingBox();
+      const x = button.x + 20, y = button.y + button.height / 2;
+      // Coordinates stay inside the icon while width changes; locator.click()
+      // would wait for layout stability and accidentally skip the live reversal.
+      await page.mouse.click(x, y);
+      await page.waitForTimeout(45);
+      await page.mouse.click(x, y);
     });
-    assert.equal(await nav('desktop').locator('.library-nav__menu').count(), 0);
+    assert(await sidebarToggle().evaluate(button => button === document.activeElement), 'Global toggle retains keyboard focus through a reversal');
+    await nav('desktop').getByRole('button', { name: '展开图库分类' }).focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(45);
+    await page.keyboard.press('Enter');
+    await expectOpenMenu('desktop');
+    assert(await nav('desktop').locator('.library-nav__menu').evaluate(menu => !menu.hasAttribute('inert') && !menu.hasAttribute('aria-hidden')
+      && [...menu.querySelectorAll('a')].every(link => link.tabIndex >= 0)), 'Reversing submenu leave restores every link to keyboard and assistive technology');
+    await page.keyboard.press('Tab');
+    assert(await nav('desktop').getByRole('link', { name: 'Cosplay', exact: true }).evaluate(link => link === document.activeElement));
+    await page.keyboard.press('Enter');
+    await page.waitForURL(/label=cosplay/);
+    await expectCards(1);
+    await nav('desktop').getByRole('link', { name: '福利姬', exact: true }).click();
+    await expectCards(0);
+    await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
+    await page.waitForFunction(() => !document.querySelector('.library-nav--desktop .library-nav__menu'));
+    assert(Math.abs((await page.locator('.sidebar').boundingBox()).width - 240) < 1, 'Category toggle must not collapse the outer sidebar');
+    await page.reload();
+    await expectCards(0);
+    await settleSidebar();
+    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'true', 'Reload restores the explicit expanded preference');
+    await page.locator('.sidebar__brand').focus();
+    for (let index = 0; index < 20 && !await sidebarToggle().evaluate(button => button === document.activeElement); index += 1) await page.keyboard.press('Tab');
+    assert(await sidebarToggle().evaluate(button => button === document.activeElement), 'The global toggle is reachable by actual Tab navigation');
+    await checkSidebarTransition('keyboard-space-collapse', () => page.keyboard.press('Space'));
+    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'false');
+    await checkSidebarTransition('keyboard-enter-expand', () => page.keyboard.press('Enter'));
+    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'true');
+    await checkSidebarTransition('rapid-keyboard-reversal', async () => {
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(45);
+      await page.keyboard.press('Enter');
+    });
+    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'true');
+    await setSidebar(false);
+    await page.reload();
+    await settleSidebar();
+    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'false', 'Reload restores the explicit collapsed preference');
     await page.goto(`${entry}#/library`);
     await expectCards(3);
     await clearSidebarInteraction();
@@ -263,8 +350,8 @@ try {
     await saveScreenshot(`sidebar-${width}-collapsed`, '侧栏收起后主体同步恢复；首卡无遮挡');
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await checkSidebarTransition('reduced-motion-hover-expand', () => page.locator('.sidebar').hover());
-  await checkSidebarTransition('reduced-motion-hover-collapse', clearSidebarInteraction);
+  await checkSidebarTransition('reduced-motion-click-expand', () => sidebarToggle().click());
+  await checkSidebarTransition('reduced-motion-click-collapse', () => sidebarToggle().click());
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   for (const width of [767, 390]) {
     await page.setViewportSize({ width, height: 844 });
@@ -292,6 +379,49 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
     await saveScreenshot(`sidebar-${width}-mobile-category`, '移动断点无桌面侧栏留白，分类菜单不遮挡底栏');
   }
+  for (const width of [1440, 1098, 980, 768, 767, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${entry}#/`);
+    await page.locator('.story-rail__item').first().waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await setSidebar(false);
+    const readHome = async state => {
+      const geometry = await page.evaluate(() => {
+        const bounds = selector => { const { left, right, width } = document.querySelector(selector).getBoundingClientRect(); return { left, right, width }; };
+        return { sidebar: bounds('.sidebar'), content: bounds('.app-shell__content'), firstStory: bounds('.story-rail__item'), ring: bounds('.story-rail__ring'), horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1 };
+      });
+      const description = `${width}px home ${state}`;
+      assert(geometry.firstStory.left >= geometry.sidebar.right - 1, `${description}: first recent batch must be to the right of the sidebar`);
+      assert(geometry.ring.left >= geometry.sidebar.right - 1, `${description}: first recent batch icon must not be hidden`);
+      assert.equal(geometry.horizontalOverflow, false, description);
+      homeLayouts.push({ width, state, ...geometry });
+    };
+    await readHome('collapsed');
+    await saveScreenshot(`home-${width}-collapsed`, '真实HomeView合成近期批次：首个图标完整可见');
+    if (width >= 768) {
+      await checkSidebarTransition('home-click-expand', () => sidebarToggle().click());
+      await readHome('expanded');
+      await saveScreenshot(`home-${width}-expanded`, '真实HomeView随侧栏展开同步让位，首个近期批次图标无遮挡');
+      await checkSidebarTransition('home-click-collapse', () => sidebarToggle().click());
+    }
+  }
+  const restricted = await context.newPage();
+  restricted.on('pageerror', error => errors.push(error.message));
+  await restricted.addInitScript(() => {
+    const get = Storage.prototype.getItem, set = Storage.prototype.setItem;
+    Storage.prototype.getItem = function(key) { if (key === 'cosgallery.sidebar-expanded.v1') throw new DOMException('Synthetic blocked storage', 'SecurityError'); return get.call(this, key); };
+    Storage.prototype.setItem = function(key, value) { if (key === 'cosgallery.sidebar-expanded.v1') throw new DOMException('Synthetic blocked storage', 'SecurityError'); return set.call(this, key, value); };
+  });
+  await restricted.goto(`${entry}#/library`);
+  const restrictedToggle = restricted.locator('[data-test="sidebar-toggle"]');
+  assert.equal(await restrictedToggle.getAttribute('aria-expanded'), 'false');
+  await restrictedToggle.click();
+  await restricted.waitForFunction(() => Math.abs(document.querySelector('.sidebar').getBoundingClientRect().width - 240) < 1);
+  assert.equal(await restrictedToggle.getAttribute('aria-expanded'), 'true');
+  await restricted.reload();
+  assert.equal(await restrictedToggle.getAttribute('aria-expanded'), 'false');
+  storageChecks.push({ reads: 'SecurityError', writes: 'SecurityError', toggling: 'PASS', reloadFallback: 'collapsed' });
+  await restricted.close();
   assert.deepEqual(creators.map(creator => creator.galleryLabels), sidebarLabelsBefore, 'Sidebar layout must preserve all assigned labels');
   assert.equal(requests.filter(request => request.method !== 'GET').length, 0, 'Sidebar interactions must not persist any business data');
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -303,7 +433,7 @@ try {
   await page.getByRole('group', { name: '分级', exact: true }).getByRole('button', { name: 'R18', exact: true }).click();
   await page.waitForURL(/rating=R18/);
   await page.waitForFunction(() => document.querySelectorAll('main h2').length === 1);
-  await page.locator('.sidebar').hover();
+  await setSidebar(true);
   await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
   assert.deepEqual((await nav('desktop').locator('.library-nav__menu a').allTextContents()).map(text => text.trim()), ['Cosplay', '写真', '自拍', '福利姬']);
   await page.mouse.move(600, 200);
@@ -342,7 +472,7 @@ try {
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.keyboard.press('Escape');
-  assert.equal(await nav('desktop').locator('.library-nav__menu').count(), 0);
+  await expectClosedMenu('desktop');
   assert(await nav('desktop').getByRole('button', { name: '展开图库分类' }).evaluate(button => button === document.activeElement));
   await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
   await expectOpenMenu('desktop');
@@ -350,7 +480,7 @@ try {
   assert(categoryRequest && !categoryRequest.query.contentRating);
   await page.getByRole('heading', { name: '合成博主甲', exact: true }).click();
   await page.waitForURL(/library\/1/);
-  assert.equal(await nav('desktop').locator('.library-nav__menu').count(), 0);
+  await expectClosedMenu('desktop');
   await page.getByRole('heading', { level: 1, name: '合成博主甲', exact: true }).waitFor();
   assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).scrollbarGutter), 'auto',
     'Gallery scrollbar reservation must not affect creator details');
@@ -358,7 +488,7 @@ try {
   await page.waitForURL(/label=cosplay/);
   await cards().first().waitFor();
   await saveScreenshot('desktop-category', 'Cosplay子分类进入博主并后退，分类范围恢复且无分级筛选');
-  await page.locator('.sidebar').hover();
+  await setSidebar(true);
   await nav('desktop').getByRole('link', { name: '图库', exact: true }).click();
   await page.waitForURL(url => url.hash === '#/library');
   await page.getByRole('group', { name: '分级', exact: true }).waitFor();
@@ -418,19 +548,19 @@ try {
   }), 'The open mobile category menu must leave the bottom navigation accessible');
   await saveScreenshot('mobile-category', '390宽匿名福利姬分类保持菜单展开，底部导航仍可操作');
   await nav('mobile').getByRole('button', { name: '展开图库分类' }).click();
-  assert.equal(await nav('mobile').locator('.library-nav__menu').count(), 0);
+  await expectClosedMenu('mobile');
   await nav('mobile').getByRole('button', { name: '展开图库分类' }).click();
   await expectOpenMenu('mobile');
   await page.locator('.mobile-nav').getByRole('link', { name: '搜索', exact: true }).click();
   await page.waitForURL(url => url.hash === '#/explore');
-  assert.equal(await nav('mobile').locator('.library-nav__menu').count(), 0);
+  await expectClosedMenu('mobile');
   await nav('mobile').getByRole('button', { name: '展开图库分类' }).click();
   await expectOpenMenu('mobile');
   await nav('mobile').getByRole('link', { name: '图库', exact: true }).click();
   await page.waitForURL(url => url.hash === '#/library');
   await page.getByRole('group', { name: '分级', exact: true }).waitFor();
   await expectCards(3);
-  assert.equal(await nav('mobile').locator('.library-nav__menu').count(), 0);
+  await expectClosedMenu('mobile');
   // A long all-creators page and an empty category exercise both filter wrapping
   // and the document scrollbar appearing/disappearing. All fixtures stay in memory.
   creators.splice(0, creators.length,
@@ -484,9 +614,10 @@ try {
       // Expansion now deliberately moves the content. Compare all/category at
       // the same expanded state, and compare return-to-all after full collapse.
       await clearSidebarInteraction();
+      await setSidebar(false);
       await settleSidebar();
       const collapsedBaseline = await readLayout();
-      if (variant === 'desktop') await page.locator('.sidebar').hover();
+      await setSidebar(true);
       await nav(variant).getByRole('button', { name: '展开图库分类' }).click();
       await settleSidebar();
       const baseline = await readLayout();
@@ -513,7 +644,7 @@ try {
           await expectOpenMenu(variant);
           await nav(variant).getByRole('button', { name: '展开图库分类' }).click();
           await saveLayoutScreenshot(`layout-${variant}-${role}-${label}`, label === 'selfie' ? '空自拍分类布局保持稳定' : 'Cosplay分类布局保持稳定');
-          if (variant === 'desktop') await page.locator('.sidebar').hover();
+          await setSidebar(true);
           await nav(variant).getByRole('button', { name: '展开图库分类' }).click();
           await settleSidebar();
         }
@@ -523,6 +654,7 @@ try {
       await expectCards(24);
       await clearSidebarInteraction();
       await settleSidebar();
+      await setSidebar(false);
       expectStableLayout(collapsedBaseline, await readLayout(), `${viewport.width}px ${role} return to all collapsed`);
       await expectAllLabels(role);
     }
@@ -531,12 +663,12 @@ try {
   assert.equal(requests.filter(request => request.method !== 'GET').length, writesBeforeLayoutChecks, 'Layout checks must not send label writes');
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
-  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, layouts, classificationRows, sidebarFrames, requests, errors, unexpected }, null, 2));
+  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, requests, errors, unexpected }, null, 2));
   console.log(JSON.stringify({ status: 'PASS', output, screenshots: evidence.length, requests: requests.length, layoutSamples: layouts.length, classificationRows: classificationRows.length,
-    sidebarTransitions: sidebarFrames.length, sidebarFrameCount: sidebarFrames.reduce((total, transition) => total + transition.frames.length, 0),
-    scenarios: ['desktop navigation and return', 'actual shell sidebar and first-card separation throughout hover, focus, persistent menu and collapse', 'reduced-motion sidebar/content alignment', '767/768 breakpoint and 390 mobile navigation without desktop gap', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes at matching sidebar states'] }));
+    sidebarTransitions: sidebarFrames.length, sidebarFrameCount: sidebarFrames.reduce((total, transition) => total + transition.frames.length, 0), homeLayouts: homeLayouts.length, storageChecks,
+    scenarios: ['desktop navigation and return', 'explicit click-only sidebar; hover/focus do not expand', 'actual Tab/Enter/Space and rapid reversal without overlap', 'submenu open choice survives global collapse and is hidden from keyboard', 'reload and route persistence; blocked storage fallback', 'real HomeView recent batches remain outside the sidebar at rest and throughout transitions', 'reduced-motion sidebar/content alignment', '767/768 breakpoint and 390 mobile navigation without desktop gap', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes at matching sidebar states'] }));
 } catch (error) {
-  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ status: 'FAIL', message: error.message, evidence, layouts, classificationRows, sidebarFrames, requests, errors, unexpected }, null, 2));
+  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ status: 'FAIL', message: error.message, evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, requests, errors, unexpected }, null, 2));
   for (const context of browser?.contexts() ?? []) for (const page of context.pages()) {
     await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
     console.error(JSON.stringify({ url: page.url(), errors, unexpected,
