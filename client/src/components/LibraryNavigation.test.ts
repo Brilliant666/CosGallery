@@ -4,12 +4,12 @@ import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import LibraryNavigation from './LibraryNavigation.vue';
 import CosGalleryHomeView from '../views/CosGalleryHomeView.vue';
-import { fetchCosGalleryCreators } from '../api/gallery';
+import { fetchCosGalleryCreators, fetchCreatorGalleryLabels, updateCreatorGalleryLabels } from '../api/gallery';
 import { useAuthStore } from '../stores/auth';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 import type { AuthRole, CosGalleryCreator } from '../types/api';
 
-vi.mock('../api/gallery', () => ({ fetchCosGalleryCreators: vi.fn() }));
+vi.mock('../api/gallery', () => ({ fetchCosGalleryCreators: vi.fn(), fetchCreatorGalleryLabels: vi.fn(), updateCreatorGalleryLabels: vi.fn() }));
 enableAutoUnmount(afterEach);
 const creator = { id: 12, key: 'creator:12', identityType: 'creator', canonicalCreatorId: 12, name: 'Sample creator', slug: 'sample', contentRating: 'R18', galleryLabels: ['cosplay', 'portrait'], workCount: 1 } as CosGalleryCreator;
 function payload(name = 'Sample creator') { return { items: [{ ...creator, name }], total: 1, page: 1, limit: 60, hasMore: false, summary: { all: 1, R15: 0, R18: 1, unclassified: 0, unlinked: 0, inactive: 0 } }; }
@@ -26,7 +26,7 @@ async function setup(path: string, variant: 'desktop' | 'mobile' = 'desktop') {
   ] });
   await router.push(path);
   await router.isReady();
-  const wrapper = mount({ components: { LibraryNavigation }, template: `<main><LibraryNavigation variant="${variant}" /><RouterView /></main>` }, { attachTo: document.body, global: { plugins: [router] } });
+  const wrapper = mount({ components: { LibraryNavigation }, template: `<main><LibraryNavigation variant="${variant}" /><RouterView /></main>` }, { attachTo: document.body, global: { plugins: [router], stubs: { Teleport: true } } });
   await flushPromises();
   return { wrapper, router };
 }
@@ -35,6 +35,8 @@ describe('gallery navigation and public reading state', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.mocked(fetchCosGalleryCreators).mockReset().mockResolvedValue(payload());
+    vi.mocked(fetchCreatorGalleryLabels).mockReset().mockResolvedValue({ galleryLabels: [], revision: 'a'.repeat(64) });
+    vi.mocked(updateCreatorGalleryLabels).mockReset();
     vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
     become('admin');
@@ -56,6 +58,8 @@ describe('gallery navigation and public reading state', () => {
     expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined, '', 1, 60, undefined, 'portrait');
     expect(wrapper.find('[aria-label="分级"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="creator-rating"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="creator-gallery-labels"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="edit-gallery-labels"]').exists()).toBe(false);
     expect(wrapper.get('h1').text()).toBe('写真图库');
     expect(wrapper.get('a[href^="/library/12"]').attributes('href')).toBe('/library/12?label=portrait');
     await wrapper.get('a[aria-label="图库"]').trigger('click');
@@ -66,6 +70,9 @@ describe('gallery navigation and public reading state', () => {
     expect(wrapper.get('h1').text()).toBe('全部图库');
     expect(wrapper.find('[aria-label="分级"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="creator-rating"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="creator-gallery-labels"]').text()).toContain('Cosplay');
+    expect(wrapper.get('[data-test="creator-gallery-labels"]').text()).toContain('写真');
+    expect(wrapper.find('[data-test="edit-gallery-labels"]').exists()).toBe(true);
     // Back restores the category rather than reviving its discarded rating.
     router.back();
     await flushPromises();
@@ -104,10 +111,74 @@ describe('gallery navigation and public reading state', () => {
       expect(router.currentRoute.value.query).toEqual({ label: value });
       expect(toggle.attributes('aria-expanded')).toBe('true');
       expect(nav.get('[aria-current="page"]').text()).toBe(label);
+      expect(wrapper.find('[data-test="creator-gallery-labels"]').exists()).toBe(false);
+      expect(wrapper.find('[data-test="edit-gallery-labels"]').exists()).toBe(false);
     }
     expect(nav.emitted('open-change')).toEqual([[true]]);
     await toggle.trigger('click');
     expect(nav.find('[aria-label="图库分类"]').exists()).toBe(false);
+  });
+
+  it.each(['admin', 'anonymous', 'viewer'] as const)('shows %s public labels only in all-gallery and preserves labels through all four category round trips', async role => {
+    become(role);
+    const response = payload();
+    response.items.push({ ...creator, id: 13, key: 'creator:13', canonicalCreatorId: 13, name: 'Untagged creator', galleryLabels: [] });
+    response.total = 2;
+    const originalLabels = response.items.map(item => [...(item.galleryLabels ?? [])]);
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValue(response);
+    const { wrapper } = await setup('/library');
+    const expectAllCards = () => {
+      expect(wrapper.findAll('[data-test="creator-gallery-labels"] span').map(badge => badge.text())).toEqual(['Cosplay', '写真']);
+      expect(wrapper.findAll('[data-test="edit-gallery-labels"]')).toHaveLength(role === 'admin' ? 2 : 0);
+      expect(wrapper.find('[data-test="edit-gallery-labels"][aria-label="编辑 Untagged creator 的分类"]').exists()).toBe(role === 'admin');
+    };
+    expectAllCards();
+    for (const value of ['cosplay', 'portrait', 'selfie', 'fuliji']) {
+      await wrapper.get('button[aria-label="展开图库分类"]').trigger('click');
+      await wrapper.get(`.library-nav__menu a[href="/library?label=${value}"]`).trigger('click');
+      await flushPromises();
+      expect(wrapper.findAll('[aria-label="博主目录"] article')).toHaveLength(2);
+      expect(wrapper.find('[data-test="creator-gallery-labels"]').exists()).toBe(false);
+      expect(wrapper.find('[data-test="edit-gallery-labels"]').exists()).toBe(false);
+      await wrapper.get('a[aria-label="图库"]').trigger('click');
+      await flushPromises();
+      expectAllCards();
+    }
+    expect(response.items.map(item => item.galleryLabels)).toEqual(originalLabels);
+    expect(fetchCreatorGalleryLabels).not.toHaveBeenCalled();
+    expect(updateCreatorGalleryLabels).not.toHaveBeenCalled();
+  });
+
+  it('opens classification for an untagged admin card without navigating or saving on cancel', async () => {
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValue({ ...payload(), items: [{ ...creator, galleryLabels: [] }] });
+    const { wrapper, router } = await setup('/library');
+    expect(wrapper.find('[data-test="creator-gallery-labels"]').exists()).toBe(false);
+    await wrapper.get('[data-test="edit-gallery-labels"]').trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe('/library');
+    expect(fetchCreatorGalleryLabels).toHaveBeenCalledExactlyOnceWith(12);
+    expect(wrapper.get('[role="dialog"]').findAll('input[type="checkbox"]')).toHaveLength(4);
+    expect(wrapper.get('[role="dialog"]').findAll('input:checked')).toHaveLength(0);
+    const cancel = wrapper.get('[role="dialog"]').findAll('button').find(button => button.text() === '取消');
+    await cancel!.trigger('click');
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(updateCreatorGalleryLabels).not.toHaveBeenCalled();
+  });
+
+  it('closes an open editor when entering a category and does not reopen it on return to all', async () => {
+    const { wrapper, router } = await setup('/library');
+    await wrapper.get('[data-test="edit-gallery-labels"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
+    await router.push('/library?label=cosplay');
+    await flushPromises();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="edit-gallery-labels"]').exists()).toBe(false);
+    await router.push('/library');
+    await flushPromises();
+    expect(wrapper.find('[data-test="edit-gallery-labels"]').exists()).toBe(true);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(updateCreatorGalleryLabels).not.toHaveBeenCalled();
   });
 
   it.each(['desktop', 'mobile'] as const)('%s closes for outside clicks and routes outside a category list', async variant => {

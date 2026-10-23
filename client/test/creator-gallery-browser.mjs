@@ -19,7 +19,7 @@ process.env.VITEST = 'true';
 const output = path.resolve(process.env.CREATOR_GALLERY_BROWSER_OUTPUT ?? '../.mocks/pr52/browser');
 mkdirSync(output, { recursive: true });
 const server = await createServer({ server: { host: '127.0.0.1', port: 0, strictPort: false, open: false }, logLevel: 'error' });
-const errors = [], unexpected = [], requests = [], evidence = [], layouts = [];
+const errors = [], unexpected = [], requests = [], evidence = [], layouts = [], classificationRows = [];
 let browser;
 const sample = (id, name, galleryLabels, contentRating) => ({
   id, key: `creator:${id}`, identityType: 'creator', canonicalCreatorId: id, name, canonicalName: name,
@@ -93,6 +93,59 @@ try {
     assert.equal(await cards().count(), count);
   };
   const nav = variant => page.locator(`.library-nav--${variant}`);
+  const classificationControls = () => page.locator('main [data-test="creator-gallery-labels"], main [data-test="edit-gallery-labels"]');
+  const expectCategoryCards = async () => {
+    assert.equal(await classificationControls().count(), 0, 'Category cards must not render public labels or admin editing controls');
+    assert.equal(await page.locator('main [data-test="creator-classification"]').count(), 0, 'Category cards must not leave an empty classification row');
+  };
+  const expectAllLabels = async role => {
+    for (const creator of creators) {
+      const card = page.locator('[aria-label="博主目录"] article').filter({ has: page.getByRole('heading', { level: 2, name: creator.name, exact: true }) });
+      const labels = await card.locator('[data-test="creator-gallery-labels"] span').allTextContents();
+      const title = { cosplay: 'Cosplay', portrait: '写真', selfie: '自拍', fuliji: '福利姬' };
+      assert.deepEqual(labels.map(text => text.trim()), creator.galleryLabels.map(label => title[label]), `${role}: all-gallery preserves every public label`);
+      assert.equal(await card.locator('[data-test="edit-gallery-labels"]').count(), role === 'admin' ? 1 : 0, `${role}: editor access includes untagged admin cards`);
+    }
+  };
+  const readClassificationRows = () => page.locator('[aria-label="博主目录"] article').evaluateAll(cards => {
+    const bounds = element => {
+      const { left, top, right, bottom, width, height } = element.getBoundingClientRect();
+      return { left, top, right, bottom, width, height };
+    };
+    return cards.flatMap(card => {
+      const labels = card.querySelector('[data-test="creator-gallery-labels"]');
+      const edit = card.querySelector('[data-test="edit-gallery-labels"]');
+      if (!labels || !edit) return [];
+      return [{
+        name: card.querySelector('h2').textContent.trim(), card: bounds(card), labels: bounds(labels), edit: bounds(edit),
+        accessibleEditName: edit.getAttribute('aria-label'),
+        badges: [...labels.querySelectorAll('span')].map(badge => ({ text: badge.textContent.trim(), ...bounds(badge), overflow: badge.scrollWidth > badge.clientWidth + 1 })),
+        editOverflow: edit.scrollWidth > edit.clientWidth + 1,
+        cardOverflow: card.scrollWidth > card.clientWidth + 1
+      }];
+    });
+  });
+  const expectClassificationRows = async viewport => {
+    const rows = await readClassificationRows();
+    assert(rows.some(row => row.badges.length === 1), 'Same-row fixture must include a single-label card');
+    assert(rows.some(row => row.badges.length > 1), 'Same-row fixture must include a multi-label card');
+    for (const row of rows) {
+      const description = `${viewport.width}px ${row.name}`;
+      assert(row.labels.right <= row.edit.left + 1, `${description}: labels and edit button stay side by side without overlap`);
+      assert(Math.min(row.labels.bottom, row.edit.bottom) - Math.max(row.labels.top, row.edit.top) > 0,
+        `${description}: edit button shares the label block row`);
+      assert(row.labels.left >= row.card.left && row.edit.right <= row.card.right, `${description}: the classification row stays within its card`);
+      assert.equal(row.editOverflow || row.cardOverflow, false, `${description}: no clipped button or card content`);
+      assert.equal(row.accessibleEditName, `编辑 ${row.name} 的分类`);
+      for (const badge of row.badges) {
+        assert(badge.left >= row.labels.left - 1 && badge.right <= row.labels.right + 1 && badge.top >= row.labels.top - 1 && badge.bottom <= row.labels.bottom + 1,
+          `${description}: ${badge.text} wraps within its label block`);
+        assert.equal(badge.overflow, false, `${description}: ${badge.text} remains readable`);
+      }
+      classificationRows.push({ viewport, ...row });
+    }
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+  };
   const saveScreenshot = async (name, action, target = page) => {
     await target.screenshot({ path: path.join(output, `${name}.png`), animations: 'disabled' });
     evidence.push({ screenshot: `${name}.png`, url: page.url(), viewport: page.viewportSize(), time: new Date().toISOString(), role: new URL(page.url()).searchParams.get('role') ?? 'admin', action });
@@ -118,6 +171,8 @@ try {
   await page.goto(`${entry}#/library`);
   await cards().first().waitFor();
   await expectCards(3);
+  await expectAllLabels('admin');
+  const originalLabels = structuredClone(creators.map(creator => creator.galleryLabels));
   await page.getByRole('group', { name: '分级', exact: true }).getByRole('button', { name: 'R18', exact: true }).click();
   await page.waitForURL(/rating=R18/);
   await page.waitForFunction(() => document.querySelectorAll('main h2').length === 1);
@@ -139,12 +194,14 @@ try {
   assert.equal(await page.getByRole('group', { name: '分级', exact: true }).count(), 0);
   assert.equal(await page.locator('main').getByText('R18', { exact: true }).count(), 0);
   await expectCards(1);
+  await expectCategoryCards();
   await expectOpenMenu('desktop');
   for (const [label, title] of [['portrait', '写真'], ['selfie', '自拍'], ['fuliji', '福利姬'], ['cosplay', 'Cosplay'], ['cosplay', 'Cosplay']]) {
     await nav('desktop').getByRole('link', { name: title, exact: true }).click();
     await page.waitForURL(url => url.hash.includes(`label=${label}`));
     await page.getByRole('heading', { level: 1, name: `${title}图库`, exact: true }).waitFor();
     await expectOpenMenu('desktop');
+    await expectCategoryCards();
     assert.equal((await nav('desktop').locator('a[aria-current="page"]').textContent()).trim(), title);
   }
   await saveScreenshot('desktop-selected-menu', '连续切换四分类并重复选择后菜单保持展开，Cosplay选中');
@@ -179,6 +236,9 @@ try {
   await page.waitForURL(url => url.hash === '#/library');
   await page.getByRole('group', { name: '分级', exact: true }).waitFor();
   await expectCards(3);
+  await expectAllLabels('admin');
+  assert.deepEqual(creators.map(creator => creator.galleryLabels), originalLabels, 'Navigation must not alter stored labels');
+  assert.equal(requests.filter(request => request.method !== 'GET').length, 0, 'Displaying or hiding classification rows must not save labels');
   await page.getByRole('button', { name: '编辑 合成博主丙 的分类' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('checkbox', { name: '写真', exact: true }).check();
@@ -205,6 +265,10 @@ try {
     assert.equal(await page.getByRole('group', { name: '偏好', exact: true }).count(), 0);
     assert.equal(await page.locator('[data-test="edit-gallery-labels"]').count(), 0);
     await expectCards(2);
+    await expectCategoryCards();
+    await page.goto(`${entry}?role=${role}#/library`);
+    await expectCards(3);
+    await expectAllLabels(role);
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${entry}?role=anonymous#/library`);
@@ -216,6 +280,7 @@ try {
   await nav('mobile').getByRole('link', { name: '福利姬', exact: true }).click();
   await page.getByRole('heading', { level: 1, name: /福利姬/ }).waitFor();
   await expectCards(1);
+  await expectCategoryCards();
   await expectOpenMenu('mobile');
   assert.equal(await page.getByRole('group', { name: '分级', exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
@@ -245,6 +310,8 @@ try {
     sample(1, '合成博主甲', ['cosplay', 'portrait'], 'R18'),
     sample(2, '合成博主乙', ['fuliji'], 'R15'),
     ...Array.from({ length: 22 }, (_, index) => sample(index + 3, `合成博主${index + 3}`, [], null)));
+  const labelsBeforeLayoutChecks = structuredClone(creators.map(creator => creator.galleryLabels));
+  const writesBeforeLayoutChecks = requests.filter(request => request.method !== 'GET').length;
   const readLayout = () => page.locator('main > section').evaluate(section => {
     const bounds = element => {
       const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
@@ -279,6 +346,13 @@ try {
       await page.goto(`${entry}?role=${role}#/library`);
       await expectCards(24);
       await page.evaluate(() => document.fonts.ready);
+      await expectAllLabels(role);
+      if (role === 'admin') {
+        await expectClassificationRows(viewport);
+        await saveLayoutScreenshot(`classification-${viewport.width}-admin-all`, '全部图库单标签、多标签与编辑按钮同排，未分类博主保留编辑入口');
+        await saveScreenshot(`classification-${viewport.width}-multi-label`, '多标签块可内部换行，编辑按钮在旁边', page.locator('[aria-label="博主目录"] article').first());
+        await saveScreenshot(`classification-${viewport.width}-single-label`, '单标签与编辑按钮同排', page.locator('[aria-label="博主目录"] article').nth(1));
+      }
       const baseline = await readLayout();
       assert(baseline.hasVerticalScroll, 'The all-creators fixture must need a vertical scrollbar');
       assert.equal(baseline.scrollbarGutter, 'stable');
@@ -296,6 +370,7 @@ try {
         const current = await readLayout();
         layouts.push({ viewport, role, category: label, ...current });
         expectStableLayout(baseline, current, `${viewport.width}px ${role} ${title}`);
+        await expectCategoryCards();
         assert.equal(await page.locator('main [aria-label="分级"], main button[value="R15"], main button[value="R18"], main [data-test="creator-rating"]').count(), 0,
           'Category pages must remove grading controls and badges from the DOM');
         assert.equal(await page.locator('main [aria-hidden="true"] button, main [aria-hidden="true"] input, main [aria-hidden="true"] a, main [aria-hidden="true"] [tabindex]').count(), 0,
@@ -314,12 +389,15 @@ try {
       await expectCards(24);
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       expectStableLayout(baseline, await readLayout(), `${viewport.width}px ${role} return to all`);
+      await expectAllLabels(role);
     }
   }
+  assert.deepEqual(creators.map(creator => creator.galleryLabels), labelsBeforeLayoutChecks, 'Role and category transitions must preserve labels');
+  assert.equal(requests.filter(request => request.method !== 'GET').length, writesBeforeLayoutChecks, 'Layout checks must not send label writes');
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
-  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, layouts, requests, errors, unexpected }, null, 2));
-  console.log(JSON.stringify({ status: 'PASS', output, screenshots: evidence.length, requests: requests.length, layoutSamples: layouts.length, scenarios: ['desktop navigation and return', 'persistent category selections and rendered icons', 'category removes rating', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes'] }));
+  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, layouts, classificationRows, requests, errors, unexpected }, null, 2));
+  console.log(JSON.stringify({ status: 'PASS', output, screenshots: evidence.length, requests: requests.length, layoutSamples: layouts.length, classificationRows: classificationRows.length, scenarios: ['desktop navigation and return', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes'] }));
 } catch (error) {
   for (const context of browser?.contexts() ?? []) for (const page of context.pages()) {
     await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});

@@ -52,7 +52,7 @@
       <article
         v-for="creator in creators"
         :key="creator.key"
-        class="group min-w-0 overflow-hidden rounded-2xl border border-border bg-surface text-text no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-lg"
+        class="creator-card group min-w-0 overflow-hidden rounded-2xl border border-border bg-surface text-text no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-lg"
       >
         <RouterLink :to="creatorRoute(creator)" class="block text-inherit no-underline">
         <div class="relative aspect-[4/5] overflow-hidden bg-surface-alt">
@@ -83,13 +83,16 @@
           <p v-if="creator.rosterStatus === 'inactive'" class="mt-1 mb-0 text-xs font-medium text-amber-600">已停用 · 本地图册仍可浏览</p>
           <p v-else-if="creator.linkStatus === 'unlinked'" class="mt-1 mb-0 text-xs text-muted">请在博主库关联目录</p>
           <p v-else class="mt-1 mb-0 text-xs text-muted">点击查看全部图册</p>
-          <div v-if="creator.galleryLabels?.length" class="mt-2 flex flex-wrap gap-1">
-            <span v-for="item in creator.galleryLabels" :key="item" class="rounded-full border border-border px-2 py-0.5 text-xs text-muted">{{ galleryLabelTitle(item) }}</span>
-          </div>
         </div>
         </RouterLink>
-        <div v-if="auth.isAdmin && creator.identityType === 'creator'" class="px-3.5 pb-3.5">
-          <button type="button" class="rounded-lg border border-border bg-surface px-3 py-2 text-xs font-semibold hover:border-accent" :aria-label="`编辑 ${creator.name} 的分类`" data-test="edit-gallery-labels" @click="editingCreator = creator">编辑分类</button>
+        <div v-if="!label && (creator.galleryLabels?.length || (auth.isAdmin && creator.identityType === 'creator'))" class="creator-classification flex items-center gap-2 px-3.5 pb-3.5" data-test="creator-classification">
+          <div v-if="creator.galleryLabels?.length" class="min-w-0 flex-1 flex flex-wrap gap-1" data-test="creator-gallery-labels">
+            <span v-for="item in creator.galleryLabels" :key="item" :title="galleryLabelTitle(item)" class="creator-classification-label max-w-full truncate rounded-full border border-border px-2 py-0.5 text-xs text-muted">{{ galleryLabelTitle(item) }}</span>
+          </div>
+          <button v-if="auth.isAdmin && creator.identityType === 'creator'" type="button" class="creator-classification-edit shrink-0 rounded-lg border border-border bg-surface px-2 py-2 text-xs font-semibold hover:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" :aria-label="`编辑 ${creator.name} 的分类`" title="编辑分类" data-test="edit-gallery-labels" @click="editingCreator = creator">
+            <span class="creator-classification-edit__text">编辑分类</span>
+            <span class="creator-classification-edit__icon i-fluent-edit-20-regular hidden h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
       </article>
     </div>
@@ -103,7 +106,7 @@
       <span class="text-sm text-muted">第 {{ page }} / {{ totalPages }} 页</span>
       <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page >= totalPages || loading" @click="setPage(page + 1)">下一页</button>
     </nav>
-    <CreatorGalleryLabelsDialog v-if="editingCreator && auth.isAdmin" :creator="editingCreator" @close="editingCreator = null" />
+    <CreatorGalleryLabelsDialog v-if="editingCreator && auth.isAdmin && !label" :creator="editingCreator" @close="editingCreator = null" />
   </section>
 </template>
 
@@ -275,6 +278,7 @@ onBeforeRouteLeave(saveReadingPosition);
 onBeforeRouteUpdate(saveReadingPosition);
 watch(() => [route.fullPath, reading.generation, reading.libraryResetVersion, auth.isAdmin] as const, (_current, previous) => {
   if (route.name !== 'library') return;
+  if (label.value) editingCreator.value = null;
   if (previous && previous[3] !== auth.isAdmin) { creators.value = []; total.value = 0; editingCreator.value = null; error.value = ''; }
   const cleanQuery = sanitizedGalleryQuery(route.query, auth.isAdmin);
   if (JSON.stringify(cleanQuery) !== JSON.stringify(route.query)) {
@@ -295,6 +299,46 @@ onBeforeUnmount(() => { requestToken += 1; });
 </script>
 
 <style scoped>
+.creator-card {
+  container-type: inline-size;
+}
+
+@container (max-width: 180px) {
+  .creator-classification {
+    gap: 0.25rem;
+    padding-inline: 0.375rem;
+  }
+
+  .creator-classification-label {
+    padding-inline: 0.25rem;
+  }
+
+  .creator-classification-edit {
+    display: grid;
+    place-items: center;
+    padding: 0.375rem;
+  }
+
+  .creator-classification-edit__text {
+    display: none;
+  }
+
+  .creator-classification-edit__icon {
+    display: block;
+  }
+}
+
+@container (max-width: 120px) {
+  .creator-classification {
+    gap: 0.125rem;
+    padding-inline: 0.125rem;
+  }
+
+  .creator-classification-label {
+    font-size: 0.6875rem;
+  }
+}
+
 :global(html:has(.creator-gallery)) {
   scrollbar-gutter: stable;
 }
