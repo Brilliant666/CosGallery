@@ -1,4 +1,6 @@
 import { ManagedCreatorService } from './managed-creator-service.js';
+import { CreatorGalleryLabelService } from './creator-gallery-label-service.js';
+import type { GalleryLabel } from '../types/gallery-labels.js';
 import { assertLegacyPostRemovalAllowed, assertLegacyPostRestoreAllowed } from './media-trash-service.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -817,6 +819,7 @@ type CosGalleryIdentityItem = {
   rosterStatus: 'active' | 'inactive' | 'unlinked';
   linkStatus: 'linked' | 'unlinked';
   preference: 'liked' | 'kept' | null;
+  galleryLabels: GalleryLabel[];
   folderIds: number[];
   folderNames: string[];
   folderPath: string;
@@ -854,6 +857,7 @@ function chooseCanonicalCreatorCover<T extends {
 
 function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityItem[] {
   const candidates = canonicalCreatorGalleryRepository.listFolderCandidates(creatorId);
+  const labelsByCreator = new CreatorGalleryLabelService().list(creatorId);
   const aliasesByCreator = new Map<number, string[]>();
   for (const row of canonicalCreatorGalleryRepository.listAliases(creatorId)) {
     const aliases = aliasesByCreator.get(row.creatorId) ?? [];
@@ -895,6 +899,7 @@ function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityIte
         : 'unlinked' as const,
       linkStatus: linked ? 'linked' as const : 'unlinked' as const,
       preference: linked ? first.preference : null,
+      galleryLabels: linked ? labelsByCreator.get(canonicalCreatorId) ?? [] : [],
       folderIds: values.map(value => value.folderId).sort((left, right) => left - right),
       folderNames: values.map(value => value.folderName).sort((left, right) => left.localeCompare(right)),
       folderPath: coverSource.folderPath,
@@ -1348,13 +1353,20 @@ function listFallbackAvatarStoryItems(
   };
 }
 
+function presentGalleryCreator(creator: CosGalleryIdentityItem, includePreference: boolean) {
+  const { preference, ...publicCreator } = creator;
+  return includePreference ? { ...publicCreator, preference } : publicCreator;
+}
+
 export const galleryService = {
   getCosGalleryCreators(
     page = 1,
     limit = 60,
     contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive',
     query?: string,
-    preference?: 'liked' | 'kept'
+    preference?: 'liked' | 'kept',
+    label?: GalleryLabel,
+    includePreference = false
   ) {
     if (!storageService.getState().libraryAvailable) {
       return {
@@ -1364,6 +1376,9 @@ export const galleryService = {
     }
 
     const normalizedQuery = query?.trim().toLocaleLowerCase() ?? '';
+    // A gallery label replaces even legacy lifecycle/rating query values.
+    if (label) contentRating = undefined;
+    if (!includePreference) preference = undefined;
     const allItems = buildCosGalleryIdentityItems();
     const summary = {
       all: allItems.filter(item => item.rosterStatus !== 'inactive').length,
@@ -1377,6 +1392,7 @@ export const galleryService = {
       // Apply user preference to the complete canonical identity range, before
       // pagination. It is not a work like, collection, or task priority.
       if (preference && creator.preference !== preference) return false;
+      if (label && !creator.galleryLabels.includes(label)) return false;
       if (contentRating === 'inactive') {
         if (creator.rosterStatus !== 'inactive') return false;
       } else {
@@ -1391,7 +1407,7 @@ export const galleryService = {
     });
     const offset = (page - 1) * limit;
     return {
-      items: filtered.slice(offset, offset + limit),
+      items: filtered.slice(offset, offset + limit).map(creator => presentGalleryCreator(creator, includePreference)),
       page,
       limit,
       total: filtered.length,
@@ -1409,11 +1425,11 @@ export const galleryService = {
     ) ?? null;
   },
 
-  getCanonicalCreator(id: number) {
+  getCanonicalCreator(id: number, includePreference = false) {
     if (!storageService.getState().libraryAvailable) return null;
     const creator = buildCosGalleryIdentityItems(id)[0];
     return creator ? {
-      ...creator,
+      ...presentGalleryCreator(creator, includePreference),
       ...canonicalCreatorGalleryRepository.getVisibleMediaSummary(id),
       unavailablePrimaryWorks: canonicalCreatorGalleryRepository.listPrimaryCopies(id)
         .filter(copy => copy.indexedAvailable !== 1)
@@ -1426,9 +1442,10 @@ export const galleryService = {
     id: number,
     page: number,
     limit: number,
-    mediaType?: MediaType
+    mediaType?: MediaType,
+    includePreference = false
   ) {
-    const creator = this.getCanonicalCreator(id);
+    const creator = this.getCanonicalCreator(id, includePreference);
     if (!creator) return null;
     const total = canonicalCreatorGalleryRepository.countVisibleWorks(id, mediaType);
     const items = canonicalCreatorGalleryRepository.listVisibleWorks(

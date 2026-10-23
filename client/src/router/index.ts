@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router';
 import { installRouteLoadRecovery } from '../utils/route-load-recovery';
+import { isGalleryReadingRoute, sanitizedGalleryQuery } from '../utils/creator-gallery-labels';
 
 import HomeView from '../views/HomeView.vue';
 import PostView from '../views/PostView.vue';
@@ -320,6 +321,11 @@ router.beforeEach((to) => {
   const authStore = useAuthStore(pinia);
   if (!authStore.ready) {
     return true;
+  }
+
+  if (isGalleryReadingRoute(to.name)) {
+    const query = sanitizedGalleryQuery(to.query, authStore.isAdmin);
+    if (JSON.stringify(query) !== JSON.stringify(to.query)) return { path: to.path, query, hash: to.hash, replace: true };
   }
 
   return canAccessRoute(to) ? true : { name: 'home' };

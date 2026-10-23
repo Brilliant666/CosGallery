@@ -1,6 +1,7 @@
 import type { ImageDetail, PostMediaItem } from '../types/api';
 import type { LocationQuery } from 'vue-router';
 import { useFoldersStore } from '../stores/folders';
+import { parseCreatorGalleryLabel } from './creator-gallery-labels';
 
 export function folderReadingRoute(slug: string, creatorId?: number | null) {
   const canonicalId = creatorId ?? useFoldersStore().items.find(folder => folder.slug === slug)?.canonicalCreatorId;
@@ -8,11 +9,11 @@ export function folderReadingRoute(slug: string, creatorId?: number | null) {
 }
 
 // Carry only browser state, never a nested arbitrary return URL.
-export function libraryReadingQuery(path?: string): Record<string, string> {
+export function libraryReadingQuery(path?: string, allowPreference = true): Record<string, string> {
   if (!path || !/^\/(?:library|creators)(?:\/|\?|$)/u.test(path) || path.includes('\\')) return {};
   const url = new URL(path, 'http://library.invalid');
   const query: Record<string, string> = {};
-  for (const key of ['q', 'rating', 'preference', 'libraryPage', 'loaded']) {
+  for (const key of ['q', 'rating', 'preference', 'label', 'libraryPage', 'loaded']) {
     const value = url.searchParams.get(key);
     if (value) query[key] = value;
   }
@@ -21,17 +22,20 @@ export function libraryReadingQuery(path?: string): Record<string, string> {
   const legacy = url.searchParams.get('returnTo');
   if (legacy && /^\/library(?:\?|$)/u.test(legacy) && !legacy.includes('\\')) {
     const old = new URL(legacy, 'http://library.invalid');
-    for (const key of ['q', 'rating', 'preference']) if (!query[key] && old.searchParams.get(key)) query[key] = old.searchParams.get(key)!;
+    for (const key of ['q', 'rating', 'preference', 'label']) if (!query[key] && old.searchParams.get(key)) query[key] = old.searchParams.get(key)!;
     if (!query.libraryPage && old.searchParams.get('page')) query.libraryPage = old.searchParams.get('page')!;
   }
+  if (!parseCreatorGalleryLabel(query.label)) delete query.label;
+  if (query.label) delete query.rating;
+  if (!allowPreference) delete query.preference;
   return query;
 }
 
-export function libraryReturnRoute(query: LocationQuery) {
+export function libraryReturnRoute(query: LocationQuery, allowPreference = true) {
   const encoded = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) if (typeof value === 'string') encoded.set(key, value);
-  const state = libraryReadingQuery(`/library/reader?${encoded}`);
-  return { name: 'library', query: { q: state.q, rating: state.rating, ...(state.preference ? { preference: state.preference } : {}), page: state.libraryPage } };
+  const state = libraryReadingQuery(`/library/reader?${encoded}`, allowPreference);
+  return { name: 'library', query: { q: state.q, ...(state.label ? { label: state.label } : { rating: state.rating }), ...(state.preference ? { preference: state.preference } : {}), page: state.libraryPage } };
 }
 
 export function parsePositiveId(value: unknown): number | null {

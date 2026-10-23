@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { useCreatorReadingStore } from './creator-reading';
 
 import {
   changePasswordProtection,
@@ -122,6 +123,10 @@ export const useAuthStore = defineStore('auth', {
   },
   actions: {
     applyStatus(status: AuthStatus) {
+      if (this.role !== status.role || this.authenticated !== status.authenticated
+        || this.capabilities.canAccessSettings !== status.capabilities.canAccessSettings) {
+        useCreatorReadingStore().invalidate();
+      }
       this.enabled = status.enabled;
       this.authenticated = status.authenticated;
       this.role = status.role;

@@ -334,13 +334,27 @@ export function fetchCosGalleryCreators(
   query?: string,
   page = 1,
   limit = 60,
-  preference?: 'liked' | 'kept'
+  preference?: 'liked' | 'kept',
+  label?: import('../types/api').CreatorGalleryLabel
 ) {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
-  if (contentRating) params.set('contentRating', contentRating);
+  if (label) params.set('label', label);
+  else if (contentRating) params.set('contentRating', contentRating);
   if (preference) params.set('preference', preference);
   if (query?.trim()) params.set('q', query.trim());
   return requestJson<import('../types/api').CosGalleryCreatorsPayload>(`/api/cos-gallery/creators?${params.toString()}`);
+}
+
+export function fetchCreatorGalleryLabels(id: number) {
+  return requestJson<import('../types/api').CreatorGalleryLabelsState>(`/api/admin/archive-catalog/creators/${id}/gallery-labels`);
+}
+
+export function updateCreatorGalleryLabels(id: number, galleryLabels: import('../types/api').CreatorGalleryLabel[], expectedRevision: string) {
+  return requestJson<import('../types/api').CreatorGalleryLabelsState>(`/api/admin/archive-catalog/creators/${id}/gallery-labels`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ galleryLabels, expectedRevision })
+  });
 }
 
 export function fetchCanonicalCreator(id: number) {

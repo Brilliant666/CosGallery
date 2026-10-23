@@ -80,21 +80,21 @@ describe('managed gallery classifications', () => {
     vi.mocked(fetchCosGalleryCreators).mockResolvedValue({total:0,page:1,limit:50,hasMore:false,summary:{all:0,R15:0,R18:0,unclassified:0,unlinked:0,inactive:0},items:[]});
     const wrapper=mount(CosGalleryHomeView,{global:{stubs:{RouterLink:true}}});
     await flushPromises();
-    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined,'',1,60,undefined);
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined,'',1,60,undefined,undefined);
     expect(wrapper.find('select').exists()).toBe(false);
     expect(wrapper.get('[role="group"][aria-label="分级"]').findAll('button').map(item=>item.text())).toEqual(['全部','R15','R18']);
     expect(wrapper.get('[role="group"][aria-label="偏好"]').findAll('button').map(item=>item.text())).toEqual(['全部','喜欢','保留']);
     for(const value of ['R15','R18']) {
       await wrapper.get(`[aria-label="分级"] button[value="${value}"]`).trigger('click');
       await flushPromises();
-      expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(value,'',1,60,undefined);
+      expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(value,'',1,60,undefined,undefined);
       expect(wrapper.get(`[aria-label="分级"] button[value="${value}"]`).attributes('aria-pressed')).toBe('true');
     }
     await wrapper.get('[aria-label="偏好"] button[value="liked"]').trigger('click');
     await wrapper.get('input[type="search"]').setValue('别名');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
-    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18','别名',1,60,'liked');
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18','别名',1,60,'liked',undefined);
     expect(routerState.route.query).toEqual({ q: '别名', rating: 'R18', preference: 'liked' });
     expect(wrapper.get('[aria-label="偏好"] button[value="liked"]').attributes('aria-pressed')).toBe('true');
     expect(wrapper.get('[aria-label="分级"]').text()).not.toContain('未关联');
@@ -102,7 +102,7 @@ describe('managed gallery classifications', () => {
     await wrapper.get('[aria-label="偏好"] button[value="liked"]').trigger('click');await wrapper.get('[aria-label="分级"] button[value="R18"]').trigger('click');await flushPromises();
     expect(fetchCosGalleryCreators).toHaveBeenCalledTimes(requestCount);expect(routerState.push).toHaveBeenCalledTimes(pushCount);
     await wrapper.get('[aria-label="偏好"] button[value="kept"]').trigger('click');await flushPromises();
-    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18','别名',1,60,'kept');
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18','别名',1,60,'kept',undefined);
     wrapper.unmount();
   });
   it('keeps old special URLs explicit and unchanged until the user exits the filter', async () => {
@@ -111,12 +111,12 @@ describe('managed gallery classifications', () => {
     vi.mocked(fetchCosGalleryCreators).mockResolvedValue({total:0,page:1,limit:60,hasMore:false,summary:{all:0,R15:0,R18:0,unclassified:0,unlinked:0,inactive:0},items:[]});
     const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: true } } });
     await flushPromises();
-    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('inactive', '', 1, 60, undefined);
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('inactive', '', 1, 60, undefined, undefined);
     expect(wrapper.get('[role="status"]').text()).toContain('范围未改变');
     expect(wrapper.findAll('[aria-label="分级"] button[aria-pressed="true"]')).toHaveLength(0);
     await wrapper.get('[aria-label="分级"] button[value="all"]').trigger('click');
     await flushPromises();
-    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined, '', 1, 60, undefined);
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined, '', 1, 60, undefined, undefined);
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
     wrapper.unmount();
   });
@@ -130,7 +130,7 @@ describe('managed gallery classifications', () => {
     await flushPromises();
     expect(routerState.replace).toHaveBeenCalledExactlyOnceWith({ name: 'library', query: { rating: 'R18', preference: 'kept', q: '别名' } });
     expect(routerState.push).not.toHaveBeenCalled();
-    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18', '别名', 1, 60, 'kept');
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18', '别名', 1, 60, 'kept', undefined);
     expect(wrapper.text()).toContain('正在加载博主目录');
     expect(wrapper.text()).not.toContain('没有符合当前条件');
     resolveLast(creatorPage(54, 1));
@@ -149,7 +149,7 @@ describe('managed gallery classifications', () => {
     expect(routerState.replace).toHaveBeenCalledTimes(1);
     expect(routerState.route.query).toEqual({ rating: 'R18', ...(expected > 1 ? { page: String(expected) } : {}) });
     expect(fetchCosGalleryCreators).toHaveBeenCalledTimes(2);
-    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18', '', expected, 60, undefined);
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18', '', expected, 60, undefined, undefined);
     expect(wrapper.text()).toContain(total ? '第 3 / 3 页' : '没有符合当前条件');
     wrapper.unmount();
   });

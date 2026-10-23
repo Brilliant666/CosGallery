@@ -41,17 +41,7 @@
           </a>
         </RouterLink>
 
-        <RouterLink custom :to="{ name: 'library' }" v-slot="{ href, navigate, isActive }">
-          <a
-            :href="href"
-            class="mobile-nav__item"
-            :class="isActive ? mobileNavActiveClass : ''"
-            :aria-label="t('nav.library')"
-            @click="handleNavNavigate($event, navigate)"
-          >
-            <span class="mobile-nav__icon" :class="isActive ? 'i-fluent-folder-16-filled' : 'i-fluent-folder-16-regular'" aria-hidden="true" />
-          </a>
-        </RouterLink>
+        <LibraryNavigation variant="mobile" @navigate="closeMoreMenu" />
 
         <RouterLink v-if="showPlacesNav" custom :to="{ name: 'places' }" v-slot="{ href, navigate, isActive }">
           <a
@@ -232,6 +222,7 @@
 </template>
 
 <script setup lang="ts">
+import LibraryNavigation from './LibraryNavigation.vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink, useRoute } from 'vue-router';
@@ -501,7 +492,7 @@ onUnmounted(() => {
     }
   }
 
-  @media (min-width: 360px) {
+  @media (min-width: 430px) {
     .mobile-nav__bar {
       grid-template-columns: 2.8rem minmax(0, 1fr);
       gap: 0.38rem;

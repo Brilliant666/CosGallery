@@ -530,6 +530,12 @@ export interface ImageCaptionMutationResult {
   image: ImageDetail;
 }
 
+export type CreatorGalleryLabel = 'cosplay' | 'portrait' | 'selfie' | 'fuliji';
+export interface CreatorGalleryLabelsState {
+  galleryLabels: CreatorGalleryLabel[];
+  revision: string;
+}
+
 export interface CosGalleryCreator {
   unavailablePrimaryWorks?: Array<{ workId: number; postId: number | null; title: string; reason: string }>;
   avatarUrl?: string | null;
@@ -551,7 +557,8 @@ export interface CosGalleryCreator {
   folderIds: number[];
   folderNames: string[];
   aliases: string[];
-  preference: ArchiveCatalogPreference | null;
+  preference?: ArchiveCatalogPreference | null;
+  galleryLabels: CreatorGalleryLabel[];
   workCount: number;
   latestWorkAt: number | null;
   contentRating: ContentRating | null;

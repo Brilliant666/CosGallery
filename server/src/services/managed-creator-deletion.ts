@@ -33,6 +33,7 @@ export function creatorDeletionRows(db: DatabaseSync, id: number): Record<string
   return {
     archive_catalog_creators: db.prepare('SELECT * FROM archive_catalog_creators WHERE id=?').all(id),
     archive_catalog_creator_aliases: db.prepare('SELECT * FROM archive_catalog_creator_aliases WHERE creator_id=? ORDER BY source,normalized_alias').all(id),
+    archive_catalog_creator_gallery_labels: db.prepare('SELECT * FROM archive_catalog_creator_gallery_labels WHERE creator_id=? ORDER BY label').all(id),
     archive_catalog_creator_sources: db.prepare('SELECT * FROM archive_catalog_creator_sources WHERE creator_id=? ORDER BY source,source_creator_id').all(id),
     archive_catalog_collections: db.prepare('SELECT * FROM archive_catalog_collections WHERE creator_id=? ORDER BY id').all(id),
     archive_catalog_works: db.prepare('SELECT * FROM archive_catalog_works WHERE creator_id=? ORDER BY id').all(id),
@@ -138,6 +139,7 @@ export function inspectCreatorDeletion(db: DatabaseSync, id: number): CreatorDel
   const owned: Record<string, string> = {
     archive_catalog_creators: 'id=?',
     archive_catalog_creator_aliases: 'creator_id=?',
+    archive_catalog_creator_gallery_labels: 'creator_id=?',
     archive_catalog_creator_sources: 'creator_id=?',
     archive_catalog_collections: 'creator_id=?',
     archive_catalog_works: 'creator_id=?',
@@ -248,6 +250,7 @@ export function inspectCreatorDeletion(db: DatabaseSync, id: number): CreatorDel
     removableAliases: aliases.length,
     removalScope: [
       { kind: 'aliases', label: '名称与别名', count: aliases.length },
+      { kind: 'galleryLabels', label: '图库标签', count: rows.archive_catalog_creator_gallery_labels.length },
       { kind: 'sources', label: '来源身份', count: rows.archive_catalog_creator_sources.length },
       { kind: 'collections', label: '来源合集', count: rows.archive_catalog_collections.length },
       { kind: 'sourceWorks', label: '来源作品记录', count: sourceWorks.length },

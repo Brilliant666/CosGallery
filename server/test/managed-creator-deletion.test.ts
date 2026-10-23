@@ -38,7 +38,7 @@ describe('global controlled creator deletion', () => {
     const fixture = sourceOnly();
     const preview = service.deletionPreview(id);
     expect(preview).toMatchObject({ eligible: true, removableAliases: 1, removalScope: [
-      { kind: 'aliases', count: 1 }, { kind: 'sources', count: 1 }, { kind: 'collections', count: 1 },
+      { kind: 'aliases', count: 1 }, { kind: 'galleryLabels', count: 0 }, { kind: 'sources', count: 1 }, { kind: 'collections', count: 1 },
       { kind: 'sourceWorks', count: 1 }, { kind: 'works', count: 1 }
     ] });
     service.deleteUnusedManualCreator(id, confirm());

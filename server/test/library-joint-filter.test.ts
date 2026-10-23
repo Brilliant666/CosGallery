@@ -48,6 +48,7 @@ describe.sequential('library complete-range joint filters', () => {
       db.connection.prepare(`INSERT INTO archive_catalog_creator_aliases (creator_id,alias,normalized_alias,source)
         VALUES (?,?,?,'test')`).run(id, `共同别名 ${id}`, `共同别名 ${id}`);
       addFolder(id);
+      if (id <= 61) db.connection.prepare("INSERT INTO archive_catalog_creator_gallery_labels(creator_id,label) VALUES(?,'cosplay')").run(id);
     }
     addFolder(1, '-second');
     addFolder(0); // Unlinked identities stay visible in the existing default range.
@@ -97,5 +98,24 @@ describe.sequential('library complete-range joint filters', () => {
     expect(refreshed.body.total).toBe(60);
     expect(refreshed.body.items.some((item: { id: number }) => item.id === 1)).toBe(false);
     expect((await requestTestApp(app, 'GET', '/api/cos-gallery/creators?preference=invalid')).status).toBe(400);
+  });
+
+  it('filters labels across canonical identities before pagination and overrides every legacy rating range', async () => {
+    for (const rating of ['R15', 'R18', 'unclassified', 'unlinked', 'inactive', 'invalid', 'R15&contentRating=R18']) {
+      const query = `label=cosplay&contentRating=${rating}&q=${encodeURIComponent('共同别名')}`;
+      const first = await requestTestApp(app, 'GET', `/api/cos-gallery/creators?${query}`);
+      const last = await requestTestApp(app, 'GET', `/api/cos-gallery/creators?${query}&page=2`);
+      expect(first.body).toMatchObject({ total: 61, hasMore: true });
+      expect(last.body).toMatchObject({ total: 61, hasMore: false });
+      expect(first.body.items).toHaveLength(60);
+      expect(last.body.items).toHaveLength(1);
+      const all = [...first.body.items, ...last.body.items];
+      expect(new Set(all.map(item => item.key)).size).toBe(61);
+      expect(all.every(item => item.galleryLabels.includes('cosplay'))).toBe(true);
+      expect(all.find(item => item.key === 'creator:1').folderIds).toHaveLength(2);
+    }
+    expect((await requestTestApp(app, 'GET', '/api/cos-gallery/creators?label=cosplay&preference=liked')).body.total).toBe(60);
+    expect((await requestTestApp(app, 'GET', '/api/cos-gallery/creators?label=invalid')).status).toBe(400);
+    expect((await requestTestApp(app, 'GET', '/api/cos-gallery/creators?label=cosplay&label=selfie')).status).toBe(400);
   });
 });

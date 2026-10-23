@@ -10,6 +10,7 @@ import {
 } from '../services/archive-catalog-pipeline-service.js';
 import { ArchiveCatalogQueryService } from '../services/archive-catalog-query-service.js';
 import { ManagedCreatorError, ManagedCreatorService, managedFolderRatingSchema } from '../services/managed-creator-service.js';
+import { CreatorGalleryLabelService, galleryLabelSchema } from '../services/creator-gallery-label-service.js';
 import { ArchiveBridgeService } from '../services/archive-bridge-service.js';
 import { ArchiveDownloadTaskService } from '../services/archive-download-task-service.js';
 import { ArchiveMetadataTaskService } from '../services/archive-metadata-task-service.js';
@@ -92,6 +93,14 @@ router.get('/admin/archive-catalog/creators/:id/editing-state', managedAccess, a
 router.put('/admin/archive-catalog/creators/:id/profile-settings', managedAccess, (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
   managedResponse(response, () => new ManagedCreatorService().saveProfile(id, request.body));
+});
+router.get('/admin/archive-catalog/creators/:id/gallery-labels', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new CreatorGalleryLabelService().get(id));
+});
+router.put('/admin/archive-catalog/creators/:id/gallery-labels', managedAccess, (request, response) => {
+  const id = imageIdSchema.parse(request.params).id;
+  managedResponse(response, () => new CreatorGalleryLabelService().update(id, request.body));
 });
 router.put('/admin/archive-catalog/creators/:id/directory-settings', managedAccess, async (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
@@ -318,6 +327,7 @@ const cosGalleryCreatorsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(60),
   contentRating: z.enum(['R15', 'R18', 'unclassified', 'unlinked', 'inactive']).optional(),
   preference: z.enum(['liked', 'kept']).optional(),
+  label: galleryLabelSchema.optional(),
   q: z.string().trim().max(160).optional()
 });
 const canonicalCreatorWorkParamsSchema = z.object({
@@ -1515,13 +1525,17 @@ router.get('/cos-gallery/works', (request, response) => {
 });
 
 router.get('/cos-gallery/creators', (request, response) => {
-  const query = cosGalleryCreatorsQuerySchema.parse(request.query);
-  response.json(galleryService.getCosGalleryCreators(query.page, query.limit, query.contentRating, query.q, query.preference));
+  const admin = authService.getStatus(request).role === 'admin';
+  const label = galleryLabelSchema.optional().parse(request.query.label);
+  // Non-admin preference input has no filtering or validation side channel.
+  const query = cosGalleryCreatorsQuerySchema.parse({ ...request.query,
+    ...(label ? { contentRating: undefined } : {}), ...(!admin ? { preference: undefined } : {}) });
+  response.json(galleryService.getCosGalleryCreators(query.page, query.limit, query.contentRating, query.q, query.preference, query.label, admin));
 });
 
 router.get('/cos-gallery/creators/:id', (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
-  const creator = galleryService.getCanonicalCreator(id);
+  const creator = galleryService.getCanonicalCreator(id, authService.getStatus(request).role === 'admin');
   if (!creator) {
     response.status(404).json({ message: 'Creator not found' });
     return;
@@ -1532,7 +1546,7 @@ router.get('/cos-gallery/creators/:id', (request, response) => {
 router.get('/cos-gallery/creators/:id/works', (request, response) => {
   const id = imageIdSchema.parse(request.params).id;
   const query = paginationQuerySchema.merge(mediaTypeQuerySchema).parse(request.query);
-  const payload = galleryService.getCanonicalCreatorWorks(id, query.page, query.limit, query.mediaType);
+  const payload = galleryService.getCanonicalCreatorWorks(id, query.page, query.limit, query.mediaType, authService.getStatus(request).role === 'admin');
   if (!payload) {
     response.status(404).json({ message: 'Creator not found' });
     return;

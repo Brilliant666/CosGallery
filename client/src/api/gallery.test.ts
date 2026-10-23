@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchPostSummary, fetchReels, fetchReelPlayback, fetchGalleryVideoPlayback, addImageToCollection, fetchCosGalleryCreators, fetchLocalIngestInboxCreators, fetchSharedImage, fetchSharedPost } from './gallery';
+import { fetchPostSummary, fetchReels, fetchReelPlayback, fetchGalleryVideoPlayback, addImageToCollection, fetchCosGalleryCreators, fetchCreatorGalleryLabels, updateCreatorGalleryLabels, fetchLocalIngestInboxCreators, fetchSharedImage, fetchSharedPost } from './gallery';
 
 describe('post and image API namespaces', () => {
   afterEach(() => {
@@ -37,6 +37,23 @@ describe('post and image API namespaces', () => {
     const url = new URL(fetchMock.mock.calls[0]![0], 'http://test.invalid');
     expect(url.pathname).toBe('/api/cos-gallery/creators');
     expect(Object.fromEntries(url.searchParams)).toEqual({ page: '2', limit: '60', contentRating: 'R18', preference: 'kept', q: '别名' });
+  });
+
+  it('does not send a content rating for a category and uses the existing trusted mutation client for label edits', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ galleryLabels: [], revision: 'revision-a' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await fetchCosGalleryCreators('R18', '  alias  ', 1, 60, undefined, 'cosplay');
+    const url = new URL(fetchMock.mock.calls[0]![0], 'http://test.invalid');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ page: '1', limit: '60', label: 'cosplay', q: 'alias' });
+    await fetchCreatorGalleryLabels(12);
+    await updateCreatorGalleryLabels(12, ['cosplay', 'selfie'], 'revision-a');
+    expect(fetchMock.mock.calls[1]![0]).toBe('/api/admin/archive-catalog/creators/12/gallery-labels');
+    const [path, init] = fetchMock.mock.calls[2]!;
+    expect(path).toBe('/api/admin/archive-catalog/creators/12/gallery-labels');
+    expect(init.method).toBe('PUT');
+    expect(init.credentials).toBe('same-origin');
+    expect(init.headers.get('x-foldergram-intent')).toBe('1');
+    expect(JSON.parse(init.body)).toEqual({ galleryLabels: ['cosplay', 'selfie'], expectedRevision: 'revision-a' });
   });
 
   it('uses the canonical shared-post endpoint for new shared links and preserves the legacy image endpoint', async () => {

@@ -10,7 +10,7 @@
           <div class="grid min-w-0 gap-4 pt-[0.35rem]">
             <div class="flex flex-wrap items-center gap-3 max-sm:justify-center">
               <h1 class="m-0 break-words text-[clamp(1.6rem,2.4vw,2rem)] font-medium leading-tight tracking-[-0.04em]">{{ creator.name }}</h1>
-              <span class="text-sm text-muted">{{ creator.contentRating ?? '待分类' }}</span>
+              <span v-if="!activeLabel" class="text-sm text-muted">{{ creator.contentRating ?? '待分类' }}</span>
             </div>
             <div class="flex flex-wrap gap-6 text-[0.95rem] max-sm:justify-center">
               <span>{{ total }} 套作品</span>
@@ -47,6 +47,8 @@ import FolderGrid from '../components/FolderGrid.vue';
 import InfiniteLoader from '../components/InfiniteLoader.vue';
 import CreatorFolderActions from '../components/CreatorFolderActions.vue';
 import { useAppStore } from '../stores/app';
+import { useAuthStore } from '../stores/auth';
+import { parseCreatorGalleryLabel } from '../utils/creator-gallery-labels';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 import type { CosGalleryCreator, CanonicalWorkSummary, FolderSummary } from '../types/api';
 import { parsePositiveId, libraryReturnRoute } from '../utils/work-gallery';
@@ -55,6 +57,7 @@ const props = defineProps<{ creatorId: string }>();
 const route = useRoute();
 const router = useRouter();
 const appStore = useAppStore();
+const authStore = useAuthStore();
 const reading = useCreatorReadingStore();
 const creator = shallowRef<CosGalleryCreator | null>(null);
 const items = ref<CanonicalWorkSummary[]>([]);
@@ -66,7 +69,8 @@ const error = ref<string | null>(null);
 let loadToken = 0;
 let activeKey = '';
 let generation = reading.generation;
-const libraryReturn = computed(() => libraryReturnRoute(route.query));
+const libraryReturn = computed(() => libraryReturnRoute(route.query, authStore.isAdmin));
+const activeLabel = computed(() => parseCreatorGalleryLabel(route.query.label));
 const updatedDate = computed(() => {
   const timestamp = creator.value?.latestImageMtimeMs ?? creator.value?.latestWorkAt;
   return timestamp ? new Date(timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
@@ -87,12 +91,13 @@ async function loadMore() {
   const id = parsePositiveId(props.creatorId);
   if (id === null) { error.value = '博主 ID 无效'; return; }
   const token = loadToken;
+  const requestGeneration = reading.generation;
   const page = nextPage.value;
   error.value = null;
   loading.value = true;
   try {
     const payload = await fetchCanonicalCreatorWorks(id, page, 24);
-    if (token !== loadToken) return;
+    if (token !== loadToken || requestGeneration !== reading.generation) return;
     creator.value = payload.creator;
     const known = new Set(items.value.map(item => item.id));
     items.value.push(...payload.items.filter(item => !known.has(item.id)));

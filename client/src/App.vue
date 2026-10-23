@@ -24,6 +24,7 @@
 </template>
 
 <script setup lang="ts">
+import { isGalleryReadingRoute, sanitizedGalleryQuery } from './utils/creator-gallery-labels';
 import { computed, nextTick, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterView, useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-router';
@@ -259,6 +260,14 @@ watch(
   async () => {
     if (!authStore.ready) {
       return;
+    }
+
+    if (isGalleryReadingRoute(route.name)) {
+      const query = sanitizedGalleryQuery(route.query, authStore.isAdmin);
+      if (JSON.stringify(query) !== JSON.stringify(route.query)) {
+        await router.replace({ path: route.path, query, hash: route.hash });
+        return;
+      }
     }
 
     if (canAccessRoute(route)) {

@@ -1,6 +1,7 @@
 <template>
   <aside
-    class="sidebar group flex h-full w-[4.85rem] flex-col overflow-visible bg-bg px-[0.95rem] py-5 text-text transition-[width] duration-220 ease hover:w-60"
+    class="sidebar group flex h-full w-[4.85rem] flex-col overflow-visible bg-bg px-[0.95rem] py-5 text-text transition-[width] duration-220 ease hover:w-60 focus-within:w-60"
+    :class="{ 'sidebar--library-open': libraryMenuOpen }"
   >
     <RouterLink
       class="sidebar__brand relative inline-flex items-center justify-center w-12 h-12 p-[0.3rem] rounded-[1rem] color-inherit transition-[background-color,transform,opacity] duration-180 hover:bg-surface-hover hover:-translate-y-px"
@@ -110,37 +111,7 @@
         </a>
       </RouterLink>
 
-      <RouterLink
-        custom
-        :to="{ name: 'library' }"
-        v-slot="{ href, navigate, isActive }"
-      >
-        <a
-          :href="href"
-          class="sidebar__link sidebar-item"
-          :class="isActive ? sidebarActiveClass : ''"
-          @click="navigate"
-        >
-          <span
-            class="sidebar__icon flex-shrink-0 w-[1.45rem] h-[1.45rem]"
-            :class="
-              isActive
-                ? 'i-fluent-folder-16-filled'
-                : 'i-fluent-folder-16-regular'
-            "
-            aria-hidden="true"
-          />
-          <span
-            class="sidebar__label max-w-0 overflow-hidden whitespace-nowrap text-[0.9rem] opacity-0 group-hover:max-w-[12rem] group-hover:opacity-100"
-            style="
-              transition:
-                opacity 0.18s ease,
-                max-width 0.22s ease;
-            "
-            >{{ t('nav.library') }}</span
-          >
-        </a>
-      </RouterLink>
+      <LibraryNavigation variant="desktop" @navigate="closeMoreMenu" @open-change="libraryMenuOpen = $event" />
 
       <RouterLink
         v-if="showPlacesNav"
@@ -436,6 +407,7 @@
 </template>
 
 <script setup lang="ts">
+import LibraryNavigation from './LibraryNavigation.vue';
 import { folderReadingRoute } from '../utils/work-gallery';
   import { computed, onMounted, onUnmounted, ref, watch } from "vue"
   import { useI18n } from "vue-i18n"
@@ -462,6 +434,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
   const placesStore = usePlacesStore()
   const route = useRoute()
   const moreMenuOpen = ref(false)
+  const libraryMenuOpen = ref(false)
 
   const likedCountByFolder = computed(() =>
     buildLikedCountByFolder(likesStore.items),
@@ -549,3 +522,23 @@ import { folderReadingRoute } from '../utils/work-gallery';
     window.removeEventListener("keydown", handleWindowKeydown)
   })
 </script>
+
+<style scoped>
+/* Keep the complete menu usable after the pointer leaves its toggle, and
+   expand before a keyboard user tabs from the gallery link to the arrow. */
+.sidebar:hover,
+.sidebar:focus-within,
+.sidebar--library-open {
+  width: 15rem;
+}
+.sidebar--library-open {
+  transition: none;
+}
+.sidebar:focus-within .sidebar__label,
+.sidebar:focus-within .sidebar__meta,
+.sidebar--library-open .sidebar__label,
+.sidebar--library-open .sidebar__meta {
+  max-width: 12rem;
+  opacity: 1;
+}
+</style>

@@ -4,6 +4,7 @@ import { useFoldersStore } from '../stores/folders';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 import type { FolderSummary } from '../types/api';
 import { canonicalCreatorRoute, canonicalWorkGalleryRoute, folderReadingRoute, libraryReadingQuery, libraryReturnRoute } from './work-gallery';
+import { sanitizedGalleryQuery } from './creator-gallery-labels';
 
 describe('unified library navigation state', () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -28,6 +29,22 @@ describe('unified library navigation state', () => {
     expect(creator.query).toEqual({ q: 'alias', rating: 'R18', preference: 'kept', libraryPage: '2' });
     const work = canonicalWorkGalleryRoute(166, 123, '/library/166?q=alias&rating=R18&preference=kept&libraryPage=2');
     expect(libraryReturnRoute(work.query!)).toEqual({ name: 'library', query: { q: 'alias', rating: 'R18', preference: 'kept', page: '2' } });
+  });
+  it('keeps one category across creator and viewer return state without carrying a rating', () => {
+    const creator = canonicalCreatorRoute(12, '/library?label=portrait&rating=R18&q=alias&page=2');
+    expect(creator.query).toEqual({ label: 'portrait', q: 'alias', libraryPage: '2' });
+    const work = canonicalWorkGalleryRoute(12, 123, '/library/12?label=portrait&rating=R18&q=alias&libraryPage=2&loaded=3');
+    expect(work.query).toEqual({ label: 'portrait', q: 'alias', libraryPage: '2', loaded: '3' });
+    expect(libraryReturnRoute(work.query!)).toEqual({ name: 'library', query: { label: 'portrait', q: 'alias', page: '2' } });
+  });
+  it('removes private filters from visitor return links including old nested reading URLs', () => {
+    expect(libraryReturnRoute({ label: 'selfie', preference: 'kept', rating: 'R18', libraryPage: '2' }, false)).toEqual({
+      name: 'library', query: { label: 'selfie', q: undefined, page: '2' }
+    });
+    expect(sanitizedGalleryQuery({ label: 'cosplay', preference: 'liked', rating: 'R18', returnTo: '/library?rating=R18&preference=liked&page=2' }, false)).toEqual({
+      label: 'cosplay', returnTo: '/library?page=2'
+    });
+    expect(sanitizedGalleryQuery({ label: ['cosplay', 'portrait'], rating: 'R15' }, true)).toEqual({ rating: 'R15' });
   });
   it('invalidates reading state after a media mutation and retains only bounded navigation state', () => {
     const reading = useCreatorReadingStore();
