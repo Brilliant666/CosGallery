@@ -56,17 +56,19 @@ onBeforeUnmount(() => { document.removeEventListener('pointerdown', outside); em
 <style scoped>
 .library-nav { position: relative; min-width: 0; }
 .library-nav__row { display: flex; align-items: center; border-radius: 1rem; }
-.library-nav__row--active { background: var(--surface); font-weight: 700; }
-.library-nav__all { display: flex; min-width: 0; min-height: 3rem; align-items: center; gap: 1rem; padding: .7rem .75rem; color: var(--text); text-decoration: none; flex: 1; }
+.library-nav__row--active { background: var(--surface-hover); font-weight: 700; }
+.library-nav__all { display: flex; min-width: 0; min-height: 3rem; align-items: center; gap: 1rem; padding: .7rem .75rem; border-radius: inherit; color: var(--text); text-decoration: none; flex: 1; }
 .library-nav__icon { width: 1.45rem; height: 1.45rem; flex-shrink: 0; }
 .library-nav__title { font-size: .9rem; white-space: nowrap; }
 .library-nav__toggle { display: flex; flex-shrink: 0; justify-content: center; align-items: center; width: 2.25rem; min-height: 3rem; border: 0; border-radius: .75rem; background: transparent; color: var(--text); cursor: pointer; }
 .library-nav__toggle span { width: 1rem; height: 1rem; }
 .library-nav__all:hover, .library-nav__toggle:hover, .library-nav__menu a:hover { background: var(--surface-hover); }
 .library-nav__all:focus-visible, .library-nav__toggle:focus-visible, .library-nav__menu a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.library-nav__menu { display: grid; gap: .2rem; padding: .3rem; border: 1px solid var(--border); border-radius: .9rem; background: var(--surface); }
-.library-nav__menu a { display: block; min-height: 2.75rem; padding: .65rem .85rem; border-radius: .6rem; color: var(--text); text-decoration: none; white-space: nowrap; }
+.library-nav__menu { display: grid; gap: .2rem; }
+.library-nav__menu a { display: block; min-height: 2.75rem; padding: .65rem .85rem; border-radius: .6rem; color: color-mix(in srgb, var(--text) 75%, var(--muted)); font-size: .9rem; text-decoration: none; white-space: nowrap; }
 .library-nav__menu a[aria-current='page'] { color: var(--accent-strong); background: var(--accent-soft); font-weight: 700; }
+.library-nav--desktop .library-nav__menu { margin: .35rem 0 .2rem 1.45rem; padding: .15rem 0 .15rem 1.5rem; border-inline-start: 1px solid var(--border); }
+.library-nav--desktop .library-nav__menu a { padding-inline-start: 1.25rem; }
 .library-nav--desktop .library-nav__title, .library-nav--desktop .library-nav__toggle { display: none; }
 .library-nav--desktop.library-nav--open .library-nav__title { display: inline; }
 .library-nav--desktop.library-nav--open .library-nav__toggle { display: flex; }
@@ -76,5 +78,5 @@ onBeforeUnmount(() => { document.removeEventListener('pointerdown', outside); em
 .library-nav--mobile .library-nav__all { padding: .5rem .35rem; min-height: 2.75rem; }
 .library-nav--mobile .library-nav__icon { display: none; }
 .library-nav--mobile .library-nav__toggle { min-height: 2.75rem; width: 2rem; }
-.library-nav--mobile .library-nav__menu { position: absolute; bottom: calc(100% + .75rem); left: 50%; transform: translateX(-50%); width: 9rem; box-shadow: 0 12px 35px #0003; }
+.library-nav--mobile .library-nav__menu { position: absolute; bottom: calc(100% + .75rem); left: 50%; transform: translateX(-50%); width: 9rem; padding: .3rem; border: 1px solid var(--border); border-radius: .9rem; background: var(--bg); box-shadow: var(--shadow); }
 </style>
