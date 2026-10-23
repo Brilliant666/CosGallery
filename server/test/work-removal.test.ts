@@ -51,6 +51,7 @@ describe.sequential(
       ).WorkRemovalService();
     });
     afterEach(async () => {
+      vi.restoreAllMocks();
       db.close();
       (globalThis as any)[Symbol.for('foldergram.database.connection')] = null;
       vi.doUnmock('../src/services/storage-service.js');
@@ -759,7 +760,7 @@ describe.sequential(
         cleanupPending: false,
       });
     });
-    it.each(["marker unlink", "journal unlink", "journal directory sync"])(
+    it.each(["marker unlink", "journal unlink", "journal directory sync", "journal fsync I/O"])(
       "recovers a %s failure after the media receipt",
       async (stage) => {
         const f = await fixture();
@@ -784,6 +785,14 @@ describe.sequential(
           },
         );
         const sync = engine.syncDirectoryIfSupported.bind(engine);
+        const open = fs.open.bind(fs);
+        const openSpy = stage === 'journal fsync I/O' ? vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          if (armed && args[0] === path.dirname(journalPath('unused'))) {
+            vi.spyOn(handle, 'sync').mockRejectedValue(Object.assign(new Error('Synthetic fsync I/O failure'), {code:'EIO', syscall:'fsync'}));
+          }
+          return handle;
+        }) : undefined;
         vi.spyOn(engine, "syncDirectoryIfSupported").mockImplementation(
           async (directory: any) => {
             if (
@@ -804,6 +813,7 @@ describe.sequential(
           filesRemoved: true,
           cleanupPending: true,
         });
+        openSpy?.mockRestore();
         const fresh = await reopenService();
         expect(fresh.listTrash().pendingOperations).toEqual([
           expect.objectContaining({
@@ -814,7 +824,7 @@ describe.sequential(
         ]);
         expect(
           Boolean(await fs.stat(journalPath(p.previewToken)).catch(() => null)),
-        ).toBe(stage !== "journal directory sync");
+        ).toBe(stage === "marker unlink" || stage === "journal unlink");
         const unrelated = journalPath("00000000-0000-4000-8000-000000000009");
         await write(unrelated, "other operation");
         expect(await fresh.retry(p.previewToken)).toMatchObject({
@@ -826,6 +836,22 @@ describe.sequential(
         expect(fresh.listTrash().pendingOperations).toEqual([]);
       },
     );
+    it.each([
+      ['open', 'EPERM'], ['sync', 'EPERM'], ['sync', 'EIO'], ['close', 'EPERM'],
+    ] as const)('does not confuse directory %s %s with unsupported Windows fsync', async (phase, code) => {
+      const error=Object.assign(new Error(`Synthetic ${phase} failure`), {code, syscall:phase==='sync'?'fsync':phase});
+      const handle={sync:vi.fn().mockResolvedValue(undefined),close:vi.fn().mockResolvedValue(undefined)};
+      const open=vi.spyOn(fs,'open');
+      if(phase==='open') open.mockRejectedValue(error);
+      else {
+        handle[phase].mockRejectedValue(error);
+        open.mockResolvedValue(handle as any);
+      }
+      const result=new Deletion().syncDirectoryIfSupported(config.galleryRoot);
+      if(process.platform==='win32' && phase==='sync' && code==='EPERM') await expect(result).resolves.toBeUndefined();
+      else await expect(result).rejects.toBe(error);
+      if(phase!=='open') expect(handle.close).toHaveBeenCalledOnce();
+    });
     it("resumes partial committed media cleanup without claiming remaining files were removed", async () => {
       const f = await fixture();
       await act(f.workId, "trash");

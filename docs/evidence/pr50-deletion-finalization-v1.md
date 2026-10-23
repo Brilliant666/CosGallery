@@ -10,6 +10,8 @@
 
 这是对静态发现的故障窗口验证，不代表正式图库已发生过这一故障。
 
+复核另在 Windows 目录句柄的真实 `sync()` 调用内注入 `EIO`：原同步助手吞掉错误并返回 `completed`，单例预期失败。修复将例外收窄到 Windows 目录句柄明确不支持的 `EPERM/fsync`；打开、关闭以及真正 I/O 失败透传，保留待收尾状态。该用例与四个打开／同步／关闭错误分类用例修复后通过。
+
 ## FINALIZATION_FIX
 
 Work 永久删除的顺序现在是：
@@ -39,7 +41,7 @@ Work 永久删除的顺序现在是：
 
 ## VALIDATION
 
-- 本轮本地 Node 24.21.0：Work 删除／恢复 35、旧 Post 永久删除 14、Work guards 6、派生文件访问 5、旧结构提示 5，共 **65 个专项测试通过**。
+- 本轮本地 Node 24.21.0：Work 删除／恢复 40、旧 Post 永久删除 14、Work guards 6、派生文件访问 5、旧结构提示 5，共 **70 个专项测试通过**。
 - 受影响客户端：WorkTrashSection 7、WorkRemovalDialog 3、语言键校验 3，共 **13 个测试通过**，包括中英文收尾提示、持续 pending 和同操作重试。
 - 服务端类型检查、服务端构建、客户端类型检查和构建、文档构建通过；客户端及文档构建有现有大 chunk 提示。
 - 最终提交 SHA 和对应 Node 22/24 Verify 链接以 [PR50](https://github.com/Brilliant666/CosGallery/pull/50) 当前验证记录为准；本文件不把历史 Verify 当作最终提交证据。

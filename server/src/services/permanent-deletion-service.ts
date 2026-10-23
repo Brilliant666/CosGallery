@@ -1077,15 +1077,19 @@ export class PermanentDeletionService {
   }
 
   private async syncDirectoryIfSupported(directoryPath: string): Promise<void> {
+    const handle = await fs.open(directoryPath, 'r');
     try {
-      const handle = await fs.open(directoryPath, 'r');
       try {
         await handle.sync();
-      } finally {
-        await handle.close();
+      } catch (error) {
+        const failure = error as NodeJS.ErrnoException;
+        // Windows can open a directory but rejects fsync on its handle. Only
+        // this known unsupported operation is optional; I/O/open/close errors
+        // must retain the journal or receipt for a later retry.
+        if (process.platform !== 'win32' || failure.code !== 'EPERM' || failure.syscall !== 'fsync') throw error;
       }
-    } catch (error) {
-      if (process.platform !== 'win32') throw error;
+    } finally {
+      await handle.close();
     }
   }
 }
