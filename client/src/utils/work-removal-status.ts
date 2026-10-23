@@ -8,7 +8,9 @@ export function workRemovalStatusKey(result: WorkRemovalResult): string {
     result.state === 'cleanup_pending' ||
     result.state === 'committed'
   )
-    return 'workRemoval.pending';
+    return result.filesRemoved
+      ? 'workRemoval.finalizationPending'
+      : 'workRemoval.pending';
   if (result.state === 'failed') return 'workRemoval.rolledBack';
   return result.state === 'completed'
     ? 'workRemoval.completed'

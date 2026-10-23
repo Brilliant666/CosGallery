@@ -1237,6 +1237,7 @@
     "scope": "共 {copies} 个本地副本，{files} 个文件。",
     "files": "{count} 个文件",
     "pending": "记录已处理，磁盘清理尚未完成。请保留此操作记录，稍后核对。",
+    "finalizationPending": "作品文件已永久删除，操作收尾尚未完成。请继续处理本次操作。",
     "completed": "操作已完成。",
     "processing": "正在处理…",
     "failed": "操作失败，请重新核对。",

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -64,6 +64,47 @@ interface DeletionJournal {
 
 export interface RemovalFileTarget { root: DeletionRoot; relativePath: string; identity?: string; present?: boolean }
 
+interface WorkCleanupOperation {
+  operation_id: string; kind: string; target_id: number; mode: string; state: string; payload_json: string;
+}
+interface MediaCleanupReceipt {
+  version: 1; operationId: string; workId: number; scopeDigest: string; entryCount: number; completedAt: string;
+}
+const cleanupScopeDigest = (operation: WorkCleanupOperation, snapshot: unknown) => createHash('sha256')
+  .update(JSON.stringify({ operationId: operation.operation_id, workId: operation.target_id, mode: operation.mode, snapshot }))
+  .digest('hex');
+
+function confirmedTargets(files: RemovalFileTarget[]): Array<{ target: RemovalFileTarget; index: number }> {
+  const targets = new Map<string, {target: RemovalFileTarget; index: number}>();
+  for (const [index, target] of files.entries()) {
+    if (!['gallery','thumbnails','previews'].includes(target.root)) throw new Error('Invalid confirmed removal root');
+    const absolute = resolveRelativePathWithinRoot(getRootPath(target.root), target.relativePath, 'Confirmed removal target');
+    const key = process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+    if (!targets.has(key)) targets.set(key, {target, index});
+  }
+  return [...targets.values()];
+}
+
+function readMediaCleanupReceipt(operation: WorkCleanupOperation): MediaCleanupReceipt | null {
+  if (operation.kind !== 'work' || operation.mode !== 'permanent' || !['committed', 'cleanup_pending', 'completed'].includes(operation.state)) return null;
+  const payload = JSON.parse(operation.payload_json);
+  const receipt = payload.mediaCleanupReceipt as MediaCleanupReceipt | undefined;
+  if (!receipt) return null;
+  if (payload.workId !== operation.target_id || payload.mode !== 'permanent' || !Array.isArray(payload.snapshot?.files) ||
+      receipt.version !== 1 || receipt.operationId !== operation.operation_id || receipt.workId !== operation.target_id ||
+      receipt.scopeDigest !== cleanupScopeDigest(operation, payload.snapshot) ||
+      receipt.entryCount !== confirmedTargets(payload.snapshot.files).length ||
+      typeof receipt.completedAt !== 'string' || !Number.isFinite(Date.parse(receipt.completedAt))) {
+    throw new Error('媒体清理完成凭据与原确认范围不符；请保留恢复材料并核对。');
+  }
+  return receipt;
+}
+
+/** A durable receipt proves media cleanup only; internal journal cleanup may still be pending. */
+export function hasVerifiedWorkMediaCleanup(operation: WorkCleanupOperation): boolean {
+  try { return readMediaCleanupReceipt(operation) !== null; } catch { return false; }
+}
+
 export class SimulatedDeletionInterruptionError extends Error {
   constructor(message = 'Simulated process termination during permanent deletion') {
     super(message);
@@ -75,6 +116,9 @@ export interface PermanentDeletionServiceHooks {
   rename?: (sourcePath: string, destinationPath: string) => Promise<void>;
   afterQuarantine?: (journal: Readonly<DeletionJournal>) => Promise<void> | void;
   afterDatabaseCommit?: (journal: Readonly<DeletionJournal>) => Promise<void> | void;
+  afterMediaCleanup?: (journal: Readonly<DeletionJournal>) => Promise<void> | void;
+  afterMediaCleanupReceipt?: (journal: Readonly<DeletionJournal>) => Promise<void> | void;
+  afterJournalRemoval?: (operationId: string) => Promise<void> | void;
 }
 
 interface ValidatedDeletionTarget {
@@ -439,7 +483,8 @@ export class PermanentDeletionService {
     }
     await this.hooks.afterDatabaseCommit?.(journal);
     await this.tryCleanupCommittedJournal(journal, journalPath);
-    return { cleanupPending: Boolean(await lstatIfPresent(journalPath)) };
+    const operation = this.workCleanupOperation(input.operationId);
+    return { cleanupPending: operation.state !== 'completed' };
   }
 
   private async renameValidatedFile(
@@ -820,7 +865,37 @@ export class PermanentDeletionService {
   private async recoverPendingDeletionsInternal(operationId?: string): Promise<void> {
     if (operationId !== undefined && !/^[0-9a-f-]{36}$/i.test(operationId)) throw new Error('Invalid deletion operation identifier');
     const journalDirectory = path.join(appConfig.galleryRoot, QUARANTINE_DIRECTORY_NAME, 'journals');
+    // Preserve offline startup when there is no durable filesystem work to recover.
+    if (storageService.getState().usingInMemoryDatabase) {
+      if (operationId) throw new Error('Cannot recover permanent deletions while the configured database is offline');
+      const stats = await lstatIfPresent(journalDirectory);
+      if (!stats) return;
+      await assertNoSymlinkTraversal(appConfig.galleryRoot, journalDirectory, 'Deletion journal directory');
+      if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error('Deletion journal path is not a directory');
+      if ((await fs.readdir(journalDirectory)).some(name => name.endsWith('.json'))) throw new Error('Cannot recover permanent deletions while the configured database is offline');
+      return;
+    }
     if(!operationId) await this.reconcileUnjournaledWorkOperations(journalDirectory);
+    const pending = operationId ? [{ operation_id: operationId }] : databaseManager.connection.prepare(
+      "SELECT operation_id FROM removal_operations WHERE kind='work' AND mode='permanent' AND state IN ('committed','cleanup_pending')"
+    ).all() as Array<{operation_id:string}>;
+    for (const operation of pending) {
+      const journalPath = path.join(journalDirectory, `${operation.operation_id}.json`);
+      if (!/^[0-9a-f-]{36}$/i.test(operation.operation_id)) throw new Error('Invalid persisted removal operation identifier');
+      await assertNoSymlinkTraversal(appConfig.galleryRoot, journalPath, 'Deletion journal path');
+      if (await lstatIfPresent(journalPath)) continue;
+      try {
+        const receipt = readMediaCleanupReceipt(this.workCleanupOperation(operation.operation_id));
+        if (!receipt) throw new Error('恢复日志缺失，且没有可验证的媒体清理完成凭据；请保留恢复材料并核对，不能自动判定删除成功。');
+        await this.finishReceiptedWorkCleanup(receipt, journalPath);
+      } catch (error) {
+        if (error instanceof SimulatedDeletionInterruptionError) throw error;
+        databaseManager.connection.prepare('UPDATE removal_operations SET error=?,updated_at=? WHERE operation_id=?')
+          .run(String(error), new Date().toISOString(), operation.operation_id);
+        if (operationId) throw error;
+      }
+      if (operationId) return;
+    }
     const directoryStats = await lstatIfPresent(journalDirectory);
     if (!directoryStats) {
       if (operationId) throw new Error('Deletion recovery journal is missing; manual review is required');
@@ -879,9 +954,33 @@ export class PermanentDeletionService {
 
   private async tryCleanupCommittedJournal(journal: DeletionJournal, journalPath: string): Promise<void> {
     try {
-      await this.cleanupCommittedJournal(journal, journalPath);
-      if (journal.operationKind === 'work') databaseManager.connection.prepare("UPDATE removal_operations SET state='completed',error=NULL,updated_at=? WHERE operation_id=?").run(new Date().toISOString(), journal.operationId);
+      if (journal.operationKind === 'work') {
+        const operation = this.workCleanupOperation(journal.operationId);
+        this.assertWorkJournalScope(operation, journal);
+        let receipt = readMediaCleanupReceipt(operation);
+        if (!receipt) {
+          await this.cleanupCommittedJournal(journal, journalPath);
+          await this.assertQuarantineEmptyAndSync(journal.operationId);
+          await this.hooks.afterMediaCleanup?.(journal);
+          const payload = JSON.parse(operation.payload_json);
+          receipt = { version: 1, operationId: journal.operationId, workId: operation.target_id,
+            scopeDigest: cleanupScopeDigest(operation, payload.snapshot), entryCount: journal.entries.length, completedAt: new Date().toISOString() };
+          // The original journal remains durable until this database write succeeds.
+          const update = databaseManager.connection.prepare("UPDATE removal_operations SET payload_json=?,updated_at=? WHERE operation_id=? AND payload_json=? AND state IN ('committed','cleanup_pending','completed')")
+            .run(JSON.stringify({ ...payload, mediaCleanupReceipt: receipt }), new Date().toISOString(), journal.operationId, operation.payload_json);
+          if (update.changes !== 1) throw new Error('Removal operation changed before the media cleanup receipt could be saved');
+          await this.hooks.afterMediaCleanupReceipt?.(journal);
+        }
+        await this.finishReceiptedWorkCleanup(receipt, journalPath);
+      } else {
+        // Legacy single-Post deletion has no removal_operations row.
+        await this.cleanupCommittedJournal(journal, journalPath);
+        await this.removeMoveMarkers(journal);
+        this.unlinkInternalFileIfPresent(appConfig.galleryRoot, journalPath, 'Deletion journal');
+        await this.syncDirectoryIfSupported(path.dirname(journalPath));
+      }
     } catch (error) {
+      if (error instanceof SimulatedDeletionInterruptionError) throw error;
       if (journal.operationKind === 'work') databaseManager.connection.prepare("UPDATE removal_operations SET state='cleanup_pending',error=?,updated_at=? WHERE operation_id=?").run(String(error), new Date().toISOString(), journal.operationId);
       log.error('Permanent deletion cleanup is pending and will be retried', {
         operationId: journal.operationId,
@@ -890,6 +989,52 @@ export class PermanentDeletionService {
         error
       });
     }
+  }
+
+  private workCleanupOperation(operationId: string): WorkCleanupOperation {
+    const operation = databaseManager.connection.prepare("SELECT * FROM removal_operations WHERE operation_id=? AND kind='work' AND mode='permanent'").get(operationId) as unknown as WorkCleanupOperation | undefined;
+    if (!operation) throw new Error('Permanent Work removal operation is missing');
+    return operation;
+  }
+
+  private assertWorkJournalScope(operation: WorkCleanupOperation, journal: DeletionJournal): void {
+    const payload = JSON.parse(operation.payload_json);
+    if (journal.postId !== operation.target_id || payload.workId !== operation.target_id || payload.mode !== 'permanent' || !Array.isArray(payload.snapshot?.files)) throw new Error('Deletion journal does not match the confirmed Work');
+    const entries = confirmedTargets(payload.snapshot.files);
+    if (journal.entries.length !== entries.length) throw new Error('Deletion journal does not cover the confirmed file scope');
+    for (const [index, entry] of journal.entries.entries()) {
+      const {target, index: sourceIndex} = entries[index]!;
+      const identity = entry.identity ? [entry.identity.device,entry.identity.inode,entry.identity.size,entry.identity.modifiedNanoseconds].join(':') : '';
+      const expectedQuarantine = normalizePath(path.join(QUARANTINE_DIRECTORY_NAME, 'files', operation.operation_id, `${String(sourceIndex).padStart(4,'0')}-${target.root}`));
+      if (entry.root !== target.root || entry.originalRelativePath !== normalizePath(target.relativePath) || entry.quarantineRelativePath !== expectedQuarantine || entry.wasPresent !== target.present || identity !== target.identity) throw new Error('Deletion journal file identity does not match the confirmed manifest');
+    }
+  }
+
+  private async assertQuarantineEmptyAndSync(operationId: string): Promise<void> {
+    for (const root of ['gallery','thumbnails','previews'] as const) {
+      const rootPath = getRootPath(root);
+      const directory = path.join(rootPath, QUARANTINE_DIRECTORY_NAME, 'files', operationId);
+      await assertNoSymlinkTraversal(rootPath, directory, 'Deletion quarantine path');
+      const stats = await lstatIfPresent(directory);
+      if (stats && (!stats.isDirectory() || (await fs.readdir(directory)).length > 0)) throw new Error('隔离目录仍有未处理或无法核实的文件；保留恢复材料，不能完成删除。');
+      // Sync the nearest surviving ancestor after pruning removed directories.
+      let parent = directory;
+      while (!(await lstatIfPresent(parent)) && parent !== rootPath) parent = path.dirname(parent);
+      await this.syncDirectoryIfSupported(parent);
+    }
+  }
+
+  private async finishReceiptedWorkCleanup(receipt: MediaCleanupReceipt, journalPath: string): Promise<void> {
+    await this.assertQuarantineEmptyAndSync(receipt.operationId);
+    for (let index = 0; index < receipt.entryCount; index++) {
+      const markerPath = path.join(path.dirname(journalPath), `${receipt.operationId}.${index}.moved`);
+      this.unlinkInternalFileIfPresent(appConfig.galleryRoot, markerPath, 'Deletion move marker');
+    }
+    this.unlinkInternalFileIfPresent(appConfig.galleryRoot, journalPath, 'Deletion journal');
+    await this.hooks.afterJournalRemoval?.(receipt.operationId);
+    if (await lstatIfPresent(path.dirname(journalPath))) await this.syncDirectoryIfSupported(path.dirname(journalPath));
+    databaseManager.connection.prepare("UPDATE removal_operations SET state='completed',error=NULL,updated_at=? WHERE operation_id=? AND state IN ('committed','cleanup_pending','completed')")
+      .run(new Date().toISOString(), receipt.operationId);
   }
 
   private async cleanupCommittedJournal(journal: DeletionJournal, journalPath: string): Promise<void> {
@@ -929,9 +1074,6 @@ export class PermanentDeletionService {
       await pruneEmptyAncestors(directory.rootPath, directory.directoryPath, directory.stopPath);
     }
 
-    await this.removeMoveMarkers(journal);
-    this.unlinkInternalFileIfPresent(appConfig.galleryRoot, journalPath, 'Deletion journal');
-    await this.syncDirectoryIfSupported(path.dirname(journalPath));
   }
 
   private async syncDirectoryIfSupported(directoryPath: string): Promise<void> {

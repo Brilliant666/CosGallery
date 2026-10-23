@@ -8,6 +8,8 @@ import { maintenanceOperationLock } from './maintenance-operation-lock.js';
 import { runWithAdmissionBarrier } from './local-admission-lock.js';
 import {
   permanentDeletionService,
+  hasVerifiedWorkMediaCleanup,
+  SimulatedDeletionInterruptionError,
   type PermanentDeletionService,
   type RemovalFileTarget,
 } from './permanent-deletion-service.js';
@@ -548,7 +550,8 @@ export class WorkRemovalService {
       workId: row.target_id,
       mode: row.mode,
       state: row.state,
-      filesRemoved: row.mode === 'permanent' && row.state === 'completed',
+      filesRemoved: row.mode === 'permanent' && (row.state === 'completed' ||
+        hasVerifiedWorkMediaCleanup(row as Parameters<typeof hasVerifiedWorkMediaCleanup>[0])),
       cleanupPending: ['committed', 'cleanup_pending'].includes(row.state),
       recoveryPending: row.state === 'recovery_pending',
       message: row.error ?? null,
@@ -558,6 +561,7 @@ export class WorkRemovalService {
     this.checkOnline();
     return this.locked(async () => {
       const operation = this.status(operationId);
+      if (operation.state === 'completed') return operation;
       if (
         !['committed', 'cleanup_pending', 'recovery_pending'].includes(
           operation.state,
@@ -567,6 +571,7 @@ export class WorkRemovalService {
       try {
         await this.files.recoverPendingDeletionsWhileLocked(operationId);
       } catch (error) {
+        if (error instanceof SimulatedDeletionInterruptionError) throw error;
         this.database()
           .prepare(
             'UPDATE removal_operations SET error=?,updated_at=? WHERE operation_id=?',

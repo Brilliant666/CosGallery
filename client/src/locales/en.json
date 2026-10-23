@@ -1237,6 +1237,7 @@
     "scope": "{copies} local copies, {files} files.",
     "files": "{count} files",
     "pending": "Records updated; disk cleanup is pending. Retain the operation record for review.",
+    "finalizationPending": "Work files have been permanently deleted; finalization of this operation is still pending. Continue processing this operation.",
     "completed": "Operation completed.",
     "processing": "Processing…",
     "failed": "Operation failed. Review the scope again.",

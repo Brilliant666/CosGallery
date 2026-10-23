@@ -1237,6 +1237,7 @@
     "scope": "{copies} copias locales, {files} archivos.",
     "files": "{count} archivos",
     "pending": "Registros actualizados; la limpieza del disco sigue pendiente. Conserva el registro de la operación.",
+    "finalizationPending": "Los archivos de la obra se eliminaron permanentemente; aún queda pendiente finalizar esta operación. Continúa procesando esta operación.",
     "completed": "Operación completada.",
     "processing": "Procesando…",
     "failed": "La operación falló. Revisa el alcance de nuevo.",

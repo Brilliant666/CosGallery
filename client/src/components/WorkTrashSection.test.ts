@@ -7,6 +7,7 @@ import {
 } from '../api/work-removal';
 import WorkTrashSection from './WorkTrashSection.vue';
 import WorkRemovalDialog from './WorkRemovalDialog.vue';
+import { i18n } from '../locales';
 vi.mock('../api/work-removal', () => ({
   fetchTrashedWorks: vi.fn(),
   retryWorkRemoval: vi.fn(),
@@ -148,6 +149,50 @@ describe('whole-work trash actions', () => {
       'this deletion did not take effect',
     );
     expect(wrapper.text()).not.toContain('Operation completed');
+  });
+  it.each([
+    ['en', 'Work files have been permanently deleted', 'finalization of this operation is still pending', 'Operation completed'],
+    ['zh', '作品文件已永久删除', '操作收尾尚未完成', '操作已完成'],
+  ] as const)('keeps completed file deletion pending until the same operation finishes its records (%s)', async (locale, removed, pending, completed) => {
+    i18n.global.locale.value = locale;
+    const operation: PendingWorkRemoval = {
+      operationId: 'records-pending-1',
+      workId: 22,
+      title: 'Removed album',
+      mode: 'permanent',
+      state: 'cleanup_pending',
+      filesRemoved: true,
+      cleanupPending: true,
+    };
+    vi.mocked(fetchTrashedWorks)
+      .mockResolvedValueOnce({ items: [], pendingOperations: [operation] })
+      .mockResolvedValueOnce({ items: [], pendingOperations: [operation] })
+      .mockResolvedValue({ items: [], pendingOperations: [] });
+    vi.mocked(retryWorkRemoval)
+      .mockResolvedValueOnce(operation)
+      .mockResolvedValue({ ...operation, state: 'completed', cleanupPending: false });
+    const wrapper = mount(WorkTrashSection, {
+      global: { stubs: { WorkRemovalDialog: true } },
+    });
+    await flushPromises();
+    const row = () => wrapper.get('[data-test="pending-operation"]');
+    expect(row().text()).toContain(removed);
+    expect(row().text()).toContain(pending);
+    expect(wrapper.text()).not.toContain(completed);
+    await row().get('button').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[role="status"]').text()).toContain(pending);
+    expect(row().text()).toContain(operation.operationId);
+    expect(row().get('button').attributes('disabled')).toBeUndefined();
+    expect(wrapper.text()).not.toContain(completed);
+    await row().get('button').trigger('click');
+    await flushPromises();
+    expect(retryWorkRemoval).toHaveBeenCalledTimes(2);
+    expect(retryWorkRemoval).toHaveBeenNthCalledWith(1, operation.operationId);
+    expect(retryWorkRemoval).toHaveBeenNthCalledWith(2, operation.operationId);
+    expect(wrapper.find('[data-test="pending-operation"]').exists()).toBe(false);
+    expect(wrapper.get('[role="status"]').text()).toContain(completed);
+    expect(wrapper.findComponent(WorkRemovalDialog).exists()).toBe(false);
   });
   it('retains the unfinished operation after a retry error without repeating it', async () => {
     const operation: PendingWorkRemoval = {
