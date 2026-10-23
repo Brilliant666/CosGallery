@@ -109,5 +109,5 @@
 - [来源资料、批次出处与精确对应](source-evidence-local-admission.md)
 - [自有资源目录与编号](own-resource-catalog.md)
 - [本地优先、可靠来源复用](local-first-source-reuse.md)
-- [未使用手工博主删除的边界](unused-manual-creator-deletion.md)
+- [删除博主的边界](unused-manual-creator-deletion.md)
 - [PR39 收尾记录](pr39-closeout.md)：历史开发 / 发布证据，不替代当前运行状态或本页操作名称。

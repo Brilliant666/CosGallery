@@ -15,7 +15,7 @@
 | [确认排序时间](confirmed-work-sort-time.md) | 固定作品级决定与来源顺序估算，不是发布日期恢复 |
 | [解压密码](local-ingest-password-settings.md) | 管理接口、加密保存与独立 key |
 | [Costuan Job 状态](local-ingest-status-model.md) | 入库结果与回收结果分开 |
-| [未使用手工博主删除](unused-manual-creator-deletion.md) | 删除资格、引用核验与确认边界 |
+| [删除博主](unused-manual-creator-deletion.md) | 删除资格、引用核验与确认边界 |
 | [范围编号](costuan-range-source-diagnostics.md)、[无逐行姓名目录](costuan-unnamed-directory-identity.md) | 特定来源解析契约，不代表任意网站适配 |
 | [API](api.md)、[开发](development.md) | 代码入口、脚本与隔离验证 |
 | [媒体处理](media-processing.md)、[Foldergram Carousel](carousel-posts.md) | 继承的底层能力；Carousel 限制不是 CosGallery 图集上限 |
