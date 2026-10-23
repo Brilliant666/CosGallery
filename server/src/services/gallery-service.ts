@@ -1,4 +1,5 @@
 import { ManagedCreatorService } from './managed-creator-service.js';
+import { assertLegacyPostRemovalAllowed, assertLegacyPostRestoreAllowed } from './media-trash-service.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -21,6 +22,8 @@ import {
 import { derivativeVersion as buildDerivativeVersion, imageDerivativeVersion } from '../utils/derivative-version.js';
 import { isPublishedDerivativeFile } from '../utils/derivative-spec.js';
 import { appConfig } from '../config/env.js';
+import { databaseManager } from '../db/database.js';
+import { createReelQueuePager, ReelQueueExpiredError } from './reel-queue.js';
 import {
   appSettingsRepository,
   canonicalCreatorGalleryRepository,
@@ -77,6 +80,7 @@ import { permanentDeletionService } from './permanent-deletion-service.js';
 
 type FeedMode = 'recent' | 'rediscover' | 'random';
 type ReelsFeedMode = 'recommended' | 'recent' | 'random';
+const readReelPage = createReelQueuePager();
 type SupportedLocale = 'en' | 'es' | 'zh';
 
 interface FeedCapsuleDefinition {
@@ -457,8 +461,15 @@ function mapFeedImage(image: IndexedFeedImage): FeedImage {
 }
 
 function mapCanonicalWorkSummary(item: CanonicalWorkSummary): CanonicalWorkSummary {
+  const { cardCover, ...firstMedia } = item;
   return {
-    ...mapFeedCover(item),
+    ...mapFeedCover(firstMedia),
+    ...(cardCover ? { cardCover: {
+      imageId: cardCover.imageId,
+      filename: cardCover.filename,
+      thumbnailUrl: toPublicMediaUrl('/thumbnails', cardCover.thumbnailUrl,
+        mediaVersion({ derivativeSourceVersion: cardCover.derivativeSourceVersion, mediaType: 'image' }, 'thumbnail'))
+    } } : {}),
     representation: 'summary',
     postType: item.postType,
     itemCount: item.itemCount,
@@ -1433,6 +1444,12 @@ export const galleryService = {
     };
   },
 
+  getPostSummary(postId: number) {
+    if (!storageService.getState().libraryAvailable) return null;
+    const summary = postRepository.getVisiblePostSummary(postId);
+    return summary ? mapCanonicalWorkSummary(summary) : null;
+  },
+
   getCanonicalCreatorWork(id: number, postId: number, mediaType?: MediaType) {
     if (!storageService.getState().libraryAvailable || !canonicalCreatorGalleryRepository.ownsVisiblePost(id, postId)) return null;
     const detail = this.getImageDetail(postId, mediaType);
@@ -1502,7 +1519,7 @@ export const galleryService = {
     };
   },
 
-  getReels(page: number, limit: number, mode: ReelsFeedMode = 'recommended', seed?: number, signals: ReelAffinitySignals = {}) {
+  getReels(page: number, limit: number, mode: ReelsFeedMode = 'recommended', seed?: number, signals: ReelAffinitySignals = {}, cursor?: string) {
     if (!storageService.getState().libraryAvailable) {
       return {
         mode,
@@ -1510,43 +1527,44 @@ export const galleryService = {
         page,
         limit,
         total: 0,
-        hasMore: false
+        hasMore: false,
+        nextCursor: null
       };
     }
 
-    const candidates = imageRepository.listVisibleVideoCandidates();
-    const total = candidates.length;
-    if (total === 0) {
-      return {
-        mode,
-        items: [],
-        page,
-        limit,
-        total: 0,
-        hasMore: false
-      };
-    }
-
-    const orderedCandidates =
-      mode === 'recent'
-        ? candidates
-        : (() => {
-            const sessionSeed = Number.isFinite(seed)
-              ? Number(seed)
-              : Number(new Date().toISOString().slice(0, 10).replaceAll('-', ''));
-
-            return mode === 'random' ? shuffleReelCandidates(candidates, sessionSeed) : buildReelQueue(candidates, sessionSeed, signals);
-          })();
-    const offset = (page - 1) * limit;
-
+    if (page > 1 && !cursor) throw new ReelQueueExpiredError();
+    const payload = readReelPage({
+      database: databaseManager.connection,
+      key: JSON.stringify([appConfig.galleryRoot, mode, seed ?? null,
+        signals.lastOpenedFolderSlug ?? null, signals.recentOpenedFolderSlugs ?? []]),
+      cursor,
+      limit,
+      build: () => {
+        const candidates = imageRepository.listVisibleVideoCandidates();
+        if (mode === 'recent') return candidates;
+        const sessionSeed = Number.isFinite(seed)
+          ? Number(seed)
+          : Number(new Date().toISOString().slice(0, 10).replaceAll('-', ''));
+        const ordered = mode === 'random'
+          ? shuffleReelCandidates(candidates, sessionSeed)
+          : buildReelQueue(candidates, sessionSeed, signals);
+        const byId = new Map(candidates.map(candidate => [candidate.id, candidate]));
+        return ordered.map(candidate => byId.get(candidate.id)!);
+      },
+      read: ids => imageRepository.listVisibleVideoCandidatesByIds(ids)
+    });
     return {
       mode,
-      ...buildPaginatedPayload(
-        mapFeedItems(orderedCandidates.slice(offset, offset + limit)),
-        page,
-        limit,
-        total
-      )
+      ...payload,
+      page,
+      limit,
+      items: payload.items.map(({ sourceIdentity, scopedPreviewUrl, likedAt, ...candidate }) => ({
+        ...mapFeedImage(candidate),
+        previewUrl: scopedPreviewUrl,
+        mediaId: candidate.mediaId,
+        postId: candidate.postId,
+        mediaPosition: candidate.mediaPosition
+      }))
     };
   },
 
@@ -2255,6 +2273,8 @@ export const galleryService = {
       return null;
     }
 
+    assertLegacyPostRemovalAllowed(post.id);
+
     const folder = folderRepository.getById(post.folder_id);
     if (!folder) {
       return null;
@@ -2280,6 +2300,8 @@ export const galleryService = {
     if (!post || post.is_deleted || post.is_trashed === 0) {
       return null;
     }
+
+    assertLegacyPostRestoreAllowed(post.id);
 
     const folder = folderRepository.getById(post.folder_id);
     if (!folder) {
@@ -2316,7 +2338,7 @@ export const galleryService = {
       indexedPosts,
       indexedMediaAssets: storageState.libraryAvailable ? imageRepository.countVisibleMediaAssets() : 0,
       indexedCarousels: postCounts.carousels,
-      indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleSingleVideos() : 0,
+      indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleVideoCandidates() : 0,
       scan: this.getScanProgress(),
       storage: {
         available: storageState.libraryAvailable,
@@ -2390,7 +2412,7 @@ export const galleryService = {
       indexedPosts,
       indexedMediaAssets: storageState.libraryAvailable ? imageRepository.countVisibleMediaAssets() : 0,
       indexedCarousels: postCounts.carousels,
-      indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleSingleVideos() : 0,
+      indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleVideoCandidates() : 0,
       deletedImages: storageState.libraryAvailable ? imageRepository.countDeleted() : 0,
       thumbnailCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.thumbnailsDir, 'thumbnail') : 0,
       previewCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.previewsDir, 'preview') : 0,
@@ -2510,6 +2532,8 @@ export const galleryService = {
     if (!post) {
       return null;
     }
+
+    assertLegacyPostRemovalAllowed(post.id);
 
     return permanentDeletionService.deletePost(post.id);
   },

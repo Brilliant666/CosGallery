@@ -74,7 +74,7 @@ describe.sequential('web directory admission delegates to original plans',()=>{
   });
   it('skipped/deferred source folders remain, deferred work can get a new preview without replaying completed items',async()=>{
     const batch=await preview(['NO.007 明确','NO.008 跳过','NO.009 暂缓']);const actions=batch.items.map((i,n)=>({key:i.key,action:['new','skip','defer'][n]}));
-    await service.execute(batch.id,request(batch,{actions}));await service.waitForIdle();expect(service.get(batch.id).totals).toEqual({total:3,selected:1,completed:1,skipped:1,deferred:1});
+    await service.execute(batch.id,request(batch,{actions}));await service.waitForIdle();expect(service.get(batch.id).totals).toEqual({total:3,selected:1,completed:1,skipped:1,deferred:1,review:0,dependency:0,unstarted:0});
     expect(service.items(batch.id).items.slice(1)).toMatchObject([
       {state:'skip',executionState:null,nextAction:'none'}, {state:'defer',executionState:null,nextAction:'prepare_preview'}]);
     for(const name of ['NO.008 跳过','NO.009 暂缓'])await expect(fs.stat(path.join(waiting,parent,name))).resolves.toBeTruthy();
@@ -90,7 +90,7 @@ describe.sequential('web directory admission delegates to original plans',()=>{
   it('pre-confirmation source changes and occupied targets fail without file moves',async()=>{
     const batch=await preview(['NO.011 变化']);await fs.writeFile(path.join(waiting,parent,'NO.011 变化','图片 1.jpg'),'changed');
     await service.execute(batch.id,request(batch));await service.waitForIdle();expect(service.get(batch.id).state).toBe('needs_review');expect(service.get(batch.id).error).toContain('Source changed');
-    expect(service.items(batch.id).items[0]).toMatchObject({state:'not_started',executionState:null,nextAction:'prepare_preview'});
+    expect(service.items(batch.id).items[0]).toMatchObject({state:'not_started',executionState:null,nextAction:'resume_plan'});
     await expect(fs.stat(path.join(waiting,parent,'NO.011 变化'))).resolves.toBeTruthy();
     const next=await preview(['NO.012 占用']);await fs.mkdir(next.items[0].targetPath);
     await service.execute(next.id,request(next));await service.waitForIdle();expect(service.get(next.id).error).toContain('Target exists');
@@ -180,28 +180,35 @@ describe.sequential('web directory admission delegates to original plans',()=>{
     expect(manager.connection.prepare('SELECT confirmed_json FROM local_admission_web_batches WHERE id=?').get(batch.id)).toEqual(payload);
     for(const item of batch.items)await expect(fs.stat(path.join(waiting,parent,item.sourceRelativePath))).resolves.toBeTruthy();
   });
-  it('adds exact global image ads to legacy drafts without rescanning or rewriting preview evidence',async()=>{
-    const name='NO.023 全局广告草稿',dir=await make(name);
-    for(const file of ['492.jpg','009-01.jpg','0492.jpg','492.jpeg'])await fs.copyFile(path.join(dir,'图片 1.jpg'),path.join(dir,file));
+  it.each([undefined,1,2,3,4])('adds exact global image ads to version %s drafts without rescanning or rewriting preview evidence',async version=>{
+    const name=`NO.023 全局广告草稿 ${version??'legacy'}`,dir=await make(name);
+    for(const file of ['492.jpg','009-01.jpg','252.jpg','101.1.jpg','3211.jpg','3211.jpeg','101.1.jpeg','0252.jpg','252.jpeg','252-extra.jpg','0492.jpg','492.jpeg'])await fs.copyFile(path.join(dir,'图片 1.jpg'),path.join(dir,file));
+    const pngAd='扫码获取更多列表网红COS作品写真.png';
+    await sharp({create:{width:12,height:18,channels:3,background:'#123456'}}).png().toFile(path.join(dir,pngAd));
+    await fs.copyFile(path.join(dir,pngAd),path.join(dir,'252.png'));
     const batch=await service.preview({creatorId:creator,parent,directories:[name]});
-    expect(batch.items[0].ads.filter(a=>a.automatic).map(a=>a.relativePath).sort()).toEqual(['009-01.jpg','492.jpg']);
+    const expectedAds=['009-01.jpg','101.1.jpg','252.jpg','252.png','3211.jpg','492.jpg',pngAd];
+    expect(batch.items[0].ads.filter(a=>a.automatic).map(a=>a.relativePath).sort()).toEqual(expectedAds);
     const db=manager.connection,row=db.prepare('SELECT summary_json,preview_json FROM local_admission_web_items WHERE batch_id=?').get(batch.id)!;
-    const legacy=JSON.parse(String(row.summary_json));delete legacy.advertisementRulesVersion;legacy.ads=legacy.ads.filter((a:{automatic?:boolean})=>!a.automatic);
+    const legacy=JSON.parse(String(row.summary_json));legacy.advertisementRulesVersion=version;legacy.ads=legacy.ads.filter((a:{automatic?:boolean;relativePath:string})=>version===4?a.relativePath!=='3211.jpg':version===3?!['3211.jpg','101.1.jpg'].includes(a.relativePath):version===2?!['3211.jpg','101.1.jpg','252.jpg','252.png'].includes(a.relativePath):version===1?!['3211.jpg','101.1.jpg','252.jpg','252.png',pngAd].includes(a.relativePath):!a.automatic);
     db.prepare('UPDATE local_admission_web_items SET summary_json=? WHERE batch_id=?').run(JSON.stringify(legacy),batch.id);
     const saved=db.prepare('SELECT * FROM local_admission_web_items WHERE batch_id=?').get(batch.id);
     const reads=vi.spyOn(fs,'readdir');
-    try{expect(service.items(batch.id).items[0].ads.filter(a=>a.automatic).map(a=>a.relativePath).sort()).toEqual(['009-01.jpg','492.jpg']);expect(reads).not.toHaveBeenCalled();}finally{reads.mockRestore();}
+    try{expect(service.items(batch.id).items[0].ads.filter(a=>a.automatic).map(a=>a.relativePath).sort()).toEqual(expectedAds);expect(reads).not.toHaveBeenCalled();}finally{reads.mockRestore();}
     expect(db.prepare('SELECT * FROM local_admission_web_items WHERE batch_id=?').get(batch.id)).toEqual(saved);
     expect(db.prepare('SELECT * FROM archive_local_admission_plans WHERE plan_id=?').get(batch.id)).toBeUndefined();
     // Historical confirmed summaries/choices do not gain retroactive approvals.
     db.prepare("UPDATE local_admission_web_batches SET state='completed',confirmed_json='{}' WHERE id=?").run(batch.id);
     expect(service.items(batch.id).items[0].ads).toEqual(legacy.ads);
   });
-  it('moves only the confirmed global JPG advertisements outside the gallery and safely replays exact evidence',async()=>{
+  it('moves only the confirmed global image advertisements outside the gallery and safely replays exact evidence',async()=>{
     const name='NO.024 图片广告执行',dir=await make(name);await fs.mkdir(path.join(dir,'nested'));
-    for(const file of ['492.jpg','009-01.jpg','nested/492.jpg','0492.jpg','492.jpeg'])await fs.copyFile(path.join(dir,'图片 1.jpg'),path.join(dir,file));
+    for(const file of ['492.jpg','009-01.jpg','nested/492.jpg','252.jpg','101.1.jpg','3211.jpg','0492.jpg','492.jpeg'])await fs.copyFile(path.join(dir,'图片 1.jpg'),path.join(dir,file));
+    const pngAd='扫码获取更多列表网红COS作品写真.png';
+    await sharp({create:{width:12,height:18,channels:3,background:'#123456'}}).png().toFile(path.join(dir,pngAd));
+    await fs.copyFile(path.join(dir,pngAd),path.join(dir,'252.png'));
     const batch=await service.preview({creatorId:creator,parent,directories:[name]});
-    const approvedAds=['492.jpg','nested/492.jpg','明确广告.txt'];
+    const approvedAds=['492.jpg','nested/492.jpg','252.jpg','252.png','101.1.jpg','3211.jpg','明确广告.txt',pngAd];
     const input=request(batch,{adsConfirmed:true,actions:[{key:batch.items[0].key,action:'new',approvedAds}]});
     await expect(service.execute(batch.id,{...input,adsConfirmed:undefined})).rejects.toThrow('单独确认');
     await expect(service.execute(batch.id,{...input,actions:[{key:batch.items[0].key,action:'new',approvedAds:['图片 1.jpg']}]})).rejects.toThrow('具体候选');
@@ -229,7 +236,9 @@ describe.sequential('web directory admission delegates to original plans',()=>{
   it('derives recovery actions from immutable checkpoints and suppresses them while an owner is active',async()=>{
     const batch=await preview(['NO.026 恢复动作']),db=manager.connection;
     const {scannerService}=await import('../src/services/scanner-service.js');
-    const scan=vi.spyOn(scannerService,'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic media issue'));
+    const scan=vi.spyOn(scannerService,'scanCosCreators').mockResolvedValueOnce({id:1,started_at:'now',finished_at:'now',status:'failed',scanned_files:1,
+      new_files:0,updated_files:0,removed_files:0,error_text:'Synthetic media issue',warning_count:0,warning_text:null,
+      admissionIssue:{kind:'review',code:'MEDIA_CONTENT_REVIEW_REQUIRED',message:'图集中有需要核对的媒体文件',detail:'Synthetic media issue'}});
     await service.execute(batch.id,request(batch));await service.waitForIdle();scan.mockRestore();
     const get=()=>service.items(batch.id).items[0];
     expect(get()).toMatchObject({state:'files_verified',executionState:'files_verified',nextAction:'review_files',postId:null});

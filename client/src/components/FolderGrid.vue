@@ -9,8 +9,8 @@
         :aria-label="navigationMode !== 'post' && !sharedSlug ? t('workGallery.openWork', { title: item.caption || item.carouselTitle || item.filename }) : item.postType === 'carousel' ? t('post.carousel.open', { count: item.itemCount ?? item.mediaItems?.length ?? 0 }) : undefined"
       >
         <ResilientImage
-          :src="item.thumbnailUrl"
-          :alt="item.filename"
+          :src="workCardCover(item)?.thumbnailUrl ?? item.thumbnailUrl"
+          :alt="workCardCover(item)?.filename ?? item.filename"
           loading="lazy"
           :retry-while="appStore.isScanning"
           class="h-full w-full object-cover group-hover:scale-[1.03] group-hover:opacity-90"
@@ -77,6 +77,11 @@ const props = withDefaults(
 const appStore = useAppStore();
 const route = useRoute();
 const { t } = useI18n();
+
+function workCardCover(item: CanonicalWorkSummary | FeedItem | SharedFeedItem) {
+  if (props.variant !== 'works' || props.sharedSlug || !('representation' in item) || item.representation !== 'summary') return undefined;
+  return item.cardCover;
+}
 
 function buildItemRoute(item: CanonicalWorkSummary | FeedItem | SharedFeedItem) {
   if (props.sharedSlug) {

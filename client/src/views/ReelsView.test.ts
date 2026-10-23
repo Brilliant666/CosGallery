@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 
-import type { AppStatus, FeedItem, FolderSummary } from '../types/api';
+import type { AppStatus, ReelItem, FolderSummary } from '../types/api';
 import { useAppStore } from '../stores/app';
 import { useFoldersStore } from '../stores/folders';
 import { useReelsStore } from '../stores/reels';
@@ -48,7 +48,7 @@ vi.mock('../components/ReelDeck.vue', async () => {
         });
 
         const activeItem = () =>
-          (props.items.find((item) => item.id === props.activeReelId) as FeedItem | undefined) ?? (props.items[0] as FeedItem | undefined);
+          (props.items.find((item) => item.id === props.activeReelId) as ReelItem | undefined) ?? (props.items[0] as ReelItem | undefined);
 
         return () =>
           h('div', { 'data-test': 'reel-deck' }, [
@@ -60,7 +60,7 @@ vi.mock('../components/ReelDeck.vue', async () => {
               'button',
               {
                 'data-test': 'emit-active-change',
-                onClick: () => emit('active-change', (props.items[1] as FeedItem | undefined)?.id ?? null)
+                onClick: () => emit('active-change', (props.items[1] as ReelItem | undefined)?.id ?? null)
               },
               'emit active change'
             ),
@@ -174,9 +174,16 @@ function createAppStatus(): AppStatus {
   };
 }
 
-function createFeedItem(id: number, folderSlug: string, folderName: string): FeedItem {
+function createReelItem(id: number, folderSlug: string, folderName: string): ReelItem {
   return {
     id,
+    mediaId: id,
+    postId: id + 1000,
+    mediaPosition: 1,
+    creatorId: null,
+    mimeType: 'video/mp4',
+    fileSize: 24 * 1024 * 1024,
+    originalDownloadUrl: `/api/reels/media/${id}/original?v=fixed&download=1`,
     folderId: id,
     folderSlug,
     folderName,
@@ -240,13 +247,20 @@ describe('ReelsView', () => {
     });
 
     reelsStore.$patch({
-      items: [createFeedItem(101, 'alpha', 'Alpha'), createFeedItem(202, 'beta', 'Beta')],
+      items: [createReelItem(101, 'alpha', 'Alpha'), createReelItem(202, 'beta', 'Beta')],
       initialized: true,
       loading: false,
       error: null,
       activeReelId: 101,
       hasMore: true
     });
+  });
+
+  it('offers an explicit fresh reload after an expired queue without restarting automatically',async()=>{
+    const store=useReelsStore();store.error='短片队列已过期，请重新加载短片。';
+    const load=vi.spyOn(store,'loadInitial').mockResolvedValue(undefined);const wrapper=mount(ReelsView);await flushPromises();
+    expect(wrapper.text()).toContain('已过期');expect(wrapper.get('button').text()).toBe('Reload reels');expect(load).toHaveBeenCalledTimes(1);
+    await wrapper.get('button').trigger('click');expect(load).toHaveBeenLastCalledWith(true);expect(load).toHaveBeenCalledTimes(2);
   });
 
   it('loads the route view and shows the right rail for the active reel', async () => {

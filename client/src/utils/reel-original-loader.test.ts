@@ -9,6 +9,14 @@ describe('scoped native reel loader', () => {
   it('only opts same-origin scoped originals into native attempts', () => {
     const loader = new ReelOriginalLoader();
     expect(loader.canPlay({ src: '/api/reels/7/original?v=abc', type: 'video/quicktime' })).toBe(true);
+    expect(loader.canPlay({ src: '/api/reels/media/70/original?v=abc', type: 'video/quicktime' })).toBe(true);
+    expect(loader.canPlay({ src: '/api/gallery/media/70/original?v=abc', type: 'video/x-matroska' })).toBe(true);
+    expect(loader.canPlay({ src: 'https://example.invalid/api/gallery/media/70/original', type: 'video/quicktime' })).toBe(false);
+    expect(loader.canPlay({ src: '/api/gallery/media/70/preview', type: 'video/mp4' })).toBe(false);
+    expect(loader.canPlay({ src: '/api/gallery/media/70/remux', type: 'video/mp4' })).toBe(false);
+    expect(loader.canPlay({ src: '/api/gallery/70/original', type: 'video/quicktime' })).toBe(false);
+    expect(loader.canPlay({ src: 'https://example.invalid/api/reels/media/70/original', type: 'video/quicktime' })).toBe(false);
+    expect(loader.canPlay({ src: '/api/reels/media/70/remux', type: 'video/mp4' })).toBe(false);
     expect(loader.canPlay({ src: 'https://example.invalid/api/reels/7/original', type: 'video/quicktime' })).toBe(false);
     expect(loader.canPlay({ src: '/api/reels/7/remux', type: 'video/mp4' })).toBe(false);
     expect(loader.canPlay({ src: '/api/reels/7/original', type: 'text/html' })).toBe(false);
@@ -21,7 +29,7 @@ describe('scoped native reel loader', () => {
     loader.target = video;
     const context = { $state: { clipStartTime: () => 0, clipEndTime: () => 0 } } as unknown as MediaContext;
     const provider = await loader.load(context);
-    const source = { src: '/api/reels/7/original?v=abc', type: 'video/quicktime' };
+    const source = { src: '/api/reels/media/70/original?v=abc', type: 'video/quicktime' };
     await provider.loadSource(source, 'metadata');
     expect(video.getAttribute('src')).toBe(source.src);
     expect(video.querySelector('source')).toBeNull();

@@ -1,7 +1,7 @@
 <template>
   <div
     class="relative h-full w-full overflow-hidden bg-surface-alt outline-none select-none"
-    :style="{ aspectRatio }"
+    :style="{ aspectRatio, touchAction: 'pan-y pinch-zoom' }"
     role="group"
     aria-roledescription="carousel"
     :aria-label="t('post.carousel.label', { count: items.length })"
@@ -10,13 +10,18 @@
     @keydown.right="handleKeyRight"
     @pointercancel.stop="cancelPointer"
     @pointerdown.stop="startPointer"
+    @pointermove.stop="movePointer"
     @pointerup.stop="finishPointer"
+    @lostpointercapture="cancelPointer"
+    @click.capture="handleClick"
   >
     <template v-for="(item, index) in items" :key="item.imageId">
       <VideoMediaPlayer
         v-if="item.mediaType === 'video' && index === activeIndex"
         class="h-full w-full object-contain bg-black"
         :src="item.previewUrl"
+        :media-id="nativeVideoPlayback ? item.imageId : undefined"
+        :duration-ms="item.durationMs ?? undefined"
         :original-url="item.originalUrl"
         :playback-strategy="item.playbackStrategy"
         :width="item.width"
@@ -87,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import type { PostMediaItem } from '../types/api';
@@ -105,6 +110,7 @@ const props = withDefaults(
     loading?: 'eager' | 'lazy';
     muted?: boolean;
     autoplay?: boolean;
+    nativeVideoPlayback?: boolean;
   }>(),
   {
     modelValue: 0,
@@ -113,7 +119,8 @@ const props = withDefaults(
     retryWhile: false,
     loading: 'lazy',
     muted: true,
-    autoplay: false
+    autoplay: false,
+    nativeVideoPlayback: false
   }
 );
 
@@ -125,6 +132,10 @@ const { t } = useI18n();
 const appStore = useAppStore();
 const pointerId = ref<number | null>(null);
 const pointerStartX = ref(0);
+const pointerStartY = ref(0);
+let swiping = false;
+let suppressPointerClick = false;
+let pointerTarget: HTMLElement | null = null;
 
 const activeIndex = computed(() => Math.min(Math.max(props.modelValue, 0), Math.max(props.items.length - 1, 0)));
 // Work viewers follow the selected media; feed/share callers retain their stable first-item frame.
@@ -179,22 +190,67 @@ function handleKeyRight(event: KeyboardEvent) {
 }
 
 function startPointer(event: PointerEvent) {
+  if (pointerId.value !== null || event.isPrimary === false) return;
+  suppressPointerClick = false;
   if (event.pointerType === 'mouse' && event.button !== 0) return;
   if (isGestureIgnored(event.target)) return;
   pointerId.value = event.pointerId;
   pointerStartX.value = event.clientX;
+  pointerStartY.value = event.clientY;
+  swiping = false;
+  pointerTarget = event.currentTarget as HTMLElement;
+  // Uncaptured taps can end outside the stage before any horizontal move.
+  window.addEventListener('pointerup', cancelPointer);
+  window.addEventListener('pointercancel', cancelPointer);
+}
+
+function movePointer(event: PointerEvent) {
+  if (pointerId.value !== event.pointerId || swiping) return;
+  const distanceX = Math.abs(event.clientX - pointerStartX.value);
+  const distanceY = Math.abs(event.clientY - pointerStartY.value);
+  if (Math.max(distanceX, distanceY) < 10) return;
+  if (distanceY >= distanceX) {
+    // Once scrolling starts, this pointer must not become a carousel swipe.
+    cancelPointer(event);
+    return;
+  }
+  swiping = true;
+  suppressPointerClick = true;
+  // A tap must retain the media surface as its click target.
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
 }
 
 function finishPointer(event: PointerEvent) {
   if (pointerId.value !== event.pointerId) return;
   const distance = event.clientX - pointerStartX.value;
-  if (Math.abs(distance) >= 48) distance > 0 ? previous() : next();
-  cancelPointer();
+  if (swiping && Math.abs(distance) >= 48) distance > 0 ? previous() : next();
+  cancelPointer(event);
 }
 
-function cancelPointer() {
+function cancelPointer(event: PointerEvent) {
+  if (pointerId.value !== event.pointerId) return;
+  clearPointer();
+}
+
+function clearPointer() {
+  const id = pointerId.value;
+  const target = pointerTarget;
   pointerId.value = null;
+  pointerTarget = null;
+  swiping = false;
+  window.removeEventListener('pointerup', cancelPointer);
+  window.removeEventListener('pointercancel', cancelPointer);
+  if (id !== null && target?.hasPointerCapture?.(id)) target.releasePointerCapture(id);
+}
+
+onBeforeUnmount(clearPointer);
+
+function handleClick(event: MouseEvent) {
+  // Keyboard activation has no pointer sequence and must remain available.
+  if (!suppressPointerClick || event.detail === 0) return;
+  suppressPointerClick = false;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 watch(

@@ -843,6 +843,7 @@
   },
   "reels": {
     "view": {
+      "reload": "Reload reels",
       "libraryUnavailableTitle": "Library storage unavailable",
       "loadErrorTitle": "Could not load reels",
       "loadingTitle": "Loading reels",
@@ -854,9 +855,12 @@
       "next": "Next reel"
     },
     "rail": {
+      "parentLoadError": "Could not load the parent post. Please try again.",
       "hideDetails": "Hide reel details",
       "showDetails": "Show reel details",
       "downloadOriginal": "Download original file",
+      "openAlbum": "Open album at this video",
+      "parentPostActions": "Likes, favorites and captions apply to the parent post or album.",
       "openFolder": "Open folder"
     },
     "info": {
@@ -1192,5 +1196,57 @@
     "emptyDescription": "Index a few folders and this page will start surfacing posts here.",
     "folderPostsOne": "{count} post",
     "folderPostsOther": "{count} posts"
+  },
+  "mediaRemoval": {
+    "legacyTitle": "Other trashed galleries",
+    "legacyEmpty": "No other trashed galleries",
+    "legacyDescription": "Whole works and individually trashed media are listed above.",
+    "action": "Move this image or video to Trash",
+    "title": "Move this media to Trash?",
+    "confirm": "Move to Trash",
+    "message": "Move only {filename} to Trash. The original file is kept and can be restored from Trash.",
+    "lastMessage": "Move {filename} to Trash. This is the last media in this work; the work will disappear from browsing until restored.",
+    "failed": "Unable to trash this media.",
+    "trashTitle": "Individually trashed images and videos",
+    "restore": "Restore media",
+    "empty": "No individually trashed media.",
+    "loadFailed": "Unable to load media trash."
+  },
+  "workRemoval": {
+    "pendingTitle": "Unfinished work operations",
+    "retry": "Continue processing",
+    "recoveryPending": "Deletion was not committed; file rollback is pending. Continuing only restores files from this operation.",
+    "rolledBack": "Files were rolled back; this deletion did not take effect. Review the scope again to delete.",
+    "copies": "local copies",
+    "trash": {
+      "title": "Move the whole work to Trash?",
+      "message": "Trash all local copies of this work. Original files are kept and the work can be restored together. Individually trashed media retain their state.",
+      "confirm": "Trash the whole work"
+    },
+    "restore": {
+      "title": "Restore the whole work?",
+      "message": "Restore all trashed copies. Individually trashed media stay in media Trash.",
+      "confirm": "Restore the whole work"
+    },
+    "permanent": {
+      "title": "Permanently delete the whole work?",
+      "message": "Permanently delete files in all local copies, including individually trashed media. This cannot be restored from Trash. Review the complete scope below.",
+      "confirm": "Permanently delete work"
+    },
+    "loading": "Checking all copies…",
+    "scope": "{copies} local copies, {files} files.",
+    "files": "{count} files",
+    "pending": "Records updated; disk cleanup is pending. Retain the operation record for review.",
+    "finalizationPending": "Work files have been permanently deleted; finalization of this operation is still pending. Continue processing this operation.",
+    "completed": "Operation completed.",
+    "processing": "Processing…",
+    "failed": "Operation failed. Review the scope again.",
+    "scopeChanged": "The scope changed. Refresh and review again.",
+    "refreshPreview": "Review scope again",
+    "trashTitle": "Whole works in Trash",
+    "empty": "No whole works in Trash.",
+    "loadFailed": "Unable to load work Trash.",
+    "restoreAction": "Restore whole work",
+    "permanentAction": "Permanently delete"
   }
 }

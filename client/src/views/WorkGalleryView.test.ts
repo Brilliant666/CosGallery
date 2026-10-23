@@ -3,7 +3,7 @@ import path from 'node:path';
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchImage, fetchFolder } from '../api/gallery';
+import { fetchCanonicalCreator, fetchCanonicalCreatorWork, fetchGalleryVideoPlayback, fetchImage, fetchFolder } from '../api/gallery';
 import { useAppStore } from '../stores/app';
 import { galleryTestRouter, mediaItem, mixedOrientationItems, workDetail } from '../../test/work-gallery-fixtures';
 import WorkGalleryView from './WorkGalleryView.vue';
@@ -17,8 +17,23 @@ vi.mock('../api/gallery', () => ({
   fetchFolder: vi.fn().mockResolvedValue({ canonicalCreatorId: null }),
   fetchImage: vi.fn(),
   fetchCanonicalCreator: vi.fn(),
-  fetchCanonicalCreatorWork: vi.fn()
+  fetchCanonicalCreatorWork: vi.fn(),
+  fetchGalleryVideoPlayback: vi.fn()
 }));
+
+// Keep the real Viewer and playback state machine mounted. JSDOM does not
+// register Vidstack's browser custom elements, so supply its player contract.
+class GalleryMediaPlayer extends HTMLElement {
+  src: unknown = '';
+  paused = true;
+  muted = true;
+  duration = 0;
+  currentTime = 0;
+  get state() { return { source: this.src || { src: '' }, canPlay: false }; }
+  async play() { this.paused = false; }
+  async pause() { this.paused = true; }
+}
+customElements.define('media-player', GalleryMediaPlayer);
 const fetchMock = vi.mocked(fetchImage);
 const fetchCanonicalCreatorMock = vi.mocked(fetchCanonicalCreator);
 const fetchCanonicalWorkMock = vi.mocked(fetchCanonicalCreatorWork);
@@ -29,6 +44,10 @@ describe('WorkGalleryView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     fetchMock.mockReset().mockResolvedValue(workDetail());
+    vi.mocked(fetchGalleryVideoPlayback).mockReset().mockImplementation(async mediaId => ({
+      originalUrl: `/api/gallery/media/${mediaId}/original`, originalMimeType: 'video/mp4',
+      previewUrl: `/api/gallery/media/${mediaId}/preview`, previewReady: false
+    }));
     vi.mocked(fetchFolder).mockReset().mockResolvedValue({ canonicalCreatorId: null } as Awaited<ReturnType<typeof fetchFolder>>);
     fetchCanonicalCreatorMock.mockReset().mockResolvedValue({
       creator: {
@@ -81,6 +100,10 @@ describe('WorkGalleryView', () => {
     expect(wrapper.findAll('article')).toHaveLength(5);
     expect(wrapper.attributes('aria-busy')).toBe('false');
     expect(wrapper.getComponent(PostView).props('authorizedWork')?.mediaItems).toHaveLength(5);
+    expect(fetchGalleryVideoPlayback).toHaveBeenCalledExactlyOnceWith(704, expect.any(AbortSignal));
+    expect((wrapper.get('media-player').element as GalleryMediaPlayer).src).toEqual({
+      src: '/api/gallery/media/704/original', type: 'video/mp4'
+    });
     const grid = wrapper.get('.work-gallery__grid').element;
     name.resolve({ creator: { id: 166, canonicalCreatorId: 166, identityType: 'creator', name: 'Resolved name' } } as Awaited<ReturnType<typeof fetchCanonicalCreator>>);
     await flushPromises();
@@ -199,6 +222,7 @@ describe('WorkGalleryView', () => {
     expect(wrapper.findAll('.work-media-card__link')).toHaveLength(5);
     expect(wrapper.findAll('.work-media-card__duration').map((label) => label.text())).toEqual(['1:02', '1:02']);
     expect(wrapper.find('video, media-player, video-media-player').exists()).toBe(false);
+    expect(fetchGalleryVideoPlayback).not.toHaveBeenCalled();
     expect(wrapper.findAll('img').every(img => getComputedStyle(img.element).objectFit === 'cover')).toBe(true);
     expect(wrapper.get('.work-gallery__back').attributes('href')).toBe('/f/creator');
   });

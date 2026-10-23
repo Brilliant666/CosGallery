@@ -82,7 +82,9 @@ Videos play inside the carousel using the integrated video player with interacti
 
 Swiping or navigating through slides isolates video controls so that dragging the time slider or tapping player buttons does not trigger slide changes, and unmounting or switching slides pauses background playback cleanly.
 
-Videos inside multi-item carousels do not appear in Reels or contribute to Reels counts. A child folder with exactly one video becomes a normal single-video post, so that fallback post may appear in Reels.
+Reels includes each visible video inside a carousel, as well as standalone video posts. Each video has its own media ID, playback source and position in the queue. Opening its work returns to the owning post at that video; likes, collections and caption edits retain their existing work-level meaning. Removed media, removed works and secondary copies outside the current gallery presentation are excluded.
+
+All modes use a fixed queue for the current browsing session. Paging rechecks each video's visibility and source identity, skips unavailable entries, and keeps the remaining order. Newly added or restored videos enter after reloading the queue. Recommendation weights and existing folder diversity rules are unchanged; no extra same-work penalty is applied.
 
 ## Edge cases
 

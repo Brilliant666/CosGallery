@@ -11,7 +11,7 @@ import {
 
 const roots: string[] = [];
 
-async function fixture(firstName = 'first.jpg', firstKind: 'image' | 'advertisement' = 'image') {
+async function fixture(firstName = 'first.jpg', firstKind: 'image' | 'video' | 'advertisement' = 'image') {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foldergram-move-'));
   roots.push(root);
   const processingPath = path.join(root, 'job');
@@ -33,8 +33,8 @@ async function fixture(firstName = 'first.jpg', firstKind: 'image' | 'advertisem
   const summary = {
     sourceWorkId: 8, archiveDownloadTaskId: 9, sourceArchiveSha256: binding.sourceArchiveSha256,
     plannedTargetPath: binding.targetPath, readyPath: path.join(processingPath, 'ready'),
-    imageCount: firstKind === 'image' ? 2 : 1, videoCount: 0,
-    totalMediaCount: firstKind === 'image' ? 2 : 1, totalBytes: firstKind === 'image' ? 23 : 12,
+    imageCount: firstKind === 'image' ? 2 : 1, videoCount: firstKind === 'video' ? 1 : 0,
+    totalMediaCount: firstKind === 'advertisement' ? 1 : 2, totalBytes: firstKind === 'advertisement' ? 12 : 23,
     warnings: ['keep original validation']
   };
   const manifest = await createStagingMoveManifest(binding, contentRoot, files, summary);
@@ -48,7 +48,27 @@ afterEach(async () => {
 });
 
 describe.sequential('Local ingest durable staging moves', () => {
-  it.each(['492.jpg', '009-01.JPG'])('keeps exact known image advertisement %s recoverable outside staged media', async name => {
+  it('recovers uppercase TS as video from a durable manifest after the ready-directory rename is interrupted', async () => {
+    const f = await fixture('clip.TS', 'video'), before = await fs.lstat(path.join(f.contentRoot, 'clip.TS'), { bigint: true });
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValueOnce(new Error('synthetic TS rename interruption'));
+    await expect(finishStagingMove(f.binding, f.manifest)).rejects.toThrow('synthetic TS rename interruption');
+    rename.mockRestore();
+    const recovered = (await readStagingMoveManifest(f.binding))!;
+    expect(recovered.files.find(file => file.relativePath === 'clip.TS')).toMatchObject({ kind: 'video' });
+    expect(recovered.summary).toMatchObject({ imageCount: 1, videoCount: 1, totalMediaCount: 2, totalBytes: 23 });
+    const validate = vi.fn(async (_filename: string, _kind: 'image' | 'video') => {});
+    expect((await verifyStagingMoveState(f.binding, recovered, validate)).pending).toHaveLength(0);
+    expect(validate).toHaveBeenCalledWith(path.join(f.binding.processingPath, 'ready-building-move', 'clip.TS'), 'video');
+    const copy = vi.spyOn(fs, 'copyFile');
+    await finishStagingMove(f.binding, recovered);
+    expect(copy).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(f.binding.processingPath, 'ready', 'clip.TS'), 'utf8')).toBe('first image');
+    const after = await fs.lstat(path.join(f.binding.processingPath, 'ready', 'clip.TS'), { bigint: true });
+    expect(after.ino).toBe(before.ino); expect(after.dev).toBe(before.dev);
+    expect((await readStagingMoveManifest(f.binding))!.summary).toEqual(f.summary);
+  });
+
+  it.each(['492.jpg', '009-01.JPG', '252.jpg', '252.PNG', '101.1.jpg', '3211.jpg', '扫码获取更多列表网红COS作品写真.png'])('keeps exact known image advertisement %s recoverable outside staged media', async name => {
     const f = await fixture(name, 'advertisement');
     await finishStagingMove(f.binding, f.manifest);
     expect(await fs.readFile(path.join(f.contentRoot, name), 'utf8')).toBe('first image');

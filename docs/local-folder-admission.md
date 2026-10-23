@@ -82,8 +82,9 @@ set is valid only if that source actually has no tasks. Changes/active claims st
 acceptance without undoing successful file admission. Resume retries this checkpoint.
 
 `approvedAds:["relative/ad.url"]` is optional and accepts only listed TXT/URL files
-or the user-confirmed global ecytt02 image-ad basenames `492.jpg` and `009-01.jpg`
-present in the confirmed manifest. New unconfirmed CLI previews prefill these two
+or the user-confirmed global image-ad basenames listed in the
+[web admission guide](./local-admission-web.md), present in the confirmed manifest.
+New unconfirmed CLI previews prefill these exact
 image-ad matches; the full plan still requires confirmation, and the list may be
 edited before confirming. Other images are not advertisement candidates. Existing
 confirmed plans are never supplemented on apply/resume. Without an explicit

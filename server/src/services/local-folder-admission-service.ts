@@ -4,8 +4,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { assertPathInsideLocalIngestRoot, isSameOrNestedPath } from '../utils/local-ingest-paths.js';
+import { isSupportedVideoFile } from '../utils/image-utils.js';
 import { LocalIngestDestinationService } from './local-ingest-destination-service.js';
 import { WorkIdentityService } from './work-identity-service.js';
+import { assertPathNotRemoved, assertWorkNotRemoved } from './work-removal-guards.js';
 import { SourceEvidenceService } from './source-evidence-service.js';
 import { runAdmissionExclusive } from './local-admission-lock.js';
 import { extractWorkDisplayTitle } from '../utils/work-title.js';
@@ -14,6 +16,7 @@ import { isAdmissionAdvertisementCandidate, isKnownAdvertisementImage } from '..
 import { recycleBinAdapter, type RecycleBinAdapter } from './recycle-bin-adapter.js';
 import { assertNoLaterAdmissionCompletion } from './local-admission-later-completion.js';
 import { assertNewAdmissionOwnership, admissionItemOwnershipGuard, foreignCaseCheckpointGuard } from './local-admission-plan-ownership.js';
+import { AdmissionReviewRequiredError, encodeAdmissionIssue, admissionErrorMessage, type AdmissionExecutionIssue } from './local-admission-execution-issue.js';
 
 const leaf = z.string().min(1).refine(v => !/[\\/:\x00]/.test(v) && v!=='.' && v!=='..', 'A direct child directory name is required');
 const entrySchema = z.object({ relativePath:z.string().min(1), kind:z.enum(['directory','image','video','other']), size:z.number().int().nonnegative(), dev:z.string(), ino:z.string(), mtimeNs:z.string() }).strict();
@@ -61,7 +64,8 @@ export async function inventoryAdmissionDirectory(root:string):Promise<Entry[]> 
       const s=await fs.lstat(absolute,{bigint:true});if(s.isSymbolicLink())throw Error('Linked entries are not supported');
       if(!s.isDirectory()&&!s.isFile())throw Error('Non-regular entry is not supported');
       const ext=path.extname(ent.name).toLowerCase();
-      const kind=s.isDirectory()?'directory':/\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(ext)?'image':/\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(ext)?'video':'other';
+      // Keep the legacy AVI inventory classification for immutable admission plans.
+      const kind=s.isDirectory()?'directory':/\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(ext)?'image':isSupportedVideoFile(ent.name)||ext==='.avi'?'video':'other';
       rows.push({relativePath:path.relative(root,absolute).split(path.sep).join('/'),kind,size:s.isDirectory()?0:Number(s.size),dev:String(s.dev),ino:String(s.ino),mtimeNs:s.isDirectory()?'0':String(s.mtimeNs)});
       if(s.isDirectory())await walk(absolute);
     }
@@ -69,7 +73,13 @@ export async function inventoryAdmissionDirectory(root:string):Promise<Entry[]> 
   await walk(root);if(!rows.some(r=>r.kind==='image'||r.kind==='video'))throw Error('No supported media found; nothing admitted');return rows;
 }
 
-type ItemState={state:string;local_work_id:number|null;work_id:number|null;manifest_json:string};
+/** Compare legacy plans with their original TS classification; do not rewrite their evidence. */
+export async function inventoryPlannedDirectory(root:string,manifest:Entry[]):Promise<Entry[]> {
+  const legacyTs=new Set(manifest.filter(entry=>entry.kind==='other'&&path.extname(entry.relativePath).toLowerCase()==='.ts').map(entry=>entry.relativePath));
+  return (await inventoryAdmissionDirectory(root)).map(entry=>entry.kind==='video'&&legacyTs.has(entry.relativePath)?{...entry,kind:'other' as const}:entry);
+}
+
+type ItemState={state:string;local_work_id:number|null;work_id:number|null;manifest_json:string;last_error:string|null};
 export class LocalFolderAdmissionService {
   private readonly recycler:Pick<RecycleBinAdapter,'recycle'>;
   constructor(private readonly db:DatabaseSync,private readonly galleryRoot:string,options:{recycler?:Pick<RecycleBinAdapter,'recycle'>}={}){
@@ -123,11 +133,13 @@ export class LocalFolderAdmissionService {
     if(isSameOrNestedPath(plan.inputRoot,plan.galleryRoot)||isSameOrNestedPath(plan.galleryRoot,plan.inputRoot))throw Error('Roots overlap');
     const keys=new Set<string>(),targets=new Set<string>();
     for(const item of plan.items){
+      assertPathNotRemoved(this.db,item.targetPath);
       if(keys.has(item.key)||targets.has(cmp(item.targetPath)))throw Error('Duplicate item or target');
       if(item.identity.kind==='existing'&&!item.identity.workId&&!item.identity.sourceWorkId)throw Error('Existing identity requires a Work or SourceWork ID');
       if(item.identity.kind==='existing'){
         const existing=this.db.prepare(`SELECT w.id,w.creator_id,w.display_title FROM archive_catalog_works w WHERE w.id=? OR w.id=(SELECT work_id FROM archive_catalog_source_works WHERE id=?)`).all(item.identity.workId??null,item.identity.sourceWorkId??null) as {id:number;creator_id:number;display_title:string}[];
         if(existing.length!==1||existing[0].creator_id!==plan.creatorId)throw Error('Existing Work/source identity conflict');
+        assertWorkNotRemoved(this.db,existing[0].id);
         if(item.displayTitle!==existing[0].display_title)throw Error(`Existing Work keeps its canonical title; confirm displayTitle as: ${existing[0].display_title}`);
       }
       if(item.identity.kind==='same-as'&&!keys.has(item.identity.itemKey))throw Error('same-as must reference an earlier explicitly confirmed item');
@@ -427,7 +439,7 @@ export class LocalFolderAdmissionService {
 
   private async verifyTarget(plan:AdmissionPlan,item:AdmissionPlan['items'][number],additional:Removal[]=[],allowPendingRetention=false){
     await assertPathInsideLocalIngestRoot(plan.galleryRoot,item.targetPath);
-    const observed=await inventoryAdmissionDirectory(item.targetPath);
+    const observed=await inventoryPlannedDirectory(item.targetPath,item.manifest);
     for(const ad of item.approvedAds){
       const saved=this.attachmentPath(plan,item,ad);await this.assertAdvertisementPath(plan,saved);
       if(!await exists(saved))continue;
@@ -559,16 +571,16 @@ export class LocalFolderAdmissionService {
       await assertPathInsideLocalIngestRoot(plan.inputRoot,source,{directChild:true});
       await assertPathInsideLocalIngestRoot(plan.galleryRoot,item.targetPath);
       if(await exists(item.targetPath))throw Error(`${item.sourceRelativePath}: Target exists; never overwrite`);
-      if(hash(await inventoryAdmissionDirectory(source))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);
+      if(hash(await inventoryPlannedDirectory(source,item.manifest))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);
     }
   }
 
   /** Each DB checkpoint commits before/after a filesystem step, never pretending rename is part of SQLite. */
-  async apply(raw:unknown,options:{stopAfterMove?:boolean}={}) {
+  async apply(raw:unknown,options:{stopAfterMove?:boolean;continueReviewable?:boolean}={}) {
     return runAdmissionExclusive(this.db,()=>this.applyConfirmed(raw,options));
   }
 
-  private async applyConfirmed(raw:unknown,options:{stopAfterMove?:boolean}) {
+  private async applyConfirmed(raw:unknown,options:{stopAfterMove?:boolean;continueReviewable?:boolean}) {
     const plan=this.validate(raw);this.idle();
     assertNoLaterAdmissionCompletion(this.db,plan.planId,plan.items.map(item=>item.key));
     const {databaseManager}=await import('../db/database.js');const {appConfig}=await import('../config/env.js');
@@ -586,7 +598,7 @@ export class LocalFolderAdmissionService {
       if(cmp(expected)!==cmp(plan.creatorDirectory))throw Error('Destination is no longer the selected legal creator directory');
       // Validate every untouched source/target before the first move.
       for(const item of plan.items){if(await exists(item.targetPath))throw Error(`${item.sourceRelativePath}: Target exists; never overwrite`);
-        if(hash(await inventoryAdmissionDirectory(path.join(plan.inputRoot,item.sourceRelativePath)))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);}
+        if(hash(await inventoryPlannedDirectory(path.join(plan.inputRoot,item.sourceRelativePath),item.manifest))!==hash(item.manifest))throw Error(`${item.sourceRelativePath}: Source changed since preview`);}
       this.db.exec('SAVEPOINT admission_plan');
       try {
         this.db.prepare('INSERT INTO archive_local_admission_plans(plan_id,payload_json,content_hash) VALUES(?,?,?)').run(plan.planId,payload,hash(plan));
@@ -594,19 +606,41 @@ export class LocalFolderAdmissionService {
         this.db.exec('RELEASE admission_plan');
       } catch(error) {this.db.exec('ROLLBACK TO admission_plan; RELEASE admission_plan');throw error;}
     }
-    const results=[];const assertItemOwnership=admissionItemOwnershipGuard(this.db,plan),assertCaseCheckpoint=foreignCaseCheckpointGuard(this.db,plan);
+    const results=[];const issues:Array<{key:string;issue:AdmissionExecutionIssue}>=[];
+    const blockedWorks=new Map<number,string>();
+    const assertItemOwnership=admissionItemOwnershipGuard(this.db,plan),assertCaseCheckpoint=foreignCaseCheckpointGuard(this.db,plan);
     for(const item of plan.items){
       let state=this.db.prepare('SELECT * FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.key) as ItemState;
       if(!state)throw Error('Plan checkpoint missing; cannot infer progress');
+      assertWorkNotRemoved(this.db,state.work_id);
       try {
         assertItemOwnership(item);
         assertCaseCheckpoint(item);
+        if(options.continueReviewable&&state.state!=='completed'){
+          let workId=state.work_id,blockedByItemKey:string|undefined;
+          if(item.identity.kind==='same-as'){
+            const dependency=this.db.prepare('SELECT state,work_id FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(plan.planId,item.identity.itemKey) as Pick<ItemState,'state'|'work_id'>|undefined;
+            if(!dependency)throw Error('Referenced plan checkpoint missing; cannot infer dependency');
+            workId=dependency.work_id;
+            if(dependency.state!=='completed')blockedByItemKey=item.identity.itemKey;
+          }else if(item.identity.kind==='existing'){
+            workId=workId??item.identity.workId??(item.identity.sourceWorkId===undefined?null:Number(this.db.prepare('SELECT work_id FROM archive_catalog_source_works WHERE id=?').get(item.identity.sourceWorkId)?.work_id??0));
+          }
+          blockedByItemKey=blockedByItemKey??(workId?blockedWorks.get(workId):undefined);
+          if(blockedByItemKey){
+            const issue:AdmissionExecutionIssue={kind:'dependency',code:'ADMISSION_DEPENDENCY_PENDING',message:'同一作品的前项尚未完成，本项等待前项处理后继续',blockedByItemKey};
+            state.last_error=encodeAdmissionIssue(issue);
+            this.db.prepare('UPDATE archive_local_admission_items SET last_error=? WHERE plan_id=? AND item_key=?').run(state.last_error,plan.planId,item.key);
+            if(workId)blockedWorks.set(workId,item.key);
+            issues.push({key:item.key,issue});results.push({key:item.key,...state,executionIssue:issue});continue;
+          }
+        }
         const source=path.join(plan.inputRoot,item.sourceRelativePath),target=item.targetPath;
         await assertPathInsideLocalIngestRoot(plan.inputRoot,source,{directChild:true});
         await assertPathInsideLocalIngestRoot(plan.galleryRoot,target);
         const sourceExists=await exists(source),targetExists=await exists(target);
         if(sourceExists===targetExists)throw Error('Both source and target exist or both are absent; review required');
-        if(sourceExists){if(hash(await inventoryAdmissionDirectory(source))!==hash(item.manifest))throw Error('Directory changed since confirmation; review required');}
+        if(sourceExists){if(hash(await inventoryPlannedDirectory(source,item.manifest))!==hash(item.manifest))throw Error('Directory changed since confirmation; review required');}
         else {await this.reconcileAdvertisementRecycling(plan,item);await this.retainRecoveredOriginals(plan,item);await this.verifyTarget(plan,item);}
         if(state.state==='planned'){
           if(!sourceExists)throw Error('No recorded move intent; cannot adopt target');
@@ -629,7 +663,7 @@ export class LocalFolderAdmissionService {
         if(state.state==='move_intent'){
           if(sourceExists){if(await exists(target))throw Error('Target occupied');await fs.rename(source,target);}
           if(options.stopAfterMove)throw Error('Simulated interruption after move');
-          if(hash(await inventoryAdmissionDirectory(target))!==hash(item.manifest))throw Error('Moved directory manifest differs');
+          if(hash(await inventoryPlannedDirectory(target,item.manifest))!==hash(item.manifest))throw Error('Moved directory manifest differs');
           this.db.prepare("UPDATE archive_local_admission_items SET state='files_verified' WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='files_verified';
         }
         if(state.state==='files_verified'){
@@ -652,7 +686,14 @@ export class LocalFolderAdmissionService {
           await this.detachRecoveredMedia(plan,item,state.local_work_id!,scope.sourcePath);
           const {scannerService}=await import('./scanner-service.js');
           const scan=await scannerService.scanCosCreators([scope.creatorDirectory],'local-folder-admission',{workFolderName:scope.workFolderName});
-          if(scan?.status!=='completed')throw Error('Scoped media indexing did not complete');
+          if(scan?.status!=='completed'){
+            if(scan?.admissionIssue){
+              // A typed content diagnosis cannot bypass the original full manifest.
+              await this.verifyTarget(plan,item);
+              throw new AdmissionReviewRequiredError(scan.admissionIssue);
+            }
+            throw Error(scan?.error_text?`Scoped media indexing did not complete: ${scan.error_text}`:'Scoped media indexing did not complete');
+          }
           const post=this.db.prepare('SELECT id,folder_id FROM posts WHERE source_path=? AND is_deleted=0 AND is_trashed=0').get(scope.sourcePath) as {id:number;folder_id:number}|undefined;
           if(!post)throw Error('Scoped Post was not found; keep files and retry indexing');
           const {ManagedCreatorService}=await import('./managed-creator-service.js');new ManagedCreatorService(this.db,plan.galleryRoot).linkFolder(post.folder_id,{creatorId:plan.creatorId});
@@ -673,11 +714,20 @@ export class LocalFolderAdmissionService {
           });
           if(plan.advertisementDisposition==='recycle_bin'&&item.approvedAds.length)await this.recycleItemAdvertisements(plan,item,
             item.approvedAds.map(ad=>item.manifest.find(entry=>entry.relativePath===ad)!),`plan:${plan.planId}`,item.reason);
-          this.db.prepare("UPDATE archive_local_admission_items SET state='completed',last_error=NULL WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='completed';
+          this.db.prepare("UPDATE archive_local_admission_items SET state='completed',last_error=NULL WHERE plan_id=? AND item_key=?").run(plan.planId,item.key);state.state='completed';state.last_error=null;
         }
         const approvedRemovals=this.removals(plan,item);
         results.push({key:item.key,...state,approvedRemovals:approvedRemovals.filter(r=>!r.retainOriginal),retainedOriginals:approvedRemovals.filter(r=>r.retainOriginal).map(r=>({...r,preservedAt:path.join(target,RETAINED_ORIGINALS_DIRECTORY,r.entry.relativePath)})),excludedAttachments:item.approvedAds.map(ad=>({relativePath:ad,preservedAt:this.attachmentPath(plan,item,ad),status:approvedRemovals.some(r=>r.entry.relativePath===ad)?'removed_by_explicit_decision':'preserved'}))});
-      } catch(e){this.db.prepare('UPDATE archive_local_admission_items SET last_error=? WHERE plan_id=? AND item_key=?').run(e instanceof Error?e.message:String(e),plan.planId,item.key);throw e;}
-    }return {planId:plan.planId,completed:true,items:results};
+      } catch(e){
+        const detail=e instanceof Error?e.message:String(e);
+        const review=options.continueReviewable&&e instanceof AdmissionReviewRequiredError&&e.issue.kind==='review';
+        const issue:AdmissionExecutionIssue=review?e.issue:{kind:'system',code:'ADMISSION_EXECUTION_PAUSED',message:admissionErrorMessage(detail)!,detail};
+        state.last_error=options.continueReviewable?encodeAdmissionIssue(issue):detail;
+        this.db.prepare('UPDATE archive_local_admission_items SET last_error=? WHERE plan_id=? AND item_key=?').run(state.last_error,plan.planId,item.key);
+        if(!review)throw e;
+        if(state.work_id)blockedWorks.set(state.work_id,item.key);
+        issues.push({key:item.key,issue});results.push({key:item.key,...state,executionIssue:issue});
+      }
+    }return {planId:plan.planId,completed:issues.length===0,items:results,issues};
   }
 }

@@ -589,4 +589,16 @@ describe('resource catalog', () => {
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
     expect(w.text()).not.toContain('已复制');
   });
+  it('opens whole-work trash by the row identity in global scope and disables stale confirmation', async () => {
+    const w = mount(ResourceCatalog, { props: { creatorId: null }, global: { stubs: { WorkRemovalDialog: true } } });
+    await flushPromises();
+    await button(w, '移入回收站').trigger('click');
+    const dialog = w.getComponent({ name: 'WorkRemovalDialog' });
+    expect(dialog.props()).toMatchObject({ workId: 22, creatorId: 1, mode: 'trash', revision: 'r1', revisionScope: 'all' });
+    expect(w.text()).not.toContain('永久删除');
+    useCreatorReadingStore().invalidate(); await flushPromises();
+    expect(dialog.props('unavailable')).toBe(true);
+    expect(button(w, '移入回收站').attributes('disabled')).toBeDefined();
+  });
+
 });

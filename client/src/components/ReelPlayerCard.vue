@@ -68,7 +68,7 @@
           <div class="reel-player-card__copy">
             <RouterLink
               class="reel-player-card__folder-row reel-player-card__folder-link"
-              :to="folderReadingRoute(item.folderSlug)"
+              :to="folderReadingRoute(item.folderSlug, item.creatorId)"
               aria-label="Open folder"
               @click.stop
             >
@@ -129,7 +129,7 @@ import type { MediaPlayerElement } from 'vidstack/elements';
 
 import { useAppStore } from '../stores/app';
 import { useReelPlayback } from '../composables/useReelPlayback';
-import type { FeedItem, FolderSummary } from '../types/api';
+import type { ReelItem, FolderSummary } from '../types/api';
 import { formatFolderTitle } from '../utils/folder-titles';
 import Avatar from './Avatar.vue';
 import { ReelOriginalLoader } from '../utils/reel-original-loader';
@@ -137,7 +137,7 @@ import { ReelOriginalLoader } from '../utils/reel-original-loader';
 const originalLoaders = [new ReelOriginalLoader()];
 
 const props = defineProps<{
-  item: FeedItem;
+  item: ReelItem;
   folder: FolderSummary | null;
   active: boolean;
 }>();

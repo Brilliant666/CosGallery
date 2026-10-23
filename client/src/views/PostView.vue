@@ -12,7 +12,7 @@
       :image="activeImage"
       :folder="folder"
       :is-modal="modal"
-      :deleting="viewerStore.deleting"
+      :deleting="mediaDeleting"
       @close="emit('close')"
       @delete="openDeleteDialog"
     />
@@ -21,39 +21,15 @@
     </div>
     <ConfirmDialog
       v-if="confirmDeleteOpen"
-      title="Delete this post?"
+      :title="t('mediaRemoval.title')"
       :message="deleteDialogMessage"
-      :confirm-label="deleteDialogConfirmLabel"
-      :loading="viewerStore.deleting"
-      @cancel="confirmDeleteOpen = false"
+      :confirm-label="t('mediaRemoval.confirm')"
+      :cancel-label="t('common.cancel')"
+      :loading="mediaDeleting"
+      @cancel="cancelDelete"
       @confirm="handleDelete"
     >
-      <template #details>
-        <label class="flex items-start gap-3 mt-3 cursor-pointer select-none">
-          <input
-            v-model="deleteOriginalFromDisk"
-            class="mt-[0.2rem]"
-            type="checkbox"
-            :disabled="viewerStore.deleting"
-          />
-          <span class="grid gap-[0.18rem]">
-            <span class="text-[0.92rem] font-semibold text-text">Also permanently delete original file from disk</span>
-            <span class="text-[0.84rem] text-muted">Keep this unchecked to move the post to Trash while keeping the source file on disk.</span>
-          </span>
-        </label>
-        <p
-          v-if="deleteOriginalFromDisk"
-          class="m-0 mt-3 px-3 py-[0.8rem] rounded-[0.9rem] border border-[rgba(217,48,37,0.24)] text-[0.84rem] text-[#b42318] bg-[rgba(217,48,37,0.08)]"
-        >
-          This will permanently delete the original file, thumbnail, and preview from disk. This action cannot be undone.
-        </p>
-        <p
-          v-if="deleteError"
-          class="m-0 mt-3 px-3 py-[0.8rem] rounded-[0.9rem] border border-[rgba(217,48,37,0.24)] text-[0.84rem] text-[#b42318] bg-[rgba(217,48,37,0.08)]"
-        >
-          {{ deleteError }}
-        </p>
-      </template>
+      <template #details><p v-if="deleteError" role="alert">{{ deleteError }}</p></template>
     </ConfirmDialog>
   </div>
 </template>
@@ -66,12 +42,10 @@ import { RouterLink, useRoute, useRouter } from 'vue-router';
 import ConfirmDialog from '../components/ConfirmDialog.vue';
 import ErrorState from '../components/ErrorState.vue';
 import PostViewer from '../components/PostViewer.vue';
-import { useAppStore } from '../stores/app';
-import { useFeedStore } from '../stores/feed';
-import { useLikesStore } from '../stores/likes';
 import { useFoldersStore } from '../stores/folders';
-import { useMomentsStore } from '../stores/moments';
 import { useViewerStore } from '../stores/viewer';
+import { trashPostMedia } from '../api/media-trash';
+import { refreshLibraryAfterRemoval } from '../utils/refresh-library';
 import type { ImageDetail } from '../types/api';
 import { canonicalWorkGalleryRoute, libraryReadingQuery, orderedMediaItems, parsePositiveId, resolveMediaSelection, workGalleryRoute, workMediaRoute } from '../utils/work-gallery';
 
@@ -87,18 +61,16 @@ const emit = defineEmits<{
   removedWork: [];
 }>();
 
-const appStore = useAppStore();
-const feedStore = useFeedStore();
-const likesStore = useLikesStore();
 const viewerStore = useViewerStore();
 const foldersStore = useFoldersStore();
-const momentsStore = useMomentsStore();
 const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
 const confirmDeleteOpen = ref(false);
-const deleteOriginalFromDisk = ref(false);
+const mediaDeleting = ref(false);
+const deleteTarget = ref<{ postId: number; mediaId: number; filename: string; last: boolean; route: string } | null>(null);
 const deleteError = ref<string | null>(null);
+let disposed = false;
 
 const imageId = computed(() => Number(props.id));
 const activeMediaType = computed(() => (route.query.tab === 'reels' ? 'video' : undefined));
@@ -130,12 +102,8 @@ const returnToWork = computed(() => {
 const folder = computed(() =>
   activeImage.value ? foldersStore.items.find((entry) => entry.slug === activeImage.value?.folderSlug) ?? null : null
 );
-const deleteDialogMessage = computed(() =>
-  deleteOriginalFromDisk.value
-    ? 'This will permanently delete the post from the app and remove original media from disk.'
-    : 'This will delete the post from the app and move it to Trash. The original file will stay on disk unless you choose permanent deletion.'
-);
-const deleteDialogConfirmLabel = computed(() => (deleteOriginalFromDisk.value ? 'Permanently Delete' : 'Delete'));
+const deleteDialogMessage = computed(() => deleteTarget.value
+  ? t(deleteTarget.value.last ? 'mediaRemoval.lastMessage' : 'mediaRemoval.message', { filename: deleteTarget.value.filename }) : '');
 
 async function loadImage() {
   if (identityError.value) { viewerStore.reset(); return; }
@@ -169,51 +137,61 @@ watch([activeImage, viewError, () => viewerStore.loading, () => route.fullPath],
     ...destination.query, ...libraryReadingQuery(`/library/reader?${encoded}`)
   } });
 }, { immediate: true });
-onBeforeUnmount(() => { viewerStore.reset(); });
+onBeforeUnmount(() => { disposed = true; viewerStore.reset(); });
 
-function openDeleteDialog() {
-  deleteOriginalFromDisk.value = false;
+function cancelDelete() {
+  if (mediaDeleting.value) return;
+  confirmDeleteOpen.value = false;
+  deleteTarget.value = null;
+}
+watch(() => route.fullPath, () => { if (!mediaDeleting.value) cancelDelete(); });
+function openDeleteDialog(mediaId: number) {
+  const work = activeImage.value;
+  if (!work || mediaDeleting.value) return;
+  const items = orderedMediaItems(work.mediaItems);
+  const item = items.find(item => item.imageId === mediaId);
+  // A post ID is never a fallback media ID.
+  if (!item) return;
+  deleteTarget.value = { postId: work.id, mediaId, filename: item.filename, last: items.length === 1, route: route.fullPath };
   deleteError.value = null;
   confirmDeleteOpen.value = true;
 }
 
 async function handleDelete() {
-  if (!viewerStore.image) {
-    return;
-  }
-
-  const currentImage = viewerStore.image;
+  const target = deleteTarget.value;
+  if (!target || mediaDeleting.value || target.route !== route.fullPath) return;
+  mediaDeleting.value = true;
   deleteError.value = null;
-
+  const creatorId = canonicalCreatorId.value;
+  const current = activeImage.value;
   try {
-    const deleted = await viewerStore.deleteImage(currentImage.id, {
-      permanent: deleteOriginalFromDisk.value
-    });
+    const result = await trashPostMedia(target.postId, target.mediaId, target.last);
     confirmDeleteOpen.value = false;
-    deleteOriginalFromDisk.value = false;
-
-    feedStore.removeImage(deleted.id);
-    likesStore.removeImage(deleted.id);
-    const removedFolder = foldersStore.removeImage(deleted.id, deleted.folderSlug, currentImage.mediaType);
-    momentsStore.removeImage(deleted.id);
-    appStore.removeIndexedImage(removedFolder ? 1 : 0, currentImage.mediaType);
-    emit('removedWork');
-
-    if (props.modal) {
-      emit('close');
-      return;
+    deleteTarget.value = null;
+    void refreshLibraryAfterRemoval().catch(() => {});
+    if (disposed || route.fullPath !== target.route) return;
+    if (result.postTrashed) {
+      await router.replace(creatorId
+        ? { name: 'canonical-creator', params: { creatorId: String(creatorId) }, query: libraryReadingQuery(target.route) }
+        : { name: 'folder', params: { slug: current?.folderSlug ?? '' } });
+    } else {
+      // Close the removed media route before reloading its remaining siblings.
+      const { media: _removed, ...query } = route.query;
+      if (props.modal) {
+        emit('removedWork');
+        await router.replace({ path: route.path, query });
+        emit('close');
+      } else if (current) {
+        await router.replace(creatorId ? canonicalWorkGalleryRoute(creatorId, target.postId, target.route) : workGalleryRoute(current.folderSlug, target.postId));
+      }
     }
-
-    if (removedFolder) {
-      await router.replace({ name: 'library' });
-      return;
-    }
-
-    await router.replace({ name: 'folder', params: { slug: deleted.folderSlug } });
   } catch (error) {
-    deleteError.value = error instanceof Error ? error.message : 'Unable to delete post';
+    deleteError.value = error instanceof Error ? error.message : t('mediaRemoval.failed');
+  } finally {
+    mediaDeleting.value = false;
   }
 }
+
 </script>
 
 <style scoped>

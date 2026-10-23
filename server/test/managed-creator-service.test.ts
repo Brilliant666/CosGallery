@@ -65,7 +65,7 @@ describe('managed creator canonical ownership', () => {
     const creator=service.create({name:'  Ａlice  ',preference:'kept',rating:null});
     expect(creator).toMatchObject({name:'Alice',preference:'kept',rating:null,isActive:true,seedSource:'manual'});
     expect(creator.seedSourceCreatorId).toMatch(/^manual:[a-f0-9-]{36}$/);
-    expect(creator.aliases).toHaveLength(1);
+    expect(creator.aliases).toHaveLength(0);
     for(const table of ['archive_catalog_download_tasks','archive_catalog_metadata_tasks','local_ingest_jobs','folders']) expect(rows(table)).toBe('[]');
     expect(service.update(creator.id,{preference:null,rating:'R18'})).toMatchObject({id:creator.id,preference:null,rating:'R18',seedSourceCreatorId:creator.seedSourceCreatorId});
   });
@@ -77,7 +77,7 @@ describe('managed creator canonical ownership', () => {
   });
   it('requires explicit confirmation for colliding normalized names and aliases, never merges', () => {
     const a=service.create({name:'Alice-X',aliases:['ＡＬＩＣＥ y','alice_y']});
-    expect(a.aliases).toHaveLength(2);
+    expect(a.aliases).toHaveLength(1);
     expect(()=>service.create({name:'alice_x'})).toThrow('名称或别名');
     const b=service.create({name:'alice_x',confirmDistinct:true});
     expect(a.id).not.toBe(b.id);
@@ -95,6 +95,36 @@ describe('managed creator canonical ownership', () => {
     const added=service.addAlias(creator.id,{alias:'Temporary'});
     expect(service.deleteAlias(creator.id,added.aliases.find(a=>a.alias==='Temporary')!.id).aliases.some(a=>a.alias==='Temporary')).toBe(false);
     expect(query.listCreators({page:1,limit:50,query:'Original'}).items[0].id).toBe(creator.id);
+  });
+  it('searches, detects collisions and matches incoming sources through the canonical row without a manual alias', () => {
+    const creator = service.create({ name: 'Canonical Person' });
+    expect(db.prepare('SELECT alias FROM archive_catalog_creator_aliases WHERE creator_id=?').all(creator.id)).toEqual([]);
+    expect(query.listCreators({ page: 1, limit: 50, query: 'Canonical Person' }).items.map(c => c.id)).toEqual([creator.id]);
+    expect(() => service.create({ name: 'canonical_person' })).toThrow('名称或别名');
+    const other = service.create({ name: 'Other person' });
+    expect(() => service.addAlias(other.id, { alias: 'Canonical Person' })).toThrow('名称或别名');
+    expect(importSource('Canonical Person')).toMatchObject({ matchedCreators: 1, addedWorks: 1 });
+    expect(db.prepare('SELECT creator_id FROM archive_catalog_collections').get()?.creator_id).toBe(creator.id);
+  });
+  it.each(['alice-x', 'Alice_X'])('filters only exact canonical aliases during create and preserves the variant %s', variant => {
+    const creator = service.create({ name: 'Alice-X', aliases: [' Ａlice-X ', variant] });
+    expect(db.prepare('SELECT alias,source FROM archive_catalog_creator_aliases WHERE creator_id=?').all(creator.id))
+      .toEqual([{ alias: variant, source: 'manual' }]);
+    expect(() => service.addAlias(creator.id, { alias: ' Ａlice-X ' }))
+      .toThrow(expect.objectContaining({ status: 400, code: 'ALIAS_EQUALS_CANONICAL_NAME' }));
+  });
+  it('allows an explicit case variant through addAlias and does not regenerate canonical aliases on rename', () => {
+    const creator = service.create({ name: 'Original' });
+    service.addAlias(creator.id, { alias: 'original' });
+    service.addAlias(creator.id, { alias: 'Changed' });
+    service.update(creator.id, { name: 'Changed' });
+    expect(db.prepare('SELECT alias,source FROM archive_catalog_creator_aliases WHERE creator_id=? ORDER BY source,alias').all(creator.id))
+      .toEqual([{ alias: 'original', source: 'manual' }, { alias: 'Original', source: 'manual-history' }]);
+    service.update(creator.id, { name: 'Original' });
+    expect(db.prepare("SELECT alias FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual'").all(creator.id))
+      .toEqual([{ alias: 'original' }]);
+    expect(db.prepare("SELECT alias FROM archive_catalog_creator_aliases WHERE creator_id=? AND source='manual-history' ORDER BY alias").all(creator.id))
+      .toEqual([{ alias: 'Changed' }, { alias: 'Original' }]);
   });
   it('pins Costuan collection/source identity after names change and never overwrites canonical fields', () => {
     const creator=service.create({name:'First',preference:'liked',rating:'R18'}); importSource('First');

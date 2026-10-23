@@ -20,6 +20,7 @@ import { THUMBNAIL_QUALITY, PREVIEW_QUALITY, WEBP_EFFORT, VIDEO_PREVIEW_MAX_LONG
 export { VIDEO_PREVIEW_MAX_LONG_EDGE, VIDEO_PREVIEW_MAX_SHORT_EDGE } from '../utils/derivative-spec.js';
 import { writeVersionedDerivative, type DerivativeGenerationExpectation } from '../utils/derivative-version.js';
 import { safeJoin } from '../utils/path-utils.js';
+import { assertTransportStreamVideoProbe } from '../utils/transport-stream.js';
 
 const execFileAsync = promisify(execFile);
 const DIRECT_VIDEO_PLAYBACK_ALLOWED_AUDIO_CODECS = new Set(['aac']);
@@ -395,6 +396,7 @@ async function resolveVideoPlaybackStrategy(
 
 async function readVideoMetadata(sourcePath: string, options: ReadMediaMetadataOptions = {}): Promise<MediaMetadata> {
   const payload = await readMediaProbe(sourcePath);
+  assertTransportStreamVideoProbe(sourcePath, payload);
   const videoStream = payload.streams?.find((stream) => stream.codec_type === 'video');
   const durationSeconds = parseFfprobeFloat(payload.format?.duration);
   const durationMs = durationSeconds !== null ? Math.round(durationSeconds * 1000) : null;

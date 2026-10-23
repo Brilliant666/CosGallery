@@ -2,6 +2,7 @@
   <div
     class="video-media-player relative h-full w-full overflow-hidden bg-black select-none"
     role="button"
+    :aria-label="[t('post.viewer.togglePlayback'), title || alt].filter(Boolean).join('：')"
     tabindex="0"
     @click="handleSurfaceClick"
     @keydown="handleSurfaceKeydown"
@@ -15,7 +16,7 @@
       :fullscreenOrientation.prop="'none'"
       :playsInline.prop="playsinline"
       :muted.prop="muted"
-      :autoPlay.prop="autoplay"
+      :autoPlay.prop="nativePlayback ? false : autoplay"
       :loop.prop="loop"
       :load="load"
       :preload="preload"
@@ -23,7 +24,7 @@
       @auto-play-fail="handleAutoplayFail"
       @error="handleMediaError"
     >
-      <media-provider />
+      <media-provider :loaders.prop="nativePlayback ? originalLoaders : defaultLoaders" />
       <media-poster
         v-if="poster"
         class="video-media-player__poster"
@@ -38,7 +39,22 @@
       >
         <template #leading>
           <div class="video-media-player__controls-group" data-swipe-ignore="true">
+            <button
+              v-if="nativePlayback"
+              class="video-media-player__control"
+              type="button"
+              :aria-label="t('post.viewer.togglePlayback')"
+              data-swipe-ignore="true"
+              @click.stop="togglePlayback"
+            >
+              <span
+                class="video-media-player__control-icon"
+                :class="playbackState === 'playing' || playbackState === 'buffering' ? 'i-fluent-pause-16-filled' : 'i-fluent-play-16-filled'"
+                aria-hidden="true"
+              />
+            </button>
             <media-play-button
+              v-else
               class="video-media-player__control"
               :aria-label="t('post.viewer.togglePlayback')"
               data-swipe-ignore="true"
@@ -111,7 +127,22 @@
     </media-player>
 
     <div
-      v-if="showPausedIndicator"
+      v-if="nativePlayback && playbackStatus"
+      class="video-media-player__status"
+      role="status"
+      aria-live="polite"
+      data-swipe-ignore="true"
+      @click.stop
+    >
+      <span>{{ playbackStatus }}</span>
+      <button v-if="playbackState === 'blocked' || playbackState === 'error'" type="button" @click.stop="togglePlayback">
+        {{ playbackState === 'blocked' ? '点击播放' : '重试' }}
+      </button>
+      <button v-if="canUsePreview" type="button" @click.stop="usePreview">使用兼容预览（可能需要转换）</button>
+    </div>
+
+    <div
+      v-if="nativePlayback ? playbackState === 'paused' : showPausedIndicator"
       class="video-media-player__pause-indicator absolute inset-0 m-auto flex h-14 w-14 items-center justify-center rounded-full bg-black/60 text-white pointer-events-none transition-opacity"
       aria-hidden="true"
     >
@@ -129,10 +160,15 @@ import type { MediaFullscreenChangeEvent, MediaLoadingStrategy, PlayerSrc } from
 import { videoPreviewWouldDownscale } from '../utils/media';
 import { diagnoseMediaFailure, mediaAccessKey, reportMediaLoadIssue } from '../utils/media-load-diagnostics';
 import VideoProgressFooter from './VideoProgressFooter.vue';
+import { useVideoPlayback } from '../composables/useVideoPlayback';
+import { ReelOriginalLoader } from '../utils/reel-original-loader';
+import { fetchGalleryVideoPlayback } from '../api/gallery';
 
 const props = withDefaults(
   defineProps<{
     src: string | PlayerSrc;
+    mediaId?: number | null;
+    durationMs?: number | null;
     originalUrl?: string;
     playbackStrategy?: 'preview' | 'original' | null;
     width?: number | null;
@@ -182,7 +218,11 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const playerElement = ref<MediaPlayerElement | null>(null);
-const durationSec = ref(0);
+const nativePlayback = computed(() => Number.isSafeInteger(props.mediaId) && Number(props.mediaId) > 0);
+const originalLoaders = [new ReelOriginalLoader()];
+const defaultLoaders: ReelOriginalLoader[] = [];
+const knownDuration = () => Number.isFinite(props.durationMs) && Number(props.durationMs) > 0 ? Number(props.durationMs) / 1000 : 0;
+const durationSec = ref(knownDuration());
 const currentTimeSec = ref(0);
 const isPaused = ref(false);
 const showPausedIndicator = ref(false);
@@ -193,7 +233,7 @@ let removeEventListeners: (() => void) | null = null;
 
 const hasHdOption = computed(() => {
   return (
-    props.playbackStrategy === 'original' &&
+    !nativePlayback.value && props.playbackStrategy === 'original' &&
     Boolean(props.originalUrl) &&
     videoPreviewWouldDownscale(props.width, props.height)
   );
@@ -214,6 +254,16 @@ const basePreviewUrl = computed<string>(() => {
   return '';
 });
 
+const {
+  videoSource, state: playbackState, statusText: playbackStatus,
+  toggle: toggleNativePlayback, play: playNative, pause: pauseNative,
+  matchesSource, canUsePreview, usePreview
+} = useVideoPlayback(
+  () => ({ mediaId: props.mediaId!, previewUrl: basePreviewUrl.value }),
+  () => nativePlayback.value, playerElement, () => props.muted, () => props.autoplay,
+  fetchGalleryVideoPlayback
+);
+
 const activeVideoUrl = computed<string>(() => {
   if (isHd.value && props.originalUrl) {
     return props.originalUrl;
@@ -222,6 +272,7 @@ const activeVideoUrl = computed<string>(() => {
 });
 
 const computedSource = computed<PlayerSrc>(() => {
+  if (nativePlayback.value) return videoSource.value;
   return {
     src: activeVideoUrl.value,
     type: 'video/mp4'
@@ -253,12 +304,16 @@ let mediaErrorGeneration = 0;
 watch(() => props.src, () => { mediaErrorGeneration += 1; });
 onBeforeUnmount(() => { mediaErrorGeneration += 1; });
 async function handleMediaError() {
+  // The shared state machine diagnoses only the scoped original on demand.
+  // Probing a cold preview here would itself start an unwanted conversion.
+  if (nativePlayback.value) return;
   const source = activeVideoUrl.value, generation = mediaErrorGeneration, access = mediaAccessKey();
   const code = await diagnoseMediaFailure(source);
   if (code && generation === mediaErrorGeneration && source === activeVideoUrl.value && access === mediaAccessKey()) reportMediaLoadIssue(source, code);
 }
 
 async function handleAutoplayFail() {
+  if (nativePlayback.value) return;
   const player = playerElement.value;
   if (!player || !props.autoplay || props.muted) return;
 
@@ -271,6 +326,7 @@ async function handleAutoplayFail() {
 }
 
 async function toggleHd() {
+  if (nativePlayback.value) return;
   const player = playerElement.value;
   const current = player?.currentTime ?? 0;
   const wasPaused = player?.paused ?? true;
@@ -308,12 +364,17 @@ function handleSurfaceKeydown(event: KeyboardEvent) {
 }
 
 async function togglePlayback() {
+  if (nativePlayback.value) {
+    await toggleNativePlayback();
+    emit('toggle-playback');
+    return;
+  }
   const player = playerElement.value;
   if (!player) return;
 
   if (player.paused) {
-    await player.play().catch(() => {});
-    isPaused.value = false;
+    try { await player.play(); } catch { return; }
+    isPaused.value = player.paused;
     showPausedIndicator.value = false;
     if (hidePausedTimer) clearTimeout(hidePausedTimer);
   } else {
@@ -329,16 +390,26 @@ async function togglePlayback() {
 }
 
 function setupListeners() {
+  removeEventListeners?.();
   const player = playerElement.value;
   if (!player) return;
 
-  const onLoadedMetadata = async () => {
-    durationSec.value = player.duration || 0;
+  const currentSource = () => !nativePlayback.value || matchesSource(player);
+  const updateDuration = (event?: Event) => {
+    if (!currentSource()) return;
+    const detail = (event as CustomEvent | undefined)?.detail;
+    const candidates = [typeof detail === 'number' ? detail : detail?.duration, player.duration, player.querySelector('video')?.duration];
+    const duration = candidates.find(value => typeof value === 'number' && Number.isFinite(value) && value > 0);
+    if (duration !== undefined) durationSec.value = duration;
+  };
+  const onLoadedMetadata = async (event: Event) => {
+    if (!currentSource()) return;
+    updateDuration(event);
     const video = player.querySelector('video');
     emit('loaded-metadata', {
       naturalWidth: video?.videoWidth || 0,
       naturalHeight: video?.videoHeight || 0,
-      duration: player.duration || 0
+      duration: durationSec.value
     });
 
     if (pendingRestoreState) {
@@ -354,30 +425,37 @@ function setupListeners() {
   };
 
   const onTimeUpdate = () => {
+    if (!currentSource()) return;
     currentTimeSec.value = player.currentTime || 0;
-    durationSec.value = player.duration || 0;
+    updateDuration();
     emit('time-update', {
       currentTime: player.currentTime || 0,
-      duration: player.duration || 0
+      duration: durationSec.value
     });
   };
 
   const onPlay = () => {
+    if (!currentSource()) return;
     isPaused.value = false;
     showPausedIndicator.value = false;
   };
 
   const onPause = () => {
+    if (!currentSource()) return;
     isPaused.value = true;
   };
 
   player.addEventListener('loaded-metadata', onLoadedMetadata);
+  player.addEventListener('can-play', updateDuration);
+  player.addEventListener('duration-change', updateDuration);
   player.addEventListener('time-update', onTimeUpdate);
   player.addEventListener('play', onPlay);
   player.addEventListener('pause', onPause);
 
   removeEventListeners = () => {
     player.removeEventListener('loaded-metadata', onLoadedMetadata);
+    player.removeEventListener('can-play', updateDuration);
+    player.removeEventListener('duration-change', updateDuration);
     player.removeEventListener('time-update', onTimeUpdate);
     player.removeEventListener('play', onPlay);
     player.removeEventListener('pause', onPause);
@@ -389,7 +467,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  if (playerElement.value) {
+  if (!nativePlayback.value && playerElement.value) {
     try {
       playerElement.value.pause();
     } catch {}
@@ -398,10 +476,14 @@ onBeforeUnmount(() => {
   if (hidePausedTimer) clearTimeout(hidePausedTimer);
 });
 
-watch(basePreviewUrl, () => {
+watch([basePreviewUrl, () => props.mediaId], () => {
   isHd.value = false;
   pendingRestoreState = null;
+  durationSec.value = knownDuration();
+  currentTimeSec.value = 0;
 });
+
+watch(() => props.durationMs, () => { if (!durationSec.value) durationSec.value = knownDuration(); });
 
 watch(playerElement, () => {
   if (removeEventListeners) removeEventListeners();
@@ -414,12 +496,31 @@ defineExpose({
   toggleHd,
   isHd,
   hasHdOption,
-  play: () => playerElement.value?.play(),
-  pause: () => playerElement.value?.pause()
+  play: () => nativePlayback.value ? playNative(true) : playerElement.value?.play(),
+  pause: () => nativePlayback.value ? pauseNative() : playerElement.value?.pause()
 });
 </script>
 
 <style scoped>
+.video-media-player__status {
+  position: absolute;
+  inset: 40% 1rem auto;
+  z-index: 3;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  color: white;
+  background: rgb(0 0 0 / 70%);
+  text-align: center;
+}
+
+.video-media-player__status button {
+  display: block;
+  margin: 0.5rem auto 0;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 0.35rem;
+}
+
 .video-media-player__player {
   position: relative;
   display: block;

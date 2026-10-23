@@ -65,6 +65,7 @@ describe.sequential('combined visible Post counts', () => {
     const items = [{ imageId: image.id, position: 1 }];
     if (postType === 'carousel') {
       const second = repos.imageRepository.upsert({ ...imageInput, folderId: sourceId,
+        extension: '.jpg', mediaType: 'image', mimeType: 'image/jpeg', durationMs: null,
         filename: 'second.jpg', relativePath: `synthetic/${name}/second.jpg`,
         absolutePath: path.join(root, 'GALLERY_ROOT', `synthetic/${name}/second.jpg`) });
       items.push({ imageId: second.id, position: 2 });
@@ -111,6 +112,14 @@ describe.sequential('combined visible Post counts', () => {
     expectCounts(2, 1);
   });
 
+  it('reports carousel videos alongside standalone videos in the Reels count', () => {
+    addPost('single', { video: true });
+    addPost('carousel', { video: true });
+    expect(repos.imageRepository.countVisibleSingleVideos()).toBe(1);
+    expect(gallery.getStatus().indexedVideos).toBe(2);
+    expect(gallery.getStats().indexedVideos).toBe(2);
+  });
+
   it('preserves explicit primary-copy and active local-folder visibility without promoting a secondary copy', () => {
     const primary = addPost('carousel');
     const secondary = addPost('carousel');
@@ -146,7 +155,7 @@ describe.sequential('combined visible Post counts', () => {
     const oldPosts = vi.spyOn(repos.imageRepository, 'countFeed');
     const oldCarousels = vi.spyOn(repos.imageRepository, 'countVisibleCarousels');
     const media = vi.spyOn(repos.imageRepository, 'countVisibleMediaAssets').mockReturnValue(29);
-    const videos = vi.spyOn(repos.imageRepository, 'countVisibleSingleVideos').mockReturnValue(3);
+    const videos = vi.spyOn(repos.imageRepository, 'countVisibleVideoCandidates').mockReturnValue(3);
     expect(gallery[method]()).toMatchObject({ indexedImages: 11, indexedPosts: 11,
       indexedCarousels: 7, indexedMediaAssets: 29, indexedVideos: 3 });
     expect(summary).toHaveBeenCalledTimes(1);
@@ -161,7 +170,7 @@ describe.sequential('combined visible Post counts', () => {
       usingInMemoryDatabase: true, databasePath: ':memory:' });
     const summary = vi.spyOn(repos.imageRepository, 'countVisiblePostSummary');
     const media = vi.spyOn(repos.imageRepository, 'countVisibleMediaAssets');
-    const videos = vi.spyOn(repos.imageRepository, 'countVisibleSingleVideos');
+    const videos = vi.spyOn(repos.imageRepository, 'countVisibleVideoCandidates');
     expect(gallery[method]()).toMatchObject({ indexedImages: 0, indexedPosts: 0,
       indexedCarousels: 0, indexedMediaAssets: 0, indexedVideos: 0 });
     expect(summary).not.toHaveBeenCalled();

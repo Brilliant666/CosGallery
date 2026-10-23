@@ -57,7 +57,7 @@ describe.sequential('roster first-collection HTTP contract',()=>{
       expect(rejected.body.message).toContain('checkRoundId');
     }
     const result=await requestTestApp(app,'POST',bridge+'/metadata-tasks/claim',bridgeHeaders,{workerId:'new',taskIds:[taskId],rounds:[{taskId,checkRoundId}]});
-    expect(result.body.items).toMatchObject([{id:taskId,creatorId:id,canonicalCreatorId:id,aliases:['HttpAlias','HttpFirst'],explicitSelection:true,status:'claimed'}]);
+    expect(result.body.items).toMatchObject([{id:taskId,creatorId:id,canonicalCreatorId:id,creatorName:'HttpFirst',aliases:['HttpAlias'],explicitSelection:true,status:'claimed'}]);
     const before=JSON.stringify(db.connection.prepare('SELECT * FROM archive_catalog_metadata_tasks').all());
     await requestTestApp(app,'GET',bridge+'/metadata-tasks?page=1&limit=1',bridgeHeaders);
     await requestTestApp(app,'GET',base+'/candidates?hasSource=all');

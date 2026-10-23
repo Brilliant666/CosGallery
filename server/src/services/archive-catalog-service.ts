@@ -11,6 +11,7 @@ import { LocalSourceReuseService } from './local-source-reuse-service.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../constants/retained-originals.js';
 import { LocalCreatorFolderBridgeService, normalizedAbsoluteCreatorPath } from './local-creator-folder-bridge-service.js';
 import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
+import { SUPPORTED_VIDEO_EXTENSIONS } from '../utils/image-utils.js';
 import { RequestInputError } from '../utils/request-input-error.js';
 import { parseWorkTitle } from '../utils/work-title.js';
 import { isWorkTitleCandidate } from '../utils/work-title-candidate.js';
@@ -78,7 +79,7 @@ const costuanArchiveSchema = z.object({
 export type CostuanArchiveRecord = z.infer<typeof costuanRecordSchema>;
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']);
-const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
+const VIDEO_EXTENSIONS = SUPPORTED_VIDEO_EXTENSIONS;
 const ADVERTISEMENT_EXTENSIONS = new Set(['.html', '.htm', '.txt', '.url']);
 
 type MatchStatus = 'matched' | 'unmatched' | 'ambiguous';
@@ -1145,6 +1146,8 @@ export class ArchiveCatalogService {
         const activeWorkPaths = new Set<string>();
 
         for (const workSnapshot of creatorSnapshot.works) {
+          const oldLink = existingByRelativePath.get(this.localWorkRelativePath(workSnapshot));
+          if (oldLink?.work_id && this.database.prepare('SELECT 1 FROM work_removals WHERE work_id=?').get(oldLink.work_id)) continue;
           result.localWorks += 1;
           const relativePath = this.localWorkRelativePath(workSnapshot);
           activeWorkPaths.add(relativePath);

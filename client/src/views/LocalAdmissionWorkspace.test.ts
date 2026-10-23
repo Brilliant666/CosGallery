@@ -39,6 +39,49 @@ describe('independent multi-creator admission workspace',()=>{
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();vi.useRealTimers();localStorage.clear();sessionStorage.clear();vi.mocked(api.fetchAdmissionWorkspace).mockResolvedValue(workspace);vi.mocked(api.fetchAdmissionCollections).mockResolvedValue({items:[],page:1,pageSize:20,total:0});vi.mocked(api.fetchAdmissionDirectories).mockImplementation(async(creatorId,parent)=>({creator:{id:creatorId,name:creatorId===17?'博主甲':'博主乙'},root:'R:/待入库',parent:parent??null,items:[{name:'第一套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false},{name:'第二套',selectable:true,matchedCreatorIds:[],matchesSelectedCreator:false}]}));vi.mocked(api.previewAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionCollection).mockResolvedValue(collection());vi.mocked(api.fetchAdmissionItems).mockImplementation(async(id)=>({items:id==='a'?[item('a-first'),item('a-candidate','B')]:[item('b-first'),{...item('b-complex','D'),structureWarnings:['多个含媒体子目录'],needsBoundaryReview:true}],total:2,page:1,pageSize:100}));vi.mocked(api.executeAdmissionCollection).mockResolvedValue(collection('queued'));vi.mocked(api.resumeAdmissionCollection).mockResolvedValue(collection('running'));vi.mocked(api.searchAdmissionCreators).mockResolvedValue({items:[{id:92,name:'博主丙',aliases:['未明确身份']}],page:1,pageSize:20,total:1});});
   afterEach(()=>vi.useRealTimers());
+  it('shows separate results after all unrelated executable albums finish without marking review or dependency items done',async()=>{
+    const totals={total:5,selected:4,completed:2,skipped:0,deferred:1,review:1,dependency:1,unstarted:0};
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),totals:{...totals,creators:1,failedCreators:1},batches:[{...batch(),state:'needs_review',totals,error:'Scoped media indexing did not complete'}]});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[
+      {...item('done-first'),state:'completed'},
+      {...item('review'),state:'files_verified',lastError:'Scoped media indexing did not complete',nextAction:'review_files',executionIssue:{kind:'review',code:'MEDIA_INDEX_INCOMPLETE',message:'图集索引未完成，请核对异常文件'}},
+      {...item('copy'),state:'not_started',executionIssue:{kind:'dependency',code:'DEPENDENCY_NOT_READY',message:'同套目标尚未完成，等待其审核结果',blockedByItemKey:'review'}},
+      {...item('done-after'),state:'completed'},
+      {...item('manual'),state:'defer'}
+    ],total:5,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.get('[data-test=admission-queue-notice]').text()).toBe('可执行项目已处理，剩余项目待审核或等待依赖');
+    expect(wrapper.get('[data-test=admission-batch-execution-totals]').text()).toBe('2 已完成 · 1 待审核 · 1 等待依赖 · 0 尚未执行 · 1 人工暂缓 · 0 跳过');
+    expect(wrapper.findAll('.result li').map(row=>row.get('strong').text())).toEqual(['review','copy','manual']);
+    expect(wrapper.findAll('[data-test=admission-error-message]').every(notice=>!notice.text().includes('Scoped media'))).toBe(true);
+    expect(wrapper.findAll('[data-test=admission-error-detail]').some(detail=>detail.text().includes('Scoped media indexing did not complete'))).toBe(true);
+    await button(wrapper,'核对后重试原计划').trigger('click');
+    expect(wrapper.get('[role=dialog]').text()).toContain('人工暂缓保持');expect(wrapper.get('[role=dialog]').text()).toContain('待审核、等待依赖及尚未完成');
+    expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();expect(api.executeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it('reports a system pause instead of saying all executable items have finished',async()=>{
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),batches:[{...batch(),state:'needs_review'}]});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('system'),lastError:'EACCES: permission denied',executionIssue:{kind:'system',code:'EACCES',message:'目录无法读取，请核对权限'}}],total:1,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.get('[data-test=admission-queue-notice]').text()).toBe('队列因异常暂停：目录无法读取，请核对权限');
+    expect(wrapper.text()).not.toContain('可执行项目已处理，剩余项目待审核或等待依赖');
+    expect(wrapper.findAll('.error').every(error=>!error.text().includes('EACCES'))).toBe(true);
+    expect(wrapper.get('[data-test=admission-error-detail]').text()).toContain('EACCES: permission denied');
+    expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+  });
+  it.each(['SQLITE_BUSY: database is locked','Scoped media indexing did not complete'])('retains a historical review entry but reports the unknown %s pause with unstarted siblings',async(lastError)=>{
+    vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),batches:[{...batch(),state:'needs_review',error:lastError,totals:{total:2,selected:2,completed:0,skipped:0,deferred:0,review:0,dependency:0,unstarted:1}}]});
+    vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[
+      {...item('historical'),state:'files_verified',lastError,nextAction:'review_files'},
+      {...item('unstarted'),state:'not_started',nextAction:'resume_plan'}
+    ],total:2,page:1,pageSize:100});
+    const {wrapper}=await render('?collection=collection-one',false);
+    expect(wrapper.get('[data-test=admission-queue-notice]').text()).toContain('队列因异常暂停');
+    expect(wrapper.text()).not.toContain('可执行项目已处理，剩余项目待审核或等待依赖');
+    expect(wrapper.get('[data-test=admission-batch-execution-totals]').text()).toBe('0 已完成 · 0 待审核 · 0 等待依赖 · 1 尚未执行 · 0 人工暂缓 · 0 跳过');
+    expect(wrapper.findAll('a').filter(link=>link.text()==='核对文件处置')).toHaveLength(1);
+    expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+  });
   it.each([null,'owner-collection'])('opens an owning %s batch beside the child error without executing or resuming',async(collectionId)=>{
     const blocked={...collection('partial'),batches:[{...batch(),state:'needs_review' as const,error:'请先继续原批次',blockingBatch:{batchId:'owner-batch',collectionId}}]};
     vi.mocked(api.fetchAdmissionCollection).mockImplementation(async id=>id==='collection-one'?blocked:{...collection('partial'),id});
@@ -148,7 +191,7 @@ describe('independent multi-creator admission workspace',()=>{
     vi.mocked(api.fetchAdmissionCollection).mockResolvedValue({...collection('partial'),currentTotals,remainingCount:1,error:'历史锁错误',batches:[{...batch(),state:'needs_review',currentTotals,error:'历史锁错误'}]});
     vi.mocked(api.fetchAdmissionItems).mockResolvedValue({items:[{...item('old-completed'),currentDisposition:completedLater,nextAction:'resume_plan',lastError:'旧项失败'},{...item('old-container','D'),currentDisposition:{status:'unresolved'},nextAction:'prepare_preview'}],total:2,page:1,pageSize:100});
     const {wrapper}=await render('?collection=collection-one');expect(wrapper.text()).toContain('后续部分覆盖');expect(wrapper.text()).toContain('历史锁错误');expect(wrapper.text()).toContain('旧项失败');expect(wrapper.get('[data-test=completion-unresolved]').text()).toContain('不按历史容器条数推算剩余作品');expect(wrapper.find('[data-test=completed-later]').exists()).toBe(true);
-    expect(wrapper.findAll('button').some(button=>button.text()==='核对后继续本批'||button.text()==='核对后继续原批次')).toBe(false);expect(wrapper.get('[data-test=collection-remaining]').text()).toContain('剩余 1 项');expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
+    expect(wrapper.findAll('button').some(button=>button.text()==='核对后重试原计划'||button.text()==='核对后继续原批次')).toBe(false);expect(wrapper.get('[data-test=collection-remaining]').text()).toContain('剩余 1 项');expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
   });
   it('does not claim unknown container coverage is complete or invent a completion timestamp',async()=>{
     const currentTotals={completedLater:1,pending:3,unresolved:3};
@@ -414,10 +457,10 @@ describe('independent multi-creator admission workspace',()=>{
     const {wrapper}=await render('?collection=collection-one',false);
     const links=wrapper.findAll('a').filter(link=>link.text()==='核对文件处置');
     expect(links).toHaveLength(1);expect(links[0]!.attributes('href')).toContain('itemKey=moved');
-    expect(wrapper.text()).toContain('尚未开始');expect(wrapper.text()).toContain('尚未建立执行记录');
+    expect(wrapper.text()).toContain('尚未执行');expect(wrapper.text()).toContain('尚未建立执行记录');
     expect(api.resumeAdmissionCollection).not.toHaveBeenCalled();
-    await button(wrapper,'核对后继续本批').trigger('click');
-    await button(wrapper,'确认继续原批次').trigger('click');await flushPromises();
+    await button(wrapper,'核对后重试原计划').trigger('click');
+    await button(wrapper,'确认重试原计划').trigger('click');await flushPromises();
     expect(api.resumeAdmissionCollection).toHaveBeenCalledTimes(1);
     expect(wrapper.findAll('a').some(link=>link.text()==='核对文件处置')).toBe(false);
   });

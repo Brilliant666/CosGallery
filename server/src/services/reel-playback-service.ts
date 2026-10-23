@@ -1,15 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import type { ImageRecord } from '../types/models.js';
 import { appConfig } from '../config/env.js';
 import { postRepository } from '../db/repositories.js';
-import { derivativeVersion, derivativeSourceVersion, hasCurrentDerivative, imageDerivativeVersion, SourceIndexOutdatedError } from '../utils/derivative-version.js';
+import { derivativeSourceVersion, hasCurrentDerivative, imageDerivativeVersion, SourceIndexOutdatedError } from '../utils/derivative-version.js';
 import { resolveOriginalPath } from '../utils/media-paths.js';
 import { safeJoin } from '../utils/path-utils.js';
 import { scannerService } from './scanner-service.js';
 import { getMimeTypeFromExtension, SUPPORTED_VIDEO_EXTENSIONS } from '../utils/image-utils.js';
 import { inspectReelVideo } from './reel-video-format.js';
+import { getReelOriginalVersion, getReelRemuxLocation } from '../utils/reel-source-version.js';
+export { getReelOriginalVersion, getReelRemuxLocation } from '../utils/reel-source-version.js';
 
 export class ReelPlaybackError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -25,15 +25,23 @@ export interface ReelPlayback {
   remuxReady: boolean;
 }
 
+export type VideoPlaybackIdentity = 'post' | 'media' | 'gallery-media';
+
 const notFound = () => new ReelPlaybackError(404, 'REEL_NOT_FOUND', 'Reel media not found.');
 
-export function getReelSourceSnapshot(postId: number) {
-  const initial = postRepository.getReelPlaybackImage(postId);
+export function getReelSourceSnapshot(id: number, identity: VideoPlaybackIdentity = 'post') {
+  const lookup = () => identity === 'gallery-media'
+    ? postRepository.getGalleryPlaybackMedia(id)
+    : identity === 'media' ? postRepository.getReelPlaybackMedia(id) : postRepository.getReelPlaybackImage(id);
+  const initial = lookup();
   if (!initial) throw notFound();
   const version = imageDerivativeVersion(initial, 'preview');
   const recheck = () => {
-    const current = postRepository.getReelPlaybackImage(postId);
+    const current = lookup();
     if (!current) throw notFound();
+    const before=initial as typeof initial & {post_id?:number;media_position?:number};
+    const after=current as typeof current & {post_id?:number;media_position?:number};
+    if(before.post_id!==after.post_id || before.media_position!==after.media_position) throw new SourceIndexOutdatedError();
     if (current.id !== initial.id || current.relative_path !== initial.relative_path ||
         current.preview_path !== initial.preview_path || current.playback_strategy !== initial.playback_strategy ||
         current.mime_type !== initial.mime_type || current.checksum_or_fingerprint !== initial.checksum_or_fingerprint ||
@@ -44,26 +52,13 @@ export function getReelSourceSnapshot(postId: number) {
   return { initial, version, recheck };
 }
 
-type ReelVersionRecord = Pick<ImageRecord, 'id' | 'relative_path' | 'checksum_or_fingerprint' | 'file_size' | 'mtime_ms'>;
-function reelSourceIdentity(image: ReelVersionRecord): string {
-  // IDs can be reused after an index reset. Bind caches to both the configured
-  // source library and the specific indexed source, without exposing paths.
-  return createHash('sha256').update(JSON.stringify([appConfig.galleryRoot, image.id, image.relative_path, image.checksum_or_fingerprint])).digest('hex').slice(0, 24);
-}
-export function getReelOriginalVersion(image: ReelVersionRecord): string {
-  return createHash('sha256').update(`${reelSourceIdentity(image)}|${derivativeSourceVersion(image.file_size, image.mtime_ms)}|reel-original-v1`).digest('hex').slice(0, 24);
-}
-export function getReelRemuxLocation(image: ReelVersionRecord) {
-  const mediaType = `video-remux:${reelSourceIdentity(image)}`;
-  const version = derivativeVersion(derivativeSourceVersion(image.file_size, image.mtime_ms), 'preview', mediaType);
-  return { version, mediaType, output: safeJoin(appConfig.previewsDir, `.reel-remux/${image.id}/${version}.mp4`) };
-}
-
 // Resolve one active post only. Browser capability is not inferred from an old
 // indexed strategy: every supported original gets an attempt without ffprobe.
 // Only an explicit fallback lookup probes remux eligibility after that attempt.
-export async function resolveReelPlayback(postId: number, inspectFallback = false): Promise<ReelPlayback> {
-  const { initial, version, recheck } = getReelSourceSnapshot(postId);
+export async function resolveReelPlayback(id: number, inspectFallback = false, identity: VideoPlaybackIdentity = 'post'): Promise<ReelPlayback> {
+  const { initial, version, recheck } = getReelSourceSnapshot(id,identity);
+  const base = identity === 'gallery-media' ? `/api/gallery/media/${id}`
+    : identity === 'media' ? `/api/reels/media/${id}` : `/api/reels/${id}`;
   let output: string;
   try { output = safeJoin(appConfig.previewsDir, initial.preview_path); } catch { throw notFound(); }
   // Readiness is advisory metadata, so never wait for a transcode's output lease.
@@ -71,7 +66,7 @@ export async function resolveReelPlayback(postId: number, inspectFallback = fals
   const previewReady = await hasCurrentDerivative(output, version);
   recheck();
   const result: ReelPlayback = {
-    previewUrl: `/previews/${initial.preview_path.split('/').map(encodeURIComponent).join('/')}?v=${version}`,
+    previewUrl: identity !== 'post' ? `${base}/preview?v=${version}` : `/previews/${initial.preview_path.split('/').map(encodeURIComponent).join('/')}?v=${version}`,
     previewReady,
     originalUrl: null,
     originalMimeType: null,
@@ -83,7 +78,7 @@ export async function resolveReelPlayback(postId: number, inspectFallback = fals
   result.remuxReady = await hasCurrentDerivative(remux.output, remux.version);
   recheck();
   if (result.remuxReady) {
-    result.remuxUrl = `/api/reels/${postId}/remux?v=${remux.version}`;
+    result.remuxUrl = `${base}/remux?v=${remux.version}`;
     result.remuxMimeType = 'video/mp4';
   }
   // A cache hit does not displace a compatible original. Preview-only media can
@@ -111,7 +106,7 @@ export async function resolveReelPlayback(postId: number, inspectFallback = fals
   }
   const extension = path.extname(initial.relative_path).toLowerCase();
   if (SUPPORTED_VIDEO_EXTENSIONS.has(extension)) {
-    result.originalUrl = `/api/reels/${postId}/original?v=${getReelOriginalVersion(initial)}`;
+    result.originalUrl = `${base}/original?v=${getReelOriginalVersion(initial)}`;
     result.originalMimeType = getMimeTypeFromExtension(extension);
   }
   if (inspectFallback && !result.remuxReady) {
@@ -125,9 +120,17 @@ export async function resolveReelPlayback(postId: number, inspectFallback = fals
     }
     recheck();
     if (format.mode === 'remux' || (format.mode === 'original' && format.mimeType === 'video/mp4')) {
-      result.remuxUrl = `/api/reels/${postId}/remux?v=${remux.version}`;
+      result.remuxUrl = `${base}/remux?v=${remux.version}`;
       result.remuxMimeType = 'video/mp4';
     }
   }
   return result;
+}
+
+export function resolveReelMediaPlayback(mediaId:number,inspectFallback=false):Promise<ReelPlayback> {
+  return resolveReelPlayback(mediaId,inspectFallback,'media');
+}
+
+export function resolveGalleryMediaPlayback(mediaId: number, inspectFallback = false): Promise<ReelPlayback> {
+  return resolveReelPlayback(mediaId, inspectFallback, 'gallery-media');
 }

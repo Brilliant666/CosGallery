@@ -1,11 +1,33 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { addImageToCollection, fetchCosGalleryCreators, fetchLocalIngestInboxCreators, fetchSharedImage, fetchSharedPost } from './gallery';
+import { fetchPostSummary, fetchReels, fetchReelPlayback, fetchGalleryVideoPlayback, addImageToCollection, fetchCosGalleryCreators, fetchLocalIngestInboxCreators, fetchSharedImage, fetchSharedPost } from './gallery';
 
 describe('post and image API namespaces', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it('uses media playback IDs and transports the opaque reels cursor',async()=>{
+    const fetchMock=vi.fn().mockResolvedValue({ok:true,json:vi.fn().mockResolvedValue({items:[]})});vi.stubGlobal('fetch',fetchMock);
+    await fetchReelPlayback(901,undefined,true);expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/reels/media/901/playback?fallback=1');
+    await fetchReels(2,6,'recommended',42,{cursor:'opaque:value/next',lastFolder:'alpha'});
+    const url=new URL(fetchMock.mock.calls[1]![0],'http://test.invalid');expect(url.searchParams.get('cursor')).toBe('opaque:value/next');expect(url.searchParams.get('lastFolder')).toBe('alpha');
+  });
+
+  it('fetches a parent post summary without loading all album media',async()=>{
+    const fetchMock=vi.fn().mockResolvedValue({ok:true,json:vi.fn().mockResolvedValue({id:900,representation:'summary'})});vi.stubGlobal('fetch',fetchMock);
+    await fetchPostSummary(900);expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/posts/900/summary');
+  });
+
+  it('resolves readable gallery media separately from the reels feed with cancellation and explicit fallback', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    await fetchGalleryVideoPlayback(901, controller.signal);
+    await fetchGalleryVideoPlayback(901, controller.signal, true);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/gallery/media/901/playback', expect.objectContaining({ signal: controller.signal }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/gallery/media/901/playback?fallback=1', expect.objectContaining({ signal: controller.signal }));
   });
 
   it('encodes library joint filters and its sixty-item default in the request identity', async () => {

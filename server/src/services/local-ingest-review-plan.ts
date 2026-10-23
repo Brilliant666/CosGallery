@@ -9,7 +9,7 @@ const sha256 = z.string().regex(/^[\da-f]{64}$/i).transform(value => value.toUpp
 export const reviewRequestSchema = z.object({
   jobId: id,
   removedFiles: z.array(z.object({ relativePath: relative, size }).strict()).max(1000),
-  retainedFiles: z.array(z.object({ relativePath: relative, reason: z.enum(['pixel_limit', 'attachment']) }).strict()).max(1000),
+  retainedFiles: z.array(z.object({ relativePath: relative, reason: z.enum(['pixel_limit', 'decode_failed', 'attachment']) }).strict()).max(1000),
   note: z.string().trim().min(1).max(2000)
 }).strict();
 export const reviewFileSchema = z.object({ relativePath: relative, size, sha256, crc32: z.string().regex(/^[\dA-F]{8}$/) }).strict();

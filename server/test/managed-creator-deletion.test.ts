@@ -8,7 +8,7 @@ import { ManagedCreatorService } from '../src/services/managed-creator-service.j
 import { ResourceCatalogReadModel } from '../src/services/resource-catalog-read-model.js';
 import { LOCAL_ADMISSION_LOCK_KEY } from '../src/services/local-admission-lock.js';
 
-describe('unused manual creator deletion', () => {
+describe('global controlled creator deletion', () => {
   let db: DatabaseSync, service: ManagedCreatorService, id: number;
   beforeEach(() => {
     db = new DatabaseSync(':memory:'); db.exec(schemaSql);
@@ -21,6 +21,125 @@ describe('unused manual creator deletion', () => {
   const retained = () => expect(db.prepare('SELECT id FROM archive_catalog_creators WHERE id=?').get(id)).toBeTruthy();
   const setting = (key: string, value: unknown) => db.prepare('INSERT INTO app_settings(key,value) VALUES(?,?)').run(key, JSON.stringify(value));
 
+  const sourceOnly = () => {
+    db.prepare("UPDATE archive_catalog_creators SET seed_source='hentaiclub' WHERE id=?").run(id);
+    db.prepare("UPDATE archive_catalog_creator_aliases SET source='hentaiclub' WHERE creator_id=?").run(id);
+    db.prepare(`INSERT INTO archive_catalog_creator_sources(creator_id,source,source_creator_id,source_display_name,metadata_json,first_seen_at,last_seen_at)
+      VALUES(?,'fixture','source','Source name',?,'fixed','fixed')`).run(id, JSON.stringify({ creatorId: id }));
+    const collection = Number(db.prepare(`INSERT INTO archive_catalog_collections(creator_id,source,source_collection_id,title,observed_at)
+      VALUES(?,'fixture','collection','Source collection','fixed')`).run(id).lastInsertRowid);
+    const work = Number(db.prepare("INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,'Source work')").run(id).lastInsertRowid);
+    const sourceWork = Number(db.prepare(`INSERT INTO archive_catalog_source_works(work_id,collection_id,source,source_work_id,source_title,first_seen_at,last_seen_at)
+      VALUES(?,?,'fixture','work','Source work','fixed','fixed')`).run(work, collection).lastInsertRowid);
+    return { collection, work, sourceWork };
+  };
+
+  it('deletes a seeded source-only identity with exact scope, immutable detached evidence and reusable names', () => {
+    const fixture = sourceOnly();
+    const preview = service.deletionPreview(id);
+    expect(preview).toMatchObject({ eligible: true, removableAliases: 1, removalScope: [
+      { kind: 'aliases', count: 1 }, { kind: 'sources', count: 1 }, { kind: 'collections', count: 1 },
+      { kind: 'sourceWorks', count: 1 }, { kind: 'works', count: 1 }
+    ] });
+    service.deleteUnusedManualCreator(id, confirm());
+    const audit = db.prepare('SELECT * FROM creator_deletion_audits').get()!;
+    expect(audit.creator_id).toBe(id);
+    expect(JSON.parse(String(audit.scope_json))).toEqual(preview.removalScope);
+    const snapshot = JSON.parse(String(audit.snapshot_json));
+    expect(snapshot.archive_catalog_creator_sources[0].source_creator_id).toBe('source');
+    expect(snapshot.archive_catalog_source_works[0].id).toBe(fixture.sourceWork);
+    expect(db.prepare('SELECT * FROM archive_catalog_works').all()).toEqual([]);
+    expect(db.prepare('SELECT * FROM archive_catalog_collections').all()).toEqual([]);
+    expect(db.prepare('SELECT * FROM archive_catalog_source_works').all()).toEqual([]);
+    expect(db.prepare('SELECT * FROM archive_catalog_creator_sources').all()).toEqual([]);
+    expect(() => db.exec('DELETE FROM creator_deletion_audits')).toThrow('immutable');
+    expect(() => db.exec("UPDATE creator_deletion_audits SET canonical_name='changed'")).toThrow('immutable');
+    const migration = fs.readFileSync(new URL('../db/migrations/000029_creator_deletion_audit.sql', import.meta.url), 'utf8');
+    db.exec(migration.split('-- migrate:down')[1]);
+    expect(db.prepare('SELECT * FROM creator_deletion_audits').get()).toEqual(audit);
+    expect(() => db.exec('DELETE FROM creator_deletion_audits')).toThrow('immutable');
+    const replacement = service.create({ name: 'Mistaken Creator', aliases: ['Other spelling'] });
+    service.setActive(replacement.id, false, { confirm: true });
+    expect(service.deletionPreview(replacement.id).eligible).toBe(true);
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  it.each(['source', 'collection', 'sourceWork', 'work', 'new source'])('invalidates a preview when %s content changes', kind => {
+    const f = sourceOnly(), before = confirm();
+    if (kind === 'source') db.prepare("UPDATE archive_catalog_creator_sources SET source_url='changed' WHERE creator_id=?").run(id);
+    if (kind === 'collection') db.prepare("UPDATE archive_catalog_collections SET title='changed' WHERE id=?").run(f.collection);
+    if (kind === 'sourceWork') db.prepare("UPDATE archive_catalog_source_works SET source_title='changed' WHERE id=?").run(f.sourceWork);
+    if (kind === 'work') db.prepare("UPDATE archive_catalog_works SET display_title='changed' WHERE id=?").run(f.work);
+    if (kind === 'new source') db.prepare(`INSERT INTO archive_catalog_creator_sources(creator_id,source,source_creator_id,source_display_name,first_seen_at,last_seen_at)
+      VALUES(?,'new','new','New source','fixed','fixed')`).run(id);
+    expect(service.deletionPreview(id).eligible).toBe(true);
+    expect(() => service.deleteUnusedManualCreator(id, before)).toThrow('重新检查');
+    retained();
+  });
+
+  it.each(['back-reference', 'primary-only'])('blocks an inactive local copy via %s even under another creator folder', relationship => {
+    const f = sourceOnly(), other = service.create({ name: 'Other folder owner' }).id;
+    const folder = Number(db.prepare(`INSERT INTO archive_catalog_local_creator_folders(creator_id,root_path,relative_path,absolute_path,folder_name,match_status,is_active,scanned_at)
+      VALUES(?,'fixture','fixture','fixture','fixture','matched',0,'fixed')`).run(other).lastInsertRowid);
+    const copy = Number(db.prepare(`INSERT INTO archive_catalog_local_works(local_creator_folder_id,work_id,relative_path,absolute_path,folder_name,match_status,is_active,scanned_at)
+      VALUES(?,?,'fixture','fixture','fixture','matched',0,'fixed')`).run(folder, relationship === 'primary-only' ? null : f.work).lastInsertRowid);
+    if (relationship === 'primary-only') db.prepare('UPDATE archive_catalog_works SET primary_local_work_id=? WHERE id=?').run(copy, f.work);
+    expect(service.deletionPreview(id).blockers.map(b => b.code)).toContain(relationship === 'primary-only' ? 'PRIMARY_LOCAL_COPY' : 'REFERENCE:archive_catalog_local_works');
+    expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('不能删除'); retained();
+  });
+
+  it.each(['download', 'delivery', 'trashed work', 'external collection', 'foreign work', 'unknown dependent', 'soft dependent', 'JSON dependent'])
+    ('blocks %s references to the complete source-only deletion scope', kind => {
+      const f = sourceOnly();
+      if (kind === 'download') db.prepare(`INSERT INTO archive_catalog_download_tasks(source_work_id,provider,status,target_root,target_relative_directory,target_filename)
+        VALUES(?,'baidu','pending','fixture','fixture','fixture')`).run(f.sourceWork);
+      if (kind === 'delivery') db.prepare(`INSERT INTO archive_catalog_deliveries(collection_id,provider,delivery_key,delivery_type,first_seen_at,last_seen_at)
+        VALUES(?,'fixture','key','transfer','fixed','fixed')`).run(f.collection);
+      if (kind === 'trashed work') {
+        db.prepare(`INSERT INTO removal_operations(operation_id,kind,target_id,mode,state,payload_json,created_at,updated_at)
+          VALUES('trash','work',?,'trash','completed','{}','fixed','fixed')`).run(f.work);
+        db.prepare(`INSERT INTO work_removals(work_id,state,operation_id,snapshot_json,created_at) VALUES(?,'trashed','trash','{}','fixed')`).run(f.work);
+      }
+      if (kind === 'external collection' || kind === 'foreign work') {
+        const other = service.create({ name: 'Other owner' }).id;
+        if (kind === 'foreign work') db.prepare('UPDATE archive_catalog_works SET creator_id=? WHERE id=?').run(other, f.work);
+        else db.prepare('UPDATE archive_catalog_collections SET creator_id=? WHERE id=?').run(other, f.collection);
+      }
+      if (kind === 'unknown dependent') {
+        db.exec('CREATE TABLE custom_history(ref INTEGER REFERENCES archive_catalog_source_works(id) ON DELETE CASCADE)');
+        db.prepare('INSERT INTO custom_history VALUES(?)').run(f.sourceWork);
+      }
+      if (kind === 'soft dependent') {
+        db.exec('CREATE TABLE custom_history(work_id INTEGER)');
+        db.prepare('INSERT INTO custom_history VALUES(?)').run(f.work);
+      }
+      if (kind === 'JSON dependent') setting('archive.plan', { workId: f.work });
+      expect(service.deletionPreview(id).eligible).toBe(false);
+      expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('不能删除'); retained();
+    });
+
+  it('rolls back the full source whitelist and new audit on a late failure', () => {
+    sourceOnly();
+    db.exec("CREATE TRIGGER fail_publication BEFORE UPDATE ON resource_catalog_meta BEGIN SELECT RAISE(ABORT,'late failure'); END");
+    expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('late failure');
+    retained();
+    for (const table of ['archive_catalog_creator_sources', 'archive_catalog_collections', 'archive_catalog_works', 'archive_catalog_source_works'])
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM creator_deletion_audits').get()?.n).toBe(0);
+  });
+
+  it('does not confuse another collection external source work ID with a removable SourceWork ID', () => {
+    const f = sourceOnly(), other = service.create({ name: 'External owner' }).id;
+    const collection = Number(db.prepare(`INSERT INTO archive_catalog_collections(creator_id,source,source_collection_id,title,observed_at)
+      VALUES(?,'external','external','External collection','fixed')`).run(other).lastInsertRowid);
+    const work = Number(db.prepare("INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,'External work')").run(other).lastInsertRowid);
+    db.prepare(`INSERT INTO archive_catalog_source_works(work_id,collection_id,source,source_work_id,source_title,first_seen_at,last_seen_at)
+      VALUES(?,?,'external',?,'External work','fixed','fixed')`).run(work, collection, String(f.sourceWork));
+    expect(service.deletionPreview(id).eligible).toBe(true);
+    service.deleteUnusedManualCreator(id, confirm());
+    expect(db.prepare('SELECT work_id FROM archive_catalog_source_works').get()?.work_id).toBe(work);
+  });
+
   it('deletes only an unused manual inactive identity and own aliases, atomically clearing derived state', () => {
     const original = service.create({ name: 'Original', rating: 'R18', preference: 'kept' });
     expect(() => service.addAlias(original.id, { alias: 'Mistaken Creator' })).toThrow('名称或别名');
@@ -29,7 +148,7 @@ describe('unused manual creator deletion', () => {
     const stalePrepared = model.prepare(id);
     const beforeOriginal = db.prepare('SELECT * FROM archive_catalog_creators WHERE id=?').get(original.id);
     const publication = Number(db.prepare('SELECT publication FROM resource_catalog_meta').get()?.publication);
-    expect(service.deletionPreview(id)).toMatchObject({ eligible: true, removableAliases: 3, blockers: [] });
+    expect(service.deletionPreview(id)).toMatchObject({ eligible: true, removableAliases: 2, blockers: [] });
     expect(service.deleteUnusedManualCreator(id, confirm())).toEqual({ deleted: true, creatorId: id });
     expect(db.prepare('SELECT * FROM archive_catalog_creators WHERE id=?').get(id)).toBeUndefined();
     expect(db.prepare('SELECT * FROM archive_catalog_creator_aliases WHERE creator_id=?').all(id)).toEqual([]);
@@ -41,7 +160,7 @@ describe('unused manual creator deletion', () => {
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
-  it('requires explicit preview confirmation; refuses active, seeded and missing creators', () => {
+  it('requires explicit preview confirmation; refuses active and missing creators', () => {
     expect(() => service.deleteUnusedManualCreator(id, { confirm: true })).toThrow();
     expect(() => service.deleteUnusedManualCreator(id, { ...confirm(), confirm: false })).toThrow();
     expect(() => service.deleteUnusedManualCreator(id, { confirm: true, confirmationToken: '0'.repeat(64) })).toThrow('重新检查');
@@ -52,13 +171,11 @@ describe('unused manual creator deletion', () => {
     expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('先停用');
     service.setActive(id, false, { confirm: true });
     db.prepare("UPDATE archive_catalog_creators SET seed_source='seed' WHERE id=?").run(id);
-    expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('手工');
+    expect(service.deletionPreview(id).eligible).toBe(true);
     expect(() => service.deletionPreview(99999)).toThrow('不存在'); retained();
   });
 
   const references: Array<[string, string]> = [
-    ['source identity', "INSERT INTO archive_catalog_creator_sources(creator_id,source,source_creator_id,source_display_name,first_seen_at,last_seen_at) VALUES(?,'fixture','external','Fixture','fixed','fixed')"],
-    ['collection', "INSERT INTO archive_catalog_collections(creator_id,source,source_collection_id,title,observed_at,is_active) VALUES(?,'fixture','1','History','fixed',0)"],
     ['work', "INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,'Work')"],
     ['inactive local folder', "INSERT INTO archive_catalog_local_creator_folders(creator_id,root_path,relative_path,absolute_path,folder_name,match_status,is_active,scanned_at) VALUES(?,'fixture','fixture','fixture','fixture','matched',0,'fixed')"],
     ['historical metadata task', "INSERT INTO archive_catalog_metadata_tasks(creator_id,source,status) VALUES(?,'fixture','cancelled')"],
@@ -72,7 +189,7 @@ describe('unused manual creator deletion', () => {
     const oldConfirmation = confirm(); db.prepare(sql).run(id);
     expect(service.deletionPreview(id).eligible).toBe(false);
     expect(() => service.deleteUnusedManualCreator(id, oldConfirmation)).toThrow('不能删除');
-    retained(); expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases WHERE creator_id=?').get(id)?.n).toBe(2);
+    retained(); expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases WHERE creator_id=?').get(id)?.n).toBe(1);
   });
 
   it.each(['candidate_creator_id', 'creator_id'])('discovers additional FK/soft %s refs instead of cascading', column => {
@@ -108,12 +225,12 @@ describe('unused manual creator deletion', () => {
     expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('不能删除'); retained();
   });
 
-  it('fails closed on uninspectable persisted evidence and source aliases', () => {
+  it('fails closed on uninspectable persisted evidence but allows source aliases', () => {
     db.prepare("INSERT INTO archive_local_admission_plans(plan_id,content_hash,payload_json) VALUES('fixture','fixture','broken')").run();
     expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('格式无法完整核对');
     db.exec('DELETE FROM archive_local_admission_plans');
     db.prepare("UPDATE archive_catalog_creator_aliases SET source='costuan' WHERE creator_id=?").run(id);
-    expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('来源别名'); retained();
+    expect(service.deletionPreview(id).eligible).toBe(true); retained();
   });
 
   it('distinguishes migration creator conflicts from folder IDs in the same receipt', () => {
@@ -153,12 +270,19 @@ describe('unused manual creator deletion', () => {
     expect(service.deletionPreview(id).eligible).toBe(true);
   });
 
-  it('rolls back aliases, creator and catalog on a late failure', () => {
+  it('rolls back source scope, audit, aliases, creator and catalog on a late failure', () => {
+    const fixture = sourceOnly();
+    const sourceBefore = db.prepare('SELECT * FROM archive_catalog_source_works WHERE id=?').get(fixture.sourceWork);
     const before = db.prepare('SELECT * FROM resource_catalog_state WHERE creator_id=?').get(id);
     db.exec("CREATE TRIGGER fail_publication BEFORE UPDATE ON resource_catalog_meta BEGIN SELECT RAISE(ABORT,'test publication failure'); END");
     expect(() => service.deleteUnusedManualCreator(id, confirm())).toThrow('test publication failure');
-    retained(); expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases WHERE creator_id=?').get(id)?.n).toBe(2);
+    retained(); expect(db.prepare('SELECT COUNT(*) AS n FROM archive_catalog_creator_aliases WHERE creator_id=?').get(id)?.n).toBe(1);
     expect(db.prepare('SELECT * FROM resource_catalog_state WHERE creator_id=?').get(id)).toEqual(before);
+    expect(db.prepare('SELECT * FROM archive_catalog_source_works WHERE id=?').get(fixture.sourceWork)).toEqual(sourceBefore);
+    expect(db.prepare('SELECT id FROM archive_catalog_works WHERE id=?').get(fixture.work)).toBeTruthy();
+    expect(db.prepare('SELECT id FROM archive_catalog_collections WHERE id=?').get(fixture.collection)).toBeTruthy();
+    expect(db.prepare('SELECT COUNT(*) n FROM archive_catalog_creator_sources WHERE creator_id=?').get(id)?.n).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) n FROM creator_deletion_audits').get()?.n).toBe(0);
     expect(db.isTransaction).toBe(false);
   });
 

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getMediaTypeFromExtension, getPreviewRelativePath, getThumbnailRelativePath } from '../src/utils/image-utils.js';
+import { requestTestApp } from './http-test-utils.js';
 
 type AppConfigModule = typeof import('../src/config/env.js');
 type GalleryServiceModule = typeof import('../src/services/gallery-service.js');
@@ -259,6 +260,64 @@ describe.sequential('trash flow', () => {
     expect(imageRepository.getById(image.id)?.is_deleted).toBe(0);
     expect(imageRepository.getById(image.id)?.is_trashed).toBe(0);
     expect(galleryService.getFeed(1, 20, 'recent').items.map((item) => item.id)).toContain(image.id);
+  });
+
+  it('does not reintroduce a individually recycled original when rescanning a carousel or its final member', async () => {
+    await createSourceFile('scoped/carousels/Album/a.jpg');
+    await createSourceFile('scoped/carousels/Album/b.jpg');
+    await createSourceFile('scoped/carousels/Album/c.jpg');
+    await scanAll('scoped-initial');
+    const { databaseManager } = await import('../src/db/database.js');
+    const { MediaTrashService } = await import('../src/services/media-trash-service.js');
+    const db=databaseManager.connection;
+    const post=db.prepare("SELECT id FROM posts WHERE source_path='scoped/carousels/Album'").get() as {id:number};
+    expect(post).toBeDefined();
+    const a=mustGetImage('scoped/carousels/Album/a.jpg');
+    const b=mustGetImage('scoped/carousels/Album/b.jpg');
+    const c=mustGetImage('scoped/carousels/Album/c.jpg');
+    const service=new MediaTrashService();
+    await service.trash(post.id,b.id);
+    await scanAll('scoped-after-middle-trash');
+    expect(db.prepare('SELECT image_id FROM post_items WHERE post_id=? ORDER BY position').all(post.id).map(row=>row.image_id)).toEqual([a.id,c.id]);
+    expect(galleryService.getImageDetail(post.id)?.mediaItems.map(item=>item.imageId)).toEqual([a.id,c.id]);
+    await service.trash(post.id,a.id);
+    await scanAll('scoped-after-two-to-one');
+    expect(db.prepare('SELECT image_id FROM post_items WHERE post_id=?').all(post.id)).toEqual([{image_id:c.id}]);
+    await service.trash(post.id,c.id,true);
+    await scanAll('scoped-after-final-trash');
+    expect(db.prepare('SELECT image_id FROM post_items WHERE post_id=?').all(post.id)).toEqual([]);
+    expect(galleryService.getImageDetail(post.id)).toBeNull();
+    expect(galleryService.getTrashImages(1,20).items).toEqual([]);
+    expect(service.list().total).toBe(3);
+    await service.restore(post.id,b.id);
+    await scanAll('scoped-after-single-restore');
+    expect(db.prepare('SELECT image_id FROM post_items WHERE post_id=?').all(post.id)).toEqual([{image_id:b.id}]);
+  });
+
+  it('enforces trusted writes and admin authorization for single-media trash and restore over HTTP',async()=>{
+    await createSourceFile('http/item.jpg');await scanAll('http-initial');
+    const image=mustGetImage('http/item.jpg');
+    const { postRepository }=await import('../src/db/repositories.js');
+    const post=postRepository.findByImageId(image.id)!;
+    const {createApp}=await import('../src/app.js');const app=createApp();
+    const headers={'x-foldergram-intent':'1'};
+    const route=`/api/posts/${post.id}/media/${image.id}`;
+    expect((await requestTestApp(app,'POST',`${route}/trash`,{}, {confirmLastMedia:true})).status).toBe(403);
+    expect((await requestTestApp(app,'POST',`${route}/trash`,headers,{})).body.code).toBe('LAST_MEDIA_CONFIRMATION_REQUIRED');
+    expect((await requestTestApp(app,'POST',`${route}/trash`,headers,{confirmLastMedia:true})).body).toMatchObject({ok:true,mediaId:image.id,postTrashed:true});
+    expect((await requestTestApp(app,'GET',`/api/originals/${image.id}`)).status).toBe(404);
+    expect((await requestTestApp(app,'GET','/api/trash/media')).body.total).toBe(1);
+    const {authService}=await import('../src/services/auth-service.js');
+    authService.setAdminPassword('fixture-admin-password');authService.setViewerAccess('password','fixture-viewer-password');
+    expect((await requestTestApp(app,'GET','/api/trash/media')).status).toBe(401);
+    const login=await requestTestApp(app,'POST','/api/auth/login',headers,{password:'fixture-viewer-password'});
+    const cookie=login.headers.get('set-cookie')!.split(';')[0]!;
+    expect((await requestTestApp(app,'GET','/api/trash/media',{Cookie:cookie})).status).toBe(403);
+    expect((await requestTestApp(app,'GET',`/api/trash/media/${image.id}/thumbnail`,{Cookie:cookie})).status).toBe(403);
+    expect((await requestTestApp(app,'POST',`${route}/restore`,{...headers,Cookie:cookie},{})).status).toBe(403);
+    const admin=await requestTestApp(app,'POST','/api/auth/login',headers,{password:'fixture-admin-password'});
+    const adminCookie=admin.headers.get('set-cookie')!.split(';')[0]!;
+    expect((await requestTestApp(app,'POST',`${route}/restore`,{...headers,Cookie:adminCookie},{})).body).toMatchObject({ok:true,remainingMediaCount:1,postTrashed:false});
   });
 
   async function scanAll(reason: string): Promise<void> {

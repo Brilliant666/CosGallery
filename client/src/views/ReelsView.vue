@@ -10,6 +10,7 @@
       <p class="reels-view__eyebrow">{{ t('nav.reels') }}</p>
       <h1 class="reels-view__title">{{ t('reels.view.loadErrorTitle') }}</h1>
       <p class="reels-view__message">{{ reelsStore.error }}</p>
+      <button class="removal-button removal-neutral" type="button" :disabled="reelsStore.loading" @click="reelsStore.loadInitial(true)">{{ t('reels.view.reload') }}</button>
     </section>
 
     <section v-else-if="showLoadingState" class="reels-view__message-card">

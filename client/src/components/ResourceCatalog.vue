@@ -168,13 +168,23 @@
                 <td>
                   <div class="row-actions" @click.stop>
                     <a
+                      class="removal-button removal-neutral hover:bg-surface-hover"
                       v-if="item.primaryPostId && item.localState === 'indexed'"
                       :href="`/library/${item.creatorId}/works/${item.primaryPostId}`"
                       title="查看图集">查看图集</a><button
+                      class="removal-button removal-neutral"
                       :disabled="stale || loading"
                       title="复制单条目录" @click="copyOne(item)"
                     >
                       复制单条
+                    </button>
+                    <button
+                      class="removal-button removal-danger-outline"
+                      type="button"
+                      :disabled="stale || loading || !payload.readModel.complete || payload.readModel.status !== 'ready'"
+                      @click="removalTarget = item"
+                    >
+                      移入回收站
                     </button>
                   </div>
                 </td>
@@ -275,9 +285,24 @@
         </button>
       </footer>
     </template>
+    <WorkRemovalDialog
+      v-if="removalTarget"
+      :work-id="removalTarget.workId"
+      :creator-id="removalTarget.creatorId"
+      mode="trash"
+      :unavailable="stale || loading"
+      :revision="payload?.revision"
+      :revision-scope="creatorId === null ? 'all' : 'creator'"
+      @close="removalTarget = null"
+      @stale="stale = true"
+      @changed="workRemoved"
+    />
   </section>
 </template>
 <script setup lang="ts">
+import WorkRemovalDialog from './WorkRemovalDialog.vue';
+import { refreshLibraryAfterRemoval } from '../utils/refresh-library';
+
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useCreatorReadingStore } from '../stores/creator-reading';
 import { RequestError } from '../api/http';
@@ -335,12 +360,22 @@ const loading = ref(false),
   expanded = ref<number | null>(null),
   detailLoading = ref(false);
 const details = ref<Record<number, ResourceDetail>>({});
+const removalTarget = ref<ResourceRow | null>(null);
+async function workRemoved() {
+  removalTarget.value = null;
+  stale.value = true;
+  await refreshLibraryAfterRemoval().catch(() => {});
+  await loadPage(1, true);
+  notice.value = '整个作品已移入回收站，可在回收站整体恢复。';
+}
+
 const metadataDownload = ref<{ url: string; name: string } | null>(null);
 function clearMetadataDownload() {
   if (metadataDownload.value) URL.revokeObjectURL(metadataDownload.value.url);
   metadataDownload.value = null;
 }
 const filters = reactive({ q: '', localState: 'all', source: 'all', order: 'oldest' as 'oldest' | 'newest' });
+watch(() => [props.creatorId, props.globalScope, filters.q, filters.localState, filters.source, filters.order], () => { removalTarget.value = null; });
 const statusTags = computed(() => [
   { value: 'indexed', label: '已索引', count: Math.max(0, (payload.value?.summary.totalWorks ?? 0) - (payload.value?.summary.unarrangedWorks ?? 0) - (payload.value?.summary.unavailableWorks ?? 0)) },
   { value: 'unarranged', label: '待核对/未编排', count: payload.value?.summary.unarrangedWorks ?? 0 },
@@ -733,7 +768,7 @@ label {
 }
 input,
 select,
-button {
+button:not(.removal-button) {
   border: 1px solid var(--color-border, #ddd);
   border-radius: 0.6rem;
   padding: 0.5rem 0.7rem;
@@ -773,9 +808,11 @@ th {
   gap: 0.3rem 0.5rem;
   min-width: 9rem;
 }
-.row-actions button {
-  padding: 0.3rem 0.45rem;
+.row-actions .removal-button {
   white-space: nowrap;
+}
+.row-actions a.removal-button {
+  color: var(--text);
 }
 .detail {
   background: var(--color-bg, #f5f6f8);

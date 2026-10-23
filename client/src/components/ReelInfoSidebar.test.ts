@@ -3,16 +3,23 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fetchImage } from '../api/gallery';
-import type { FeedItem, FolderSummary, ImageDetail } from '../types/api';
+import type { ReelItem, FolderSummary } from '../types/api';
 import ReelInfoSidebar from './ReelInfoSidebar.vue';
 
 vi.mock('../api/gallery', () => ({
   fetchImage: vi.fn()
 }));
 
-function createFeedItem(id: number): FeedItem {
+function createReelItem(id: number): ReelItem {
   return {
     id,
+    mediaId: id,
+    postId: id + 1000,
+    mediaPosition: 1,
+    creatorId: null,
+    mimeType: 'video/mp4',
+    fileSize: 24 * 1024 * 1024,
+    originalDownloadUrl: `/api/reels/media/${id}/original?v=fixed&download=1`,
     folderId: 7,
     folderSlug: 'animal-planet',
     folderName: 'Animal Planet',
@@ -47,157 +54,22 @@ function createFolder(): FolderSummary {
   };
 }
 
-function createImageDetail(id: number): ImageDetail {
-  return {
-    ...createFeedItem(id),
-    caption: 'Snow leopard sprint',
-    folderAvatarImageId: null,
-    relativePath: `animals/big-cats/snow-leopard-${id}.mp4`,
-    mimeType: 'video/mp4',
-    fileSize: 24 * 1024 * 1024,
-    exif: null,
-    originalUrl: `/api/originals/${id}`,
-    playbackStrategy: 'preview',
-    nextImageId: null,
-    previousImageId: null
-  };
-}
-
 describe('ReelInfoSidebar', () => {
-  const fetchImageMock = vi.mocked(fetchImage);
-
-  beforeEach(() => {
-    setActivePinia(createPinia());
-    fetchImageMock.mockReset();
+  beforeEach(() => {setActivePinia(createPinia());vi.mocked(fetchImage).mockReset();});
+  const sidebar=(item:ReelItem,open=true)=>mount(ReelInfoSidebar,{props:{item,folder:createFolder(),open},global:{stubs:{Avatar:{template:'<div />'},RouterLink:{template:'<a><slot /></a>'}}}});
+  it('uses current video metadata without fetching the parent post or all album media',async()=>{
+    const item={...createReelItem(11),postId:999,mediaPosition:3,postType:'carousel' as const,caption:'Parent album description'};
+    const wrapper=sidebar(item);await flushPromises();
+    expect(fetchImage).not.toHaveBeenCalled();expect(wrapper.text()).toContain('MP4');expect(wrapper.text()).toContain('24.00 MB');expect(wrapper.text()).toContain('1080 x 1920');expect(wrapper.text()).toContain('Parent album description');expect(wrapper.text()).toContain('parent post or album');
+    await wrapper.setProps({item:{...item,id:12,mediaId:12,mediaPosition:4,width:1920,height:1080,fileSize:5*1024*1024,mimeType:'video/webm'}});await flushPromises();
+    expect(wrapper.text()).toContain('1920 x 1080');expect(wrapper.text()).toContain('5.00 MB');expect(wrapper.text()).toContain('WEBM');expect(fetchImage).not.toHaveBeenCalled();
   });
-
-  it('loads reel details only when the sidebar is open', async () => {
-    fetchImageMock.mockResolvedValue(createImageDetail(11));
-
-    const wrapper = mount(ReelInfoSidebar, {
-      props: {
-        item: createFeedItem(11),
-        folder: createFolder(),
-        open: false
-      },
-      global: {
-        stubs: {
-          Avatar: {
-            template: '<div data-test="avatar" />'
-          },
-          RouterLink: {
-            template: '<a><slot /></a>'
-          }
-        }
-      }
-    });
-
-    await flushPromises();
-    expect(fetchImageMock).not.toHaveBeenCalled();
-
-    await wrapper.setProps({ open: true });
-    await flushPromises();
-
-    expect(fetchImageMock).toHaveBeenCalledWith(11, 'video');
-    expect(wrapper.text()).toContain('MP4');
-    expect(wrapper.text()).toContain('24.00 MB');
-    expect(wrapper.text()).toContain('animals/big-cats');
-    expect(wrapper.text()).toContain('video/mp4');
+  it('does not fetch details on reopening and honors right-side anchoring',async()=>{
+    const wrapper=sidebar(createReelItem(14),false);await wrapper.setProps({open:true,anchor:'right'});await flushPromises();
+    expect(wrapper.get('.reels-info-sidebar').classes()).toContain('reels-info-sidebar--anchor-right');expect(fetchImage).not.toHaveBeenCalled();
   });
-
-  it('reuses cached details when reopening the same reel', async () => {
-    fetchImageMock.mockResolvedValue(createImageDetail(14));
-
-    const wrapper = mount(ReelInfoSidebar, {
-      props: {
-        item: createFeedItem(14),
-        folder: createFolder(),
-        open: true
-      },
-      global: {
-        stubs: {
-          Avatar: {
-            template: '<div data-test="avatar" />'
-          },
-          RouterLink: {
-            template: '<a><slot /></a>'
-          }
-        }
-      }
-    });
-
-    await flushPromises();
-    expect(fetchImageMock).toHaveBeenCalledTimes(1);
-
-    await wrapper.setProps({ open: false });
-    await flushPromises();
-    await wrapper.setProps({ open: true });
-    await flushPromises();
-
-    expect(fetchImageMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('applies the right-side anchor styling when requested', async () => {
-    const wrapper = mount(ReelInfoSidebar, {
-      props: {
-        item: createFeedItem(18),
-        folder: createFolder(),
-        open: false,
-        anchor: 'right'
-      },
-      global: {
-        stubs: {
-          Avatar: {
-            template: '<div data-test="avatar" />'
-          },
-          RouterLink: {
-            template: '<a><slot /></a>'
-          }
-        }
-      }
-    });
-
-    await flushPromises();
-
-    expect(wrapper.get('.reels-info-sidebar').classes()).toContain('reels-info-sidebar--anchor-right');
-  });
-
-  it('falls back to the filename when a cleared caption should override cached detail text', async () => {
-    fetchImageMock.mockResolvedValue(createImageDetail(21));
-
-    const wrapper = mount(ReelInfoSidebar, {
-      props: {
-        item: {
-          ...createFeedItem(21),
-          caption: 'Snow leopard sprint'
-        },
-        folder: createFolder(),
-        open: true
-      },
-      global: {
-        stubs: {
-          Avatar: {
-            template: '<div data-test="avatar" />'
-          },
-          RouterLink: {
-            template: '<a><slot /></a>'
-          }
-        }
-      }
-    });
-
-    await flushPromises();
-    expect(wrapper.text()).toContain('Snow leopard sprint');
-
-    await wrapper.setProps({
-      item: {
-        ...createFeedItem(21),
-        caption: null
-      }
-    });
-    await flushPromises();
-
-    expect(wrapper.text()).toContain('snow leopard 21');
-    expect(wrapper.text()).not.toContain('Snow leopard sprint');
+  it('uses parent album title after clearing its caption',async()=>{
+    const item={...createReelItem(21),postType:'carousel' as const,carouselTitle:'Album A',caption:'Old caption'};
+    const wrapper=sidebar(item);expect(wrapper.text()).toContain('Old caption');await wrapper.setProps({item:{...item,caption:null}});expect(wrapper.text()).toContain('Album A');expect(wrapper.text()).not.toContain('Old caption');
   });
 });

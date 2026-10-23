@@ -6,6 +6,13 @@ import * as galleryApi from '../api/gallery';
 import type { AppStats, AppStatus, PlacesStatus } from '../types/api';
 import { useAppStore } from '../stores/app';
 import SettingsView from './SettingsView.vue';
+import { useFeedStore } from '../stores/feed';
+import { useFoldersStore } from '../stores/folders';
+import { useLikesStore } from '../stores/likes';
+import { useMomentsStore } from '../stores/moments';
+import { useViewerStore } from '../stores/viewer';
+import { RequestError } from '../api/http';
+
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({
@@ -908,4 +915,54 @@ describe('SettingsView', () => {
     expect(wrapper.text()).toContain('Carousel folder behavior was saved. Run a library scan to apply it.');
     expect(wrapper.text()).not.toContain('Stories folder behavior was saved');
   });
+  it.each([false, true])('preserves cached views until rebuild succeeds (accepted=%s)', async (accepted) => {
+    vi.useFakeTimers();
+    const app = useAppStore();
+    app.$patch({ stats: createAppStatus() });
+    vi.spyOn(app, 'fetchStats').mockResolvedValue();
+    const markStarted = vi.spyOn(app, 'markLibraryRebuildStarted');
+    const resets = [
+      vi.spyOn(useFeedStore(), 'resetForRebuild').mockImplementation(() => {}),
+      vi.spyOn(useFoldersStore(), 'resetForRebuild').mockImplementation(() => {}),
+      vi.spyOn(useLikesStore(), 'resetForRebuild').mockImplementation(() => {}),
+      vi.spyOn(useMomentsStore(), 'resetForRebuild').mockImplementation(() => {}),
+      vi.spyOn(useViewerStore(), 'reset').mockImplementation(() => {})
+    ];
+    const refreshes = [
+      vi.spyOn(useFoldersStore(), 'fetchFolders').mockResolvedValue(),
+      vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue(),
+      vi.spyOn(useLikesStore(), 'initialize').mockResolvedValue(),
+      vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue()
+    ];
+    let resolve!: (value: { ok: boolean; lastScan: null }) => void;
+    let reject!: (reason: Error) => void;
+    const rebuild = vi.spyOn(galleryApi, 'triggerLibraryRebuild').mockReturnValue(new Promise((a, b) => { resolve = a; reject = b; }));
+    const wrapper = mountSettingsView();
+    try {
+      await flushPromises();
+      const button = wrapper.findAll('button').find(button => button.text() === 'Rebuild Library Index');
+      expect(button).toBeDefined();
+      await button!.trigger('click');
+      wrapper.getComponent({ name: 'ConfirmDialog' }).vm.$emit('confirm');
+      await flushPromises();
+      expect(rebuild).toHaveBeenCalledTimes(1);
+      resets.forEach(reset => expect(reset).not.toHaveBeenCalled());
+      expect(markStarted).not.toHaveBeenCalled();
+      expect(app.stats?.indexedImages).toBe(18);
+      if (accepted) resolve({ ok: true, lastScan: null });
+      else reject(new RequestError('Retained identities prevent rebuilding', 409, { code: 'LIBRARY_REBUILD_RETAINED_IDENTITIES' }));
+      await flushPromises();
+      resets.forEach(reset => expect(reset).toHaveBeenCalledTimes(accepted ? 1 : 0));
+      refreshes.forEach(refresh => expect(refresh).toHaveBeenCalledTimes(accepted ? 1 : 0));
+      if (!accepted) {
+        expect(wrapper.text()).toContain('Retained identities prevent rebuilding');
+        expect(app.stats?.indexedImages).toBe(18);
+      }
+    } finally {
+      wrapper.unmount();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
 });

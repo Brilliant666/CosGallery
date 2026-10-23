@@ -124,7 +124,7 @@ export class ResourceCatalogBuilder {
         .prepare(
           `SELECT w.id,w.display_title AS title,w.primary_local_work_id AS primaryId,c.evidence_json AS sortEvidence
           FROM archive_catalog_works w LEFT JOIN archive_catalog_work_sort_confirmations c ON c.work_id=w.id AND c.state='confirmed'
-          WHERE w.creator_id=? ORDER BY w.id`,
+          WHERE w.creator_id=? AND NOT EXISTS(SELECT 1 FROM work_removals removed WHERE removed.work_id=w.id) ORDER BY w.id`,
         )
         .all(creatorId) as unknown as Work[];
       const estimates = new Map(works.map(work => [work.id, work.sortEvidence ? publicSortEstimate(work.sortEvidence) : undefined]));

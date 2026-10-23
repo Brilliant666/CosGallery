@@ -20,6 +20,17 @@ describe('scoped review UI invokes original task instead of asking for JSON',()=
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchLocalReviewTarget).mockResolvedValue({target:{kind:'stage3',jobId:9},creatorId:17,title:'本项中文作品',eligible:true,reason:'媒体审核暂停',sessionId:null});vi.mocked(api.createLocalReviewSession).mockResolvedValue({sessionId:'review-synthetic',status:'preparing'});vi.mocked(api.fetchLocalReviewSession).mockResolvedValue(session());vi.mocked(api.fetchLocalReviewFiles).mockResolvedValue({items:files,total:104,page:1,limit:50});vi.mocked(api.executeLocalReview).mockResolvedValue(session('submitted'));});
   afterEach(()=>vi.useRealTimers());
+  it.each(['Scoped media indexing did not complete','EACCES: permission denied, open 中文目录/001.jpg'])('shows Chinese review errors and keeps the original %s only in technical details',async(raw)=>{
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session('failed'),error:raw,message:raw});
+    vi.mocked(api.fetchLocalReviewFiles).mockRejectedValueOnce(new Error('EIO: unable to read 中文清单'));
+    const {wrapper}=await render();
+    expect(wrapper.findAll('[data-test=admission-error-message]').every(message=>!message.text().includes(raw)&&!message.text().includes('EIO'))).toBe(true);
+    expect(wrapper.findAll('p').filter(paragraph=>!paragraph.element.closest('details')).every(paragraph=>!paragraph.text().includes(raw))).toBe(true);
+    expect(wrapper.findAll('[data-test=admission-error-detail]').some(detail=>detail.text().includes(raw))).toBe(true);
+    expect(wrapper.findAll('[data-test=admission-error-detail]').some(detail=>detail.text().includes('EIO: unable to read 中文清单'))).toBe(true);
+    expect(wrapper.text()).toContain('不能据此认定没有需处理文件');
+    expect(api.executeLocalReview).not.toHaveBeenCalled();expect(api.retryLocalReview).not.toHaveBeenCalled();
+  });
   it('returns a Costuan review to its stage and exact job, without starting that job',async()=>{
     const {wrapper}=await render();
     expect(wrapper.get('header a').attributes('href')).toBe('/creator-admission/costuan?workspace=ingest&jobId=9&creatorId=17');
@@ -107,5 +118,76 @@ describe('scoped review UI invokes original task instead of asking for JSON',()=
     await wrapper.get('.check input').setValue(false);await flushPromises();
     expect(wrapper.text()).toContain('本项未返回文件记录');expect(wrapper.text()).toContain('本次已选择 1 个文件');
     expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
+
+  it('retains an undecodable image only after explicit selection with its actual reason, and restores that exact request',async()=>{
+    const undecodable:LocalReviewFile={relativePath:'尚无法解码.jpg',size:321,kind:'image',issue:'decode_failed',allowedActions:['retain_original','quarantine'],suggestedAction:'retain_original'};
+    vi.mocked(api.fetchLocalReviewFiles).mockResolvedValue({items:[undecodable,files[2]!],total:2,page:1,limit:50});
+    vi.mocked(api.executeLocalReview).mockRejectedValueOnce(new Error('response lost'));
+    const {wrapper}=await render();const rows=wrapper.findAll('tbody tr');
+    expect(rows[0]!.get('select').element.value).toBe('');
+    expect(rows[0]!.text()).toContain('无法解码不等于已经确认损坏');
+    expect(rows[1]!.findAll('option').some(option=>option.attributes('value')==='retain_original')).toBe(false);
+    await rows[0]!.get('select').setValue('retain_original');await wrapper.get('[data-test=review-confirm]').trigger('click');
+    const dialog=wrapper.get('[role=dialog]');expect(dialog.text()).toContain('保留原文件，不作为图片展示');expect(dialog.text()).toContain('随作品永久删除');
+    await dialog.get('input').setValue(true);await dialog.get('[data-test=review-execute]').trigger('click');await flushPromises();
+    const original=vi.mocked(api.executeLocalReview).mock.calls[0]![1];
+    expect(original.choices).toEqual([{relativePath:undecodable.relativePath,action:'retain_original',reason:'decode_failed'}]);
+    expect(original.quarantineConfirmed).toBe(false);
+    wrapper.unmount();const returned=await render();expect(returned.wrapper.text()).toContain('提交回执未确认');
+    await returned.wrapper.get('[data-test=review-confirm]').trigger('click');await returned.wrapper.get('[role=dialog] input').setValue(true);await returned.wrapper.get('[data-test=review-execute]').trigger('click');await flushPromises();
+    expect(vi.mocked(api.executeLocalReview).mock.calls[1]![1]).toEqual(original);
+  });
+
+  it('blocks an outdated preview and clears prior choices only after explicit refresh succeeds, then polls the new files',async()=>{
+    vi.useFakeTimers();const {wrapper}=await render();
+    await wrapper.findAll('tbody tr')[0]!.get('select').setValue('retain_original');
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session(),previewNeedsRefresh:true});
+    await button(wrapper,'读取最新状态').trigger('click');await flushPromises();
+    expect(wrapper.get('[data-test=review-confirm]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('tbody select').attributes('disabled')).toBeDefined();expect(api.refreshLocalReviewSession).not.toHaveBeenCalled();
+    vi.mocked(api.refreshLocalReviewSession).mockResolvedValue({...session('preparing'),previewNeedsRefresh:false});
+    await wrapper.get('[data-test=review-refresh]').trigger('click');await flushPromises();
+    expect(api.refreshLocalReviewSession).toHaveBeenCalledWith('review-synthetic',expect.any(String));
+    expect(wrapper.find('tbody').exists()).toBe(false);
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session(),previewNeedsRefresh:false});
+    await vi.advanceTimersByTimeAsync(2500);await flushPromises();
+    expect(wrapper.text()).toContain('本次已选择 0 个文件');expect(wrapper.get('tbody select').element.value).toBe('');
+    expect(api.fetchLocalReviewFiles).toHaveBeenCalledTimes(2);expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
+
+  it('keeps choices on a rejected refresh without permitting stale submission',async()=>{
+    const {wrapper}=await render();await wrapper.get('tbody select').setValue('retain_original');
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session(),previewNeedsRefresh:true});
+    await button(wrapper,'读取最新状态').trigger('click');await flushPromises();
+    vi.mocked(api.refreshLocalReviewSession).mockRejectedValue(new RequestError('当前原计划正在执行',409));
+    await wrapper.get('[data-test=review-refresh]').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('当前原计划正在执行');expect(wrapper.text()).toContain('本次已选择 1 个文件');
+    expect(wrapper.get('[data-test=review-confirm]').attributes('disabled')).toBeDefined();expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
+
+  it('reconciles an accepted refresh after its response was lost and does not reuse the old selection',async()=>{
+    const {wrapper}=await render();await wrapper.get('tbody select').setValue('retain_original');
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session(),previewNeedsRefresh:true});
+    await button(wrapper,'读取最新状态').trigger('click');await flushPromises();
+    vi.mocked(api.refreshLocalReviewSession).mockRejectedValue(new Error('refresh response lost'));
+    await wrapper.get('[data-test=review-refresh]').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('本次已选择 1 个文件');
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session(),previewNeedsRefresh:false});
+    await button(wrapper,'读取最新状态').trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('本次已选择 0 个文件');expect(wrapper.get('tbody select').element.value).toBe('');
+    expect(api.fetchLocalReviewFiles).toHaveBeenCalledTimes(2);expect(api.refreshLocalReviewSession).toHaveBeenCalledTimes(1);expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
+
+  it('shows whole-plan continuation and exact pending counts in both the admission page and final confirmation',async()=>{
+    const target={kind:'admission' as const,planId:'original-plan',itemKey:'one'};
+    vi.mocked(api.fetchLocalReviewTarget).mockResolvedValue({target,creatorId:17,title:'本地作品',eligible:true,reason:null,sessionId:null});
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session(),target,continuation:{totalItems:19,completedItems:7,pendingItems:12}});
+    const {wrapper}=await render('&session=review-synthetic','/local-review?kind=admission&planId=original-plan&itemKey=one&creatorId=17');
+    expect(wrapper.get('header').text()).toContain('继续整个原计划的待完成项');
+    expect(wrapper.get('[data-test=review-continuation]').text()).toContain('已完成 7 项，待继续 12 项（包含当前项）');
+    await wrapper.get('[data-test=review-confirm]').trigger('click');const dialog=wrapper.get('[role=dialog]');
+    expect(dialog.text()).toContain('文件处置只针对本项所选文件');expect(dialog.text()).toContain('继续整个原计划的待完成项');
+    expect(dialog.text()).toContain('已完成 7 项，待继续 12 项（包含当前项）');expect(api.executeLocalReview).not.toHaveBeenCalled();
   });
 });

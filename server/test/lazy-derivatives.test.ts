@@ -215,7 +215,9 @@ describe.sequential('DERIVATIVE_MODE lazy behavior', () => {
           finish();
           return this;
         },
-        sendFile(filePath: string, callback?: (error?: Error) => void) {
+        sendFile(filePath: string, optionsOrCallback?: express.SendFileOptions | ((error?: Error) => void), done?: (error?: Error) => void) {
+          const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : done;
+          if (typeof optionsOrCallback === 'object' && optionsOrCallback.root) filePath = path.resolve(optionsOrCallback.root, filePath);
           if (options.sendFile) {
             options.sendFile(filePath, callback, {
               fail,

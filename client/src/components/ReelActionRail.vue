@@ -5,8 +5,9 @@
       :class="{ 'reel-action-rail__button--liked': isLiked }"
       type="button"
       :aria-label="likesStore.toggleAriaLabel(isLiked)"
+      :title="t('reels.rail.parentPostActions')"
       :aria-pressed="isLiked"
-      :disabled="likesStore.isPending(item.id) || !authStore.canUseSavedItems"
+      :disabled="loadingParent || likesStore.isPending(item.postId) || !authStore.canUseSavedItems"
       @click="handleLike"
     >
       <span
@@ -49,28 +50,29 @@
 
     <RouterLink
       class="reel-action-rail__button"
-      :to="folderReadingRoute(item.folderSlug)"
-      :aria-label="t('reels.rail.openFolder')"
-      :title="t('reels.rail.openFolder')"
+      :to="workMediaRoute(item.postId, item.mediaId, item.creatorId ?? undefined)"
+      :aria-label="t('reels.rail.openAlbum')"
+      :title="t('reels.rail.openAlbum')"
     >
       <span class="reel-action-rail__icon i-fluent-folder-16-regular" aria-hidden="true" />
     </RouterLink>
+    <p v-if="actionError" class="reel-action-rail__error" role="status">{{ actionError }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { folderReadingRoute } from '../utils/work-gallery';
-import { computed } from 'vue';
+import { workMediaRoute } from '../utils/work-gallery';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { fetchPostSummary } from '../api/gallery';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 
 import { useAuthStore } from '../stores/auth';
 import { useLikesStore } from '../stores/likes';
-import type { FeedItem } from '../types/api';
-import { getOriginalMediaDownloadUrl } from '../utils/original-media';
+import type { ReelItem } from '../types/api';
 
 const props = defineProps<{
-  item: FeedItem;
+  item: ReelItem;
   infoOpen?: boolean;
 }>();
 
@@ -81,15 +83,44 @@ defineEmits<{
 const authStore = useAuthStore();
 const likesStore = useLikesStore();
 const { t } = useI18n();
-const isLiked = computed(() => likesStore.isLiked(props.item.id));
-const downloadOriginalMediaUrl = computed(() => getOriginalMediaDownloadUrl(props.item.id));
+const isLiked = computed(() => likesStore.isLiked(props.item.postId));
+const downloadOriginalMediaUrl = computed(() => props.item.originalDownloadUrl);
+
+const loadingParent = ref(false);
+const actionError = ref<string | null>(null);
+let actionGeneration = 0;
+watch(() => props.item.postId, () => {
+  ++actionGeneration;
+  loadingParent.value = false;
+  actionError.value = null;
+});
+onBeforeUnmount(() => { ++actionGeneration; });
 
 async function handleLike() {
-  if (!authStore.canUseSavedItems) {
+  const postId = props.item.postId;
+  if (!authStore.canUseSavedItems || loadingParent.value || likesStore.isPending(postId)) return;
+  actionError.value = null;
+  // Removal needs no hydration; retain the existing complete snapshot for rollback.
+  if (likesStore.isLiked(postId)) {
+    const savedPost = likesStore.items.find(item => item.id === postId);
+    if (savedPost) await likesStore.toggleLike(savedPost);
+    else actionError.value = t('reels.rail.parentLoadError');
     return;
   }
-
-  await likesStore.toggleLike(props.item);
+  const turn = ++actionGeneration;
+  const mode = authStore.likesMode;
+  loadingParent.value = true;
+  try {
+    const parent = await fetchPostSummary(postId);
+    if (turn !== actionGeneration || props.item.postId !== postId || authStore.likesMode !== mode || !authStore.canUseSavedItems) return;
+    if (parent.id !== postId || parent.representation !== 'summary') throw new Error(t('reels.rail.parentLoadError'));
+    // A different control may have added this post while the summary loaded.
+    if (!likesStore.isLiked(postId)) await likesStore.toggleLike(parent);
+  } catch (error) {
+    if (turn === actionGeneration) actionError.value = error instanceof Error ? error.message : t('reels.rail.parentLoadError');
+  } finally {
+    if (turn === actionGeneration) loadingParent.value = false;
+  }
 }
 </script>
 
@@ -98,6 +129,18 @@ async function handleLike() {
   display: grid;
   gap: 0.88rem;
   justify-items: center;
+}
+
+.reel-action-rail__error {
+  position: absolute;
+  right: 100%;
+  bottom: 0;
+  width: 15rem;
+  padding: .65rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: var(--surface);
+  color: var(--text);
 }
 
 .reel-action-rail__info-wrap {

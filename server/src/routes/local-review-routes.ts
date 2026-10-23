@@ -20,6 +20,10 @@ export function createLocalReviewRouter(service?: LocalReviewWebService) {
       limit: req.query.limit ? id.max(100).parse(req.query.limit) : undefined, issuesOnly: req.query.issuesOnly === 'true' }));
   });
   router.post('/sessions/:id/execute', (req, res) => { res.status(202).json(current().execute(key.parse(req.params.id), req.body)); });
+  router.post('/sessions/:id/refresh', (req, res) => {
+    const body = z.object({ requestKey: key }).strict().parse(req.body);
+    res.status(202).json(current().refresh(key.parse(req.params.id), body.requestKey));
+  });
   router.post('/sessions/:id/retry', (req, res) => {
     const body = z.object({ requestKey: key }).strict().parse(req.body);
     res.status(202).json(current().retry(key.parse(req.params.id), body.requestKey));

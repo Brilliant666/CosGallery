@@ -340,14 +340,35 @@ export interface FeedPost extends FeedImage {
 // A creator card is not an authorized, fully loaded album. Detail endpoints
 // retain FeedPost/PostDetail and their complete position-ordered mediaItems.
 export interface CanonicalWorkSummary extends Omit<FeedPost, 'mediaItems'> {
+  cardCover?: {
+    imageId: number;
+    filename: string;
+    thumbnailUrl: string;
+    /** Internal cache provenance; stripped when mapping the API response. */
+    derivativeSourceVersion?: string;
+  };
   representation: 'summary';
   imageCount: number;
   videoCount: number;
   mediaItems?: never;
 }
 
-export interface ReelCandidate extends FeedPost {
+export interface ReelItem extends FeedPost {
+  /** Reel identity is a media row; parent Post actions use postId. */
+  mediaId: number;
+  postId: number;
+  mediaPosition: number;
+  creatorId: number | null;
+  mimeType: string;
+  fileSize: number;
+  originalDownloadUrl: string;
+}
+
+export interface ReelCandidate extends ReelItem {
   likedAt: string | null;
+  /** Internal queue identity; do not serialize as a user-facing field. */
+  sourceIdentity: string;
+  scopedPreviewUrl: string;
 }
 
 export interface ImageDetail extends FeedImage {

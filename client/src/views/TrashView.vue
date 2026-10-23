@@ -8,10 +8,19 @@
           {{ t('trashPage.description') }}
         </p>
       </div>
-      <div class="flex items-center gap-3">
+    </header>
+
+    <template v-if="!appStore.isLibraryUnavailable">
+      <WorkTrashSection ref="workTrash" @changed="trashChanged" />
+      <MediaTrashSection ref="mediaTrash" @changed="trashChanged" />
+    </template>
+
+    <header v-if="trashStore.items.length" class="flex flex-wrap items-center justify-between gap-3">
+      <h2>{{ t('mediaRemoval.legacyTitle') }}</h2>
+      <div class="flex flex-wrap items-center gap-3">
         <span class="text-[0.82rem] text-muted tabular-nums">{{ selectedCountLabel }}</span>
         <button
-          class="min-h-[2.35rem] px-4 py-[0.6rem] rounded-[0.75rem] border border-border bg-surface text-text font-semibold disabled:opacity-55 disabled:cursor-not-allowed"
+          class="removal-button removal-neutral"
           type="button"
           :disabled="selectedCount === 0 || processing"
           @click="restoreConfirmOpen = true"
@@ -19,7 +28,7 @@
           {{ t('trashPage.restoreButton') }}
         </button>
         <button
-          class="min-h-[2.35rem] px-4 py-[0.6rem] rounded-[0.75rem] border border-transparent bg-[#b42318] text-white font-semibold disabled:opacity-55 disabled:cursor-not-allowed"
+          class="removal-button removal-danger-outline"
           type="button"
           :disabled="selectedCount === 0 || processing"
           @click="permanentConfirmOpen = true"
@@ -55,8 +64,8 @@
       </section>
       <EmptyState
         v-else-if="trashStore.initialized && trashStore.items.length === 0"
-        :title="t('trashPage.emptyTitle')"
-        :description="t('trashPage.emptyDescription')"
+        :title="t('mediaRemoval.legacyEmpty')"
+        :description="t('mediaRemoval.legacyDescription')"
       />
       <template v-else>
         <section class="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
@@ -177,6 +186,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 
+import WorkTrashSection from '../components/WorkTrashSection.vue';
+import MediaTrashSection from '../components/MediaTrashSection.vue';
 import { deleteImage, restoreImage } from '../api/gallery';
 import ConfirmDialog from '../components/ConfirmDialog.vue';
 import EmptyState from '../components/EmptyState.vue';
@@ -199,6 +210,13 @@ const foldersStore = useFoldersStore();
 const likesStore = useLikesStore();
 const momentsStore = useMomentsStore();
 const trashStore = useTrashStore();
+const workTrash = ref<InstanceType<typeof WorkTrashSection> | null>(null);
+const mediaTrash = ref<InstanceType<typeof MediaTrashSection> | null>(null);
+function trashChanged() {
+  void trashStore.loadInitial(true);
+  void workTrash.value?.reload();
+  void mediaTrash.value?.reload();
+}
 const selectedIds = ref<number[]>([]);
 const actionError = ref<string | null>(null);
 const processing = ref(false);

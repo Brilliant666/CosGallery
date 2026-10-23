@@ -74,8 +74,12 @@ export function fetchFeed(page = 1, limit = 24, mode: FeedMode = 'random', seed?
   return requestJson<PaginatedFeed>(`/api/feed?${params.toString()}`);
 }
 
-export function fetchReelPlayback(id: number, signal?: AbortSignal, fallback = false) {
-  return requestJson<ReelPlayback>(`/api/reels/${id}/playback${fallback ? '?fallback=1' : ''}`, { signal });
+export function fetchReelPlayback(mediaId: number, signal?: AbortSignal, fallback = false) {
+  return requestJson<ReelPlayback>(`/api/reels/media/${mediaId}/playback${fallback ? '?fallback=1' : ''}`, { signal });
+}
+
+export function fetchGalleryVideoPlayback(mediaId: number, signal?: AbortSignal, fallback = false) {
+  return requestJson<ReelPlayback>(`/api/gallery/media/${mediaId}/playback${fallback ? '?fallback=1' : ''}`, { signal });
 }
 
 export function fetchReels(
@@ -84,6 +88,7 @@ export function fetchReels(
   mode: ReelsFeedMode = 'recommended',
   seed?: number,
   options: {
+    cursor?: string;
     lastFolder?: string | null;
     recentFolders?: string[];
   } = {}
@@ -97,6 +102,8 @@ export function fetchReels(
   if (typeof seed === 'number') {
     params.set('seed', String(seed));
   }
+
+  if (options.cursor) params.set('cursor', options.cursor);
 
   if (options.lastFolder) {
     params.set('lastFolder', options.lastFolder);
@@ -284,6 +291,10 @@ export function fetchSharedPost(id: number, mediaType?: 'image' | 'video') {
 
 export function fetchSharedImage(id: number, mediaType?: 'image' | 'video') {
   return fetchSharedDetail('images', id, mediaType);
+}
+
+export function fetchPostSummary(id: number) {
+  return requestJson<import('../types/api').CanonicalWorkSummary>(`/api/posts/${id}/summary`);
 }
 
 export function fetchImage(id: number, mediaType?: 'image' | 'video') {

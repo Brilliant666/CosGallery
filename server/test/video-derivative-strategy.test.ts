@@ -59,6 +59,37 @@ describe.sequential('video derivative strategy', () => {
     ]);
   });
 
+  it('reads MPEG-TS video metadata and generates an MP4 preview without changing the original', async () => {
+    execFileAsyncMock.mockImplementation(createExecFileAsyncMock({
+      format: { duration: '2.0', format_name: 'mpegts' },
+      streams: [
+        { codec_type: 'video', codec_name: 'h264', width: 1920, height: 1080, pix_fmt: 'yuv420p' },
+        { codec_type: 'audio', codec_name: 'aac' }
+      ]
+    }));
+    const sourcePath = path.join(appConfig.galleryRoot, 'clips', 'mpeg-video.TS');
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const original = Buffer.from('synthetic transport stream');
+    await fs.writeFile(sourcePath, original);
+    const result = await generateDerivatives(sourcePath, 'clips/mpeg-video.TS');
+    expect(result).toMatchObject({ mediaType: 'video', width: 1920, height: 1080, durationMs: 2000,
+      playbackStrategy: 'preview', generatedThumbnail: true, generatedPreview: true, previewPath: 'clips/mpeg-video.mp4' });
+    expect(await fs.readFile(sourcePath)).toEqual(original);
+    expect(execFileAsyncMock.mock.calls.filter(([command]) => command === 'ffmpeg')).toHaveLength(2);
+  });
+
+  it.each([
+    { format: { format_name: 'mpegts' }, streams: [{ codec_type: 'audio', codec_name: 'aac' }] },
+    { format: { format_name: 'mov,mp4,m4a' }, streams: [{ codec_type: 'video', width: 32, height: 48 }] },
+    { format: { format_name: 'mpegts' }, streams: [{ codec_type: 'video', width: 0, height: 48 }] },
+    { format: { format_name: 'mpegts' }, streams: [{ codec_type: 'video', width: 32 }] }
+  ])('rejects invalid TS probe metadata before writing derivatives (%j)', async payload => {
+    execFileAsyncMock.mockImplementation(createExecFileAsyncMock(payload));
+    const { readMediaMetadata } = await import('../src/services/derivative-service.js');
+    await expect(readMediaMetadata('unreadable.ts', 'video')).rejects.toThrow('MPEG-TS');
+    expect(execFileAsyncMock.mock.calls.filter(([command]) => command === 'ffmpeg')).toHaveLength(0);
+  });
+
   it('keeps preview transcoding for large high-resolution browser-safe MP4 originals while preserving original playback eligibility', async () => {
     execFileAsyncMock.mockImplementation(createExecFileAsyncMock({
       format: {

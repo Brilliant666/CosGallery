@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { schemaSql } from '../src/db/schema.js';
+import { workRemovalSchemaSql } from '../src/db/work-removal-schema.js';
 import { completeManagedCreatorMigration } from '../src/db/managed-creator-migration.js';
 
 describe('000016 reversible managed-creator migration',()=>{
@@ -13,9 +14,11 @@ describe('000016 reversible managed-creator migration',()=>{
     const sortDown=fs.readFileSync(new URL('../db/migrations/000023_work_sort_confirmations.sql',import.meta.url),'utf8').split('-- migrate:down')[1]!;
     const evidenceDown=fs.readFileSync(new URL('../db/migrations/000024_source_evidence.sql',import.meta.url),'utf8').split('-- migrate:down')[1]!;
     try {
+      // Removal history intentionally survives downgrade, so omit its newer
+      // tables/triggers when constructing this synthetic pre-000016 fixture.
       // Reconstruct the older fixture in reverse dependency order: 000023
       // references 000022 state, whose triggers reference 000016 fields.
-      db.exec(schemaSql);db.exec(evidenceDown);db.exec(sortDown);db.exec(catalogDown);db.exec(down);
+      db.exec(schemaSql.replace(workRemovalSchemaSql,''));db.exec(evidenceDown);db.exec(sortDown);db.exec(catalogDown);db.exec(down);
       db.exec(`INSERT INTO archive_catalog_creators(id,canonical_name,normalized_name,preference,effective_rating,seed_source,seed_source_creator_id,created_at,updated_at)
         VALUES(42,'Historical','historical','liked','R18','hentaiclub','old-name','old-created','old-updated');
         INSERT INTO archive_catalog_creator_sources(creator_id,source,source_creator_id,source_display_name,metadata_json,first_seen_at,last_seen_at)

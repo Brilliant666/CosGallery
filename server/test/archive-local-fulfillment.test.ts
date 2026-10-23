@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {describe,it,expect} from 'vitest';
 import {schemaSql} from '../src/db/schema.js';
-import {ArchiveLocalFulfillmentService} from '../src/services/archive-local-fulfillment-service.js';
+import {ArchiveLocalFulfillmentService,captureMediaAdjustment,recordMediaAdjustment} from '../src/services/archive-local-fulfillment-service.js';
 import {ArchiveDownloadTaskService} from '../src/services/archive-download-task-service.js';
 import {CreatorSyncQueryService} from '../src/services/creator-sync-query-service.js';
 import {sourceNeedsAcquisitionSql} from '../src/services/archive-local-fulfillment-service.js';
@@ -29,6 +29,45 @@ function fixture(){
  return {db,tasks,accept,clean(){db.close();rmSync(dir,{recursive:true,force:true});}};
 }
 describe('explicit local acquisition satisfaction',()=>{
+ it('records manual media adjustments without changing accepted history and rejects unrelated subsequent changes',()=>{
+  const f=fixture();try{
+   f.db.exec(`INSERT INTO images(id,folder_id,filename,extension,relative_path,absolute_path,file_size,width,height,mime_type,checksum_or_fingerprint,mtime_ms,first_seen_at,sort_timestamp,thumbnail_path,preview_path)
+    SELECT 2,folder_id,'ad.jpg',extension,'ad.jpg','/fixture/ad.jpg',file_size,width,height,mime_type,'advertisement',mtime_ms,first_seen_at,sort_timestamp,thumbnail_path,preview_path FROM images WHERE id=1;
+    INSERT INTO post_items(post_id,image_id,position) VALUES(1,2,2);`);
+   f.accept();const before=f.db.prepare('SELECT * FROM archive_catalog_local_fulfillments').all();
+   f.db.exec('BEGIN IMMEDIATE');const captured=captureMediaAdjustment(f.db,1);expect(captured).toHaveLength(1);
+   f.db.exec('DELETE FROM post_items WHERE image_id=2; UPDATE images SET is_trashed=1,is_deleted=1 WHERE id=2');
+   recordMediaAdjustment(f.db,captured,'User removed advertisement');f.db.exec('COMMIT');
+   expect(f.tasks.get(1)?.acquisitionState).toBe('local_satisfied');
+   expect(f.db.prepare('SELECT * FROM archive_catalog_local_fulfillments').all()).toEqual(before);
+   expect(f.db.prepare('SELECT reason FROM media_fulfillment_adjustments').get()).toEqual({reason:'User removed advertisement'});
+   f.db.exec("UPDATE images SET checksum_or_fingerprint='changed' WHERE id=1");
+   expect(f.tasks.get(1)?.acquisitionState).toBe('review_required');
+   f.db.exec('BEGIN IMMEDIATE');expect(captureMediaAdjustment(f.db,1)).toEqual([]);f.db.exec('ROLLBACK');
+  }finally{f.clean();}
+ });
+ it('preserves an authorized empty-state adjustment so restoring the last media satisfies the original acceptance',()=>{
+  const f=fixture();try{
+   f.accept();
+   f.db.exec('BEGIN IMMEDIATE');const removed=captureMediaAdjustment(f.db,1);
+   f.db.exec('DELETE FROM post_items; UPDATE images SET is_trashed=1,is_deleted=1; UPDATE posts SET is_trashed=1,is_deleted=1');
+   recordMediaAdjustment(f.db,removed,'Trash last image');f.db.exec('COMMIT');
+   expect(f.tasks.get(1)?.acquisitionState).toBe('review_required');
+   expect(f.tasks.planMissing({targetRoot:'/inbox',creatorIds:[1]}).created).toBe(0);
+   f.db.exec('BEGIN IMMEDIATE');const restored=captureMediaAdjustment(f.db,1);expect(restored).toHaveLength(1);
+   f.db.exec('INSERT INTO post_items(post_id,image_id,position) VALUES(1,1,1); UPDATE images SET is_trashed=0,is_deleted=0; UPDATE posts SET is_trashed=0,is_deleted=0');
+   recordMediaAdjustment(f.db,restored,'Restore last image');f.db.exec('COMMIT');
+   expect(f.tasks.get(1)?.acquisitionState).toBe('local_satisfied');
+   expect(f.db.prepare('SELECT COUNT(*) n FROM media_fulfillment_adjustments').get()).toEqual({n:2});
+  }finally{f.clean();}
+ });
+ it('never approves an already changed source when recording a later media adjustment',()=>{
+  const f=fixture();try{
+   f.accept();f.db.exec("UPDATE archive_catalog_source_works SET media_summary='Changed' WHERE id=1; BEGIN IMMEDIATE");
+   expect(captureMediaAdjustment(f.db,1)).toEqual([]);f.db.exec('ROLLBACK');
+   expect(f.tasks.get(1)?.acquisitionState).toBe('review_required');
+  }finally{f.clean();}
+ });
  it.each([
   "UPDATE images SET checksum_or_fingerprint='different' WHERE id=1",
   "UPDATE images SET mtime_ms=2 WHERE id=1",

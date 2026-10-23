@@ -101,7 +101,7 @@ async function checkedManifest(binding: StagingMoveBinding, value: unknown): Pro
     seen.add(relativeKey);
     const extension = path.extname(file.relativePath).toLowerCase();
     if ((file.kind === 'image' && !['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension))
-      || (file.kind === 'video' && !['.mp4', '.mov', '.mkv'].includes(extension))
+      || (file.kind === 'video' && !['.mp4', '.mov', '.mkv', '.ts'].includes(extension))
       || (file.kind === 'advertisement' && !['.txt', '.html', '.htm', '.url'].includes(extension)
         && !isKnownAdvertisementImage(file.relativePath))
       || (file.kind === 'ignored' && file.relativePath !== '.DS_Store')) fail('Staging file classification changed');

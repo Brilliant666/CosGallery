@@ -15,6 +15,8 @@ import { LocalReviewWebService } from '../src/services/local-review-web-service.
 import { createLocalReviewRouter } from '../src/routes/local-review-routes.js';
 import { requestTestApp } from './http-test-utils.js';
 import { RETAINED_ORIGINALS_DIRECTORY } from '../src/constants/retained-originals.js';
+import * as processRunner from '../src/utils/run-process.js';
+import { appConfig } from '../src/config/env.js';
 
 const fixtures: Array<{ root: string; db: DatabaseSync }> = [];
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex').toUpperCase();
@@ -93,6 +95,34 @@ async function fixture(extra: Record<string, Buffer> = { '坏图.jpg': Buffer.al
 afterEach(async () => { vi.restoreAllMocks(); for (const f of fixtures.splice(0)) { f.db.close(); await fs.rm(f.root, { recursive: true, force: true }); } });
 
 describe.sequential('web precise review of original Stage3 jobs', () => {
+  it('classifies TS and uppercase TS as video and offers quarantine only for an empty TS file', async () => {
+    const probe = vi.spyOn(processRunner, 'runProcessWithTimeout').mockResolvedValue({ code: 0, signal: null, stdout: JSON.stringify({ format: { format_name: 'mpegts' }, streams: [{ codec_type: 'video', width: 16, height: 9 }] }), stderr: '' });
+    const video = Buffer.from('synthetic MPEG-TS bytes');
+    const f = await fixture({ 'lower.ts': video, 'upper.TS': video, 'empty.TS': Buffer.alloc(0), '坏图.jpg': Buffer.alloc(0) }), sessionId = await f.open();
+    const files = f.web.files(sessionId).items;
+    for (const relativePath of ['lower.ts', 'upper.TS']) expect(files.find(file => file.relativePath === relativePath)).toMatchObject({ kind: 'video', issue: null, allowedActions: [] });
+    expect(files.find(file => file.relativePath === 'empty.TS')).toMatchObject({ kind: 'video', issue: 'damaged', allowedActions: ['quarantine'] });
+    expect(f.web.files(sessionId, { issuesOnly: true }).items.map(file => file.relativePath).sort()).toEqual(['empty.TS', '坏图.jpg']);
+    expect(f.ingest.getJob(1).status).toBe('awaiting_review');
+    expect(await fs.readFile(path.join(f.levelTwo, 'upper.TS'))).toEqual(video);
+    expect(await fs.readdir(f.gallery)).toEqual([]);
+    for (const [command, _args, timeout, options] of probe.mock.calls) {
+      expect(command).toBe(appConfig.ffprobePath);
+      expect(timeout).toBe(60_000);
+      expect(options).toEqual({ shell: false });
+    }
+  });
+
+  it.each(['异常.jpg', '异常.png'])('retains undecodable %s through HTTP and the original Stage3 recovery', async filename => {
+    const bytes = Buffer.from('synthetic undecodable image'), f = await fixture({ [filename]: bytes }), sessionId = await f.open();
+    expect(f.web.files(sessionId, { issuesOnly: true }).items).toMatchObject([{ issue: 'decode_failed', suggestedAction: 'retain_original' }]);
+    expect((await f.confirm(sessionId, [{ relativePath: filename, action: 'retain_original', reason: 'decode_failed' }])).status).toBe(202);
+    await f.web.wait(sessionId);
+    expect(f.web.get(sessionId).status, f.web.get(sessionId).error ?? '').toBe('completed');
+    expect(await fs.readFile(path.join(f.ingest.getJob(1).targetPath!, RETAINED_ORIGINALS_DIRECTORY, filename))).toEqual(bytes);
+    expect(f.web.get(sessionId).result.summary).toEqual({ images: 1, videos: 0, retainedOriginals: 1, retainedAttachments: 0, quarantined: 0 });
+  });
+
   it('uses HTTP preview/confirm, recoverably moves the exact bad file and resumes original job once', async () => {
     const f = await fixture(), sessionId = await f.open();
     const history = f.db.prepare('SELECT claimed_by,attempt_count FROM archive_catalog_download_tasks').get();

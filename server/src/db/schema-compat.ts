@@ -51,7 +51,11 @@ export function assertNoLegacySchema(database: DatabaseSync): void {
     return;
   }
 
-  throw new Error('Legacy database schema detected. Delete the SQLite file and restart the app to rebuild the database with folders/folder_id tables.');
+  throw new Error(
+    'Legacy database schema detected (profiles/images.profile_id). Automatic upgrade of this schema is not supported. '
+    + 'Do not delete the SQLite database or rebuild it in place. Preserve the database, configuration and required keys; '
+    + 'verify a suitable consistent recovery copy and a supported upgrade or recovery procedure before continuing.'
+  );
 }
 
 export function applyBaselineCompatMigrations(database: DatabaseSync): void {

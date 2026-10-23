@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as galleryApi from '../api/gallery';
-import type { AppStatus, FeedItem } from '../types/api';
+import type { AppStatus, ReelItem } from '../types/api';
 import { useAppStore } from './app';
 import { useReelsStore } from './reels';
 
@@ -48,9 +48,16 @@ function createAppStatus(defaultReelsFeedMode: AppStatus['preferences']['default
   };
 }
 
-function createFeedItem(id: number): FeedItem {
+function createReelItem(id: number): ReelItem {
   return {
     id,
+    mediaId: id,
+    postId: id + 1000,
+    mediaPosition: 1,
+    creatorId: null,
+    mimeType: 'video/mp4',
+    fileSize: 24 * 1024 * 1024,
+    originalDownloadUrl: `/api/reels/media/${id}/original?v=fixed&download=1`,
     folderId: 1,
     folderSlug: 'reels-alpha',
     folderName: 'Reels Alpha',
@@ -82,7 +89,7 @@ describe('reels store', () => {
 
     const fetchReelsSpy = vi.spyOn(galleryApi, 'fetchReels').mockResolvedValue({
       mode: 'random',
-      items: [createFeedItem(11)],
+      items: [createReelItem(11)],
       page: 1,
       limit: 6,
       total: 1,
@@ -106,7 +113,7 @@ describe('reels store', () => {
 
     const fetchReelsSpy = vi.spyOn(galleryApi, 'fetchReels').mockResolvedValue({
       mode: 'recent',
-      items: [createFeedItem(7)],
+      items: [createReelItem(7)],
       page: 1,
       limit: 6,
       total: 1,
@@ -129,7 +136,7 @@ describe('reels store', () => {
 
     const fetchReelsSpy = vi.spyOn(galleryApi, 'fetchReels').mockResolvedValue({
       mode: 'random',
-      items: [createFeedItem(21)],
+      items: [createReelItem(21)],
       page: 1,
       limit: 6,
       total: 1,
@@ -140,7 +147,7 @@ describe('reels store', () => {
     reelsStore.$patch({
       mode: 'random',
       loadedMode: null,
-      items: [createFeedItem(5)],
+      items: [createReelItem(5)],
       page: 2,
       hasMore: true,
       initialized: true,
@@ -153,4 +160,20 @@ describe('reels store', () => {
     expect(reelsStore.items.map((item) => item.id)).toEqual([21]);
     expect(reelsStore.loadedMode).toBe('random');
   });
+  it('keeps multiple videos from one album and applies parent caption changes to each',async()=>{
+    const items=[{...createReelItem(31),postId:500},{...createReelItem(32),postId:500},{...createReelItem(500),postId:600}];
+    const store=useReelsStore();store.items=items;store.setActiveReel(32);expect(store.activeItem?.mediaId).toBe(32);
+    store.updateImageCaption(500,'Album caption');expect(store.items.map(item=>item.caption)).toEqual(['Album caption','Album caption',undefined]);
+  });
+  it('passes opaque continuation cursors and only resets the queue after explicit reload',async()=>{
+    const spy=vi.spyOn(galleryApi,'fetchReels').mockResolvedValueOnce({mode:'random',items:[{...createReelItem(1),postId:501}],page:1,limit:6,total:2,hasMore:true,nextCursor:'opaque:page2'})
+      .mockResolvedValueOnce({mode:'random',items:[{...createReelItem(2),postId:501}],page:2,limit:6,total:2,hasMore:true,nextCursor:'opaque:page3'});
+    const store=useReelsStore();await store.loadInitial();const seed=store.seed;await store.loadMore();
+    expect(spy).toHaveBeenLastCalledWith(2,6,'random',seed,{cursor:'opaque:page2'});expect(store.items.map(item=>item.mediaId)).toEqual([1,2]);expect(store.cursor).toBe('opaque:page3');
+    spy.mockRejectedValueOnce(new Error('短片队列已过期，请重新加载短片。'));await store.loadMore();expect(store.error).toContain('已过期');expect(store.items.map(item=>item.id)).toEqual([1,2]);expect(store.cursor).toBe('opaque:page3');expect(spy).toHaveBeenCalledTimes(3);
+    spy.mockResolvedValueOnce({mode:'random',items:[createReelItem(3)],page:1,limit:6,total:1,hasMore:false,nextCursor:null});await store.loadInitial(true);
+    expect(spy).toHaveBeenLastCalledWith(1,6,'random',expect.any(Number),{});expect(store.items.map(item=>item.id)).toEqual([3]);expect(store.cursor).toBeNull();expect(store.error).toBeNull();
+    store.cursor='cursor';store.reset();expect(store.cursor).toBeNull();
+  });
+
 });

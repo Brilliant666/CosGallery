@@ -7,11 +7,16 @@ export interface CreatorDeletionBlocker { code: string; label: string; count: nu
 export interface CreatorDeletionPreview {
   creatorId: number; name: string; eligible: boolean; blockers: CreatorDeletionBlocker[];
   confirmationToken: string; removableAliases: number;
+  removalScope: Array<{ kind: string; label: string; count: number }>;
 }
 const quote = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
 const derived = new Set(['resource_catalog_state', 'resource_catalog_rows', 'resource_catalog_meta']);
 const labels: Record<string, string> = {
   archive_catalog_creator_sources: '来源身份', archive_catalog_collections: '来源合集',
+  archive_catalog_source_works: '其他来源合集仍关联的作品', archive_catalog_local_works: '本地副本（包括停用及回收站内副本）',
+  archive_catalog_deliveries: '来源交付或转存历史', archive_catalog_download_tasks: '下载任务（包括历史任务）',
+  work_removals: '作品回收或永久删除记录', removal_operations: '回收、恢复或删除操作记录',
+  work_removal_paths: '作品恢复路径记录',
   archive_catalog_works: '作品（包括历史作品）', archive_catalog_local_creator_folders: '本地目录关系（包括停用关系）',
   archive_catalog_metadata_tasks: '来源检查任务（包括历史任务）', local_ingest_jobs: '本地入库任务（包括历史任务）',
   local_ingest_file_observations: '待入库文件观察记录', archive_local_admission_plans: '原接纳计划',
@@ -21,6 +26,42 @@ const labels: Record<string, string> = {
   source_evidence_identity_decisions: '来源归属决定', source_evidence_admission_links: '来源接纳关联'
 };
 const normalizedKey = (key: string) => key.replaceAll('_', '').toLowerCase();
+
+type Row = Record<string, unknown>;
+/** This whitelist is also the complete audit snapshot. No generic cascade is used. */
+export function creatorDeletionRows(db: DatabaseSync, id: number): Record<string, Row[]> {
+  return {
+    archive_catalog_creators: db.prepare('SELECT * FROM archive_catalog_creators WHERE id=?').all(id),
+    archive_catalog_creator_aliases: db.prepare('SELECT * FROM archive_catalog_creator_aliases WHERE creator_id=? ORDER BY source,normalized_alias').all(id),
+    archive_catalog_creator_sources: db.prepare('SELECT * FROM archive_catalog_creator_sources WHERE creator_id=? ORDER BY source,source_creator_id').all(id),
+    archive_catalog_collections: db.prepare('SELECT * FROM archive_catalog_collections WHERE creator_id=? ORDER BY id').all(id),
+    archive_catalog_works: db.prepare('SELECT * FROM archive_catalog_works WHERE creator_id=? ORDER BY id').all(id),
+    archive_catalog_source_works: db.prepare(`SELECT sw.* FROM archive_catalog_source_works sw
+      JOIN archive_catalog_collections c ON c.id=sw.collection_id WHERE c.creator_id=? ORDER BY sw.id`).all(id)
+  };
+}
+
+function referencesRemovedEntities(value: unknown, entities: Map<string, Set<string>>, key = '', depth = 0): boolean {
+  if (depth > 64) throw new Error('Uninspectable nested evidence');
+  const field = normalizedKey(key);
+  for (const [kind, ids] of entities) {
+    if (field === `${kind}id` || field === `${kind}ids` || field === `target${kind}id`) {
+      const values = Array.isArray(value) ? value : [value];
+      if (values.some(v => (typeof v === 'number' || typeof v === 'string') && ids.has(String(v)))) return true;
+    }
+    if ([kind, `${kind}s`].includes(field) && value && typeof value === 'object' && !Array.isArray(value)
+      && ids.has(String((value as Row).id))) return true;
+  }
+  if (typeof value === 'string' && /^\s*[\[{]/u.test(value)) {
+    let decoded: unknown;
+    try { decoded = JSON.parse(value); }
+    catch { if (field.endsWith('json')) throw new Error('Uninspectable serialized evidence'); return false; }
+    return referencesRemovedEntities(decoded, entities, key, depth + 1);
+  }
+  if (Array.isArray(value)) return value.some(v => referencesRemovedEntities(v, entities, key, depth + 1));
+  return !!value && typeof value === 'object'
+    && Object.entries(value).some(([k, v]) => referencesRemovedEntities(v, entities, k, depth + 1));
+}
 
 /** Inspect structured identities, not arbitrary numeric IDs, titles or substrings. */
 function references(value: unknown, id: number, names: Set<string>, key = '', depth = 0): boolean {
@@ -66,7 +107,16 @@ function references(value: unknown, id: number, names: Set<string>, key = '', de
 export function inspectCreatorDeletion(db: DatabaseSync, id: number): CreatorDeletionPreview | null {
   const creator = db.prepare('SELECT * FROM archive_catalog_creators WHERE id=?').get(id);
   if (!creator) return null;
-  const aliases = db.prepare('SELECT * FROM archive_catalog_creator_aliases WHERE creator_id=? ORDER BY source,normalized_alias').all(id);
+  const rows = creatorDeletionRows(db, id);
+  const aliases = rows.archive_catalog_creator_aliases;
+  const works = rows.archive_catalog_works, sourceWorks = rows.archive_catalog_source_works;
+  const workIds = new Set(works.map(row => String(row.id)));
+  const sourcedWorkIds = new Set(sourceWorks.map(row => String(row.work_id)));
+  const collectionIds = new Set(rows.archive_catalog_collections.map(row => String(row.id)));
+  const entities = new Map([
+    ['work', workIds], ['collection', collectionIds],
+    ['sourcework', new Set(sourceWorks.map(row => String(row.id)))]
+  ]);
   const names = new Set([String(creator.canonical_name), ...aliases.map(row => String(row.alias))].map(normalizeCreatorIdentity));
   const blockers: CreatorDeletionBlocker[] = [];
   const add = (code: string, label: string, count = 1) => {
@@ -75,34 +125,75 @@ export function inspectCreatorDeletion(db: DatabaseSync, id: number): CreatorDel
     if (existing) existing.count += count;
     else blockers.push({ code, label, count });
   };
-  if (creator.seed_source !== 'manual') add('NOT_MANUAL', '仅允许删除手工创建的误建博主');
   if (creator.is_active !== 0) add('ACTIVE', '请先停用博主；停用不会删除任何资料');
   if (creator.preferred_local_creator_folder_id !== null) add('PREFERRED_FOLDER', '已设置入库目标目录');
-  const unsafeAliases = aliases.filter(row => !['manual', 'manual-history'].includes(String(row.source)));
-  add('SOURCE_ALIASES', '来源别名不能随误建身份删除', unsafeAliases.length);
+  add('PRIMARY_LOCAL_COPY', '独立作品仍指定本地主要副本',
+    works.filter(work => work.primary_local_work_id !== null).length);
+  add('UNCLASSIFIED_WORK', '缺少来源记录的独立作品，不能证明为纯来源资料',
+    works.filter(work => !sourcedWorkIds.has(String(work.id))).length);
+  add('SHARED_SOURCE_WORK', '来源作品指向其他博主的独立作品', sourceWorks.filter(sw => !workIds.has(String(sw.work_id))).length);
 
+  // These predicates describe exactly the same whitelist as creatorDeletionRows.
+  // SQL subqueries keep FK checks indexed and avoid materializing unrelated tables.
+  const owned: Record<string, string> = {
+    archive_catalog_creators: 'id=?',
+    archive_catalog_creator_aliases: 'creator_id=?',
+    archive_catalog_creator_sources: 'creator_id=?',
+    archive_catalog_collections: 'creator_id=?',
+    archive_catalog_works: 'creator_id=?',
+    archive_catalog_source_works: 'collection_id IN (SELECT id FROM archive_catalog_collections WHERE creator_id=?)'
+  };
+  const softTargets: Record<string, string> = {
+    workid: 'archive_catalog_works', targetworkid: 'archive_catalog_works',
+    collectionid: 'archive_catalog_collections', targetcollectionid: 'archive_catalog_collections',
+    sourceworkid: 'archive_catalog_source_works', targetsourceworkid: 'archive_catalog_source_works'
+  };
   const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
   for (const { name: rawTable } of tables) {
     const table = String(rawTable);
-    if (derived.has(table) || table === 'archive_catalog_creators' || table === 'archive_catalog_creator_aliases') continue;
+    // Audits are detached evidence, not live references or name reservations.
+    if (derived.has(table) || table === 'creator_deletion_audits') continue;
     const columns = db.prepare(`PRAGMA table_info(${quote(table)})`).all();
-    const keys = new Set(db.prepare(`PRAGMA foreign_key_list(${quote(table)})`).all()
-      .filter(fk => fk.table === 'archive_catalog_creators').map(fk => String(fk.from)));
-    // Include soft scalar references even when a legacy table omitted its FK.
-    for (const col of columns) if (/(?:^|_)creator_id$/u.test(String(col.name))
-      && !['source_creator_id', 'seed_source_creator_id'].includes(String(col.name))) keys.add(String(col.name));
-    if (keys.size) {
-      const count = Number(db.prepare(`SELECT COUNT(*) AS n FROM ${quote(table)} WHERE ${[...keys].map(key => `${quote(key)}=?`).join(' OR ')}`)
-        .get(...[...keys].map(() => id))?.n);
+    const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${quote(table)})`).all();
+    const conditions = new Set<string>();
+    for (const fk of foreignKeys) {
+      const target = String(fk.table);
+      if (!owned[target]) continue;
+      const targetColumn = fk.to == null
+        ? String(db.prepare(`PRAGMA table_info(${quote(target)})`).all()
+          .filter(col => Number(col.pk) > 0).sort((a, b) => Number(a.pk) - Number(b.pk))[Number(fk.seq)]?.name)
+        : String(fk.to);
+      conditions.add(`${quote(String(fk.from))} IN (SELECT ${quote(targetColumn)} FROM ${quote(target)} WHERE ${owned[target]})`);
+    }
+    for (const col of columns) {
+      const column = String(col.name), key = normalizedKey(column);
+      if (/(?:^|_)creator_id$/u.test(column) && !['source_creator_id', 'seed_source_creator_id'].includes(column))
+        conditions.add(`${quote(column)}=?`);
+      // These two columns carry external upstream IDs despite sharing the
+      // spelling used by task tables for internal SourceWork primary keys.
+      const externalSourceId = column === 'source_work_id'
+        && ['archive_catalog_source_works', 'archive_catalog_source_bindings'].includes(table);
+      const target = externalSourceId ? undefined : softTargets[key];
+      if (target) conditions.add(`${quote(column)} IN (SELECT id FROM ${quote(target)} WHERE ${owned[target]})`);
+    }
+    if (table === 'removal_operations')
+      conditions.add("kind='work' AND target_id IN (SELECT id FROM archive_catalog_works WHERE creator_id=?)");
+    const exclusion = owned[table] ? `NOT (${owned[table]}) AND ` : '';
+    if (conditions.size) {
+      const args = [...(owned[table] ? [id] : []), ...[...conditions].map(() => id)];
+      const count = Number(db.prepare(`SELECT COUNT(*) AS n FROM ${quote(table)} WHERE ${exclusion}(${[...conditions].map(c => `(${c})`).join(' OR ')})`).get(...args)?.n);
       add(`REFERENCE:${table}`, labels[table] ?? `业务引用：${table}`, count);
     }
     for (const col of columns) {
       const column = String(col.name);
       if (!column.endsWith('_json')) continue;
       let count = 0, invalid = 0;
-      for (const row of db.prepare(`SELECT ${quote(column)} AS value FROM ${quote(table)} WHERE ${quote(column)} IS NOT NULL`).iterate()) {
-        try { if (references(JSON.parse(String(row.value)), id, names)) count++; }
-        catch { invalid++; }
+      const sql = `SELECT ${quote(column)} AS value FROM ${quote(table)} WHERE ${exclusion}${quote(column)} IS NOT NULL`;
+      for (const row of db.prepare(sql).iterate(...(owned[table] ? [id] : []))) {
+        try {
+          const value: unknown = JSON.parse(String(row.value));
+          if (references(value, id, names) || referencesRemovedEntities(value, entities)) count++;
+        } catch { invalid++; }
       }
       add(`EVIDENCE:${table}.${column}`, `${labels[table] ?? table}：历史资料引用`, count);
       add(`UNVERIFIED:${table}.${column}`, `${labels[table] ?? table}：资料格式无法完整核对，暂不能证明无引用`, invalid);
@@ -127,7 +218,7 @@ export function inspectCreatorDeletion(db: DatabaseSync, id: number): CreatorDel
       try {
         const receipt: unknown = JSON.parse(raw);
         if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) throw new Error('Invalid historical receipt');
-        if (references(receipt, id, names)) add('SETTING_REFERENCE', '来源检查设置或历史执行记录仍引用该博主');
+        if (references(receipt, id, names) || referencesRemovedEntities(receipt, entities)) add('SETTING_REFERENCE', '来源检查设置或历史执行记录仍引用该博主');
       } catch { add('UNVERIFIED_SETTING', '来源检查历史执行记录无法完整核对'); }
       continue;
     }
@@ -142,7 +233,10 @@ export function inspectCreatorDeletion(db: DatabaseSync, id: number): CreatorDel
         if (list.some(v => names.has(normalizeCreatorIdentity(v)))) add('ALLOWLIST', '博主仍在 Costuan 允许处理名单中，请先移除');
       } catch { add('UNVERIFIED_ALLOWLIST', '允许处理名单无法核对'); }
     } else if (/^\s*[\[{]/u.test(raw)) {
-      try { if (references(JSON.parse(raw), id, names)) add('SETTING_REFERENCE', '设置或执行记录仍引用该博主'); }
+      try {
+        const value: unknown = JSON.parse(raw);
+        if (references(value, id, names) || referencesRemovedEntities(value, entities)) add('SETTING_REFERENCE', '设置或执行记录仍引用该博主');
+      }
       catch {
         if (/^(archive[._]|local[._]|managed_creators\.)/u.test(key))
           add('UNVERIFIED_SETTING', '结构化设置或执行记录无法完整核对');
@@ -151,7 +245,14 @@ export function inspectCreatorDeletion(db: DatabaseSync, id: number): CreatorDel
   }
   return {
     creatorId: id, name: String(creator.canonical_name), eligible: blockers.length === 0, blockers,
-    removableAliases: aliases.length - unsafeAliases.length,
-    confirmationToken: createHash('sha256').update(JSON.stringify({ creator, aliases })).digest('hex')
+    removableAliases: aliases.length,
+    removalScope: [
+      { kind: 'aliases', label: '名称与别名', count: aliases.length },
+      { kind: 'sources', label: '来源身份', count: rows.archive_catalog_creator_sources.length },
+      { kind: 'collections', label: '来源合集', count: rows.archive_catalog_collections.length },
+      { kind: 'sourceWorks', label: '来源作品记录', count: sourceWorks.length },
+      { kind: 'works', label: '纯来源独立作品', count: works.length }
+    ],
+    confirmationToken: createHash('sha256').update(JSON.stringify(rows)).digest('hex')
   };
 }

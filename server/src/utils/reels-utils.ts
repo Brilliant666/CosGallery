@@ -141,11 +141,17 @@ function createReelScoreContext(
   seed: number,
   signals: ReelAffinitySignals
 ): ReelScoreContext {
-  const effectiveTimestamps = candidates.map(getEffectiveTimestamp);
+  let minimumTimestamp = Number.POSITIVE_INFINITY;
+  let maximumTimestamp = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    const timestamp = getEffectiveTimestamp(candidate);
+    minimumTimestamp = Math.min(minimumTimestamp, timestamp);
+    maximumTimestamp = Math.max(maximumTimestamp, timestamp);
+  }
 
   return {
-    minimumTimestamp: Math.min(...effectiveTimestamps),
-    maximumTimestamp: Math.max(...effectiveTimestamps),
+    minimumTimestamp,
+    maximumTimestamp,
     folderAffinityLookup: getFolderAffinityLookup(signals),
     seed
   };
@@ -212,27 +218,34 @@ export function buildReelQueue(
   signals: ReelAffinitySignals = {}
 ): ReelRecommendationCandidate[] {
   const rankedCandidates = rankReelCandidates(candidates, seed, signals);
-  const remaining = [...rankedCandidates];
+  // Every candidate in a folder receives the same penalties. Only its highest
+  // ranked remaining video can win; comparing folder heads preserves the old
+  // order without searching all remaining videos for alternative folders.
+  const remaining = new Map<string, { entries: Array<RankedReelCandidate & { rank: number }>; index: number }>();
+  rankedCandidates.forEach((entry, rank) => {
+    const slug = entry.candidate.folderSlug;
+    const group = remaining.get(slug) ?? { entries: [], index: 0 };
+    group.entries.push({ ...entry, rank });
+    remaining.set(slug, group);
+  });
   const queue: ReelRecommendationCandidate[] = [];
   const folderCounts = new Map<string, number>();
 
-  while (remaining.length > 0) {
+  while (remaining.size > 0) {
     const previousFolderSlug = queue.at(-1)?.folderSlug ?? null;
     const secondaryPreviousFolderSlug = queue.at(-2)?.folderSlug ?? null;
-    let bestIndex = 0;
+    let bestFolder = '';
+    let bestRank = Number.POSITIVE_INFINITY;
     let bestAdjustedScore = Number.NEGATIVE_INFINITY;
 
-    for (let index = 0; index < remaining.length; index += 1) {
-      const entry = remaining[index];
+    for (const [slug, group] of remaining) {
+      const entry = group.entries[group.index];
       if (!entry) {
         continue;
       }
 
       let adjustedScore = entry.score;
-      const hasAlternativeFolder = remaining.some(
-        (candidate, candidateIndex) =>
-          candidateIndex !== index && candidate.candidate.folderSlug !== entry.candidate.folderSlug
-      );
+      const hasAlternativeFolder = remaining.size > 1;
 
       if (hasAlternativeFolder && previousFolderSlug && entry.candidate.folderSlug === previousFolderSlug) {
         adjustedScore -= PRIMARY_REPEAT_FOLDER_PENALTY;
@@ -244,18 +257,21 @@ export function buildReelQueue(
 
       adjustedScore -= (folderCounts.get(entry.candidate.folderSlug) ?? 0) * FOLDER_REPEAT_COUNT_PENALTY;
 
-      if (adjustedScore > bestAdjustedScore) {
+      if (adjustedScore > bestAdjustedScore || (adjustedScore === bestAdjustedScore && entry.rank < bestRank)) {
         bestAdjustedScore = adjustedScore;
-        bestIndex = index;
+        bestFolder = slug;
+        bestRank = entry.rank;
       }
     }
 
-    const [nextEntry] = remaining.splice(bestIndex, 1);
+    const group = remaining.get(bestFolder)!;
+    const nextEntry = group.entries[group.index++];
     if (!nextEntry) {
       break;
     }
 
     queue.push(nextEntry.candidate);
+    if (group.index >= group.entries.length) remaining.delete(bestFolder);
     folderCounts.set(nextEntry.candidate.folderSlug, (folderCounts.get(nextEntry.candidate.folderSlug) ?? 0) + 1);
   }
 

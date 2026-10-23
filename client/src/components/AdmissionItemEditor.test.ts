@@ -9,6 +9,20 @@ const item:AdmissionItem={key:'review',sourceRelativePath:'Moon',targetPath:'gal
 const render=(value:AdmissionItem=item,locked=false)=>mount(AdmissionItemEditor,{props:{item:value,creatorId:1,peers:[],locked,acceptExistingVersion:true,modelValue:admissionAction(value,'defer')}});
 
 describe('admission candidate review evidence',()=>{
+  it.each(['No supported media found; nothing admitted','Failed to preview: No supported media found; nothing admitted'])('shows the historical draft conflict %s in Chinese with raw English only in technical details',raw=>{
+    const wrapper=render({...item,group:'D',reviewIssues:['read_error'],conflicts:[raw,'target exists','目录身份需要核对'],summary:{images:0,videos:0,other:1,bytes:100}});
+    expect(wrapper.get('[data-test=admission-error-message]').text()).toBe('目录中未找到支持入库的图片或视频，请核对文件格式');
+    const detail=wrapper.get('[data-test=admission-error-detail]');
+    expect(detail.text()).toContain(raw);expect(detail.attributes('open')).toBeUndefined();
+    const main=wrapper.element.cloneNode(true) as HTMLElement;
+    main.querySelectorAll('details').forEach(details=>details.remove());
+    expect(main.textContent).toContain('目录中未找到支持入库的图片或视频，请核对文件格式');
+    expect(main.textContent).not.toContain(raw);
+    expect(wrapper.findAll('.warning').map(warning=>warning.text())).toEqual(['目标路径已占用，不能覆盖；请核对现有目录，不要仅靠改名消除提示。','目录身份需要核对']);
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it('shows batch peers while deferred without selecting a relation, and permits independent manual handling',async()=>{
     const wrapper=render({...item,candidates:[],reviewIssues:['batch_candidate'],peerCandidates:[{sourceRelativePath:'Studio Series-123 V2',reasons:['同系列标记，仅供核对']}],peerCandidatesTruncated:true});
     expect(wrapper.text()).toContain('本批还有相关目录');

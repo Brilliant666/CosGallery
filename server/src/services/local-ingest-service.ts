@@ -5,6 +5,8 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 
 import { readMovableImageMetadata } from '../utils/movable-image-metadata.js';
+import { assertTransportStreamVideoProbe } from '../utils/transport-stream.js';
+import { imageRetentionReason, type ImageRetentionReason } from '../utils/image-retention-diagnosis.js';
 import { isKnownAdvertisementImage } from '../utils/local-advertisements.js';
 import { inspectReviewFiles, matchReviewInventory, normalizeReviewPath, parseReviewArchiveInventory } from './local-ingest-review-inventory.js';
 import { readReviewRecovery, reviewHash, reviewPlanHash, reviewPlanSchema, reviewRequestSchema, type LocalIngestReviewPlan, type LocalIngestReviewRequest } from './local-ingest-review-plan.js';
@@ -17,6 +19,7 @@ import { normalizeCreatorIdentity } from '../utils/creator-identity.js';
 import { ArchiveCatalogPipelineService } from './archive-catalog-pipeline-service.js';
 import { preserveDownloadStagedAt } from './archive-download-activity.js';
 import { acquisitionHeldSql } from './archive-local-fulfillment-service.js';
+import { assertPathNotRemoved, assertSourceWorkNotRemoved } from './work-removal-guards.js';
 import {
   localIngestSettingsService,
   type LocalIngestSettingsService,
@@ -33,7 +36,7 @@ import {
   canonicalizeLocalIngestPath,
   LocalIngestPathError
 } from '../utils/local-ingest-paths.js';
-import { ProcessTimeoutError } from '../utils/run-process.js';
+import { ProcessTimeoutError, runProcessWithTimeout } from '../utils/run-process.js';
 import { trustedSevenZip } from '../utils/trusted-seven-zip.js';
 import {
   LocalIngestDestinationError,
@@ -44,7 +47,7 @@ import {
 const SOURCE_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip']);
 const NESTED_ARCHIVE_EXTENSIONS = new Set(['.7z', '.7zz', '.zip', '.rar', '.tar', '.gz', '.bz2', '.xz']);
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
-const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.ts']);
 const ADVERTISEMENT_EXTENSIONS = new Set(['.txt', '.html', '.htm', '.url']);
 const TEMPORARY_SUFFIXES = ['.crdownload', '.tmp', '.downloading', '.part'];
 const EXTRACTION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -352,7 +355,7 @@ type ValidationSummary = {
     automaticPolicy: 1;
     directory: string;
     count: number;
-    files: Array<{ relativePath: string; size: number; sha256: string; reason?: 'pixel_limit' | 'attachment' }>;
+    files: Array<{ relativePath: string; size: number; sha256: string; reason?: ImageRetentionReason | 'attachment' }>;
     verifiedAt: string;
   };
   reviewRecovery?: { plan: LocalIngestReviewPlan; hash: string; acceptedAt: string };
@@ -598,13 +601,23 @@ async function validateImage(filePath: string): Promise<void> {
 }
 
 async function validateVideo(filePath: string): Promise<void> {
-  const result = await runCommand(
+  const transportStream = path.extname(filePath).toLowerCase() === '.ts';
+  const result = await runProcessWithTimeout(
     appConfig.ffprobePath,
-    ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath],
-    60_000
+    ['-v', 'error', '-show_entries', transportStream ? 'format=format_name:stream=codec_type,width,height' : 'format=duration',
+      '-of', transportStream ? 'json' : 'default=noprint_wrappers=1:nokey=1', filePath],
+    60_000,
+    { shell: false }
   ).catch(() => null);
   if (!result || result.code !== 0) {
     throw new LocalIngestFailure('MEDIA_UNREADABLE', `Video cannot be probed: ${path.basename(filePath)}`, true);
+  }
+  if (transportStream) {
+    try {
+      assertTransportStreamVideoProbe(filePath, JSON.parse(result.stdout));
+    } catch {
+      throw new LocalIngestFailure('MEDIA_UNREADABLE', `MPEG-TS 视频无法识别：${path.basename(filePath)}`, true);
+    }
   }
 }
 
@@ -1132,10 +1145,16 @@ export class LocalIngestService {
     ).run(this.timestamp(), id, token);
   }
 
+  private assertJobNotRemoved(job: LocalIngestJobRow): void {
+    assertSourceWorkNotRemoved(this.database, job.source_work_id);
+    assertPathNotRemoved(this.database, job.target_path);
+  }
+
   private async runWithClaimOutcome(
     id: number,
     executor: () => Promise<LocalIngestJob>
   ): Promise<{ job: LocalIngestJob; ownership: 'acquired' | 'joined' | 'unavailable' }> {
+    this.assertJobNotRemoved(this.getJobRow(id));
     const existing = this.inFlightJobs.get(id);
     if (existing) return { job: await existing, ownership: 'joined' };
     const token = this.tryClaim(id);
@@ -1302,12 +1321,15 @@ export class LocalIngestService {
     requireCreatorDirectory = false
   ): Promise<LocalIngestTargetPlan> {
     try {
-      return await this.destinationService(settings).validatePersistedTarget({
+      this.assertJobNotRemoved(job);
+      const plan = await this.destinationService(settings).validatePersistedTarget({
         creatorId: mapping.creator_id,
         targetPath: job.target_path,
         workTitle: this.mappedTargetTitle(mapping),
         requireCreatorDirectory
       });
+      assertPathNotRemoved(this.database, plan.targetPath);
+      return plan;
     } catch (error) {
       return this.destinationFailure(error);
     }
@@ -1900,12 +1922,14 @@ export class LocalIngestService {
       if (item.reason === 'attachment') {
         if (!['.pdf', '.txt', '.url'].includes(extension)) fail('Only an explicitly retained PDF/TXT/URL attachment is supported');
       } else {
-        if (!['.jpg', '.jpeg'].includes(extension)) fail('Pixel-limit retention requires a JPEG');
-        let pixelLimit = false;
+        let diagnosed: ImageRetentionReason | null = null;
         try { await readMovableImageMetadata(path.join(levelTwo, file!.relativePath)); }
-        catch (error) { pixelLimit = error instanceof Error && /Input image exceeds pixel limit/i.test(error.message); }
-        if (!pixelLimit) fail('Default decoder did not confirm the pixel safety limit; no decode exception granted');
+        catch (error) { diagnosed = imageRetentionReason(error, file!.relativePath); }
+        if (diagnosed !== item.reason) fail('Default decoder did not confirm the approved image retention reason; no decode exception granted');
       }
+      const approvedPath = path.join(levelTwo, file!.relativePath), after = await fs.lstat(approvedPath);
+      if (!after.isFile() || after.isSymbolicLink() || after.size !== file!.size
+        || (await this.hashFile(approvedPath)).toUpperCase() !== file!.sha256.toUpperCase()) fail('Retained file changed during decoder verification');
     }
     const afterSource = await fs.stat(job.source_archive_path);
     if (afterSource.size !== source.size || afterSource.mtimeMs !== source.mtimeMs) fail('Source changed during preview');
@@ -2171,7 +2195,7 @@ export class LocalIngestService {
         ? `来源声明${declaredImages[1]}张；可展示${imageCount}张，另保留${retainedImages}张未支持原件，数量与声明不符`
         : `Declared ${declaredImages[1]} images; extracted ${imageCount}`);
     }
-    if (retainedImages) warnings.push(reviewed ? `${retainedImages}张未支持格式或经明确批准的超限图片原件已保留，暂不支持展示` : `${retainedImages}张 HEIC/HEIF/TIFF 原件已保留，暂不支持展示`);
+    if (retainedImages) warnings.push(reviewed ? `${retainedImages}张未支持格式或经明确批准的超限、无法解码图片原件已保留，暂不支持展示` : `${retainedImages}张 HEIC/HEIF/TIFF 原件已保留，暂不支持展示`);
     if (retainedAttachments) warnings.push(`${retainedAttachments}个经明确批准的PDF/TXT/URL附件已保留，不计入图片/视频或未支持图片数量`);
     if (reviewed?.plan.request.removedFiles.length) warnings.push(`${reviewed.plan.request.removedFiles.length}项已明确批准移除的文件保持缺席，未重新解包恢复`);
     if (declaredVideos && Number(declaredVideos[1]) !== videoCount) warnings.push(`Declared ${declaredVideos[1]} videos; extracted ${videoCount}`);
@@ -2304,7 +2328,9 @@ export class LocalIngestService {
         const approval = reviewed?.plan.request.retainedFiles.find(item => comparableRelativePath(item.relativePath) === comparableRelativePath(reviewedPath));
         const original = reviewed?.plan.files.find(item => comparableRelativePath(item.relativePath) === comparableRelativePath(reviewedPath));
         if (!approval || !original || original.sha256 !== file.sha256.toUpperCase() || original.size !== file.size || file.reason !== approval.reason
-          || (approval.reason === 'attachment' ? !['.pdf', '.txt', '.url'].includes(extension) : !['.jpg', '.jpeg'].includes(extension))) fail();
+          || (approval.reason === 'attachment' ? !['.pdf', '.txt', '.url'].includes(extension)
+            : approval.reason === 'pixel_limit' ? !['.jpg', '.jpeg'].includes(extension)
+              : !IMAGE_EXTENSIONS.has(extension) && !['.bmp', '.avif'].includes(extension))) fail();
       }
       const key = comparableRelativePath(file.relativePath);
       if (keys.has(key)) fail();
@@ -2794,6 +2820,7 @@ export class LocalIngestService {
 
   private async reconcile(jobId: number, newlyCommitted = false): Promise<LocalIngestJob> {
     const job = this.getJobRow(jobId);
+    this.assertJobNotRemoved(job);
     const mapping = this.mappingForJob(job);
     const settings = await this.checkedSettings();
     if (!job.target_path || !(await pathExists(job.target_path))) {
@@ -3136,6 +3163,8 @@ export class LocalIngestService {
         summary.reviewCommit = { hash: reviewed.hash, dev: stat.dev.toString(), ino: stat.ino.toString() };
         this.updateJob(id, { summaryJson: JSON.stringify(summary) });
       }
+      this.assertJobNotRemoved(this.getJobRow(id));
+      assertPathNotRemoved(this.database, summary.plannedTargetPath);
       await this.timed(id, 'final_commit', () => fs.rename(summary.readyPath, summary.plannedTargetPath));
       this.updateJob(id, { status: 'reconciling', phase: 'rescanning', targetPath: summary.plannedTargetPath });
       return await this.reconcile(id, true);

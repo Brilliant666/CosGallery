@@ -1,15 +1,14 @@
 import { defineStore } from 'pinia';
 
 import { fetchReels } from '../api/gallery';
-import type { FeedItem, ReelsFeedMode } from '../types/api';
-import { updateCaptionInItems } from '../utils/caption';
+import type { ReelItem, ReelsFeedMode } from '../types/api';
 import { resolveReelsAffinitySnapshot, type ReelsAffinitySnapshot } from '../utils/reels';
 import { useAppStore } from './app';
 
 interface ReelsState {
   mode: ReelsFeedMode;
   loadedMode: ReelsFeedMode | null;
-  items: FeedItem[];
+  items: ReelItem[];
   page: number;
   limit: number;
   hasMore: boolean;
@@ -19,6 +18,7 @@ interface ReelsState {
   seed: number | null;
   affinitySnapshot: ReelsAffinitySnapshot | null;
   activeReelId: number | null;
+  cursor: string | null;
 }
 
 function createReelsSeed(): number {
@@ -43,7 +43,8 @@ export const useReelsStore = defineStore('reels', {
     initialized: false,
     seed: null,
     affinitySnapshot: null,
-    activeReelId: null
+    activeReelId: null,
+    cursor: null
   }),
   getters: {
     activeItem: (state) => state.items.find((item) => item.id === state.activeReelId) ?? state.items[0] ?? null
@@ -89,6 +90,7 @@ export const useReelsStore = defineStore('reels', {
       this.seed = null;
       this.affinitySnapshot = null;
       this.activeReelId = null;
+      this.cursor = null;
     },
 
     async loadInitial(force = false) {
@@ -97,6 +99,7 @@ export const useReelsStore = defineStore('reels', {
       }
 
       const modeChanged = this.syncModeWithDefault(force);
+      if (force) this.seed = null;
       const queueRequiresSeed = this.mode !== 'recent';
       const queueMatchesMode = this.loadedMode === this.mode && (!queueRequiresSeed || this.seed !== null);
 
@@ -111,6 +114,7 @@ export const useReelsStore = defineStore('reels', {
       this.error = null;
       this.initialized = false;
       this.activeReelId = null;
+      this.cursor = null;
       await this.loadMore();
     },
 
@@ -139,15 +143,20 @@ export const useReelsStore = defineStore('reels', {
           this.limit,
           this.mode,
           this.mode === 'recent' ? undefined : this.ensureSeed(),
-          this.mode === 'recommended'
-            ? {
-                lastFolder: this.affinitySnapshot?.lastFolder ?? null,
-                recentFolders: this.affinitySnapshot?.recentFolders ?? []
-              }
-            : {}
+          {
+            ...(this.cursor ? { cursor: this.cursor } : {}),
+            ...(this.mode === 'recommended'
+              ? {
+                  lastFolder: this.affinitySnapshot?.lastFolder ?? null,
+                  recentFolders: this.affinitySnapshot?.recentFolders ?? []
+                }
+              : {})
+          }
         );
 
-        this.items.push(...payload.items);
+        const knownMediaIds = new Set(this.items.map(item => item.mediaId));
+        this.items.push(...payload.items.filter(item => !knownMediaIds.has(item.mediaId)));
+        this.cursor = payload.nextCursor ?? null;
         this.loadedMode = payload.mode ?? this.mode;
         this.page += 1;
         this.hasMore = payload.hasMore;
@@ -174,7 +183,7 @@ export const useReelsStore = defineStore('reels', {
     },
 
     updateImageCaption(id: number, caption: string | null) {
-      this.items = updateCaptionInItems(this.items, id, caption);
+      this.items = this.items.map(item => item.postId === id ? { ...item, caption } : item);
     }
   }
 });

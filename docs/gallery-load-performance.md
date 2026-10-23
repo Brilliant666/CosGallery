@@ -40,10 +40,21 @@ The card contract is `CanonicalWorkSummary` (`representation: 'summary'`):
 | Post ID, folder identity, source path, canonical creator route | Existing navigation and links |
 | Caption/carousel title/filename | Existing display title precedence |
 | Cover thumbnail/preview metadata, width/height, type/duration | 2:3 card, video indicator, fallback |
+| Optional `cardCover` (`imageId`, `filename`, `thumbnailUrl`) | Image thumbnail for a work containing exactly one image and one video |
 | `itemCount`, `imageCount`, `videoCount` | Counts over the same complete work |
 | Sort/taken timestamps, saved state, pagination | Existing order, filters and interactions |
 
-The service maps only this cover; the client creator reading store holds summary
+For a work containing exactly one image and one video, the summary adds
+`cardCover` when both members remain available. The work card uses that image's
+versioned cached thumbnail regardless of filename order. Deleted or trashed
+members do not qualify. Other works keep the existing cover fallback. This is a
+read-time projection of the existing index; it requires no rescan or media moves.
+The page aggregate still reads only the selected Post IDs, with no per-card query.
+Top-level first-media metadata, media-type filtering, detail order and links keep
+their existing meaning. The image cover does not reorder media or change the
+creator's separately configured avatar.
+
+The service maps these cover URLs; the client creator reading store holds summary
 items, not complete details. `mediaItems?: never` prevents treating this type as a
 full media payload. `FeedItem.mediaItems` remains available to other feed/share
 entrances. `WorkGalleryView` retains its existing complete-detail fetch/cache:

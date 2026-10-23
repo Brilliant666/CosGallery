@@ -141,8 +141,100 @@ describe.sequential('reels feed', () => {
       page: 1,
       limit: 8,
       total: 0,
-      hasMore: false
+      hasMore: false,
+      nextCursor: null
     });
+  });
+
+  it('lists every album video once without hydrating the album and preserves a live cursor across writes', async () => {
+    const photo = await createIndexedMedia('album', 'cover-photo.jpg', 1_778_200_004_000);
+    const first = await createIndexedMedia('album', 'first.mp4', 1_778_200_003_000);
+    const second = await createIndexedMedia('album', 'second.mp4', 1_778_200_002_000);
+    const third = await createIndexedMedia('album', 'third.mp4', 1_778_200_001_000);
+    const fourth = await createIndexedMedia('album', 'fourth.mp4', 1_778_200_000_000);
+    const { databaseManager } = await import('../src/db/database.js');
+    const { postRepository } = await import('../src/db/repositories.js');
+    const db = databaseManager.connection;
+    const parent = postRepository.findByImageId(photo.id)!;
+    db.prepare('DELETE FROM post_items').run();
+    db.prepare('DELETE FROM posts WHERE id <> ?').run(parent.id);
+    db.prepare("UPDATE posts SET post_type='carousel' WHERE id=?").run(parent.id);
+    [photo, first, second, third, fourth].forEach((image, index) => db.prepare('INSERT INTO post_items(post_id,image_id,position) VALUES(?,?,?)').run(parent.id,image.id,index+1));
+    const build = vi.spyOn(imageRepository, 'listVisibleVideoCandidates');
+    expect(imageRepository.countVisibleVideoCandidates()).toBe(4);
+    const candidates = imageRepository.listVisibleVideoCandidates();
+    expect(candidates.map(item=>item.id)).toEqual([first.id,second.id,third.id,fourth.id]);
+    expect(candidates.every(item=>item.mediaItems.length===0)).toBe(true);
+    build.mockClear();
+    const page1 = galleryService.getReels(1,1,'recent',9);
+    expect(page1.items[0]).toMatchObject({id:first.id,mediaId:first.id,postId:parent.id,mediaPosition:2,mimeType:'video/mp4',fileSize:2048});
+    expect(page1.items[0]!.mediaItems).toHaveLength(1);
+    expect(page1.items[0]!.previewUrl).toContain(`/api/reels/media/${first.id}/preview?v=`);
+    expect(page1.items[0]!.originalDownloadUrl).toContain('&download=1');
+    expect(postRepository.getVisiblePostSummary(parent.id)).toMatchObject({ id: parent.id, itemCount: 5, imageCount: 1, videoCount: 4, representation: 'summary' });
+    expect(postRepository.getVisiblePostSummary(parent.id)).not.toHaveProperty('mediaItems');
+    db.prepare('UPDATE images SET is_trashed=1 WHERE id=?').run(second.id);
+    likeRepository.upsert(parent.id);
+    await createIndexedMedia('new', 'new.mp4', 1_778_300_000_000);
+    // Independent connection writes must also be visible to the next page.
+    const { DatabaseSync } = await import('node:sqlite');
+    const external = new DatabaseSync(appConfig.databasePath);
+    try { external.prepare('UPDATE images SET is_deleted=1 WHERE id=?').run(third.id); } finally { external.close(); }
+    const page2 = galleryService.getReels(2,1,'recent',9,{},page1.nextCursor!);
+    expect(page2.items.map(item=>item.id)).toEqual([fourth.id]);
+    expect(page2.hasMore).toBe(false);
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(()=>galleryService.getReels(2,1,'recent',9)).toThrow('短片队列已过期');
+  });
+
+  it.each(['secondary', 'removed-linked', 'removed-path'] as const)('excludes %s Work media from candidate pages and playback lookup', async mode => {
+    const video = await createIndexedMedia('artist/album', 'video.mp4', 1_778_200_000_000);
+    const { databaseManager } = await import('../src/db/database.js');
+    const { postRepository } = await import('../src/db/repositories.js');
+    const db = databaseManager.connection;
+    const post = postRepository.findByImageId(video.id)!;
+    db.exec('BEGIN');
+    try {
+      const creator = Number(db.prepare("INSERT INTO archive_catalog_creators(canonical_name,normalized_name,seed_source,seed_source_creator_id) VALUES('Artist','artist','test','artist')").run().lastInsertRowid);
+      const work = Number(db.prepare("INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,'Album')").run(creator).lastInsertRowid);
+      const folder = Number(db.prepare("INSERT INTO archive_catalog_local_creator_folders(gallery_folder_id,creator_id,root_path,relative_path,absolute_path,folder_name,match_status,scanned_at) VALUES(?,?,'root','artist','root/artist','Artist','matched',CURRENT_TIMESTAMP)").run(video.folder_id,creator).lastInsertRowid);
+      const local = Number(db.prepare("INSERT INTO archive_catalog_local_works(local_creator_folder_id,work_id,post_id,relative_path,absolute_path,folder_name,match_status,scanned_at) VALUES(?,?,?,'album','root/artist/album','Album','matched',CURRENT_TIMESTAMP)").run(folder,work,mode==='removed-path'?null:post.id).lastInsertRowid);
+      if(mode==='secondary') {
+        const primary = Number(db.prepare("INSERT INTO archive_catalog_local_works(local_creator_folder_id,work_id,relative_path,absolute_path,folder_name,match_status,scanned_at) VALUES(?,?,'primary','root/artist/primary','Primary','matched',CURRENT_TIMESTAMP)").run(folder,work).lastInsertRowid);
+        db.prepare('UPDATE archive_catalog_works SET primary_local_work_id=? WHERE id=?').run(primary,work);
+      } else {
+        db.prepare("INSERT INTO removal_operations(operation_id,kind,target_id,mode,state,payload_json,created_at,updated_at) VALUES('test','work',?,'trash','completed','{}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)").run(work);
+        db.prepare("INSERT INTO work_removals(work_id,state,operation_id,snapshot_json,created_at) VALUES(?,'trashed','test','{}',CURRENT_TIMESTAMP)").run(work);
+        if(mode==='removed-path') db.prepare('INSERT INTO work_removal_paths(work_id,local_work_id,absolute_path,relative_path) VALUES(?,?,?,?)').run(work,local,'root/artist/album',post.source_path);
+      }
+      expect(imageRepository.listVisibleVideoCandidates()).toEqual([]);
+      expect(imageRepository.listVisibleVideoCandidatesByIds([video.id])).toEqual([]);
+      expect(imageRepository.countVisibleVideoCandidates()).toBe(0);
+      expect(postRepository.getReelPlaybackMedia(video.id)).toBeUndefined();
+      if (mode === 'secondary') expect(postRepository.getGalleryPlaybackMedia(video.id)?.id).toBe(video.id);
+      else expect(postRepository.getGalleryPlaybackMedia(video.id)).toBeUndefined();
+      expect(postRepository.getReelPlaybackImage(post.id)).toBeUndefined();
+      expect(postRepository.getVisiblePostSummary(post.id)).toBeUndefined();
+    } finally { db.exec('ROLLBACK'); }
+  });
+
+  it('does not continue an old queue after a media identity is reassigned to another post',async()=>{
+    await createIndexedMedia('queue','first.mp4',1_778_200_002_000);
+    const second=await createIndexedMedia('queue','second.mp4',1_778_200_001_000);
+    const photo=await createIndexedMedia('queue','photo.jpg',1_778_200_000_000);
+    const {postRepository}=await import('../src/db/repositories.js');
+    const {databaseManager}=await import('../src/db/database.js');
+    const db=databaseManager.connection;
+    const page1=galleryService.getReels(1,1,'recent',7);
+    const original=postRepository.findByImageId(second.id)!;
+    const newOwner=postRepository.findByImageId(photo.id)!;
+    db.prepare('DELETE FROM post_items WHERE post_id=?').run(original.id);
+    db.prepare('DELETE FROM posts WHERE id=?').run(original.id);
+    db.prepare("UPDATE posts SET post_type='carousel' WHERE id=?").run(newOwner.id);
+    db.prepare('INSERT INTO post_items(post_id,image_id,position) VALUES(?,?,2)').run(newOwner.id,second.id);
+    const page2=galleryService.getReels(2,1,'recent',7,{},page1.nextCursor!);
+    expect(page2.items).toEqual([]);
+    expect(imageRepository.listVisibleVideoCandidatesByIds([second.id])[0]).toMatchObject({postId:newOwner.id});
   });
 
   async function createIndexedMedia(

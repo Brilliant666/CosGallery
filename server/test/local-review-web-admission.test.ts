@@ -8,7 +8,7 @@ import { requestTestApp } from './http-test-utils.js';
 
 const closes: Array<() => void> = [];
 const roots: string[] = [];
-async function fixture(extra: Record<string, Buffer> = { '坏图.jpg': Buffer.alloc(0) }) {
+async function fixture(extra: Record<string, Buffer> = { '坏图.jpg': Buffer.alloc(0) }, siblings: string[] = []) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'local-web-folder-review-')); roots.push(root);
   const inbox = path.join(root, '等待区'), gallery = path.join(root, '图库');
   vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('COS_GALLERY_MODE', '1'); vi.stubEnv('PUBLIC_DEMO_MODE', '0');
@@ -27,7 +27,11 @@ async function fixture(extra: Record<string, Buffer> = { '坏图.jpg': Buffer.al
   const directory = path.join(inbox, name); await fs.mkdir(directory);
   await sharp({ create: { width: 16, height: 24, channels: 3, background: '#112244' } }).jpeg().toFile(path.join(directory, '正常.jpg'));
   for (const [filename, bytes] of Object.entries(extra)) await fs.writeFile(path.join(directory, filename), bytes);
-  const preview = await folder.preview({ creatorId: creator, inputRoot: inbox, directories: [name] });
+  for (const sibling of siblings) {
+    const siblingDirectory = path.join(inbox, sibling); await fs.mkdir(siblingDirectory);
+    await sharp({ create: { width: 16, height: 24, channels: 3, background: '#335577' } }).jpeg().toFile(path.join(siblingDirectory, '正常.jpg'));
+  }
+  const preview = await folder.preview({ creatorId: creator, inputRoot: inbox, directories: [name, ...siblings] });
   const plan = { ...preview, confirmed: true, items: preview.items.map(item => ({ ...item, reason: '隔离用户确认独立作品' })) };
   const { scannerService } = await import('../src/services/scanner-service.js');
   const failure = vi.spyOn(scannerService, 'scanCosCreators').mockRejectedValueOnce(new Error('Synthetic after-move interruption'));
@@ -51,6 +55,103 @@ afterEach(async () => {
 });
 
 describe.sequential('web precise review preserves original folder admission', () => {
+  it.each(['review', 'system'])('completes the exact reviewed item receipt when a sibling still has a %s issue', async kind => {
+    const f = await fixture(undefined, ['后续待核对图集']);
+    const immutable = f.db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(f.plan.planId);
+    const { scannerService } = await import('../src/services/scanner-service.js');
+    const original = scannerService.scanCosCreators.bind(scannerService);
+    const scan = vi.spyOn(scannerService, 'scanCosCreators').mockImplementationOnce((...args) => original(...args));
+    if (kind === 'review') scan.mockResolvedValueOnce({ id: 2, started_at: 'now', finished_at: 'now', status: 'failed', scanned_files: 1,
+      new_files: 0, updated_files: 0, removed_files: 0, error_text: 'Input file contains unsupported image format', warning_count: 0, warning_text: null,
+      admissionIssue: { kind: 'review', code: 'MEDIA_CONTENT_REVIEW_REQUIRED', message: '图集中有需要核对的媒体文件', detail: 'Input file contains unsupported image format' } });
+    else scan.mockRejectedValueOnce(Object.assign(new Error('Synthetic sibling storage unavailable'), { code: 'EIO' }));
+    expect((await f.confirm()).status).toBe(202); await f.web.wait(f.sessionId);
+    expect(f.web.get(f.sessionId)).toMatchObject({ status: 'completed', result: { completed: true, message: '本审核图集已完成；其余项目请查看原计划的执行状态。',
+      summary: { images: 1, quarantined: 1 } }, continuation: { totalItems: 2, completedItems: 1, pendingItems: 1 } });
+    expect(f.db.prepare('SELECT state,last_error FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(f.plan.planId, f.item.key)).toEqual({ state: 'completed', last_error: null });
+    const sibling = f.db.prepare('SELECT state,last_error FROM archive_local_admission_items WHERE plan_id=? AND item_key=?').get(f.plan.planId, f.plan.items[1].key)!;
+    expect(sibling.state).toBe('files_verified'); expect(String(sibling.last_error)).toContain(kind === 'review' ? 'MEDIA_CONTENT_REVIEW_REQUIRED' : 'ADMISSION_EXECUTION_PAUSED');
+    expect(f.db.prepare('SELECT payload_json,content_hash FROM archive_local_admission_plans WHERE plan_id=?').get(f.plan.planId)).toEqual(immutable);
+    expect(f.db.prepare('SELECT COUNT(*) n FROM post_items').get()!.n).toBe(1);
+  });
+
+  it.each(['异常.jpg', '异常.png'])('preserves undecodable %s byte-for-byte inside its work and indexes only display media', async filename => {
+    const bytes = Buffer.from('synthetic undecodable image bytes'), f = await fixture({ [filename]: bytes });
+    const original = f.db.prepare('SELECT * FROM archive_local_admission_plans').get();
+    expect(f.web.get(f.sessionId)).toMatchObject({ previewNeedsRefresh: false, continuation: { totalItems: 1, completedItems: 0, pendingItems: 1 } });
+    expect(f.web.files(f.sessionId, { issuesOnly: true }).items).toMatchObject([{ relativePath: filename, issue: 'decode_failed', allowedActions: ['retain_original', 'quarantine'] }]);
+    expect((await f.confirm([{ relativePath: filename, action: 'retain_original', reason: 'pixel_limit' }])).status).toBe(409);
+    const choices = [{ relativePath: filename, action: 'retain_original', reason: 'decode_failed' }];
+    expect((await f.confirm(choices)).status).toBe(202); await f.web.wait(f.sessionId);
+    expect(f.web.get(f.sessionId)).toMatchObject({ status: 'completed', result: { summary: { images: 1, retainedOriginals: 1, quarantined: 0 } }, continuation: { completedItems: 1, pendingItems: 0 } });
+    expect(await fs.readFile(path.join(f.item.targetPath, '_未支持格式原件', filename))).toEqual(bytes);
+    await expect(fs.stat(path.join(f.item.targetPath, filename))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.db.prepare('SELECT COUNT(*) n FROM post_items').get()!.n).toBe(1);
+    expect(f.db.prepare('SELECT * FROM archive_local_admission_plans').get()).toEqual(original);
+    expect(f.db.prepare('SELECT COUNT(*) n FROM local_review_web_file_actions').get()!.n).toBe(0);
+    expect((await f.confirm(choices)).status).toBe(202);
+    expect(await fs.readFile(path.join(f.item.targetPath, '_未支持格式原件', filename))).toEqual(bytes);
+    expect((await f.post(`/sessions/${f.sessionId}/refresh`, { requestKey: 'after-confirm' })).status).toBe(409);
+  });
+
+  it('requires explicit refresh of an old unconfirmed preview and does not change its original plan', async () => {
+    const f = await fixture({ '异常.jpg': Buffer.from('undecodable original') });
+    const original = f.db.prepare('SELECT * FROM archive_local_admission_plans').get();
+    const baseline = JSON.parse(String(f.db.prepare('SELECT baseline_json FROM local_review_web_sessions WHERE id=?').get(f.sessionId)!.baseline_json));
+    delete baseline.rulesVersion; baseline.files.find((file: {relativePath:string}) => file.relativePath === '异常.jpg').allowedActions = ['quarantine'];
+    f.db.prepare('UPDATE local_review_web_sessions SET baseline_json=? WHERE id=?').run(JSON.stringify(baseline), f.sessionId);
+    const before = f.db.prepare('SELECT * FROM local_review_web_sessions WHERE id=?').get(f.sessionId);
+    expect(f.web.get(f.sessionId).previewNeedsRefresh).toBe(true);
+    f.web.files(f.sessionId, { issuesOnly: true });
+    expect(f.db.prepare('SELECT * FROM local_review_web_sessions WHERE id=?').get(f.sessionId)).toEqual(before);
+    expect((await f.confirm([{ relativePath: '异常.jpg', action: 'quarantine', reason: 'damaged' }])).status).toBe(409);
+    expect((await f.post(`/sessions/${f.sessionId}/refresh`, { requestKey: 'refresh-preview' })).status).toBe(202);
+    await f.web.wait(f.sessionId);
+    expect(f.web.get(f.sessionId)).toMatchObject({ status: 'ready', previewNeedsRefresh: false, confirmed: false });
+    expect(f.web.files(f.sessionId, { issuesOnly: true }).items).toMatchObject([{ issue: 'decode_failed', allowedActions: ['retain_original', 'quarantine'] }]);
+    expect(f.db.prepare('SELECT * FROM archive_local_admission_plans').get()).toEqual(original);
+    expect(await fs.readFile(path.join(f.item.targetPath, '异常.jpg'), 'utf8')).toBe('undecodable original');
+  });
+
+  it.each(['EACCES', 'ENOMEM'])('does not turn %s into permission to preserve unreadable media', async code => {
+    const f = await fixture({ '异常.jpg': Buffer.from('undecodable original') });
+    f.db.prepare("UPDATE local_review_web_sessions SET baseline_json=json_remove(baseline_json,'$.rulesVersion') WHERE id=?").run(f.sessionId);
+    // Linux Sharp opens files itself; inject at the shared metadata boundary so
+    // the I/O/resource error reaches classification on every platform.
+    const metadata = await import('../src/utils/movable-image-metadata.js');
+    const originalRead = metadata.readMovableImageMetadata;
+    const read = vi.spyOn(metadata, 'readMovableImageMetadata').mockImplementation(async filename => {
+      if (filename === path.join(f.item.targetPath, '异常.jpg')) throw Object.assign(new Error('Input buffer contains unsupported image format'), { code });
+      return originalRead(filename);
+    });
+    await f.post(`/sessions/${f.sessionId}/refresh`, { requestKey: `refresh-${code}` }); await f.web.wait(f.sessionId);
+    expect(read).toHaveBeenCalledWith(path.join(f.item.targetPath, '异常.jpg'));
+    expect(f.web.get(f.sessionId)).toMatchObject({ status: 'failed', confirmed: false });
+    expect(f.db.prepare('SELECT state FROM archive_local_admission_items').get()!.state).toBe('files_verified');
+    expect(f.db.prepare("SELECT COUNT(*) n FROM archive_catalog_work_decisions WHERE kind='admission_file_removal'").get()!.n).toBe(0);
+  });
+
+  it('resumes an interrupted retained-file rename without moving or approving the file twice', async () => {
+    const bytes = Buffer.from('undecodable original'), f = await fixture({ '异常.jpg': bytes });
+    const rename = fs.rename.bind(fs);
+    const interruption = vi.spyOn(fs, 'rename').mockImplementationOnce(async (...args) => { await rename(...args); throw new Error('Synthetic interruption after retained rename'); });
+    await f.confirm([{ relativePath: '异常.jpg', action: 'retain_original', reason: 'decode_failed' }]); await f.web.wait(f.sessionId);
+    expect(f.web.get(f.sessionId).status).toBe('failed'); interruption.mockRestore();
+    f.web.retry(f.sessionId, 'continue-retention'); await f.web.wait(f.sessionId);
+    expect(f.web.get(f.sessionId).status, f.web.get(f.sessionId).error ?? '').toBe('completed');
+    expect(await fs.readFile(path.join(f.item.targetPath, '_未支持格式原件', '异常.jpg'))).toEqual(bytes);
+    expect(f.db.prepare("SELECT COUNT(*) n FROM archive_catalog_work_decisions WHERE kind='admission_file_removal'").get()!.n).toBe(1);
+  });
+
+  it('refuses retention when no normal display media would remain', async () => {
+    const f = await fixture({ '正常.jpg': Buffer.from('undecodable replacement'), '异常.png': Buffer.from('undecodable png') });
+    const choices = ['正常.jpg', '异常.png'].map(relativePath => ({ relativePath, action: 'retain_original', reason: 'decode_failed' }));
+    const reply = await f.confirm(choices);
+    expect(reply.status).toBe(409); expect(reply.body.message).toContain('没有可正常展示');
+    expect(f.web.get(f.sessionId).confirmed).toBe(false);
+    await expect(fs.stat(path.join(f.item.targetPath, '_未支持格式原件'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('uses original recover and actual scoped indexing without creating a Stage3 history', async () => {
     const f = await fixture(); const original = f.db.prepare('SELECT * FROM archive_local_admission_plans').get();
     const identity = f.db.prepare('SELECT work_id,local_work_id FROM archive_local_admission_items').get();
@@ -144,12 +245,14 @@ describe.sequential('web precise review preserves original folder admission', ()
     const { authService } = await import('../src/services/auth-service.js');
     const endpoint = `/api/admin/local-review/sessions/${f.sessionId}`;
     expect((await requestTestApp(app, 'POST', endpoint + '/retry', {}, { requestKey: 'forbidden' })).status).toBe(403);
+    expect((await requestTestApp(app, 'POST', endpoint + '/refresh', {}, { requestKey: 'forbidden-refresh' })).status).toBe(403);
     authService.setAdminPassword('synthetic-admin-password'); authService.setViewerAccess('password', 'synthetic-viewer-password');
     expect((await requestTestApp(app, 'GET', endpoint)).status).toBe(401);
     const login = await requestTestApp(app, 'POST', '/api/auth/login', { 'x-foldergram-intent': '1' }, { password: 'synthetic-viewer-password' });
     expect(login.status).toBe(200); const cookie = login.headers.get('set-cookie')!.split(';')[0];
     expect((await requestTestApp(app, 'GET', endpoint, { cookie })).status).toBe(403);
     expect((await requestTestApp(app, 'POST', endpoint + '/retry', { cookie, 'x-foldergram-intent': '1' }, { requestKey: 'denied' })).status).toBe(403);
+    expect((await requestTestApp(app, 'POST', endpoint + '/refresh', { cookie, 'x-foldergram-intent': '1' }, { requestKey: 'denied-refresh' })).status).toBe(403);
     expect(f.web.get(f.sessionId).status).toBe('ready');
   });
 });

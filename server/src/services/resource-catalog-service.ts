@@ -74,6 +74,7 @@ export class ResourceCatalogService {
   private selection(creatorId: number | null, filter: ResourceCatalogFilter) {
     const conditions = ['s.revision IS NOT NULL', 'EXISTS (SELECT 1 FROM archive_catalog_creators c WHERE c.id=r.creator_id)',
       'EXISTS (SELECT 1 FROM archive_catalog_works w WHERE w.id=r.work_id AND w.creator_id=r.creator_id)',
+      'NOT EXISTS (SELECT 1 FROM work_removals removed WHERE removed.work_id=r.work_id)',
       '(r.primary_post_id IS NULL OR EXISTS (SELECT 1 FROM posts p WHERE p.id=r.primary_post_id AND p.is_deleted=0 AND p.is_trashed=0))'];
     const args: SQLInputValue[] = [];
     if (creatorId !== null) { conditions.push('r.creator_id=?'); args.push(creatorId); }

@@ -116,6 +116,17 @@ export interface FeedItem {
   itemCount?: number;
 }
 
+/** One video media item. id is the media ID; parent post actions use postId. */
+export interface ReelItem extends FeedItem {
+  mediaId: number;
+  postId: number;
+  mediaPosition: number;
+  creatorId: number | null;
+  mimeType: string;
+  fileSize: number;
+  originalDownloadUrl: string;
+}
+
 // Reading-list entries cannot stand in for ImageDetail in the gallery/Viewer.
 // Other feed and share endpoints still carry their existing mediaItems payload.
 export interface CanonicalWorkSummary extends Omit<FeedItem, 'mediaItems'> {
@@ -124,6 +135,7 @@ export interface CanonicalWorkSummary extends Omit<FeedItem, 'mediaItems'> {
   itemCount: number;
   imageCount: number;
   videoCount: number;
+  cardCover?: { imageId: number; filename: string; thumbnailUrl: string };
   mediaItems?: never;
 }
 
@@ -192,7 +204,8 @@ export interface PaginatedFeed {
 
 export interface PaginatedReels {
   mode?: ReelsFeedMode;
-  items: FeedItem[];
+  items: ReelItem[];
+  nextCursor?: string | null;
   page: number;
   limit: number;
   total: number;

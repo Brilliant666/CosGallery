@@ -3007,17 +3007,17 @@ async function runLibraryRebuild() {
   rebuilding.value = true;
   rebuildError.value = null;
   confirmRebuildOpen.value = false;
-  appStore.markLibraryRebuildStarted();
-  feedStore.resetForRebuild();
-  foldersStore.resetForRebuild();
-  likesStore.resetForRebuild();
-  momentsStore.resetForRebuild();
-  viewerStore.reset();
-
   try {
     const request = triggerLibraryRebuild();
     void warmScanStatus();
     await request;
+    // Rebuild may be rejected before touching the index. Preserve cached views
+    // until the server confirms the rebuild completed.
+    feedStore.resetForRebuild();
+    foldersStore.resetForRebuild();
+    likesStore.resetForRebuild();
+    momentsStore.resetForRebuild();
+    viewerStore.reset();
     await appStore.fetchStats({ background: true });
     await loadAdminStats().catch(() => {});
     await Promise.all([

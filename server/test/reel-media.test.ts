@@ -27,9 +27,13 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
     ({ databaseManager: database } = await import('../src/db/database.js'));
     playback = await import('../src/services/reel-playback-service.js');
     versions = await import('../src/utils/derivative-version.js');
-    const { serveReelMedia } = await import('../src/routes/reel-media.js');
+    const { serveReelMedia, serveReelPreview } = await import('../src/routes/reel-media.js');
     const app = express();
     for (const kind of ['original', 'remux'] as const) app.get(`/api/reels/:id/${kind}`, async (req, res) => { await serveReelMedia(req, res, Number(req.params.id), kind); });
+    for (const kind of ['original', 'remux'] as const) app.get(`/api/reels/media/:id/${kind}`, async (req, res) => { await serveReelMedia(req, res, Number(req.params.id), kind, 'media'); });
+    app.get('/api/reels/media/:id/preview', async (req,res)=>{ await serveReelPreview(req,res,Number(req.params.id)); });
+    for (const kind of ['original', 'remux'] as const) app.get(`/api/gallery/media/:id/${kind}`, async (req, res) => { await serveReelMedia(req, res, Number(req.params.id), kind, 'gallery-media'); });
+    app.get('/api/gallery/media/:id/preview', async (req,res)=>{ await serveReelPreview(req,res,Number(req.params.id),'gallery-media'); });
     server = http.createServer(app);
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
@@ -51,8 +55,8 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
     vi.resetModules();
     await fs.rm(root, { recursive: true, force: true });
   });
-  async function fixture(extension = '.mov') {
-    const filename = `clip${extension}`;
+  async function fixture(extension = '.mov', name = 'clip') {
+    const filename = `${name}${extension}`;
     const absolutePath = path.join(config.galleryRoot, filename);
     await fs.writeFile(absolutePath, 'synthetic-source-original');
     const stat = await fs.stat(absolutePath);
@@ -62,6 +66,88 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
     const result = await playback.resolveReelPlayback(post.id, extension !== '.mp4');
     return { image, post, url: new URL(extension === '.mp4' ? result.originalUrl! : result.remuxUrl!, origin) };
   }
+  it('serves distinct album videos and downloads, closes warm media sources after recycle, and retains legacy post scope', async () => {
+    const first = await fixture('.mp4','first');
+    const second = await fixture('.mov','second');
+    const db=database.connection;
+    db.prepare('DELETE FROM post_items WHERE post_id=?').run(second.post.id);
+    db.prepare('DELETE FROM posts WHERE id=?').run(second.post.id);
+    db.prepare("UPDATE posts SET post_type='carousel' WHERE id=?").run(first.post.id);
+    db.prepare('INSERT INTO post_items(post_id,image_id,position) VALUES(?,?,2)').run(first.post.id,second.image.id);
+    const plan=await playback.resolveReelMediaPlayback(second.image.id,true);
+    expect(plan.originalUrl).toContain(`/api/reels/media/${second.image.id}/original`);
+    expect(plan.previewUrl).toContain(`/api/reels/media/${second.image.id}/preview`);
+    await expect(playback.resolveReelPlayback(first.post.id)).rejects.toMatchObject({status:404});
+    const download=await fetch(new URL(`${plan.originalUrl!}&download=1`,origin));
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-disposition')).toContain('second.mov');
+    expect(await download.text()).toBe('synthetic-source-original');
+    const output=path.join(config.previewsDir,second.image.preview_path);
+    const previewVersion=versions.imageDerivativeVersion(second.image,'preview');
+    await versions.writeVersionedDerivative(second.image.absolute_path,output,'preview','video',false,async temporary=>{await fs.writeFile(temporary,'cached-preview');},{expectedVersion:previewVersion,validate:()=>{}});
+    const previewUrl=new URL(`/api/reels/media/${second.image.id}/preview?v=${previewVersion}`,origin);
+    expect((await fetch(previewUrl)).status).toBe(200);
+    expect((await fetch(new URL(plan.remuxUrl!,origin))).status).toBe(200);
+    db.prepare('UPDATE images SET is_trashed=1 WHERE id=?').run(second.image.id);
+    for(const url of [plan.originalUrl!,plan.remuxUrl!,previewUrl.toString()]) expect((await fetch(new URL(url,origin))).status).toBe(404);
+    expect((await playback.resolveReelMediaPlayback(first.image.id)).originalUrl).toContain(`/media/${first.image.id}/original`);
+    db.prepare('UPDATE images SET is_trashed=0 WHERE id=?').run(second.image.id);
+    db.prepare('UPDATE posts SET is_trashed=1 WHERE id=?').run(first.post.id);
+    for(const url of [plan.originalUrl!,plan.remuxUrl!,previewUrl.toString()]) expect((await fetch(new URL(url,origin))).status).toBe(404);
+  });
+  it.each(['single', 'carousel'] as const)('serves readable secondary %s gallery video without adding it to Reels', async postType => {
+    const { image, post } = await fixture('.mp4');
+    const db = database.connection;
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE posts SET post_type=? WHERE id=?').run(postType, post.id);
+      const creator = Number(db.prepare("INSERT INTO archive_catalog_creators(canonical_name,normalized_name,seed_source,seed_source_creator_id) VALUES('Artist','artist','test','artist')").run().lastInsertRowid);
+      const work = Number(db.prepare("INSERT INTO archive_catalog_works(creator_id,display_title) VALUES(?,'Album')").run(creator).lastInsertRowid);
+      const folder = Number(db.prepare("INSERT INTO archive_catalog_local_creator_folders(gallery_folder_id,creator_id,root_path,relative_path,absolute_path,folder_name,match_status,scanned_at) VALUES(?,?,'root','artist','root/artist','Artist','matched',CURRENT_TIMESTAMP)").run(image.folder_id,creator).lastInsertRowid);
+      db.prepare("INSERT INTO archive_catalog_local_works(local_creator_folder_id,work_id,post_id,relative_path,absolute_path,folder_name,match_status,scanned_at) VALUES(?,?,?,'secondary','root/artist/secondary','Secondary','matched',CURRENT_TIMESTAMP)").run(folder,work,post.id);
+      const primary = Number(db.prepare("INSERT INTO archive_catalog_local_works(local_creator_folder_id,work_id,relative_path,absolute_path,folder_name,match_status,scanned_at) VALUES(?,?,'primary','root/artist/primary','Primary','matched',CURRENT_TIMESTAMP)").run(folder,work).lastInsertRowid);
+      db.prepare('UPDATE archive_catalog_works SET primary_local_work_id=? WHERE id=?').run(primary,work);
+      await expect(playback.resolveReelMediaPlayback(image.id)).rejects.toMatchObject({status:404});
+      const plan = await playback.resolveGalleryMediaPlayback(image.id);
+      expect(plan.originalUrl).toContain(`/api/gallery/media/${image.id}/original?v=`);
+      expect(plan.previewUrl).toContain(`/api/gallery/media/${image.id}/preview?v=`);
+      expect(plan.previewReady).toBe(false);
+      expect(inspect).not.toHaveBeenCalled();
+      expect(writer).not.toHaveBeenCalled();
+      const response = await fetch(new URL(plan.originalUrl!,origin), {headers:{Range:'bytes=0-8'}});
+      expect(response.status).toBe(206);
+      expect(await response.text()).toBe('synthetic');
+      expect(inspect).not.toHaveBeenCalled();
+      expect(writer).not.toHaveBeenCalled();
+      const fallback = await playback.resolveGalleryMediaPlayback(image.id,true);
+      expect(fallback.remuxUrl).toContain(`/api/gallery/media/${image.id}/remux?v=`);
+      expect(writer).not.toHaveBeenCalled();
+      const remux = await fetch(new URL(fallback.remuxUrl!,origin));
+      expect(remux.status).toBe(200);
+      expect(await remux.text()).toBe('synthetic-lossless-output');
+    } finally { db.exec('ROLLBACK'); }
+  });
+
+  it.each(['deleted-image','trashed-image','deleted-post','trashed-post'] as const)('closes all warm gallery sources after %s', async state => {
+    const {image,post} = await fixture('.mp4');
+    const plan = await playback.resolveGalleryMediaPlayback(image.id,true);
+    const output = path.join(config.previewsDir,image.preview_path);
+    await versions.writeVersionedDerivative(image.absolute_path,output,'preview','video',false,async temporary=>{await fs.writeFile(temporary,'cached-preview');});
+    const urls = [plan.originalUrl!,plan.remuxUrl!,plan.previewUrl];
+    for (const url of urls) {
+      const response = await fetch(new URL(url,origin));
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    const table = state.endsWith('image') ? 'images' : 'posts';
+    const column = state.startsWith('deleted') ? 'is_deleted' : 'is_trashed';
+    database.connection.prepare(`UPDATE ${table} SET ${column}=1 WHERE id=?`).run(table==='images'?image.id:post.id);
+    await expect(playback.resolveGalleryMediaPlayback(image.id)).rejects.toMatchObject({status:404});
+    writer.mockClear();
+    for (const url of urls) expect((await fetch(new URL(url,origin))).status).toBe(404);
+    expect(writer).not.toHaveBeenCalled();
+  });
+
   it('singleflights cold remux, supports Range and reuses separately stamped bytes', async () => {
     const { image, url } = await fixture();
     const responses = await Promise.all([fetch(url), fetch(url)]);
@@ -81,6 +167,28 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
     expect(invalid.headers.get('cache-control')).toBe('no-store');
     expect(writer).toHaveBeenCalledOnce();
   });
+
+  it.each(['reels','gallery'].flatMap(scope => ['trash','identity'].map(change => ({scope,change}))))('rejects $scope preview scope $change changes during the cache read with a known error',async ({scope,change})=>{
+    const {image,post}=await fixture('.mp4');
+    const output=path.join(config.previewsDir,image.preview_path);
+    const version=versions.imageDerivativeVersion(image,'preview');
+    await versions.writeVersionedDerivative(image.absolute_path,output,'preview','video',false,async temporary=>{await fs.writeFile(temporary,'cached-preview');},{expectedVersion:version,validate:()=>{}});
+    const original=fs.readFile.bind(fs);
+    let changed=false;
+    vi.spyOn(fs,'readFile').mockImplementation(async(...args:Parameters<typeof fs.readFile>)=>{
+      const result=await original(...args);
+      if(!changed && String(args[0]).startsWith(output)) {
+        changed=true;
+        if(change==='trash') database.connection.prepare('UPDATE posts SET is_trashed=1 WHERE id=?').run(post.id);
+        else database.connection.prepare("UPDATE images SET checksum_or_fingerprint='replacement' WHERE id=?").run(image.id);
+      }
+      return result;
+    });
+    const response=await fetch(new URL(`/api/${scope}/media/${image.id}/preview?v=${version}`,origin));
+    expect(changed).toBe(true);
+    expect(response.status).toBe(change==='trash'?404:409);
+    expect(await response.json()).toMatchObject({code:change==='trash'?'REEL_NOT_FOUND':'SOURCE_INDEX_OUTDATED'});
+  });
   it('delivers original bytes and Range without generating any output', async () => {
     const { url } = await fixture('.mp4');
     const response = await fetch(url, { headers: { Range: 'bytes=0-8' } });
@@ -90,7 +198,7 @@ describe.sequential('scoped reel original and remux HTTP delivery', () => {
     expect(inspect).not.toHaveBeenCalled();
   });
 
-  it.each(['.mov', '.mkv', '.m4v', '.webm'])('serves %s original GET and HEAD without probing or generating', async extension => {
+  it.each(['.mov', '.mkv', '.m4v', '.webm', '.ts'])('serves %s original GET and HEAD without probing or generating', async extension => {
     const { image, post } = await fixture(extension);
     inspect.mockClear();
     const result = await playback.resolveReelPlayback(post.id);

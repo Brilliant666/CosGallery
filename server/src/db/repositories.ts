@@ -1,9 +1,12 @@
 import { databaseManager } from './database.js';
 import { createUnchangedReadCache } from './unchanged-read-cache.js';
 import { effectivePostSortSql } from './work-sort-sql.js';
+import { getReelOriginalVersion } from '../utils/reel-source-version.js';
+import { derivativeVersion, derivativeSourceVersion } from '../utils/derivative-version.js';
 import { SHARE_SESSION_SECRET_SETTING_KEY } from '../constants/app-setting-keys.js';
 import { normalizePath, safeJoin } from '../utils/path-utils.js';
 import { resolveUniqueSlug, slugifyFolderName } from '../utils/slug.js';
+import { RequestInputError } from '../utils/request-input-error.js';
 import type {
   AppSettingRecord,
   CollectionMembershipRecord,
@@ -62,6 +65,10 @@ const EFFECTIVE_FEED_TIME_SQL = 'COALESCE(posts.taken_at, posts.sort_timestamp)'
 const EFFECTIVE_IMAGE_FEED_TIME_SQL = 'COALESCE(images.taken_at, images.sort_timestamp)';
 const DEFAULT_COLLECTION_SLUG = 'saved';
 const DEFAULT_COLLECTION_NAME = 'Saved';
+const LEGACY_TRASH_SCOPE_SQL = `NOT EXISTS (
+  SELECT 1 FROM archive_catalog_local_works removed_local JOIN work_removals removed_work ON removed_work.work_id=removed_local.work_id
+  WHERE removed_local.post_id=posts.id)
+  AND NOT EXISTS (SELECT 1 FROM media_trash_entries removed_media WHERE removed_media.post_id=posts.id AND removed_media.active=1)`;
 const COVER_FILENAMES = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp', 'cover.avif', 'cover.gif'] as const;
 const COVER_FILENAME_SQL = COVER_FILENAMES.map((name) => `'${name}'`).join(', ');
 const NORMAL_FOLDER_ROLE_SQL = "folders.role = 'normal'";
@@ -247,6 +254,45 @@ const WORK_DISPLAY_TITLE_SQL = `(SELECT work.display_title FROM archive_catalog_
   JOIN archive_catalog_works work ON work.id=copy.work_id
   WHERE copy.post_id=posts.id AND copy.identity_policy IN ('manual','local_only') ORDER BY copy.id LIMIT 1)`;
 
+const READABLE_VIDEO_WHERE_SQL = `${READABLE_POST_WHERE_SQL}
+  AND images.media_type='video' AND images.is_deleted=0 AND images.is_trashed=0
+  AND LOWER(images.filename) NOT IN (${COVER_FILENAME_SQL})
+  AND NOT EXISTS(SELECT 1 FROM media_trash_entries recycled WHERE recycled.image_id=images.id AND recycled.active=1)
+  AND NOT EXISTS(SELECT 1 FROM archive_catalog_local_works copy JOIN work_removals removed ON removed.work_id=copy.work_id WHERE copy.post_id=posts.id)
+  AND NOT EXISTS(SELECT 1 FROM work_removal_paths held JOIN work_removals removed ON removed.work_id=held.work_id WHERE held.relative_path=posts.source_path)`;
+const VISIBLE_REEL_WHERE_SQL = `${READABLE_VIDEO_WHERE_SQL} AND ${DEFAULT_WORK_COPY_SQL}`;
+const REEL_FROM_SQL = `FROM images JOIN post_items ON post_items.image_id=images.id
+  JOIN posts ON posts.id=post_items.post_id JOIN folders ON folders.id=posts.folder_id`;
+const REEL_ORDER_SQL = 'images.sort_timestamp DESC, images.id DESC';
+const REEL_SELECT_SQL = `SELECT images.id,images.id AS mediaId,posts.id AS postId,post_items.position AS mediaPosition,
+  (SELECT CASE WHEN COUNT(DISTINCT cf.creator_id)=1 THEN MIN(cf.creator_id) ELSE NULL END FROM archive_catalog_local_creator_folders cf
+    JOIN archive_catalog_creators cc ON cc.id=cf.creator_id AND cc.is_active=1
+    WHERE cf.gallery_folder_id=posts.folder_id AND cf.is_active=1 AND cf.match_status='matched') AS creatorId,
+  posts.folder_id AS folderId,folders.slug AS folderSlug,folders.name AS folderName,folders.folder_path AS folderPath,
+  images.filename,posts.caption,posts.post_type AS postType,posts.content_rating AS contentRating,posts.source_path AS sourcePath,
+  ${WORK_DISPLAY_TITLE_SQL} AS workDisplayTitle,images.width,images.height,images.media_type AS mediaType,
+  images.duration_ms AS durationMs,images.is_animated AS isAnimated,images.mime_type AS mimeType,images.file_size AS fileSize,
+  printf('%lld:%lld',images.file_size,round(images.mtime_ms)) AS derivativeSourceVersion,
+  images.thumbnail_path AS thumbnailUrl,images.preview_path AS previewUrl,images.playback_strategy AS playbackStrategy,
+  images.sort_timestamp AS sortTimestamp,images.taken_at AS takenAt,1 AS itemCount,${POST_SAVED_SELECT_SQL},
+  places.id AS placeId,places.slug AS placeSlug,places.display_name AS placeName,places.kind AS placeKind,places.is_approximate AS placeIsApproximate,
+  likes.created_at AS likedAt,images.relative_path AS reelSourcePath,images.checksum_or_fingerprint AS reelFingerprint,images.mtime_ms AS reelMtimeMs
+  ${REEL_FROM_SQL} LEFT JOIN places ON places.id=posts.place_id LEFT JOIN likes ON likes.post_id=posts.id`;
+
+function mapReelCandidates(rows: unknown[], withMedia: boolean): ReelCandidate[] {
+  return (rows as Array<ReelCandidate & {reelSourcePath:string;reelFingerprint:string;reelMtimeMs:number}>).map(row=>{
+    const {reelSourcePath,reelFingerprint,reelMtimeMs,...item}=row;
+    const version=getReelOriginalVersion({id:item.id,relative_path:reelSourcePath,checksum_or_fingerprint:reelFingerprint,file_size:item.fileSize,mtime_ms:reelMtimeMs});
+    const previewVersion=derivativeVersion(derivativeSourceVersion(item.fileSize,reelMtimeMs),'preview','video');
+    return {...item,sourceIdentity:`${item.postId}:${version}`,scopedPreviewUrl:`/api/reels/media/${item.mediaId}/preview?v=${previewVersion}`,originalDownloadUrl:`/api/reels/media/${item.mediaId}/original?v=${version}&download=1`,mediaItems:withMedia?[{
+      imageId:item.mediaId,position:item.mediaPosition,filename:item.filename,width:item.width,height:item.height,mediaType:item.mediaType,
+      durationMs:item.durationMs,isAnimated:item.isAnimated??false,thumbnailUrl:item.thumbnailUrl,previewUrl:item.previewUrl,
+      derivativeSourceVersion:item.derivativeSourceVersion,playbackStrategy:(item as ReelCandidate & {playbackStrategy?:PlaybackStrategy}).playbackStrategy,
+      mimeType:item.mimeType,fileSize:item.fileSize
+    }]:[]};
+  });
+}
+
 const BASE_POST_SELECT_SQL = `
   SELECT
     posts.id,
@@ -284,6 +330,44 @@ const BASE_POST_SELECT_SQL = `
   JOIN images ON images.id = post_items.image_id
   LEFT JOIN places ON places.id = posts.place_id
 `;
+
+type WorkSummaryProjection = Pick<CanonicalWorkSummary, 'itemCount' | 'imageCount' | 'videoCount' | 'cardCover'>;
+
+function readWorkSummaryProjections(postIds: number[]): Map<number, WorkSummaryProjection> {
+  if (postIds.length === 0) return new Map();
+  // Keep the existing member counts and first-media contract. Only an exact,
+  // available image/video pair gets a separate card cover, scoped to this page.
+  const rows = database.prepare(`
+    WITH member_counts AS (
+      SELECT pi.post_id AS postId, COUNT(*) AS itemCount,
+        SUM(CASE WHEN img.media_type = 'image' THEN 1 ELSE 0 END) AS imageCount,
+        SUM(CASE WHEN img.media_type = 'video' THEN 1 ELSE 0 END) AS videoCount,
+        MAX(CASE WHEN img.media_type = 'image' THEN img.id END) AS imageId,
+        SUM(CASE WHEN img.is_deleted != 0 OR img.is_trashed != 0 OR EXISTS (
+          SELECT 1 FROM media_trash_entries recycled WHERE recycled.image_id = img.id AND recycled.active = 1
+        ) THEN 1 ELSE 0 END) AS unavailableCount
+      FROM post_items pi JOIN images img ON img.id = pi.image_id
+      WHERE pi.post_id IN (${postIds.map(() => '?').join(', ')})
+      GROUP BY pi.post_id
+    )
+    SELECT counts.postId, counts.itemCount, counts.imageCount, counts.videoCount,
+      cover.id AS coverImageId, cover.filename AS coverFilename, cover.thumbnail_path AS coverThumbnailPath,
+      CASE WHEN cover.id IS NOT NULL THEN printf('%lld:%lld', cover.file_size, round(cover.mtime_ms)) END AS coverSourceVersion
+    FROM member_counts counts
+    LEFT JOIN images cover ON counts.itemCount = 2 AND counts.imageCount = 1 AND counts.videoCount = 1
+      AND counts.unavailableCount = 0 AND cover.id = counts.imageId
+  `).all(...postIds) as Array<{
+    postId: number; itemCount: number; imageCount: number; videoCount: number;
+    coverImageId: number | null; coverFilename: string | null; coverThumbnailPath: string | null; coverSourceVersion: string | null;
+  }>;
+  return new Map(rows.map(row => [row.postId, {
+    itemCount: row.itemCount, imageCount: row.imageCount, videoCount: row.videoCount,
+    ...(row.coverImageId === null ? {} : { cardCover: {
+      imageId: row.coverImageId, filename: row.coverFilename!, thumbnailUrl: row.coverThumbnailPath!,
+      derivativeSourceVersion: row.coverSourceVersion!
+    } })
+  }]));
+}
 
 const FOLDER_SUMMARY_SELECT_SQL = `
   SELECT
@@ -1796,66 +1880,47 @@ export const postRepository = {
   },
 
   getReelPlaybackImage(postId: number): ImageRecord | undefined {
-    return database.prepare(`
-      SELECT images.* FROM posts
-      JOIN folders ON folders.id = posts.folder_id
-      JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
-      JOIN images ON images.id = post_items.image_id
-      WHERE posts.id = ? AND ${VISIBLE_POST_WHERE_SQL}
-        AND posts.post_type = 'single' AND images.media_type = 'video'
-        AND images.is_deleted = 0 AND images.is_trashed = 0
-        AND LOWER(images.filename) NOT IN (${COVER_FILENAME_SQL})
-        AND (SELECT COUNT(*) FROM post_items WHERE post_id = posts.id) = 1
-    `).get(postId) as ImageRecord | undefined;
+    return database.prepare(`SELECT images.* ${REEL_FROM_SQL}
+      WHERE posts.id=? AND ${VISIBLE_REEL_WHERE_SQL} AND posts.post_type='single'
+        AND (SELECT COUNT(*) FROM post_items member WHERE member.post_id=posts.id)=1`).get(postId) as ImageRecord | undefined;
+  },
+
+  getVisiblePostSummary(postId: number): CanonicalWorkSummary | undefined {
+    const row = database.prepare(`${BASE_POST_SELECT_SQL} WHERE posts.id=? AND ${VISIBLE_POST_WHERE_SQL}
+      AND NOT EXISTS(SELECT 1 FROM archive_catalog_local_works copy JOIN work_removals removed ON removed.work_id=copy.work_id WHERE copy.post_id=posts.id)
+      AND NOT EXISTS(SELECT 1 FROM work_removal_paths held JOIN work_removals removed ON removed.work_id=held.work_id WHERE held.relative_path=posts.source_path)`)
+      .get(postId) as Omit<FeedPost, 'mediaItems'> | undefined;
+    if (!row) return undefined;
+    const counts = readWorkSummaryProjections([postId]).get(postId)!;
+    return {...row, ...counts, representation:'summary', isAnimated:Boolean(row.isAnimated)};
+  },
+
+  getReelPlaybackMedia(mediaId: number): (ImageRecord & {post_id:number;media_position:number}) | undefined {
+    return database.prepare(`SELECT images.*,posts.id AS post_id,post_items.position AS media_position ${REEL_FROM_SQL}
+      WHERE images.id=? AND ${VISIBLE_REEL_WHERE_SQL}`).get(mediaId) as (ImageRecord & {post_id:number;media_position:number}) | undefined;
+  },
+
+  // Direct gallery links retain readable secondary copies. Reels keep their
+  // separate primary-copy presentation contract.
+  getGalleryPlaybackMedia(mediaId: number): (ImageRecord & {post_id:number;media_position:number}) | undefined {
+    return database.prepare(`SELECT images.*,posts.id AS post_id,post_items.position AS media_position ${REEL_FROM_SQL}
+      WHERE images.id=? AND ${READABLE_VIDEO_WHERE_SQL}`).get(mediaId) as (ImageRecord & {post_id:number;media_position:number}) | undefined;
+  },
+
+  countVisibleVideoCandidates(): number {
+    return Number(database.prepare(`SELECT COUNT(*) n ${REEL_FROM_SQL} WHERE ${VISIBLE_REEL_WHERE_SQL}`).get()!.n);
   },
 
   listVisibleVideoCandidates(): ReelCandidate[] {
-    const posts = database.prepare(
-      `
-      SELECT
-        posts.id,
-        posts.folder_id AS folderId,
-        folders.slug AS folderSlug,
-        folders.name AS folderName,
-        folders.folder_path AS folderPath,
-        images.filename,
-        posts.caption AS caption,
-        posts.post_type AS postType,
-        posts.source_path AS sourcePath,
-        ${WORK_DISPLAY_TITLE_SQL} AS workDisplayTitle,
-        images.width,
-        images.height,
-        images.media_type AS mediaType,
-        images.duration_ms AS durationMs,
-        images.is_animated AS isAnimated,
-        printf('%lld:%lld', images.file_size, round(images.mtime_ms)) AS derivativeSourceVersion,
-        images.thumbnail_path AS thumbnailUrl,
-        images.preview_path AS previewUrl,
-        images.playback_strategy AS playbackStrategy,
-        posts.sort_timestamp AS sortTimestamp,
-        posts.taken_at AS takenAt,
-        ${POST_SAVED_SELECT_SQL},
-        places.id AS placeId,
-        places.slug AS placeSlug,
-        places.display_name AS placeName,
-        places.kind AS placeKind,
-        places.is_approximate AS placeIsApproximate,
-        likes.created_at AS likedAt
-      FROM posts
-      INNER JOIN folders ON folders.id = posts.folder_id
-      JOIN post_items ON post_items.post_id = posts.id AND post_items.position = 1
-      JOIN images ON images.id = post_items.image_id
-      LEFT JOIN places ON places.id = posts.place_id
-      LEFT JOIN likes ON likes.post_id = posts.id
-      WHERE ${VISIBLE_POST_WHERE_SQL}
-        AND posts.post_type = 'single'
-        AND images.media_type = 'video'
-        AND LOWER(images.filename) NOT IN (${COVER_FILENAME_SQL})
-      ORDER BY posts.sort_timestamp DESC, posts.id DESC
-      `
-    ).all() as unknown as ReelCandidate[];
+    return mapReelCandidates(database.prepare(`${REEL_SELECT_SQL} WHERE ${VISIBLE_REEL_WHERE_SQL} ORDER BY ${REEL_ORDER_SQL}`).all(),false);
+  },
 
-    return this.hydratePostItems(posts) as ReelCandidate[];
+  listVisibleVideoCandidatesByIds(mediaIds: number[]): ReelCandidate[] {
+    if(!mediaIds.length)return [];
+    const unique=[...new Set(mediaIds)];
+    const rows=mapReelCandidates(database.prepare(`${REEL_SELECT_SQL} WHERE images.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND ${VISIBLE_REEL_WHERE_SQL}`).all(JSON.stringify(unique)),true);
+    const byId=new Map(rows.map(row=>[row.mediaId,row]));
+    return unique.flatMap(id=>byId.has(id)?[byId.get(id)!]:[]);
   },
 
   listVisibleSearch(query: string, page: number, limit: number): FeedPost[] {
@@ -2049,6 +2114,7 @@ export const postRepository = {
       JOIN images ON images.id = post_items.image_id
       LEFT JOIN places ON places.id = posts.place_id
       WHERE posts.is_deleted = 0 AND posts.is_trashed = 1
+        AND ${LEGACY_TRASH_SCOPE_SQL}
       ORDER BY posts.trashed_at DESC, posts.id DESC
       LIMIT ? OFFSET ?
       `
@@ -2059,7 +2125,7 @@ export const postRepository = {
 
   countTrashed(): number {
     return Number(
-      (database.prepare('SELECT COUNT(*) AS count FROM posts WHERE is_deleted = 0 AND is_trashed = 1').get() as { count: number }).count
+      (database.prepare(`SELECT COUNT(*) AS count FROM posts WHERE is_deleted = 0 AND is_trashed = 1 AND ${LEGACY_TRASH_SCOPE_SQL}`).get() as { count: number }).count
     );
   },
 
@@ -2409,7 +2475,9 @@ export const canonicalCreatorGalleryRepository = {
       LEFT JOIN archive_catalog_local_works copy ON copy.id=work.primary_local_work_id AND copy.work_id=work.id
       LEFT JOIN archive_catalog_local_creator_folders local_folder ON local_folder.id=copy.local_creator_folder_id
       LEFT JOIN posts ON posts.id=copy.post_id
-      WHERE work.creator_id=? AND work.primary_local_work_id IS NOT NULL ORDER BY work.id`).all(creatorId) as unknown as Array<{
+      WHERE work.creator_id=? AND work.primary_local_work_id IS NOT NULL
+        AND NOT EXISTS(SELECT 1 FROM work_removals removed WHERE removed.work_id=work.id)
+      ORDER BY work.id`).all(creatorId) as unknown as Array<{
         workId: number; title: string; postId: number | null; absolutePath: string | null; indexedAvailable: number;
       }>;
   },
@@ -2616,20 +2684,7 @@ export const canonicalCreatorGalleryRepository = {
     ).all(...params) as unknown as Omit<FeedPost, 'mediaItems'>[];
     if (posts.length === 0) return [];
 
-    // Read only counts for the selected page. The cover is already selected by
-    // BASE_POST_SELECT_SQL; do not fetch/parse every image's URLs or EXIF here.
-    // Join exactly the same media rows as hydratePostItems to retain its counts.
-    const counts = database.prepare(`
-      SELECT pi.post_id AS postId, COUNT(*) AS itemCount,
-        SUM(CASE WHEN img.media_type = 'image' THEN 1 ELSE 0 END) AS imageCount,
-        SUM(CASE WHEN img.media_type = 'video' THEN 1 ELSE 0 END) AS videoCount
-      FROM post_items pi JOIN images img ON img.id = pi.image_id
-      WHERE pi.post_id IN (${posts.map(() => '?').join(', ')})
-      GROUP BY pi.post_id
-    `).all(...posts.map(post => post.id)) as Array<{
-      postId: number; itemCount: number; imageCount: number; videoCount: number;
-    }>;
-    const countsByPost = new Map(counts.map(row => [row.postId, row]));
+    const countsByPost = readWorkSummaryProjections(posts.map(post => post.id));
     return posts.map(post => {
       const count = countsByPost.get(post.id);
       const itemCount = count?.itemCount ?? 0;
@@ -2640,7 +2695,8 @@ export const canonicalCreatorGalleryRepository = {
         isAnimated: Boolean(post.isAnimated),
         itemCount,
         imageCount: count?.imageCount ?? 0,
-        videoCount: count?.videoCount ?? 0
+        videoCount: count?.videoCount ?? 0,
+        ...(count?.cardCover ? { cardCover: count.cardCover } : {})
       };
     });
   },
@@ -3117,6 +3173,9 @@ export const imageRepository = {
   listVisibleVideoCandidates(): ReelCandidate[] {
     return postRepository.listVisibleVideoCandidates();
   },
+
+  countVisibleVideoCandidates(): number { return postRepository.countVisibleVideoCandidates(); },
+  listVisibleVideoCandidatesByIds(mediaIds:number[]): ReelCandidate[] { return postRepository.listVisibleVideoCandidatesByIds(mediaIds); },
 
   listVisibleSearch(query: string, page: number, limit: number): FeedImage[] {
     return postRepository.listVisibleSearch(query, page, limit);
@@ -4335,9 +4394,26 @@ export const appSettingsRepository = {
 };
 
 export const maintenanceRepository = {
+  assertLibraryIndexResetAllowed(): void {
+    // Reassigning index IDs would break retained Work and recycle-bin identities.
+    // A full identity migration is required before these libraries can be reset.
+    if (database.prepare(`SELECT 1 WHERE
+      EXISTS (SELECT 1 FROM archive_catalog_local_works) OR
+      EXISTS (SELECT 1 FROM work_removals) OR
+      EXISTS (SELECT 1 FROM work_removal_paths) OR
+      EXISTS (SELECT 1 FROM media_trash_entries)`).get()) {
+      throw new RequestInputError(
+        '当前图库保留了独立作品身份或回收记录，暂不支持重建索引。请使用普通扫描更新图库；现有作品、回收记录和恢复材料均已保留。',
+        'LIBRARY_REBUILD_RETAINED_IDENTITIES'
+      );
+    }
+  },
   resetLibraryIndex(): void {
-    database.exec(`
-      BEGIN;
+    this.assertLibraryIndexResetAllowed();
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      this.assertLibraryIndexResetAllowed();
+      database.exec(`
       UPDATE folders SET avatar_image_id = NULL;
       DELETE FROM likes;
       DELETE FROM collection_items;
@@ -4352,8 +4428,12 @@ export const maintenanceRepository = {
       DELETE FROM scan_runs;
       DELETE FROM app_settings WHERE key = '${SHARE_SESSION_SECRET_SETTING_KEY}';
       DELETE FROM sqlite_sequence WHERE name IN ('folders', 'images', 'posts', 'scan_runs');
-      COMMIT;
-    `);
+      `);
+      database.exec('COMMIT');
+    } catch (error) {
+      if (database.isTransaction) database.exec('ROLLBACK');
+      throw error;
+    }
   }
 };
 

@@ -4,6 +4,7 @@ import {
   createFingerprint,
   getDerivativeRelativePath,
   getMediaTypeFromExtension,
+  getMimeTypeFromExtension,
   getPreviewRelativePath,
   getStableSortTimestamp,
   getThumbnailRelativePath,
@@ -39,6 +40,16 @@ describe('scanner utilities', () => {
     expect(isSupportedVideoFile('clip.mp4')).toBe(true);
     expect(isSupportedMediaFile('clip.webm')).toBe(true);
     expect(getMediaTypeFromExtension('.mov')).toBe('video');
+  });
+
+  it('classifies MPEG-TS originals and creates MP4 previews', () => {
+    expect(isSupportedVideoFile('nested/clip.TS')).toBe(true);
+    expect(isSupportedMediaFile('clip.ts')).toBe(true);
+    expect(getMediaTypeFromExtension('.TS')).toBe('video');
+    expect(getMimeTypeFromExtension('.TS')).toBe('video/mp2t');
+    expect(getPreviewRelativePath('nested/clip.TS', 'video')).toBe('nested/clip.mp4');
+    expect(getThumbnailRelativePath('nested/clip.TS')).toBe('nested/clip.webp');
+    expect(isSupportedVideoFile('clip.ts.txt')).toBe(false);
   });
 
   it('detects supported AVIF image files', () => {
