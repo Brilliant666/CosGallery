@@ -1,5 +1,5 @@
 <template>
-  <section class="mx-auto w-full max-w-[92rem] px-2 pb-12 sm:px-5 lg:px-8">
+  <section class="creator-gallery mx-auto w-full max-w-[92rem] px-2 pb-12 sm:px-5 lg:px-8">
     <header class="mb-7 grid gap-5">
       <div>
         <p class="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-muted">CosGallery</p>
@@ -20,12 +20,15 @@
       </form>
 
       <div class="flex flex-wrap items-center gap-3" aria-label="博主筛选">
-        <div v-if="!label" role="group" aria-label="分级" class="flex flex-wrap items-center gap-2 text-sm font-semibold">
-          <span aria-hidden="true" class="mr-1 text-muted">分级</span>
-          <button v-for="option in ratingOptions" :key="option.value" type="button" :value="option.value" :aria-pressed="rating === option.value"
-            class="rounded-full border px-4 py-2.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-            :class="rating === option.value ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-text hover:border-accent/60'"
-            @click="setRating(option.value)">{{ option.label }}</button>
+        <!-- Keep filter wrapping stable without rendering grading controls on category pages. -->
+        <div class="min-h-[2.625rem] w-64 max-w-full" :aria-hidden="label ? true : undefined">
+          <div v-if="!label" role="group" aria-label="分级" class="grid grid-cols-[auto_repeat(3,minmax(0,1fr))] items-center gap-2 text-sm font-semibold">
+            <span aria-hidden="true" class="mr-1 text-muted">分级</span>
+            <button v-for="option in ratingOptions" :key="option.value" type="button" :value="option.value" :aria-pressed="rating === option.value"
+              class="rounded-full border px-3 py-2.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              :class="rating === option.value ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-text hover:border-accent/60'"
+              @click="setRating(option.value)">{{ option.label }}</button>
+          </div>
         </div>
         <div v-if="auth.isAdmin" role="group" aria-label="偏好" class="flex flex-wrap items-center gap-2 text-sm font-semibold">
           <span aria-hidden="true" class="mr-1 text-muted">偏好</span>
@@ -290,3 +293,9 @@ watch(() => [route.fullPath, reading.generation, reading.libraryResetVersion, au
 }, { immediate: true });
 onBeforeUnmount(() => { requestToken += 1; });
 </script>
+
+<style scoped>
+:global(html:has(.creator-gallery)) {
+  scrollbar-gutter: stable;
+}
+</style>
