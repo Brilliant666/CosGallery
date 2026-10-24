@@ -8,6 +8,7 @@ describe.sequential('admitted Work primary-copy gallery projection', () => {
   let db: typeof import('../src/db/database.js')['databaseManager'];
   let repos: typeof import('../src/db/repositories.js');
   let gallery: typeof import('../src/services/gallery-service.js')['galleryService'];
+  let getStatistics: typeof import('../src/db/gallery-statistics-repository.js')['getGalleryStatistics'];
   let primary: number;
   let secondary: number;
   let independent: number;
@@ -25,6 +26,7 @@ describe.sequential('admitted Work primary-copy gallery projection', () => {
     ({ databaseManager: db } = await import('../src/db/database.js'));
     repos = await import('../src/db/repositories.js');
     ({ galleryService: gallery } = await import('../src/services/gallery-service.js'));
+    ({ getGalleryStatistics: getStatistics } = await import('../src/db/gallery-statistics-repository.js'));
     db.connection.exec(`INSERT INTO archive_catalog_creators (id,canonical_name,normalized_name,seed_source,seed_source_creator_id)
       VALUES (1,'Synthetic Creator','synthetic creator','test','synthetic');
       INSERT INTO archive_catalog_works (id,creator_id,display_title,title_policy) VALUES (1,1,'Same title','manual'),(2,1,'Same title','manual');`);
@@ -57,6 +59,14 @@ describe.sequential('admitted Work primary-copy gallery projection', () => {
 
   it('retains unmarked legacy posts without guessing by title or shared Work', () => {
     expect(repos.canonicalCreatorGalleryRepository.countVisibleWorks(1)).toBe(3);
+    expect(repos.canonicalCreatorGalleryRepository.listVisibleWorks(1, 1, 10).map(p => p.id))
+      .toEqual([secondary, independent, primary]);
+    expect(gallery.getCanonicalCreator(1)).toMatchObject({ workCount: 3, imageCount: 3 });
+    // Browsing preserves legacy Post entries. The independent-Work statistics
+    // do not choose between the two unmarked copies; only Work 2 contributes.
+    expect(getStatistics(db.connection)).toEqual({ creators: 1, works: 1, photos: 1 });
+    expect(db.connection.prepare('SELECT primary_local_work_id FROM archive_catalog_works WHERE id=1').get())
+      .toMatchObject({ primary_local_work_id: null });
   });
   it('uses one explicit primary across lists, totals, cover, and media while retaining direct IDs', () => {
     db.connection.prepare('UPDATE archive_catalog_works SET primary_local_work_id=? WHERE id=1').run(primaryLocal);
@@ -66,6 +76,7 @@ describe.sequential('admitted Work primary-copy gallery projection', () => {
     const candidate = repos.canonicalCreatorGalleryRepository.listFolderCandidates()[0]!;
     expect(repos.canonicalCreatorGalleryRepository.listFolderCandidates(1)).toEqual([candidate]);
     expect(candidate.workCount).toBe(2);
+    expect(getStatistics(db.connection)).toEqual({ creators: 1, works: 2, photos: 2 });
     const cover = repos.postRepository.findById(independent)!;
     expect(candidate.latestWorkAt).toBe(cover.sort_timestamp);
     expect(repos.postRepository.countCosGalleryWorks()).toBe(2);
@@ -80,16 +91,21 @@ describe.sequential('admitted Work primary-copy gallery projection', () => {
     db.connection.prepare('UPDATE archive_catalog_local_works SET is_active=0 WHERE id=?').run(primaryLocal);
     expect(repos.canonicalCreatorGalleryRepository.listVisibleWorks(1, 1, 10).map(p => p.id)).toEqual([independent]);
     expect(repos.canonicalCreatorGalleryRepository.getVisibleMediaSummary(1).imageCount).toBe(1);
+    expect(getStatistics(db.connection)).toEqual({ creators: 1, works: 1, photos: 1 });
     expect(gallery.getCanonicalCreator(1)?.unavailablePrimaryWorks).toEqual([
       expect.objectContaining({ workId: 1, postId: primary, title: 'Same title' })
     ]);
     // Removing the remaining independent card still retains the creator and offline explanation.
     db.connection.prepare('UPDATE posts SET is_deleted=1 WHERE id=?').run(independent);
     expect(gallery.getCanonicalCreator(1)).toMatchObject({ workCount: 0, imageCount: 0 });
+    expect(getStatistics(db.connection)).toEqual({ creators: 1, works: 0, photos: 0 });
     db.connection.prepare('UPDATE archive_catalog_local_creator_folders SET is_active=0 WHERE id=1').run();
     expect(gallery.getCanonicalCreator(1)?.unavailablePrimaryWorks).toHaveLength(1);
     expect(repos.canonicalCreatorGalleryRepository.listFolderCandidates(1)).toEqual(
       repos.canonicalCreatorGalleryRepository.listFolderCandidates().filter(item => item.canonicalCreatorId === 1));
     expect(repos.postRepository.findById(secondary)).toBeDefined();
+    expect(getStatistics(db.connection)).toEqual({ creators: 1, works: 0, photos: 0 });
+    expect(db.connection.prepare('SELECT primary_local_work_id FROM archive_catalog_works WHERE id=1').get())
+      .toMatchObject({ primary_local_work_id: primaryLocal });
   });
 });

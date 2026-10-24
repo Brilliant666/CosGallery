@@ -90,6 +90,50 @@ describe('canonical gallery statistics', () => {
     expect(getGalleryStatistics(db).works).toBe(0);
   });
 
+  it.each([
+    'missing Post', 'inactive copy without Post', 'inactive copy', 'unmatched copy',
+    'inactive folder', 'unmatched folder', 'different creator', 'different Post folder',
+    'ambiguous owner', 'cover-only Post'
+  ])('does not let an ineligible secondary (%s) hide the sole viable copy', (reason) => {
+    const f = setup(); f.creator(1); f.creator(2);
+    const owner = f.folder(1), otherFolder = f.folder(1), work = f.work(1);
+    const valid = f.copy(owner, work);
+    const invalid = f.copy(otherFolder, work);
+    const discardPostLink = () => db!.prepare(`UPDATE archive_catalog_local_works
+      SET post_id=NULL, relative_path='not-indexed' WHERE id=?`).run(invalid.local);
+    switch (reason) {
+      case 'missing Post': discardPostLink(); break;
+      case 'inactive copy without Post':
+        discardPostLink();
+        db!.prepare('UPDATE archive_catalog_local_works SET is_active=0 WHERE id=?').run(invalid.local); break;
+      case 'inactive copy':
+        db!.prepare('UPDATE archive_catalog_local_works SET is_active=0 WHERE id=?').run(invalid.local); break;
+      case 'unmatched copy':
+        db!.prepare("UPDATE archive_catalog_local_works SET match_status='unmatched' WHERE id=?").run(invalid.local); break;
+      case 'inactive folder':
+        db!.prepare('UPDATE archive_catalog_local_creator_folders SET is_active=0 WHERE id=?').run(otherFolder.local); break;
+      case 'unmatched folder':
+        db!.prepare("UPDATE archive_catalog_local_creator_folders SET match_status='unmatched' WHERE id=?").run(otherFolder.local); break;
+      case 'different creator':
+        db!.prepare('UPDATE archive_catalog_local_creator_folders SET creator_id=2 WHERE id=?').run(otherFolder.local); break;
+      case 'different Post folder':
+        db!.prepare('UPDATE posts SET folder_id=? WHERE id=?').run(owner.id, invalid.post); break;
+      case 'ambiguous owner':
+        db!.exec('DROP INDEX idx_catalog_folder_gallery_active');
+        db!.prepare(`INSERT INTO archive_catalog_local_creator_folders
+          (gallery_folder_id,creator_id,root_path,relative_path,absolute_path,folder_name,match_status,scanned_at)
+          VALUES(?,2,'/other','ambiguous','/other/ambiguous','ambiguous','matched','fixed')`).run(otherFolder.id); break;
+      case 'cover-only Post':
+        db!.prepare("UPDATE images SET filename='cover.jpg' WHERE id=?").run(invalid.images[0]); break;
+    }
+    expect(getGalleryStatistics(db)).toMatchObject({ works: 1, photos: 1 });
+    // An explicit but unusable primary remains authoritative: no implicit failover.
+    f.primary(work, invalid.local);
+    expect(getGalleryStatistics(db)).toMatchObject({ works: 0, photos: 0 });
+    f.primary(work, valid.local);
+    expect(getGalleryStatistics(db)).toMatchObject({ works: 1, photos: 1 });
+  });
+
   it('excludes media trash, removed Works, retained originals and excluded attachments; derivatives are never members', () => {
     const f = setup(); f.creator(1); const owner = f.folder(1), work = f.work(1);
     const copy = f.copy(owner, work, ['photo.jpg', 'trash-ad.jpg', '_未支持格式原件/large.jpg',
@@ -150,7 +194,11 @@ describe('public gallery statistics contract', () => {
       const auth = (await import('../src/services/auth-service.js')).authService;
       const gallery = (await import('../src/services/gallery-service.js')).galleryService;
       const storage = (await import('../src/services/storage-service.js')).storageService;
-      const f = fixtures(manager.connection); f.creator(1); const owner = f.folder(1); f.copy(owner, f.work(1));
+      const f = fixtures(manager.connection); f.creator(1); const owner = f.folder(1), workId = f.work(1);
+      f.copy(owner, workId);
+      const staleCopy = f.copy(owner, workId);
+      manager.connection.prepare(`UPDATE archive_catalog_local_works
+        SET is_active=0, post_id=NULL, relative_path='not-indexed' WHERE id=?`).run(staleCopy.local);
       auth.setAdminPassword('isolated-statistics-password'); auth.setViewerAccess('public');
       let cookie = '';
       auth.setAuthenticatedSession({ cookie(name: string, value: string) { cookie = `${name}=${value}`; } } as Response,

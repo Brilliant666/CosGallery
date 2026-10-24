@@ -45,10 +45,7 @@ export function getGalleryStatistics(db: DatabaseSync = databaseManager.connecti
           copy.id AS local_id, copy.is_active AS copy_active, copy.match_status AS copy_match,
           local.is_active AS folder_active, local.match_status AS folder_match,
           local.creator_id AS owner_id, local.gallery_folder_id,
-          posts.id AS post_id, posts.folder_id AS post_folder_id,
-          posts.is_deleted, posts.is_trashed,
-          COUNT(*) FILTER (WHERE COALESCE(posts.is_deleted,0)=0 AND COALESCE(posts.is_trashed,0)=0)
-            OVER (PARTITION BY work.id) AS viable_copy_count
+          posts.id AS post_id, posts.folder_id AS post_folder_id
         FROM archive_catalog_works work
         JOIN visible_creators creators ON creators.id=work.creator_id
         CROSS JOIN archive_catalog_local_works copy ON copy.work_id=work.id
@@ -61,13 +58,14 @@ export function getGalleryStatistics(db: DatabaseSync = databaseManager.connecti
             AND legacy.source_path=rtrim(replace(local.relative_path,char(92),'/'),'/')
               || '/' || ltrim(replace(copy.relative_path,char(92),'/'),'/')))
         WHERE NOT EXISTS (SELECT 1 FROM work_removals removed WHERE removed.work_id=work.id)
-      ), selected_copies AS MATERIALIZED (
-        SELECT copy.work_id, copy.post_id
+      ), viable_copies AS MATERIALIZED (
+        -- Determine eligibility before counting alternatives. A missing Post,
+        -- stale copy or mismatched owner must not make a sole usable copy ambiguous.
+        SELECT copy.work_id, copy.post_id, copy.local_id, copy.primary_local_work_id,
+          COUNT(*) OVER (PARTITION BY copy.work_id) AS viable_copy_count
         FROM local_copies copy
         JOIN visible_posts ON visible_posts.id=copy.post_id
-        WHERE (copy.primary_local_work_id=copy.local_id
-            OR (copy.primary_local_work_id IS NULL AND copy.viable_copy_count=1))
-          AND copy.copy_active=1 AND copy.folder_active=1
+        WHERE copy.copy_active=1 AND copy.folder_active=1
           AND copy.copy_match='matched' AND copy.folder_match='matched'
           AND copy.owner_id=copy.creator_id AND copy.post_folder_id=copy.gallery_folder_id
           AND NOT EXISTS (
@@ -75,6 +73,11 @@ export function getGalleryStatistics(db: DatabaseSync = databaseManager.connecti
             WHERE other.gallery_folder_id=copy.gallery_folder_id AND other.is_active=1
               AND other.match_status='matched' AND other.creator_id IS NOT NULL
               AND other.creator_id<>copy.creator_id)
+      ), selected_copies AS MATERIALIZED (
+        SELECT work_id, post_id FROM viable_copies
+        -- An explicit unavailable primary remains authoritative; never promote a secondary.
+        WHERE primary_local_work_id=local_id
+          OR (primary_local_work_id IS NULL AND viable_copy_count=1)
       ), visible_media AS MATERIALIZED (
         -- Visit only selected copies' members by PK, not the global image index.
         SELECT copy.work_id, media.id, media.media_type
