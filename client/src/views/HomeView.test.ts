@@ -173,7 +173,7 @@ describe('HomeView', () => {
     const all = rail.findAllComponents(routerLinkStub).find(link => link.text() === 'View all');
     expect(all?.props('to')).toEqual({ name: 'library' });
     const attribution = rail.get('a[href="https://github.com/foldergram/foldergram"]');
-    expect(attribution.text()).toBe('Thanks to Foldergram');
+    expect(attribution.text()).toBe('Built on Foldergram');
     expect(attribution.attributes('target')).toBe('_blank');
     expect(attribution.attributes('rel')).toBe('noreferrer');
     wrapper.unmount();

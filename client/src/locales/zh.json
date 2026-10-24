@@ -89,6 +89,12 @@
     "more": "更多",
     "trash": "回收站",
     "archiveCatalog": "图库账本",
+    "sidebarExpand": "展开侧栏",
+    "sidebarCollapse": "收起侧栏",
+    "sidebarInteraction": "侧栏交互",
+    "sidebarClick": "点击展开／收起",
+    "sidebarHover": "悬停展开",
+    "sidebarLocalHint": "仅保存在当前浏览器，点击模式会记住展开状态。",
     "settings": "设置",
     "unlockAdmin": "解锁管理员",
     "switchAppearance": "切换外观",
@@ -661,36 +667,35 @@
       "viewAll": "查看全部",
       "workCount": "{count} 个作品",
       "openFolder": "查看作品",
-      "openSourceText": "基于 Foldergram 构建，感谢开源贡献。",
-      "viewOnGitHub": "致谢 Foldergram"
+      "openSourceText": "基于 Foldergram 构建"
     }
   },
   "likes": {
     "labels": {
       "sharedCollection": "赞过",
       "localCollection": "收藏",
-      "sharedSection": "已赞帖子",
-      "localSection": "收藏帖子"
+      "sharedSection": "已赞内容",
+      "localSection": "收藏内容"
     },
     "view": {
       "rebuilding": "正在重建图库索引。刷新后的图库加载完成后，{label} 会重新出现。",
       "sectionsAria": "{label} 分区"
     },
     "states": {
-      "sharedEmptyTitle": "还没有赞过的帖子",
+      "sharedEmptyTitle": "还没有赞过的内容",
       "localEmptyTitle": "还没有收藏内容",
-      "sharedEmptyDescription": "点按任意帖子下方的心形，它就会出现在这里。",
-      "localEmptyDescription": "点按任意帖子下方的心形，它就会出现在此浏览器中的这里。",
+      "sharedEmptyDescription": "点按内容下方的心形，它就会出现在这里。",
+      "localEmptyDescription": "点按内容下方的心形，它就会保存在此浏览器中，并显示在这里。",
       "sharedLoadingLabel": "正在加载赞过内容...",
       "localLoadingLabel": "正在加载收藏...",
       "sharedErrorTitle": "无法加载赞过内容",
       "localErrorTitle": "无法加载收藏"
     },
     "actions": {
-      "likePost": "点赞帖子",
+      "likePost": "点赞此内容",
       "unlikePost": "取消点赞",
-      "favoritePost": "收藏帖子",
-      "removeFavoriteFromPost": "取消收藏帖子"
+      "favoritePost": "收藏此内容",
+      "removeFavoriteFromPost": "取消收藏此内容"
     },
     "errors": {
       "loadShared": "无法加载赞过内容",
@@ -1000,6 +1005,8 @@
       "removeSavedPost": "取消收藏",
       "errors": {
         "loadCollections": "无法加载合集",
+        "busy": "这条媒体的收藏操作尚未完成，请稍后重试。",
+        "createdWithoutMedia": "合集“{name}”已创建，但尚未确认媒体已加入。请在合集列表中核对后重试加入。{error}",
         "refreshAfterSave": "收藏状态已更新，但列表刷新失败。请刷新页面查看最新状态。"
       }
     },

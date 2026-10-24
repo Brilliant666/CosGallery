@@ -89,6 +89,12 @@
     "more": "Más",
     "trash": "Papelera",
     "archiveCatalog": "Catálogo del archivo",
+    "sidebarExpand": "Expandir barra lateral",
+    "sidebarCollapse": "Contraer barra lateral",
+    "sidebarInteraction": "Interacción de la barra lateral",
+    "sidebarClick": "Clic para expandir / contraer",
+    "sidebarHover": "Expandir al pasar el cursor",
+    "sidebarLocalHint": "Solo se guarda en este navegador. El modo de clic recuerda si la barra está expandida.",
     "settings": "Ajustes",
     "unlockAdmin": "Desbloquear admin",
     "switchAppearance": "Cambiar apariencia",
@@ -661,36 +667,35 @@
       "viewAll": "Ver todos",
       "workCount": "{count} obras",
       "openFolder": "Ver obras",
-      "openSourceText": "Basado en Foldergram. Gracias a sus colaboradores de código abierto.",
-      "viewOnGitHub": "Gracias a Foldergram"
+      "openSourceText": "Basado en Foldergram"
     }
   },
   "likes": {
     "labels": {
       "sharedCollection": "Me gusta",
       "localCollection": "Favoritos",
-      "sharedSection": "Publicaciones con me gusta",
-      "localSection": "Publicaciones favoritas"
+      "sharedSection": "Contenido con me gusta",
+      "localSection": "Contenido favorito"
     },
     "view": {
       "rebuilding": "Se está reconstruyendo el índice de la biblioteca. {label} volverá cuando termine de cargarse la biblioteca actualizada.",
       "sectionsAria": "Secciones de {label}"
     },
     "states": {
-      "sharedEmptyTitle": "Aún no hay publicaciones con me gusta",
+      "sharedEmptyTitle": "Aún no hay contenido con me gusta",
       "localEmptyTitle": "Aún no hay favoritos",
-      "sharedEmptyDescription": "Toca el corazón debajo de cualquier publicación y aparecerá aquí.",
-      "localEmptyDescription": "Toca el corazón debajo de cualquier publicación y aparecerá aquí en este navegador.",
+      "sharedEmptyDescription": "Toca el corazón debajo de cualquier contenido y aparecerá aquí.",
+      "localEmptyDescription": "Toca el corazón debajo de cualquier contenido para guardarlo en este navegador y mostrarlo aquí.",
       "sharedLoadingLabel": "Cargando me gusta...",
       "localLoadingLabel": "Cargando favoritos...",
       "sharedErrorTitle": "No se pudieron cargar los me gusta",
       "localErrorTitle": "No se pudieron cargar los favoritos"
     },
     "actions": {
-      "likePost": "Marcar me gusta en la publicación",
-      "unlikePost": "Quitar me gusta de la publicación",
-      "favoritePost": "Agregar publicación a favoritos",
-      "removeFavoriteFromPost": "Quitar publicación de favoritos"
+      "likePost": "Marcar me gusta en este contenido",
+      "unlikePost": "Quitar me gusta de este contenido",
+      "favoritePost": "Agregar este contenido a favoritos",
+      "removeFavoriteFromPost": "Quitar este contenido de favoritos"
     },
     "errors": {
       "loadShared": "No se pudieron cargar los me gusta",
@@ -1000,6 +1005,8 @@
       "removeSavedPost": "Quitar de guardados",
       "errors": {
         "loadCollections": "No se pudieron cargar las colecciones",
+        "busy": "Hay otra acción de guardado en curso para este archivo. Inténtalo de nuevo en unos momentos.",
+        "createdWithoutMedia": "La colección «{name}» se ha creado, pero no se pudo confirmar que se añadiera el archivo. Comprueba la lista de colecciones antes de reintentarlo. {error}",
         "refreshAfterSave": "El estado guardado se ha actualizado, pero no se pudo actualizar la lista de colecciones. Actualiza la página para ver el estado más reciente."
       }
     },

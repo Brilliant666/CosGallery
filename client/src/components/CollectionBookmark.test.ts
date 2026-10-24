@@ -344,6 +344,41 @@ describe('CollectionBookmark', () => {
     wrapper.unmount();
   });
 
+  it('preserves the new collection form while media is busy and blocks duplicate submissions until the retry completes', async () => {
+    const item = createFeedItem(87);
+    const store = useCollectionsStore();
+    const saved = createCollection('saved', 'Saved', true);
+    const membership = { imageId: item.id, isSaved: false, items: [createMembership(saved, false)] };
+    store.$patch({ items: [saved], membershipByImageId: { [item.id]: membership } });
+    vi.spyOn(store, 'fetchMembership').mockResolvedValue(membership);
+    let finishCreate!: () => void;
+    const create = vi.spyOn(store, 'createAndAdd').mockImplementation(() => new Promise(resolve => { finishCreate = resolve; }));
+    const wrapper = mount(CollectionBookmark, { attachTo: document.body, props: { item, placement: 'feed' } });
+    await wrapper.trigger('focusin'); vi.advanceTimersByTime(1_000); await flushPromises();
+    const createButton = document.querySelector<HTMLButtonElement>('.collection-bookmark__create-button')!;
+    createButton.click(); await flushPromises();
+    const input = document.querySelector<HTMLInputElement>('.collection-bookmark__input')!;
+    input.value = 'Trip'; input.dispatchEvent(new Event('input')); await flushPromises();
+    store.pendingImageIds.push(item.id); await flushPromises();
+    expect(createButton.disabled).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('.collection-bookmark__submit')!.disabled).toBe(true);
+    const form = document.querySelector<HTMLFormElement>('.collection-bookmark__create')!;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flushPromises();
+    expect(create).not.toHaveBeenCalled();
+    expect(input.value).toBe('Trip');
+    expect(document.querySelector('.collection-bookmark__popover')).not.toBeNull();
+    expect(document.querySelector('.collection-bookmark__error')?.textContent).toBeTruthy();
+
+    store.pendingImageIds = []; await flushPromises();
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flushPromises();
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flushPromises();
+    expect(create).toHaveBeenCalledExactlyOnceWith('Trip', item);
+    expect(document.querySelector('.collection-bookmark__popover')).not.toBeNull();
+    finishCreate(); await flushPromises();
+    expect(document.querySelector('.collection-bookmark__popover')).toBeNull();
+    wrapper.unmount();
+  });
+
   it('positions the popover below the icon when there is not enough space above', async () => {
     const item = createFeedItem(86);
     const collectionsStore = useCollectionsStore();

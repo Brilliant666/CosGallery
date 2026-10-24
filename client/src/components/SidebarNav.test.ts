@@ -9,6 +9,7 @@ import { useFoldersStore } from '../stores/folders';
 import { useAppStore } from '../stores/app';
 import type { FolderSummary } from '../types/api';
 import { i18n } from '../locales';
+import { SIDEBAR_INTERACTION_KEY, SIDEBAR_CLICK_EXPANDED_KEY } from '../utils/sidebar-preferences';
 
 enableAutoUnmount(afterEach);
 
@@ -46,6 +47,7 @@ async function movePointerOutside(type = 'mouse') {
 
 describe('sidebar hover intent', () => {
   beforeEach(() => {
+    localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
     vi.useFakeTimers();
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(min-width: 48rem)', addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   });
@@ -184,6 +186,111 @@ describe('sidebar hover intent', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(sidebar.classes()).toContain('sidebar--expanded');
     expect(router.currentRoute.value.query).toEqual({ label });
+  });
+});
+
+describe('personal sidebar interaction', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.removeItem(SIDEBAR_INTERACTION_KEY);
+    localStorage.removeItem(SIDEBAR_CLICK_EXPANDED_KEY);
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(min-width: 48rem)', addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it('defaults to click mode and ignores pointer and keyboard focus expansion', async () => {
+    const { sidebar } = await setup();
+    expect(sidebar.find('[data-test="sidebar-toggle"]').exists()).toBe(true);
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    sidebar.get<HTMLAnchorElement>('a[href="/library"]').element.focus();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await movePointerOutside();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+  });
+
+  it('remembers both expanded and collapsed choices across remounts', async () => {
+    const first = await setup();
+    await first.sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    expect(localStorage.getItem(SIDEBAR_CLICK_EXPANDED_KEY)).toBe('true');
+    first.wrapper.unmount();
+    const second = await setup();
+    expect(second.sidebar.classes()).toContain('sidebar--expanded');
+    await second.sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    expect(localStorage.getItem(SIDEBAR_CLICK_EXPANDED_KEY)).toBe('false');
+    second.wrapper.unmount();
+    const third = await setup();
+    expect(third.sidebar.classes()).not.toContain('sidebar--expanded');
+  });
+
+  it('switches modes without stale hover timers overwriting the remembered click choice', async () => {
+    localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
+    const { sidebar } = await setup();
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
+    await vi.advanceTimersByTimeAsync(45);
+    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-interaction"]').setValue('click');
+    await vi.advanceTimersByTimeAsync(400);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    expect(localStorage.getItem(SIDEBAR_INTERACTION_KEY)).toBe('click');
+    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-interaction"]').trigger('pointerdown', { pointerType: 'mouse' });
+    await sidebar.get('[data-test="sidebar-interaction"]').setValue('hover');
+    expect(document.activeElement).toBe(sidebar.get('button[aria-haspopup="menu"]').element);
+    await movePointerOutside();
+    await vi.advanceTimersByTimeAsync(120);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    expect(sidebar.find('[data-test="sidebar-toggle"]').exists()).toBe(false);
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
+    await vi.advanceTimersByTimeAsync(100);
+    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-interaction"]').setValue('click');
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+  });
+
+  it('keeps category choice independent from click mode collapse', async () => {
+    const { sidebar, router } = await setup();
+    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await sidebar.get('button[aria-label="展开图库分类"]').trigger('click');
+    await sidebar.get('.library-nav__menu a[href="/library?label=selfie"]').trigger('click');
+    await flushPromises();
+    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    expect(sidebar.find('.library-nav__menu').exists()).toBe(false);
+    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    expect(router.currentRoute.value.query.label).toBe('selfie');
+    expect(sidebar.get('.library-nav__menu a[href="/library?label=selfie"]').attributes('aria-current')).toBe('page');
+  });
+
+  it('falls back to click mode for an invalid stored mode and remains usable if storage fails', async () => {
+    localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'invalid');
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+    const { sidebar } = await setup();
+    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-interaction"]').trigger('pointerdown', { pointerType: 'mouse' });
+    await sidebar.get('[data-test="sidebar-interaction"]').setValue('hover');
+    await vi.advanceTimersByTimeAsync(120);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+  });
+
+  it('synchronizes sidebar preference events without touching unrelated storage', async () => {
+    const { sidebar } = await setup();
+    localStorage.setItem('retained-preference', 'unchanged');
+    localStorage.setItem(SIDEBAR_CLICK_EXPANDED_KEY, 'true');
+    window.dispatchEvent(new StorageEvent('storage', { key: SIDEBAR_CLICK_EXPANDED_KEY }));
+    await nextTick();
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+    localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
+    window.dispatchEvent(new StorageEvent('storage', { key: SIDEBAR_INTERACTION_KEY }));
+    await vi.advanceTimersByTimeAsync(120);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    expect(localStorage.getItem('retained-preference')).toBe('unchanged');
   });
 });
 

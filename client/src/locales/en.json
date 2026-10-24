@@ -89,6 +89,12 @@
     "more": "More",
     "trash": "Trash",
     "archiveCatalog": "Archive catalog",
+    "sidebarExpand": "Expand sidebar",
+    "sidebarCollapse": "Collapse sidebar",
+    "sidebarInteraction": "Sidebar interaction",
+    "sidebarClick": "Click to expand / collapse",
+    "sidebarHover": "Expand on hover",
+    "sidebarLocalHint": "Saved only in this browser. Click mode remembers whether the sidebar is expanded.",
     "settings": "Settings",
     "unlockAdmin": "Unlock admin",
     "switchAppearance": "Switch appearance",
@@ -661,36 +667,35 @@
       "viewAll": "View all",
       "workCount": "{count} works",
       "openFolder": "View works",
-      "openSourceText": "Built on Foldergram. Thanks to its open-source contributors.",
-      "viewOnGitHub": "Thanks to Foldergram"
+      "openSourceText": "Built on Foldergram"
     }
   },
   "likes": {
     "labels": {
       "sharedCollection": "Likes",
       "localCollection": "Favorites",
-      "sharedSection": "Liked posts",
-      "localSection": "Favorite posts"
+      "sharedSection": "Liked content",
+      "localSection": "Favorite content"
     },
     "view": {
       "rebuilding": "Rebuilding the library index. {label} will return after the refreshed library finishes loading.",
       "sectionsAria": "{label} sections"
     },
     "states": {
-      "sharedEmptyTitle": "No liked posts yet",
+      "sharedEmptyTitle": "No liked content yet",
       "localEmptyTitle": "No favorites yet",
-      "sharedEmptyDescription": "Tap the heart under any post and it will appear here.",
-      "localEmptyDescription": "Tap the heart under any post and it will appear here in this browser.",
+      "sharedEmptyDescription": "Tap the heart below any content and it will appear here.",
+      "localEmptyDescription": "Tap the heart below any content to save it in this browser and show it here.",
       "sharedLoadingLabel": "Loading likes...",
       "localLoadingLabel": "Loading favorites...",
       "sharedErrorTitle": "Could not load likes",
       "localErrorTitle": "Could not load favorites"
     },
     "actions": {
-      "likePost": "Like post",
-      "unlikePost": "Unlike post",
-      "favoritePost": "Favorite post",
-      "removeFavoriteFromPost": "Remove favorite from post"
+      "likePost": "Like this content",
+      "unlikePost": "Unlike this content",
+      "favoritePost": "Favorite this content",
+      "removeFavoriteFromPost": "Remove this content from favorites"
     },
     "errors": {
       "loadShared": "Unable to load likes",
@@ -1000,6 +1005,8 @@
       "removeSavedPost": "Remove from saved",
       "errors": {
         "loadCollections": "Unable to load collections",
+        "busy": "Another save action for this media is still running. Try again shortly.",
+        "createdWithoutMedia": "Collection “{name}” was created, but adding the media could not be confirmed. Check the collection list before retrying. {error}",
         "refreshAfterSave": "Saved state updated, but the collection list could not refresh. Refresh the page to see the latest state."
       }
     },

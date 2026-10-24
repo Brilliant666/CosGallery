@@ -37,7 +37,7 @@
             :class="preference === option.value ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-text hover:border-accent/60'"
             @click="setPreference(option.value)">{{ option.label }}</button>
         </div>
-        <span class="ml-auto text-sm text-muted">{{ total }} 位博主 · 每页 {{ PAGE_SIZE }} 位</span>
+        <span v-if="hasCurrentResults" class="ml-auto text-sm text-muted">{{ total }} 位博主 · 每页 {{ PAGE_SIZE }} 位</span>
       </div>
       <p v-if="legacyRatingLabel" role="status" class="m-0 rounded-xl border border-amber-300 px-4 py-3 text-sm text-amber-700">当前沿用旧链接的“{{ legacyRatingLabel }}”筛选，范围未改变。日常入口已收起；选择分级“全部”可退出此筛选，身份管理请前往博主库。</p>
     </header>
@@ -48,7 +48,7 @@
     </div>
 
     <div
-      v-if="creators.length && !error"
+      v-if="hasCurrentResults && creators.length && !error"
       class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
       aria-label="博主目录"
       :aria-busy="loading"
@@ -102,10 +102,10 @@
     </div>
 
     <div v-else-if="loading" class="py-20 text-center text-muted">正在加载博主目录…</div>
-    <div v-else-if="!error" class="rounded-2xl border border-dashed border-border py-16 text-center text-muted">
+    <div v-else-if="hasCurrentResults && !error" class="rounded-2xl border border-dashed border-border py-16 text-center text-muted">
       没有符合当前条件的博主。
     </div>
-    <nav v-if="totalPages > 1 && !error" class="mt-7 flex items-center justify-center gap-4" aria-label="博主分页">
+    <nav v-if="hasCurrentResults && totalPages > 1 && !error" class="mt-7 flex items-center justify-center gap-4" aria-label="博主分页">
       <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page <= 1 || loading" @click="setPage(page - 1)">上一页</button>
       <span class="text-sm text-muted">第 {{ page }} / {{ totalPages }} 页</span>
       <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page >= totalPages || loading" @click="setPage(page + 1)">下一页</button>
@@ -157,6 +157,10 @@ const page = ref(typeof initialPage === 'string' && /^\d+$/.test(initialPage) &&
 const total = ref(0);
 const loading = ref(false);
 const error = ref('');
+// A pending retry may retain data only for the same applied route and access context.
+const resultContext = ref<string | null>(null);
+const currentResultContext = computed(() => JSON.stringify([cacheKey(), reading.generation, auth.isAdmin]));
+const hasCurrentResults = computed(() => resultContext.value === currentResultContext.value);
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 const legacyRatingLabel = computed(() => label.value ? '' : legacyLabels[rating.value as keyof typeof legacyLabels] ?? '');
 function cacheKey(path = route.fullPath) { return `library:${PAGE_SIZE}:${path}`; }
@@ -194,7 +198,8 @@ async function loadCreators(scroll: 'restore' | 'top' | 'preserve', force = fals
   generation = reading.generation;
   const requestGeneration = generation;
   const admin = auth.isAdmin;
-  const isCurrent = () => token === requestToken && requestGeneration === reading.generation && admin === auth.isAdmin;
+  const context = currentResultContext.value;
+  const isCurrent = () => token === requestToken && requestGeneration === reading.generation && admin === auth.isAdmin && context === currentResultContext.value;
   loading.value = true;
   error.value = '';
   const cached = force ? undefined : reading.libraryPages[cacheKey()];
@@ -203,6 +208,7 @@ async function loadCreators(scroll: 'restore' | 'top' | 'preserve', force = fals
     if (!isCurrent()) return;
     creators.value = cached.items;
     total.value = cached.total;
+    resultContext.value = context;
     loading.value = false;
     await nextTick();
     requestAnimationFrame(() => { if (token === requestToken && scroll !== 'preserve') window.scrollTo({ top: scroll === 'restore' ? cached.scrollY : 0 }); });
@@ -217,6 +223,7 @@ async function loadCreators(scroll: 'restore' | 'top' | 'preserve', force = fals
     if (!isCurrent()) return;
     creators.value = payload.items;
     total.value = payload.total;
+    resultContext.value = context;
     await nextTick();
     if (token === requestToken && scroll === 'top') window.scrollTo({ top: 0 });
   } catch (reason) {
@@ -280,7 +287,7 @@ function creatorRoute(creator: CosGalleryCreator) {
 }
 
 function saveReadingPosition() {
-  if (!loading.value && !error.value && generation === reading.generation) {
+  if (!loading.value && !error.value && hasCurrentResults.value && generation === reading.generation) {
     reading.libraryPages[cacheKey()] = { items: [...creators.value], total: total.value, scrollY: window.scrollY };
     const keys = Object.keys(reading.libraryPages);
     if (keys.length > 10) delete reading.libraryPages[keys[0]!];

@@ -133,7 +133,7 @@ describe('PostViewer work context', () => {
   it('keeps likes, bookmarks and caption at Post level but trashes the selected media', async () => {
     const like = vi.spyOn(useLikesStore(), 'toggleLike').mockResolvedValue();
     const { wrapper } = await render();
-    await wrapper.get('button[aria-label="Like post"]').trigger('click');
+    await wrapper.get('button[aria-label="Like this content"]').trigger('click');
     expect(like.mock.calls[0]?.[0].id).toBe(123);
     expect(wrapper.getComponent(CollectionBookmark).props('item').id).toBe(123);
     expect(wrapper.get('.viewer__sidebar-caption').text()).toContain('Creator NO.033 Work');

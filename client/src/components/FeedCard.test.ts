@@ -328,7 +328,7 @@ describe('FeedCard', () => {
     await flushPromises();
 
     expect(wrapper.get('button[aria-label="More options"]').attributes('title')).toBe('More options');
-    expect(wrapper.get('button[aria-label="Like post"]').attributes('title')).toBe('Like post');
+    expect(wrapper.get('button[aria-label="Like this content"]').attributes('title')).toBe('Like this content');
     expect(wrapper.get('a[aria-label="Open media"]').attributes('title')).toBe('Open media');
     const postRouteLink = wrapper
       .findAll('a[data-to]')

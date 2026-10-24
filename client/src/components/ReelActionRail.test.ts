@@ -97,7 +97,7 @@ describe('ReelActionRail', () => {
       }
     });
 
-    await wrapper.get('button[aria-label="Like post"]').trigger('click');
+    await wrapper.get('button[aria-label="Like this content"]').trigger('click');
     await flushPromises();
 
     expect(wrapper.get('[data-test="parent-count"]').text()).toBe('0');

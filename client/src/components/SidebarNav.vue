@@ -205,20 +205,20 @@
 
     <div class="z-50 mt-auto pt-10 pb-2">
       <button
-        v-if="touchControls"
+        v-if="touchControls || sidebarInteraction === 'click'"
         class="sidebar__toggle sidebar-item w-full mb-[0.4rem]"
         data-test="sidebar-toggle"
         type="button"
-        :aria-label="expanded ? '收起侧栏' : '展开侧栏'"
+        :aria-label="expanded ? t('nav.sidebarCollapse') : t('nav.sidebarExpand')"
         :aria-expanded="expanded"
-        :title="expanded ? '收起侧栏' : '展开侧栏'"
-        @click="toggleTouchSidebar"
+        :title="expanded ? t('nav.sidebarCollapse') : t('nav.sidebarExpand')"
+        @click="toggleSidebar"
       >
         <span
           class="sidebar__toggle-icon sidebar__icon i-fluent-chevron-right-20-regular flex-shrink-0 w-[1.45rem] h-[1.45rem]"
           aria-hidden="true"
         />
-        <span class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]">{{ expanded ? '收起侧栏' : '展开侧栏' }}</span>
+        <span class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]">{{ expanded ? t('nav.sidebarCollapse') : t('nav.sidebarExpand') }}</span>
       </button>
       <div class="relative">
         <div
@@ -302,6 +302,21 @@
             <span>{{ t('nav.switchAppearance') }}</span>
           </button>
 
+          <label class="block border-t border-border px-[1.2rem] py-[0.85rem] text-[0.85rem]">
+            <span class="block font-semibold mb-2">{{ t('nav.sidebarInteraction') }}</span>
+            <select
+              class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-text"
+              :value="sidebarInteraction"
+              :aria-label="t('nav.sidebarInteraction')"
+              data-test="sidebar-interaction"
+              @change="changeSidebarInteraction"
+            >
+              <option value="click">{{ t('nav.sidebarClick') }}</option>
+              <option value="hover">{{ t('nav.sidebarHover') }}</option>
+            </select>
+            <small class="block mt-2 text-muted">{{ t('nav.sidebarLocalHint') }}</small>
+          </label>
+
           <button
             v-if="authStore.canSignOut"
             class="flex items-center gap-[0.95rem] w-full px-[1.2rem] py-[1rem] border-0 bg-transparent text-[0.98rem] text-text cursor-pointer text-left transition-colors duration-150 hover:bg-surface-hover disabled:opacity-60 disabled:cursor-wait"
@@ -318,6 +333,7 @@
         </div>
 
         <button
+          ref="moreButton"
           class="sidebar-item w-full"
           :class="moreMenuOpen ? 'bg-surface-hover font-semibold' : ''"
           type="button"
@@ -343,7 +359,8 @@
 <script setup lang="ts">
 import LibraryNavigation from './LibraryNavigation.vue';
 import GalleryStatistics from './GalleryStatistics.vue';
-  import { computed, onMounted, onUnmounted, ref, watch } from "vue"
+import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference, SIDEBAR_INTERACTION_KEY, SIDEBAR_CLICK_EXPANDED_KEY } from '../utils/sidebar-preferences';
+  import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
   import { useI18n } from "vue-i18n"
   import { RouterLink, useRoute } from "vue-router"
 
@@ -365,11 +382,15 @@ import GalleryStatistics from './GalleryStatistics.vue';
   const route = useRoute()
   const moreMenuOpen = ref(false)
   const sidebar = ref<HTMLElement | null>(null)
+  const moreButton = ref<HTMLButtonElement | null>(null)
   const desktop = ref(false)
   const touchControls = ref(false)
   const keyboardFocus = ref(false)
   const touchExpanded = ref(false)
+  const sidebarInteraction = ref(readSidebarInteraction())
+  const clickExpanded = ref(readSidebarClickExpanded())
   let pointerInside = false
+  let lastPointerPosition: { clientX: number; clientY: number } | null = null
   let inputMode: 'keyboard' | 'pointer' | null = null
   let expandTimer: ReturnType<typeof setTimeout> | undefined
   let collapseTimer: ReturnType<typeof setTimeout> | undefined
@@ -431,6 +452,11 @@ import GalleryStatistics from './GalleryStatistics.vue';
 
   function reconcileExpansion() {
     if (!desktop.value) return
+    if (sidebarInteraction.value === 'click') {
+      clearTimers()
+      requestExpanded(clickExpanded.value)
+      return
+    }
     if (hasExpansionHold()) {
       clearTimers()
       requestExpanded(true)
@@ -458,6 +484,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
 
   function handlePointerEnter(event: PointerEvent) {
     if (!desktop.value || touchControls.value || event.pointerType === 'touch') return
+    lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
     pointerInside = pointerIsOverSidebar(event)
     reconcileExpansion()
   }
@@ -467,7 +494,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
     reconcileExpansion()
   }
 
-  function pointerIsOverSidebar(event: MouseEvent) {
+  function pointerIsOverSidebar(event: { clientX: number; clientY: number }) {
     const bounds = sidebar.value?.getBoundingClientRect()
     return Boolean(bounds && event.clientX >= bounds.left && event.clientX < bounds.right &&
       event.clientY >= bounds.top && event.clientY < bounds.bottom)
@@ -478,6 +505,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
     // aside's pointerleave, so observe document coordinates even after closing.
     // Only an actual pointer event updates hover; keyboard clicks do not.
     if (!desktop.value || touchControls.value || event.pointerType === 'touch') return
+    lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
     if (!props.expanded && !pointerInside && !moreMenuOpen.value) return
     const inside = pointerIsOverSidebar(event)
     if (inside !== pointerInside) {
@@ -492,11 +520,43 @@ import GalleryStatistics from './GalleryStatistics.vue';
     reconcileExpansion()
   }
 
-  function toggleTouchSidebar() {
+  function toggleSidebar() {
+    if (sidebarInteraction.value === 'click') {
+      clickExpanded.value = !props.expanded
+      saveSidebarPreference(SIDEBAR_CLICK_EXPANDED_KEY, String(clickExpanded.value))
+      closeMoreMenu()
+      reconcileExpansion()
+      return
+    }
     touchExpanded.value = !props.expanded
     if (!touchExpanded.value) keyboardFocus.value = false
     closeMoreMenu()
     reconcileExpansion()
+  }
+
+  function changeSidebarInteraction(event: Event) {
+    const value = (event.target as HTMLSelectElement).value
+    if (value !== 'click' && value !== 'hover') return
+    sidebarInteraction.value = value
+    saveSidebarPreference(SIDEBAR_INTERACTION_KEY, value)
+    resetInteraction()
+    void nextTick(() => moreButton.value?.focus({ preventScroll: true }))
+  }
+
+  function resetInteraction() {
+    clearTimers()
+    keyboardFocus.value = false
+    touchExpanded.value = false
+    pointerInside = !touchControls.value && Boolean(lastPointerPosition && pointerIsOverSidebar(lastPointerPosition))
+    closeMoreMenu()
+    reconcileExpansion()
+  }
+
+  function handlePreferenceStorage(event: StorageEvent) {
+    if (event.key !== null && event.key !== SIDEBAR_INTERACTION_KEY && event.key !== SIDEBAR_CLICK_EXPANDED_KEY) return
+    sidebarInteraction.value = readSidebarInteraction()
+    clickExpanded.value = readSidebarClickExpanded()
+    resetInteraction()
   }
 
   function handlePointerDown(event: PointerEvent) {
@@ -527,7 +587,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
     closeMoreMenu()
     touchControls.value = Boolean(desktopMedia?.matches && touchMedia?.matches)
     desktop.value = Boolean(desktopMedia?.matches)
-    requestExpanded(false)
+    requestExpanded(desktop.value && sidebarInteraction.value === 'click' && clickExpanded.value)
   }
 
   function handleAppearanceToggle() {
@@ -589,6 +649,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
     document.addEventListener('pointerdown', handlePointerDown, true)
     document.addEventListener('pointermove', handlePointerMove, { capture: true, passive: true })
     window.addEventListener("keydown", handleWindowKeydown, true)
+    window.addEventListener('storage', handlePreferenceStorage)
   })
 
   onUnmounted(() => {
@@ -598,6 +659,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
     document.removeEventListener('pointerdown', handlePointerDown, true)
     document.removeEventListener('pointermove', handlePointerMove, true)
     window.removeEventListener("keydown", handleWindowKeydown, true)
+    window.removeEventListener('storage', handlePreferenceStorage)
   })
 </script>
 
@@ -640,7 +702,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
 .sidebar__statistics {
   width: calc(var(--sidebar-expanded-width, 15rem) - 1.9rem);
   padding: 0 .6rem;
-  margin-top: 1.6rem;
+  margin-top: 2.8rem;
   pointer-events: none;
 }
 

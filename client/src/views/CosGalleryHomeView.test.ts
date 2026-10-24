@@ -1,11 +1,13 @@
-import { flushPromises, mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useCreatorReadingStore } from '../stores/creator-reading';
+import { useAuthStore } from '../stores/auth';
 import CosGalleryHomeView from './CosGalleryHomeView.vue';
 import { fetchCosGalleryCreators } from '../api/gallery';
 
 vi.mock('../api/gallery', () => ({ fetchCosGalleryCreators: vi.fn() }));
+enableAutoUnmount(afterEach);
 const routerState = vi.hoisted(() => ({
   route: { name: 'library', query: {} as Record<string, string | string[]>, fullPath: '/library' },
   replace: vi.fn(),
@@ -74,6 +76,81 @@ describe('managed gallery classifications', () => {
     await wrapper.get('[data-test=retry-creators]').trigger('click'); await flushPromises();
     expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R15', '', 1, 60, undefined, undefined);
     expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+  it.each<{ condition: string; nextQuery: Record<string, string> }>([
+    { condition: 'rating', nextQuery: { rating: 'R15' } },
+    { condition: 'search', nextQuery: { q: 'another creator' } },
+    { condition: 'page', nextQuery: { page: '2' } },
+    { condition: 'label', nextQuery: { label: 'portrait' } },
+    { condition: 'preference', nextQuery: { preference: 'liked' } }
+  ])('keeps previous-condition results hidden while retrying $condition', async ({ nextQuery }) => {
+    let resolveRetry!: (value: CreatorPage) => void;
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValueOnce(creatorPage(121, 1))
+      .mockRejectedValueOnce(new Error('New condition failed'))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRetry = resolve; }));
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } });
+    await flushPromises();
+    expect(wrapper.text()).toContain('121 位博主');
+    routerState.route.query = nextQuery;
+    routerState.route.fullPath = '/library?' + new URLSearchParams(nextQuery).toString();
+    await flushPromises();
+    expect(wrapper.get('[role=alert]').text()).toContain('New condition failed');
+    await wrapper.get('[data-test=retry-creators]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(false);
+    expect(wrapper.find('[aria-label="博主分页"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('121 位博主');
+    expect(wrapper.text()).toContain('正在加载博主目录');
+    resolveRetry(creatorPage(61, Number(nextQuery.page ?? 1)));
+    await flushPromises();
+    expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('61 位博主');
+    wrapper.unmount();
+  });
+  it('keeps same-condition results during refresh and retry despite an unsubmitted search draft', async () => {
+    let rejectRefresh!: (reason: Error) => void;
+    let resolveRetry!: (value: CreatorPage) => void;
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValueOnce(creatorPage(121, 1))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRetry = resolve; }));
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } });
+    await flushPromises();
+    useCreatorReadingStore().libraryResetVersion += 1;
+    await flushPromises();
+    expect(wrapper.get('[aria-label="博主目录"]').attributes('aria-busy')).toBe('true');
+    expect(wrapper.text()).toContain('121 位博主');
+    rejectRefresh(new Error('Refresh failed'));
+    await flushPromises();
+    await wrapper.get('input[type=search]').setValue('unsubmitted');
+    await wrapper.get('[data-test=retry-creators]').trigger('click');
+    await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith(undefined, '', 1, 60, undefined, undefined);
+    expect(wrapper.get('[aria-label="博主目录"]').attributes('aria-busy')).toBe('true');
+    expect(wrapper.text()).toContain('121 位博主');
+    resolveRetry(creatorPage(60, 1));
+    await flushPromises();
+    expect(wrapper.text()).toContain('60 位博主');
+    wrapper.unmount();
+  });
+  it.each(['invalidation', 'permission change'])('hides previous-context results during %s', async change => {
+    let resolveCurrent!: (value: CreatorPage) => void;
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValueOnce(creatorPage(121, 1))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveCurrent = resolve; }));
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } });
+    await flushPromises();
+    if (change === 'invalidation') useCreatorReadingStore().invalidate();
+    else {
+      const auth = useAuthStore();
+      auth.applyStatus({ ...auth.$state, role: 'viewer', capabilities: { ...auth.capabilities, canAccessSettings: false } });
+    }
+    await flushPromises();
+    expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(false);
+    expect(wrapper.find('[aria-label="博主分页"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('121 位博主');
+    resolveCurrent(creatorPage(0, 1));
+    await flushPromises();
+    expect(wrapper.text()).toContain('0 位博主');
     wrapper.unmount();
   });
   it('distinguishes linked null, unlinked and inactive while keeping folder navigation', async () => {

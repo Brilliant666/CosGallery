@@ -40,19 +40,19 @@ describe('useLikesStore localization', () => {
     store.syncFromItems([createFeedItem(1)], 'shared');
 
     expect(store.collectionLabel).toBe('Likes');
-    expect(store.collectionSectionLabel).toBe('Liked posts');
+    expect(store.collectionSectionLabel).toBe('Liked content');
 
     i18n.global.locale.value = 'zh';
 
     expect(store.collectionLabel).toBe('赞过');
-    expect(store.collectionSectionLabel).toBe('已赞帖子');
-    expect(store.toggleAriaLabel(false)).toBe('点赞帖子');
+    expect(store.collectionSectionLabel).toBe('已赞内容');
+    expect(store.toggleAriaLabel(false)).toBe('点赞此内容');
 
     store.syncFromItems([createFeedItem(2)], 'local');
 
     expect(store.collectionLabel).toBe('收藏');
-    expect(store.collectionSectionLabel).toBe('收藏帖子');
-    expect(store.toggleAriaLabel(true)).toBe('取消收藏帖子');
+    expect(store.collectionSectionLabel).toBe('收藏内容');
+    expect(store.toggleAriaLabel(true)).toBe('取消收藏此内容');
   });
 });
 

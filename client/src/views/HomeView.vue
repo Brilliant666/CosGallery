@@ -202,14 +202,13 @@
       </div>
 
       <p class="m-0 mt-[1.4rem] text-center text-[0.7rem] leading-[1.7] text-muted">
-        {{ t('home.sidebar.openSourceText') }}
         <a
           class="home-recommendations__all inline-block text-muted"
           href="https://github.com/foldergram/foldergram"
           target="_blank"
           rel="noreferrer"
         >
-          {{ t('home.sidebar.viewOnGitHub') }}
+          {{ t('home.sidebar.openSourceText') }}
         </a>
       </p>
     </aside>

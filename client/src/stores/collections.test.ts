@@ -271,6 +271,128 @@ describe('collections store', () => {
     expect(collectionsStore.isPending(item.id)).toBe(false);
   });
 
+  it.each(['local', 'shared'] as const)('rejects %s creation before creating an empty collection when the media is busy', async mode => {
+    if (mode === 'local') useLocalCollectionsMode();
+    const saved = createCollection('saved', 'Saved', true);
+    const travel = createCollection('travel', 'Travel');
+    fetchCollectionsMock.mockResolvedValue({ items: [saved] });
+    createCollectionMock.mockResolvedValue({ collection: travel });
+    const store = useCollectionsStore();
+    await store.initialize();
+    store.pendingImageIds = [42];
+    const before = window.localStorage.getItem('foldergram-local-collections-v1');
+    await expect(store.createAndAdd('Travel', createFeedItem(42))).rejects.toThrow(i18n.global.t('collections.bookmark.errors.busy'));
+    expect(createCollectionMock).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('foldergram-local-collections-v1')).toBe(before);
+    expect(store.pendingImageIds).toEqual([42]);
+  });
+
+  it.each(['local', 'shared'] as const)('locks the complete %s create-and-add operation from initialization through readback', async mode => {
+    if (mode === 'local') useLocalCollectionsMode();
+    const saved = createCollection('saved', 'Saved', true);
+    const travel = createCollection('travel', 'Travel');
+    fetchCollectionsMock.mockResolvedValue({ items: [saved, travel] });
+    let created!: () => void;
+    createCollectionMock.mockImplementation(() => new Promise(resolve => { created = () => resolve({ collection: travel }); }));
+    addImageToCollectionMock.mockResolvedValue({ ok: true, isSaved: true });
+    fetchImageCollectionsMock.mockResolvedValue({ imageId: 43, isSaved: false, items: [{ ...saved, containsImage: false }] });
+    const store = useCollectionsStore();
+    store.mode = mode; store.initialized = true; store.items = [saved];
+    let initialized!: () => void;
+    vi.spyOn(store, 'initialize').mockResolvedValue().mockImplementationOnce(() => new Promise(resolve => { initialized = resolve; }));
+    let refreshed!: () => void;
+    vi.spyOn(store, 'refreshAfterMembershipChange').mockImplementation(() => new Promise(resolve => { refreshed = resolve; }));
+    const pending = store.createAndAdd('Travel', createFeedItem(43));
+    expect(store.isPending(43)).toBe(true);
+    await expect(store.createAndAdd('Other', createFeedItem(43))).rejects.toThrow(i18n.global.t('collections.bookmark.errors.busy'));
+    await store.toggleDefaultSave(createFeedItem(43));
+    await store.toggleCollectionMembership('other', createFeedItem(43));
+    expect(saveImageMock).not.toHaveBeenCalled();
+    expect(addImageToCollectionMock).not.toHaveBeenCalled();
+    initialized();
+    if (mode === 'shared') {
+      await vi.waitFor(() => expect(created).toBeTypeOf('function'));
+      expect(store.isPending(43)).toBe(true);
+      await store.toggleDefaultSave(createFeedItem(43));
+      await store.toggleCollectionMembership('other', createFeedItem(43));
+      expect(saveImageMock).not.toHaveBeenCalled();
+      expect(addImageToCollectionMock).not.toHaveBeenCalled();
+      created();
+    }
+    await vi.waitFor(() => expect(refreshed).toBeTypeOf('function'));
+    expect(store.isPending(43)).toBe(true);
+    expect(store.membershipByImageId[43].items.find(entry => entry.slug === 'travel')?.containsImage).toBe(true);
+    await store.toggleDefaultSave(createFeedItem(43));
+    expect(saveImageMock).not.toHaveBeenCalled();
+    refreshed(); await pending;
+    expect(store.pendingImageIds).toEqual([]);
+    expect(store.pendingCollectionKeys).toEqual([]);
+    expect(addImageToCollectionMock).toHaveBeenCalledTimes(mode === 'shared' ? 1 : 0);
+  });
+
+  it('keeps a newly created shared collection and committed membership when the list readback fails', async () => {
+    const saved = createCollection('saved', 'Saved', true);
+    const travel = createCollection('travel', 'Travel');
+    const store = useCollectionsStore(); store.initialized = true; store.items = [saved];
+    store.membershipByImageId[44] = { imageId: 44, isSaved: false, items: [{ ...saved, containsImage: false }] };
+    createCollectionMock.mockResolvedValue({ collection: travel });
+    addImageToCollectionMock.mockResolvedValue({ ok: true, isSaved: true });
+    fetchCollectionsMock.mockRejectedValue(new Error('Readback unavailable'));
+    await expect(store.createAndAdd('Travel', createFeedItem(44))).rejects.toThrow(i18n.global.t('collections.bookmark.errors.refreshAfterSave'));
+    expect(createCollectionMock).toHaveBeenCalledOnce();
+    expect(addImageToCollectionMock).toHaveBeenCalledExactlyOnceWith('travel', 44);
+    expect(store.items.some(collection => collection.slug === 'travel')).toBe(true);
+    expect(store.isSaved(44)).toBe(true);
+    expect(store.membershipByImageId[44].items.find(entry => entry.slug === 'travel')?.containsImage).toBe(true);
+    expect(store.membershipRefreshRequired).toContain(44);
+    expect(store.isPending(44)).toBe(false);
+  });
+
+  it('keeps local saved state and storage after create-and-add commits but readback fails', async () => {
+    useLocalCollectionsMode();
+    const store = useCollectionsStore(); await store.initialize();
+    vi.spyOn(store, 'refreshAfterMembershipChange').mockRejectedValue(new Error('Storage readback failed'));
+    await expect(store.createAndAdd('Travel', createFeedItem(45))).rejects.toThrow(i18n.global.t('collections.bookmark.errors.refreshAfterSave'));
+    expect(store.isSaved(45)).toBe(true);
+    expect(store.membershipByImageId[45].items.find(entry => entry.slug === 'travel')?.containsImage).toBe(true);
+    const persisted = JSON.parse(window.localStorage.getItem('foldergram-local-collections-v1')!);
+    expect(persisted.collections.find((collection: {slug: string}) => collection.slug === 'travel').items[0].id).toBe(45);
+    expect(store.isPending(45)).toBe(false);
+    expect(createCollectionMock).not.toHaveBeenCalled();
+  });
+
+  it('retains a created collection after adding fails so its row can retry without creating a duplicate', async () => {
+    const saved = createCollection('saved', 'Saved', true);
+    const travel = createCollection('travel', 'Travel');
+    const store = useCollectionsStore(); store.initialized = true; store.items = [saved];
+    store.membershipByImageId[46] = { imageId: 46, isSaved: false, items: [{ ...saved, containsImage: false }] };
+    createCollectionMock.mockResolvedValue({ collection: travel });
+    fetchCollectionsMock.mockResolvedValue({ items: [saved, travel] });
+    addImageToCollectionMock.mockRejectedValueOnce(new Error('Add failed')).mockResolvedValue({ ok: true, isSaved: true });
+    const expected = i18n.global.t('collections.bookmark.errors.createdWithoutMedia', { name: 'Travel', error: 'Add failed' });
+    await expect(store.createAndAdd('Travel', createFeedItem(46))).rejects.toThrow(expected);
+    expect(store.items.some(collection => collection.slug === 'travel')).toBe(true);
+    expect(store.membershipByImageId[46].items.find(entry => entry.slug === 'travel')?.containsImage).toBe(false);
+    expect(store.pendingImageIds).toEqual([]);
+    fetchImageCollectionsMock.mockResolvedValue({ imageId: 46, isSaved: true,
+      items: [{...saved, containsImage: true}, {...travel, containsImage: true}] });
+    await store.toggleCollectionMembership('travel', createFeedItem(46));
+    expect(createCollectionMock).toHaveBeenCalledOnce();
+    expect(addImageToCollectionMock).toHaveBeenCalledTimes(2);
+    expect(store.isSaved(46)).toBe(true);
+  });
+
+  it('releases the media lock and preserves the list when collection creation itself fails', async () => {
+    const saved = createCollection('saved', 'Saved', true);
+    const store = useCollectionsStore(); store.initialized = true; store.items = [saved];
+    createCollectionMock.mockRejectedValue(new Error('Create failed'));
+    await expect(store.createAndAdd('Travel', createFeedItem(47))).rejects.toThrow('Create failed');
+    expect(store.pendingImageIds).toEqual([]);
+    expect(store.pendingCollectionKeys).toEqual([]);
+    expect(store.items).toEqual([saved]);
+    expect(addImageToCollectionMock).not.toHaveBeenCalled();
+  });
+
   it('keeps a committed save when refreshing the list fails and explains the partial success', async () => {
     fetchCollectionsMock.mockResolvedValueOnce({ items: [createCollection('saved', 'Saved', true)] }).mockRejectedValueOnce(new Error('Refresh failed'));
     saveImageMock.mockResolvedValue({ ok: true });

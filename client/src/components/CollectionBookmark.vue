@@ -56,6 +56,7 @@
             type="button"
             :aria-label="t('collections.bookmark.createCollection')"
             :title="t('collections.bookmark.createCollection')"
+            :disabled="creatingCollection || collectionsStore.isPending(item.id)"
             @click="startCreating"
           >
             <span class="i-fluent-add-16-filled" aria-hidden="true" />
@@ -72,7 +73,7 @@
             :placeholder="t('collections.bookmark.namePlaceholder')"
             @keydown.esc.stop.prevent="cancelCreating"
           />
-          <button class="collection-bookmark__submit" type="submit" :disabled="creatingCollection">
+          <button class="collection-bookmark__submit" type="submit" :disabled="creatingCollection || collectionsStore.isPending(item.id)">
             <span class="i-fluent-checkmark-16-filled" aria-hidden="true" />
           </button>
         </form>
@@ -375,6 +376,7 @@ function clearLongPressTimer() {
 }
 
 async function startCreating() {
+  if (creatingCollection.value || collectionsStore.isPending(props.item.id)) return;
   creating.value = true;
   localError.value = null;
   await nextTick();
@@ -389,6 +391,11 @@ function cancelCreating() {
 }
 
 async function submitCreate() {
+  if (creatingCollection.value) return;
+  if (collectionsStore.isPending(props.item.id)) {
+    localError.value = t('collections.bookmark.errors.busy');
+    return;
+  }
   const name = collectionName.value.trim();
   if (!name) {
     localError.value = t('collections.detail.edit.required');
