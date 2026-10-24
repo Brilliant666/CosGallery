@@ -32,7 +32,7 @@ describe('sidebar hover intent', () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-  it('requires 100 ms dwell, delays exit by 220 ms and cancels pending collapse on reentry', async () => {
+  it('requires 100 ms dwell, delays exit by 120 ms and cancels pending collapse on reentry', async () => {
     const { sidebar } = await setup();
     await sidebar.trigger('pointerenter', { pointerType: 'mouse' });
     await vi.advanceTimersByTimeAsync(99);
@@ -40,13 +40,15 @@ describe('sidebar hover intent', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(sidebar.classes()).toContain('sidebar--expanded');
     await sidebar.trigger('pointerleave', { pointerType: 'mouse' });
-    await vi.advanceTimersByTimeAsync(219);
+    await vi.advanceTimersByTimeAsync(119);
     expect(sidebar.classes()).toContain('sidebar--expanded');
     await sidebar.trigger('pointerenter', { pointerType: 'mouse' });
     await vi.advanceTimersByTimeAsync(500);
     expect(sidebar.classes()).toContain('sidebar--expanded');
     await sidebar.trigger('pointerleave', { pointerType: 'mouse' });
-    await vi.advanceTimersByTimeAsync(220);
+    await vi.advanceTimersByTimeAsync(119);
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+    await vi.advanceTimersByTimeAsync(1);
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
   });
 
@@ -74,7 +76,7 @@ describe('sidebar hover intent', () => {
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ label });
     await sidebar.trigger('pointerleave', { pointerType: 'mouse' });
-    await vi.advanceTimersByTimeAsync(219);
+    await vi.advanceTimersByTimeAsync(119);
     expect(sidebar.classes()).toContain('sidebar--expanded');
     await vi.advanceTimersByTimeAsync(1);
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
@@ -87,7 +89,7 @@ describe('sidebar hover intent', () => {
     expect(sidebar.get(`.library-nav__menu a[href="/library?label=${label}"]`).attributes('aria-current')).toBe('page');
     expect(sidebar.findAll('.library-nav__menu a')).toHaveLength(4);
     await sidebar.trigger('pointerleave', { pointerType: 'mouse' });
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(60);
     await sidebar.trigger('pointerenter', { pointerType: 'mouse' });
     await vi.advanceTimersByTimeAsync(500);
     expect(sidebar.classes()).toContain('sidebar--expanded');

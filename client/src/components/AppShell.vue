@@ -141,7 +141,7 @@ onMounted(() => {
 .app-shell {
   --sidebar-collapsed-width: 4.85rem;
   --sidebar-expanded-width: 15rem;
-  --sidebar-width-duration: 220ms;
+  --sidebar-width-duration: 180ms;
   --sidebar-motion-easing: cubic-bezier(0.22, 1, 0.36, 1);
   --mobile-safe-area-bottom: 0px;
   --mobile-bottom-nav-height: calc(3.55rem + var(--mobile-safe-area-bottom));

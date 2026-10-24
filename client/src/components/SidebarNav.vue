@@ -509,7 +509,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
         collapseTimer = setTimeout(() => {
           collapseTimer = undefined
           if (!pointerInside && !hasExpansionHold()) requestExpanded(false)
-        }, 220)
+        }, 120)
       }
     }
   }
@@ -657,7 +657,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
 <style scoped>
 .sidebar {
   width: var(--sidebar-collapsed-width, 4.85rem);
-  transition: width var(--sidebar-width-duration, 220ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
+  transition: width var(--sidebar-width-duration, 180ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .sidebar--expanded {
@@ -674,7 +674,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
 .sidebar__meta {
   flex-shrink: 0;
   opacity: 0;
-  transition: opacity var(--sidebar-width-duration, 220ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
+  transition: opacity var(--sidebar-width-duration, 180ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .sidebar__label {
@@ -700,7 +700,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
 }
 
 .sidebar__toggle-icon {
-  transition: transform var(--sidebar-width-duration, 220ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
+  transition: transform var(--sidebar-width-duration, 180ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .sidebar--expanded .sidebar__toggle-icon {

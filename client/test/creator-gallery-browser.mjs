@@ -338,16 +338,18 @@ try {
   await page.goto(entry + '#/library');
   await expectCards(3);
   await setSidebar(true);
-  const reentered = await checkSidebarTransition('reenter-cancels-220ms-collapse', async () => {
+  assert.equal(await page.locator('.sidebar').evaluate(node => getComputedStyle(node).transitionDuration), '0.18s');
+  assert.equal(await page.locator('.app-shell__content').evaluate(node => getComputedStyle(node).transitionDuration), '0.18s');
+  const reentered = await checkSidebarTransition('reenter-cancels-120ms-collapse', async () => {
     await leaveSidebar();
-    await page.waitForTimeout(120);
+    await page.waitForTimeout(60);
     assert.equal(await sidebarExpanded(), true, 'Collapse waits through a short exit');
     await enterSidebar();
   });
   assert(Math.abs(reentered.sidebarWidth - 240) < 1);
   const reversed = await checkSidebarTransition('rapid-hover-reversal', async () => {
     await leaveSidebar();
-    await page.waitForTimeout(260);
+    await page.waitForTimeout(160);
     await enterSidebar();
   });
   assert(Math.abs(reversed.sidebarWidth - 240) < 1);
@@ -356,14 +358,14 @@ try {
   await expectCards(1);
   const categoryReentered = await checkSidebarTransition('open-category-reentry-cancels-collapse', async () => {
     await leaveSidebar();
-    await page.waitForTimeout(120);
+    await page.waitForTimeout(60);
     assert.equal(await sidebarExpanded(), true);
     await enterSidebar();
   });
   assert(Math.abs(categoryReentered.sidebarWidth - 240) < 1);
   const categoryReversed = await checkSidebarTransition('open-category-exit-animation-reversal', async () => {
     await leaveSidebar();
-    await page.waitForTimeout(260);
+    await page.waitForTimeout(160);
     await enterSidebar();
   });
   assert(Math.abs(categoryReversed.sidebarWidth - 240) < 1);
@@ -792,7 +794,7 @@ try {
   writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, categoryExitChecks, requests, errors, unexpected }, null, 2));
   console.log(JSON.stringify({ status: 'PASS', output, isolatedPort: port, screenshots: evidence.length, requests: requests.length, layoutSamples: layouts.length, classificationRows: classificationRows.length,
     sidebarTransitions: sidebarFrames.length, sidebarFrameCount: sidebarFrames.reduce((total, transition) => total + transition.frames.length, 0), homeLayouts: homeLayouts.length, storageChecks, categoryExitChecks: categoryExitChecks.length,
-    scenarios: ['desktop navigation and return', '100ms hover dwell and 220ms exit delay; brief passes and reentry', 'mouse-click focus does not pin sidebar; keyboard focus-visible expands immediately', 'all four categories collapse on pointer exit and restore open list and selection on reentry', 'category exit animation inert links and reversal; keyboard category focus holds only until focus leaves', 'more-menu holder including fixed backdrop click and outside Escape', 'keyboard focused more-menu item removal with Escape and Enter', 'touch desktop button fallback with independent category state', 'retired storage preference ignored and preserved', 'real HomeView recent batches remain outside the sidebar at rest and throughout transitions', 'reduced-motion sidebar/content alignment', '767/768 breakpoint and 390 mobile navigation without desktop gap', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes at matching sidebar states'] }));
+    scenarios: ['desktop navigation and return', '100ms hover dwell, 120ms exit delay and synchronized 180ms animation; brief passes and reentry', 'mouse-click focus does not pin sidebar; keyboard focus-visible expands immediately', 'all four categories collapse on pointer exit and restore open list and selection on reentry', 'category exit animation inert links and reversal; keyboard category focus holds only until focus leaves', 'more-menu holder including fixed backdrop click and outside Escape', 'keyboard focused more-menu item removal with Escape and Enter', 'touch desktop button fallback with independent category state', 'retired storage preference ignored and preserved', 'real HomeView recent batches remain outside the sidebar at rest and throughout transitions', 'reduced-motion sidebar/content alignment', '767/768 breakpoint and 390 mobile navigation without desktop gap', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes at matching sidebar states'] }));
 } catch (error) {
   writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ status: 'FAIL', message: error.message, evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, categoryExitChecks, requests, errors, unexpected }, null, 2));
   for (const context of browser?.contexts() ?? []) for (const page of context.pages()) {
