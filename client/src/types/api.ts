@@ -171,6 +171,8 @@ export interface FolderSummary {
   breadcrumb: string | null;
   workNavigationMode?: 'post' | 'work-gallery';
   contentRating: ContentRating;
+  postCount?: number;
+  /** Legacy visible post-representative count, not the number of original media files. */
   imageCount: number;
   videoCount: number;
   latestImageMtimeMs: number | null;

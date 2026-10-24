@@ -5,16 +5,21 @@ import { nextTick } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import SidebarNav from './SidebarNav.vue';
 import { usePlacesStore } from '../stores/places';
+import { useFoldersStore } from '../stores/folders';
+import type { FolderSummary } from '../types/api';
+import { i18n } from '../locales';
 
 enableAutoUnmount(afterEach);
 
-async function setup() {
+async function setup(folders: FolderSummary[] = []) {
   const pinia = createPinia();
   setActivePinia(pinia);
+  useFoldersStore().items = folders;
   vi.spyOn(usePlacesStore(), 'fetchPlaces').mockResolvedValue(undefined);
   const router = createRouter({ history: createMemoryHistory(), routes:
     ['home', 'library', 'reels', 'explore', 'places', 'likes', 'collections', 'trash', 'archive-catalog', 'creator-admission', 'settings', 'folder']
       .map(name => ({ name, path: name === 'home' ? '/' : `/${name}`, component: { template: '<p>Fixture</p>' } }))
+      .concat([{ name: 'canonical-creator', path: '/library/:creatorId', component: { template: '<p>Fixture</p>' } }])
   });
   await router.push('/library');
   await router.isReady();
@@ -94,5 +99,24 @@ describe('sidebar hover intent', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(sidebar.classes()).toContain('sidebar--expanded');
     expect(router.currentRoute.value.query).toEqual({ label });
+  });
+});
+
+describe('featured creator summaries', () => {
+  it('shows the work count instead of a physical breadcrumb and opens the canonical creator', async () => {
+    i18n.global.locale.value = 'zh';
+    const { sidebar, router } = await setup([{
+      id: 11, canonicalCreatorId: 42, slug: 'sample', name: '合成博主', description: null,
+      folderPath: 'Sample', breadcrumb: '旧父目录', contentRating: 'R15',
+      postCount: 3, imageCount: 99, videoCount: 0, latestImageMtimeMs: null,
+      avatarImageId: null, avatarUrl: null
+    }]);
+    expect(sidebar.text()).toContain('精选博主');
+    const link = sidebar.get('.sidebar__folder');
+    expect(link.get('small').text()).toBe('3 个作品');
+    expect(link.attributes('href')).toBe('/library/42');
+    await link.trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.params.creatorId).toBe('42');
   });
 });

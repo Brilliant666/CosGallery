@@ -95,9 +95,9 @@
     "switchToLightMode": "Cambiar al modo claro",
     "signOut": "Cerrar sesión",
     "returnToPublicView": "Volver a la vista pública",
-    "foldersSpotlight": "Carpetas destacadas",
+    "foldersSpotlight": "Creadores destacados",
     "likesAriaLabel": "{label} ({count})",
-    "folderPosts": "{count} publicaciones"
+    "folderPosts": "{count} obras"
   },
   "settings": {
     "eyebrow": "Ajustes",
@@ -630,13 +630,13 @@
   },
   "home": {
     "sidebar": {
-      "ariaLabel": "Recomendaciones de carpetas",
-      "suggestedFolders": "Carpetas sugeridas",
-      "viewLikes": "Ver me gusta",
-      "viewFavorites": "Ver favoritos",
-      "openFolder": "Abrir",
-      "openSourceText": "Foldergram es de código abierto.",
-      "viewOnGitHub": "Ver en GitHub"
+      "ariaLabel": "Recomendaciones de creadores",
+      "suggestedFolders": "Creadores recomendados",
+      "viewAll": "Ver todos",
+      "workCount": "{count} obras",
+      "openFolder": "Ver obras",
+      "openSourceText": "Basado en Foldergram. Gracias a sus colaboradores de código abierto.",
+      "viewOnGitHub": "Gracias a Foldergram"
     }
   },
   "likes": {

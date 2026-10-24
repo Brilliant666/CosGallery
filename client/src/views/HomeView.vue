@@ -226,46 +226,38 @@
     <aside
       v-if="
         !appStore.isLibraryUnavailable &&
-        homeSummaryFolder &&
+        recommendedFolders.length > 0 &&
         !isCompactHomeLayout
       "
-      class="sticky top-8 grid gap-[1.15rem] w-[19.9375rem] text-muted"
+      class="sticky top-8 grid min-w-0 grid-cols-1 gap-[1.15rem] w-[19.9375rem] text-muted"
       :aria-label="t('home.sidebar.ariaLabel')"
     >
-      <div class="flex items-center gap-[0.8rem]">
-        <Avatar class="w-11 h-11" :name="formatDisplayFolderTitle(homeSummaryFolder)" :src="homeSummaryFolder.avatarUrl" />
-        <div class="flex-1 min-w-0">
-          <strong class="block text-text text-[0.87rem] font-bold">{{ formatDisplayFolderTitle(homeSummaryFolder) }}</strong>
-          <p class="m-0 mt-[0.12rem] text-[0.79rem] truncate">{{ homeSummaryFolder.breadcrumb ?? t('folder.shared.topLevelSourceFolder') }}</p>
-        </div>
-        <RouterLink class="ml-auto text-accent-strong text-[0.76rem] font-bold" :to="folderReadingRoute(homeSummaryFolder.slug, homeSummaryFolder.canonicalCreatorId)">{{ t('home.sidebar.openFolder') }}</RouterLink>
-      </div>
-
       <div class="flex items-center justify-between gap-4 text-text text-[0.96rem] font-bold">
-        <span>{{ t('home.sidebar.suggestedFolders') }}</span>
-        <RouterLink class="text-muted text-[0.76rem] font-bold" :to="{ name: 'likes' }">{{ homeSidebarLinkLabel }}</RouterLink>
+        <h2 class="m-0 text-[0.96rem] font-bold">{{ t('home.sidebar.suggestedFolders') }}</h2>
+        <RouterLink class="home-recommendations__all shrink-0 text-muted text-[0.76rem] font-bold" :to="{ name: 'library' }">{{ t('home.sidebar.viewAll') }}</RouterLink>
       </div>
 
-      <div class="grid gap-[0.95rem]">
+      <div class="grid min-w-0 grid-cols-1 gap-[0.95rem]">
         <RouterLink
           v-for="folder in recommendedFolders"
           :key="folder.id"
-          class="flex items-center gap-[0.8rem]"
+          class="home-recommendations__creator flex min-w-0 items-center gap-[0.8rem]"
           :to="folderReadingRoute(folder.slug, folder.canonicalCreatorId)"
+          :aria-label="`${formatDisplayFolderTitle(folder)} · ${t('home.sidebar.openFolder')}`"
         >
-          <Avatar class="w-11 h-11" :name="formatDisplayFolderTitle(folder)" :src="folder.avatarUrl" />
+          <Avatar class="w-11 h-11 shrink-0" :name="formatDisplayFolderTitle(folder)" :src="folder.avatarUrl" />
           <div class="flex-1 min-w-0">
-            <strong class="block text-text text-[0.87rem] font-bold">{{ formatDisplayFolderTitle(folder) }}</strong>
-            <p class="m-0 mt-[0.12rem] text-[0.79rem] truncate">{{ folder.breadcrumb ?? t('folder.shared.topLevelSourceFolder') }}</p>
+            <strong class="block truncate text-text text-[0.87rem] font-bold" :title="formatDisplayFolderTitle(folder)">{{ formatDisplayFolderTitle(folder) }}</strong>
+            <p class="m-0 mt-[0.12rem] text-[0.79rem] truncate">{{ t('home.sidebar.workCount', { count: formatCount(folder.postCount ?? folder.imageCount) }) }}</p>
           </div>
-          <span class="ml-auto text-accent-strong text-[0.76rem] font-bold">{{ t('home.sidebar.openFolder') }}</span>
+          <span class="home-recommendations__action ml-auto shrink-0 whitespace-nowrap text-accent-strong text-[0.76rem] font-bold">{{ t('home.sidebar.openFolder') }}</span>
         </RouterLink>
       </div>
 
-      <p class="m-0 mt-[1.4rem] text-center text-[0.64rem] font-semibold uppercase tracking-[0.08em] leading-[1.7] text-muted">
+      <p class="m-0 mt-[1.4rem] text-center text-[0.7rem] leading-[1.7] text-muted">
         {{ t('home.sidebar.openSourceText') }}
         <a
-          class="text-muted transition-colors duration-180 hover:text-text"
+          class="home-recommendations__all inline-block text-muted"
           href="https://github.com/foldergram/foldergram"
           target="_blank"
           rel="noreferrer"
@@ -314,8 +306,11 @@ const likedCountByFolder = computed(() => buildLikedCountByFolder(likesStore.ite
 const homeRecommendations = computed(() =>
   selectHomeRecommendations(foldersStore.items, likedCountByFolder.value, appStore.lastOpenedFolderSlug)
 );
-const homeSummaryFolder = computed(() => homeRecommendations.value.homeSummaryFolder);
-const recommendedFolders = computed(() => homeRecommendations.value.recommendedFolders);
+const recommendedFolders = computed(() => {
+  const { homeSummaryFolder, recommendedFolders } = homeRecommendations.value;
+  const combined = homeSummaryFolder ? [homeSummaryFolder, ...recommendedFolders] : recommendedFolders;
+  return combined.filter((folder, index) => combined.findIndex(candidate => candidate.id === folder.id) === index);
+});
 const activeRailViewerId = ref<string | null>(null);
 const activeFeedStoryId = ref<string | null>(null);
 const feedStoryRetrySlug = ref<string | null>(null);
@@ -387,7 +382,7 @@ async function refreshHomeRail(force = false) {
   await feedThenRail(async () => {}, force);
 }
 
-function formatDisplayFolderTitle(folder: NonNullable<typeof homeSummaryFolder.value> | (typeof recommendedFolders.value)[number]) {
+function formatDisplayFolderTitle(folder: (typeof recommendedFolders.value)[number]) {
   return formatFolderTitle(folder, appStore.nestedFolderTitleFormat);
 }
 
@@ -399,9 +394,6 @@ function formatCount(value: number) {
 }
 
 const displayMomentItems = computed(() => momentsStore.localizedItems);
-const homeSidebarLinkLabel = computed(() =>
-  authStore.likesMode === 'local' ? t('home.sidebar.viewFavorites') : t('home.sidebar.viewLikes')
-);
 
 const indexedSummaryLabel = computed(() => {
   if (!appStore.stats) {
@@ -720,3 +712,52 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateHomeLayout);
 });
 </script>
+
+<style scoped>
+.home-recommendations__creator,
+.home-recommendations__all {
+  border-radius: 0.5rem;
+}
+
+.home-recommendations__action {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: transparent;
+  transition: background-color 180ms, border-color 180ms;
+}
+
+.home-recommendations__creator:hover .home-recommendations__action,
+.home-recommendations__creator:focus-visible .home-recommendations__action {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.home-recommendations__creator:active .home-recommendations__action {
+  border-color: var(--accent-strong);
+  background: var(--surface-alt);
+}
+
+.home-recommendations__all:hover,
+.home-recommendations__all:active {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.home-recommendations__creator:focus-visible,
+.home-recommendations__all:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-recommendations__action {
+    transition: none;
+  }
+}
+</style>

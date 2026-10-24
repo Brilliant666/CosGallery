@@ -4,9 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 
 import { i18n } from '../locales';
-import type { AppStatus, ScanProgress } from '../types/api';
+import type { AppStatus, FolderSummary, ScanProgress } from '../types/api';
 import { useAppStore } from '../stores/app';
 import { useFeedStore } from '../stores/feed';
+import { useFoldersStore } from '../stores/folders';
 import { useMomentsStore } from '../stores/moments';
 import { useAuthStore } from '../stores/auth';
 import * as galleryApi from '../api/gallery';
@@ -123,6 +124,15 @@ function mountHomeView() {
   });
 }
 
+function recommendationFolder(id: number, overrides: Partial<FolderSummary> = {}): FolderSummary {
+  return {
+    id, canonicalCreatorId: id + 100, slug: `creator-${id}`, name: `Creator ${id}`,
+    description: null, folderPath: `creator-${id}`, breadcrumb: null, contentRating: 'R15',
+    imageCount: 17, postCount: 17, videoCount: 0, latestImageMtimeMs: id,
+    avatarImageId: null, avatarUrl: null, ...overrides
+  };
+}
+
 describe('HomeView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -137,6 +147,60 @@ describe('HomeView', () => {
       writable: true,
       value: 1280
     });
+  });
+
+  it('merges the previously separate creator into one titled list and shows work counts with creator links', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }), lastOpenedFolderSlug: 'creator-2' });
+    useFoldersStore().items = Array.from({ length: 7 }, (_, index) => recommendationFolder(index + 1,
+      index === 1 ? { postCount: 7, imageCount: 999 } : {}));
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
+    vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+
+    const rail = wrapper.get('aside[aria-label="Creator recommendations"]');
+    expect(rail.element.firstElementChild?.querySelector('h2')?.textContent).toBe('Recommended creators');
+    const links = rail.findAllComponents(routerLinkStub).filter(link => link.attributes('aria-label')?.endsWith('View works'));
+    expect(links).toHaveLength(6);
+    expect(new Set(links.map(link => JSON.stringify(link.props('to')))).size).toBe(6);
+    expect(links[0].text()).toContain('Creator 2');
+    expect(links[0].text()).toContain('7 works');
+    expect(links[0].text()).not.toContain('999');
+    expect(links[0].props('to')).toEqual({ name: 'canonical-creator', params: { creatorId: '102' } });
+    expect(rail.findAll('a a')).toHaveLength(0);
+    const all = rail.findAllComponents(routerLinkStub).find(link => link.text() === 'View all');
+    expect(all?.props('to')).toEqual({ name: 'library' });
+    const attribution = rail.get('a[href="https://github.com/foldergram/foldergram"]');
+    expect(attribution.text()).toBe('Thanks to Foldergram');
+    expect(attribution.attributes('target')).toBe('_blank');
+    expect(attribution.attributes('rel')).toBe('noreferrer');
+    wrapper.unmount();
+  });
+
+  it('uses the same complete-library destination for public visitors and keeps the single-creator and empty cases coherent', async () => {
+    i18n.global.locale.value = 'zh';
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
+    useAuthStore().$patch({ authenticated: false, role: 'anonymous', accessMode: 'public', enabled: true });
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    useFoldersStore().items = [recommendationFolder(1, { postCount: undefined, breadcrumb: 'Legacy source path' })];
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
+    vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+
+    const rail = wrapper.get('aside[aria-label="博主推荐"]');
+    expect(rail.get('h2').text()).toBe('推荐博主');
+    expect(rail.findAllComponents(routerLinkStub).filter(link => link.attributes('aria-label')?.endsWith('查看作品'))).toHaveLength(1);
+    expect(rail.text()).toContain('17 个作品');
+    expect(rail.findAll('p')[0].text()).not.toContain('Legacy source path');
+    expect(rail.text()).not.toContain('查看收藏');
+    expect(rail.text()).not.toContain('查看赞过');
+    expect(rail.findAllComponents(routerLinkStub).find(link => link.text() === '查看全部')?.props('to')).toEqual({ name: 'library' });
+    useFoldersStore().items = [];
+    await flushPromises();
+    expect(wrapper.find('aside').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it('shows an explicit startup scan phase badge and updates it with the current phase', async () => {

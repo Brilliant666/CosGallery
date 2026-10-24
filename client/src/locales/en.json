@@ -95,9 +95,9 @@
     "switchToLightMode": "Switch to light mode",
     "signOut": "Sign out",
     "returnToPublicView": "Return to public view",
-    "foldersSpotlight": "Folders Spotlight",
+    "foldersSpotlight": "Featured creators",
     "likesAriaLabel": "{label} ({count})",
-    "folderPosts": "{count} posts"
+    "folderPosts": "{count} works"
   },
   "settings": {
     "eyebrow": "Settings",
@@ -630,13 +630,13 @@
   },
   "home": {
     "sidebar": {
-      "ariaLabel": "Folder recommendations",
-      "suggestedFolders": "Suggested folders",
-      "viewLikes": "View likes",
-      "viewFavorites": "View favorites",
-      "openFolder": "Open",
-      "openSourceText": "Foldergram is open source.",
-      "viewOnGitHub": "View on GitHub"
+      "ariaLabel": "Creator recommendations",
+      "suggestedFolders": "Recommended creators",
+      "viewAll": "View all",
+      "workCount": "{count} works",
+      "openFolder": "View works",
+      "openSourceText": "Built on Foldergram. Thanks to its open-source contributors.",
+      "viewOnGitHub": "Thanks to Foldergram"
     }
   },
   "likes": {

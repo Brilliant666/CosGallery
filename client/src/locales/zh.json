@@ -95,9 +95,9 @@
     "switchToLightMode": "切换到浅色模式",
     "signOut": "退出登录",
     "returnToPublicView": "返回公开视图",
-    "foldersSpotlight": "精选文件夹",
+    "foldersSpotlight": "精选博主",
     "likesAriaLabel": "{label} ({count})",
-    "folderPosts": "{count} 个帖子"
+    "folderPosts": "{count} 个作品"
   },
   "settings": {
     "eyebrow": "设置",
@@ -630,13 +630,13 @@
   },
   "home": {
     "sidebar": {
-      "ariaLabel": "文件夹推荐",
-      "suggestedFolders": "推荐文件夹",
-      "viewLikes": "查看赞过",
-      "viewFavorites": "查看收藏",
-      "openFolder": "打开",
-      "openSourceText": "Foldergram 是开源的。",
-      "viewOnGitHub": "在 GitHub 上查看"
+      "ariaLabel": "博主推荐",
+      "suggestedFolders": "推荐博主",
+      "viewAll": "查看全部",
+      "workCount": "{count} 个作品",
+      "openFolder": "查看作品",
+      "openSourceText": "基于 Foldergram 构建，感谢开源贡献。",
+      "viewOnGitHub": "致谢 Foldergram"
     }
   },
   "likes": {

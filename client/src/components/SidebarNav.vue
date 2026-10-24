@@ -227,7 +227,7 @@
             >
               <strong class="truncate text-[0.82rem]">{{ formatFeaturedFolderTitle(folder) }}</strong>
               <small class="truncate text-[0.68rem] text-muted">{{
-                folder.breadcrumb ?? t('nav.folderPosts', { count: folder.imageCount })
+                t('nav.folderPosts', { count: folder.postCount ?? folder.imageCount })
               }}</small>
             </span>
           </a>
