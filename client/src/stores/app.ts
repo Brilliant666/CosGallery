@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import type { RouteLocationNormalized } from 'vue-router';
 
 import {
   fetchAdminScanProgress,
@@ -28,6 +29,8 @@ interface AppState {
   videoMuted: boolean;
   lastOpenedFolderSlug: string | null;
   recentOpenedFolderSlugs: string[];
+  // Creator identities for recent navigation, with legacy slugs supported during migration.
+  recentOpenedCreatorKeys: string[];
   imageModalBackgroundPath: string | null;
   statsPollFailures: number;
   statsPollTimer: number | null;
@@ -39,6 +42,7 @@ const LOCALE_STORAGE_KEY = 'foldergram-locale';
 const VIDEO_MUTED_STORAGE_KEY = 'foldergram-video-muted';
 const LAST_OPENED_FOLDER_STORAGE_KEY = 'foldergram-last-opened-folder';
 const RECENT_OPENED_FOLDERS_STORAGE_KEY = 'foldergram-recent-opened-folders';
+const RECENT_CREATORS_STORAGE_KEY = 'cosgallery-recent-viewed-creators';
 const RECENT_OPENED_FOLDERS_LIMIT = 24;
 const SCAN_PROGRESS_POLL_INTERVAL_MS = 1000;
 
@@ -95,6 +99,7 @@ export const useAppStore = defineStore('app', {
     videoMuted: true,
     lastOpenedFolderSlug: null,
     recentOpenedFolderSlugs: [],
+    recentOpenedCreatorKeys: [],
     imageModalBackgroundPath: null,
     statsPollFailures: 0,
     statsPollTimer: null,
@@ -177,6 +182,11 @@ export const useAppStore = defineStore('app', {
         : savedRecentSlugs;
 
       this.persistOpenedFolderState();
+      const savedCreators = window.localStorage.getItem(RECENT_CREATORS_STORAGE_KEY);
+      this.recentOpenedCreatorKeys = savedCreators === null
+        ? [...this.recentOpenedFolderSlugs].slice(0, RECENT_OPENED_FOLDERS_LIMIT)
+        : parseStoredRecentFolderSlugs(savedCreators);
+      this.persistRecentCreators();
     },
 
     setTheme(theme: 'light' | 'dark') {
@@ -239,6 +249,30 @@ export const useAppStore = defineStore('app', {
         RECENT_OPENED_FOLDERS_LIMIT
       );
       this.persistOpenedFolderState();
+      this.recordRecentCreator(slug);
+    },
+
+    persistRecentCreators() {
+      window.localStorage.setItem(RECENT_CREATORS_STORAGE_KEY, JSON.stringify(this.recentOpenedCreatorKeys));
+    },
+
+    recordRecentCreator(key: string) {
+      this.recentOpenedCreatorKeys = [key, ...this.recentOpenedCreatorKeys.filter((entry) => entry !== key)]
+        .slice(0, RECENT_OPENED_FOLDERS_LIMIT);
+      this.persistRecentCreators();
+    },
+
+    recordOpenedRoute(route: Pick<RouteLocationNormalized, 'name' | 'params'>) {
+      if (route.name === 'canonical-creator' || route.name === 'canonical-work-gallery') {
+        const rawId = route.params.creatorId;
+        if (typeof rawId !== 'string' || !/^[1-9]\d*$/.test(rawId)) return;
+        const creatorId = Number(rawId);
+        if (!Number.isSafeInteger(creatorId)) return;
+        this.recordRecentCreator(`creator:${creatorId}`);
+      } else if ((route.name === 'folder' || route.name === 'work-gallery') && typeof route.params.slug === 'string') {
+        const slug = route.params.slug.trim();
+        if (slug) this.recordOpenedFolder(slug);
+      }
     },
 
     setImageModalBackground(path: string) {

@@ -303,14 +303,9 @@ const foldersStore = useFoldersStore();
 const momentsStore = useMomentsStore();
 const { t } = useI18n();
 const likedCountByFolder = computed(() => buildLikedCountByFolder(likesStore.items));
-const homeRecommendations = computed(() =>
-  selectHomeRecommendations(foldersStore.items, likedCountByFolder.value, appStore.lastOpenedFolderSlug)
+const recommendedFolders = computed(() =>
+  selectHomeRecommendations(foldersStore.items, likedCountByFolder.value, appStore.recentOpenedCreatorKeys)
 );
-const recommendedFolders = computed(() => {
-  const { homeSummaryFolder, recommendedFolders } = homeRecommendations.value;
-  const combined = homeSummaryFolder ? [homeSummaryFolder, ...recommendedFolders] : recommendedFolders;
-  return combined.filter((folder, index) => combined.findIndex(candidate => candidate.id === folder.id) === index);
-});
 const activeRailViewerId = ref<string | null>(null);
 const activeFeedStoryId = ref<string | null>(null);
 const feedStoryRetrySlug = ref<string | null>(null);

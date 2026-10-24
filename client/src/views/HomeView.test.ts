@@ -149,11 +149,11 @@ describe('HomeView', () => {
     });
   });
 
-  it('merges the previously separate creator into one titled list and shows work counts with creator links', async () => {
+  it('excludes recently viewed creators from the titled recommendation list and preserves work counts and creator links', async () => {
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
-    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }), lastOpenedFolderSlug: 'creator-2' });
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }), recentOpenedCreatorKeys: ['creator:102'] });
     useFoldersStore().items = Array.from({ length: 7 }, (_, index) => recommendationFolder(index + 1,
-      index === 1 ? { postCount: 7, imageCount: 999 } : {}));
+      index === 0 ? { postCount: 7, imageCount: 999 } : {}));
     vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
     vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
     const wrapper = mountHomeView();
@@ -164,10 +164,11 @@ describe('HomeView', () => {
     const links = rail.findAllComponents(routerLinkStub).filter(link => link.attributes('aria-label')?.endsWith('View works'));
     expect(links).toHaveLength(6);
     expect(new Set(links.map(link => JSON.stringify(link.props('to')))).size).toBe(6);
-    expect(links[0].text()).toContain('Creator 2');
-    expect(links[0].text()).toContain('7 works');
-    expect(links[0].text()).not.toContain('999');
-    expect(links[0].props('to')).toEqual({ name: 'canonical-creator', params: { creatorId: '102' } });
+    expect(links.some(link => link.text().includes('Creator 2'))).toBe(false);
+    const countedCreator = links.find(link => link.props('to').params.creatorId === '101');
+    expect(countedCreator?.text()).toContain('7 works');
+    expect(countedCreator?.text()).not.toContain('999');
+    expect(countedCreator?.props('to')).toEqual({ name: 'canonical-creator', params: { creatorId: '101' } });
     expect(rail.findAll('a a')).toHaveLength(0);
     const all = rail.findAllComponents(routerLinkStub).find(link => link.text() === 'View all');
     expect(all?.props('to')).toEqual({ name: 'library' });
@@ -175,6 +176,27 @@ describe('HomeView', () => {
     expect(attribution.text()).toBe('Thanks to Foldergram');
     expect(attribution.attributes('target')).toBe('_blank');
     expect(attribution.attributes('rel')).toBe('noreferrer');
+    wrapper.unmount();
+  });
+
+  it('updates recommendations when recent history changes and never refills a small library with recent creators', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }), recentOpenedCreatorKeys: ['creator:101'] });
+    useFoldersStore().items = [recommendationFolder(1), recommendationFolder(2), recommendationFolder(3)];
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
+    vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+    const creatorIds = () => wrapper.findAllComponents(routerLinkStub)
+      .filter(link => link.attributes('aria-label')?.endsWith('View works'))
+      .map(link => link.props('to').params.creatorId).sort();
+    expect(creatorIds()).toEqual(['102', '103']);
+    useAppStore().recentOpenedCreatorKeys = ['creator:102', 'creator:101'];
+    await flushPromises();
+    expect(creatorIds()).toEqual(['103']);
+    useAppStore().recentOpenedCreatorKeys = ['creator:103', 'creator:102', 'creator:101'];
+    await flushPromises();
+    expect(wrapper.find('aside[aria-label="Creator recommendations"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

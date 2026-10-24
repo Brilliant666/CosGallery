@@ -95,7 +95,7 @@
     "switchToLightMode": "切换到浅色模式",
     "signOut": "退出登录",
     "returnToPublicView": "返回公开视图",
-    "foldersSpotlight": "精选博主",
+    "recentCreators": "最近浏览",
     "likesAriaLabel": "{label} ({count})",
     "folderPosts": "{count} 个作品"
   },

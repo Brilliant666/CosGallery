@@ -1,6 +1,7 @@
 import type { FeedItem, FolderSummary } from '../types/api';
+import { creatorIdentity, selectRecentCreators } from './sidebar-folders';
 
-const DAILY_RECOMMENDATION_COUNT = 5;
+const DAILY_RECOMMENDATION_COUNT = 6;
 const RANKED_POOL_SIZE = 12;
 const RECENT_ACTIVITY_WINDOW_MS = 1000 * 60 * 60 * 24 * 45;
 
@@ -8,11 +9,6 @@ interface RankedFolder {
   folder: FolderSummary;
   score: number;
   likedImageCount: number;
-}
-
-export interface HomeRecommendations {
-  homeSummaryFolder: FolderSummary | null;
-  recommendedFolders: FolderSummary[];
 }
 
 export function buildLikedCountByFolder(items: FeedItem[]): Map<string, number> {
@@ -28,22 +24,12 @@ export function buildLikedCountByFolder(items: FeedItem[]): Map<string, number> 
 export function selectHomeRecommendations(
   folders: FolderSummary[],
   likedCountByFolder: Map<string, number>,
-  lastOpenedFolderSlug: string | null,
+  recentHistoryKeys: string[],
   now = new Date()
-): HomeRecommendations {
-  if (folders.length === 0) {
-    return {
-      homeSummaryFolder: null,
-      recommendedFolders: []
-    };
-  }
-
-  const homeSummaryFolder =
-    (lastOpenedFolderSlug ? folders.find((folder) => folder.slug === lastOpenedFolderSlug) ?? null : null) ??
-    getFallbackTopFolder(folders, likedCountByFolder);
-
+): FolderSummary[] {
+  const recentIdentities = new Set(selectRecentCreators(folders, recentHistoryKeys).map(creatorIdentity));
   const rankedCandidates = folders
-    .filter((folder) => folder.id !== homeSummaryFolder?.id && folder.imageCount > 0)
+    .filter((folder) => (folder.postCount ?? folder.imageCount) > 0 && !recentIdentities.has(creatorIdentity(folder)))
     .map((folder) => ({
       folder,
       score: getRecommendationScore(folder, likedCountByFolder, now.getTime()),
@@ -51,46 +37,22 @@ export function selectHomeRecommendations(
     }))
     .sort(compareRankedFolders);
 
-  const rankedPool = rankedCandidates.slice(0, Math.min(RANKED_POOL_SIZE, rankedCandidates.length)).map(({ folder }) => folder);
-  const recommendedFolders = shuffleWithSeed(rankedPool, createDailySeed(now)).slice(0, DAILY_RECOMMENDATION_COUNT);
-
-  return {
-    homeSummaryFolder,
-    recommendedFolders
-  };
-}
-
-function getFallbackTopFolder(folders: FolderSummary[], likedCountByFolder: Map<string, number>): FolderSummary {
-  const nonEmptyFolders = folders.filter((folder) => folder.imageCount > 0);
-  const candidates = nonEmptyFolders.length > 0 ? nonEmptyFolders : folders;
-
-  return [...candidates].sort((left, right) => {
-    const recentComparison = compareNumbers(right.latestImageMtimeMs ?? 0, left.latestImageMtimeMs ?? 0);
-    if (recentComparison !== 0) {
-      return recentComparison;
-    }
-
-    const likedComparison = compareNumbers(
-      likedCountByFolder.get(right.slug) ?? 0,
-      likedCountByFolder.get(left.slug) ?? 0
-    );
-    if (likedComparison !== 0) {
-      return likedComparison;
-    }
-
-    const imageCountComparison = compareNumbers(right.imageCount, left.imageCount);
-    if (imageCountComparison !== 0) {
-      return imageCountComparison;
-    }
-
-    return compareText(left.name, right.name);
-  })[0];
+  const seen = new Set<string>();
+  const rankedPool: FolderSummary[] = [];
+  for (const { folder } of rankedCandidates) {
+    const identity = creatorIdentity(folder);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    rankedPool.push(folder);
+    if (rankedPool.length === RANKED_POOL_SIZE) break;
+  }
+  return shuffleWithSeed(rankedPool, createDailySeed(now)).slice(0, DAILY_RECOMMENDATION_COUNT);
 }
 
 function getRecommendationScore(folder: FolderSummary, likedCountByFolder: Map<string, number>, nowMs: number): number {
   const recentActivityScore = getRecentActivityScore(folder.latestImageMtimeMs, nowMs);
   const likeScore = normalizeLogarithmicValue(likedCountByFolder.get(folder.slug) ?? 0, 6);
-  const imageCountScore = normalizeLogarithmicValue(folder.imageCount, 30);
+  const imageCountScore = normalizeLogarithmicValue(folder.postCount ?? folder.imageCount, 30);
 
   return recentActivityScore * 0.6 + likeScore * 0.25 + imageCountScore * 0.15;
 }
@@ -128,7 +90,10 @@ function compareRankedFolders(left: RankedFolder, right: RankedFolder): number {
     return recentComparison;
   }
 
-  const imageCountComparison = compareNumbers(right.folder.imageCount, left.folder.imageCount);
+  const imageCountComparison = compareNumbers(
+    right.folder.postCount ?? right.folder.imageCount,
+    left.folder.postCount ?? left.folder.imageCount
+  );
   if (imageCountComparison !== 0) {
     return imageCountComparison;
   }

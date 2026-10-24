@@ -95,7 +95,7 @@
     "switchToLightMode": "Cambiar al modo claro",
     "signOut": "Cerrar sesión",
     "returnToPublicView": "Volver a la vista pública",
-    "foldersSpotlight": "Creadores destacados",
+    "recentCreators": "Vistos recientemente",
     "likesAriaLabel": "{label} ({count})",
     "folderPosts": "{count} obras"
   },

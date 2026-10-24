@@ -192,47 +192,49 @@
         </a>
       </RouterLink>
 
-      <span
-        class="sidebar__section-label sidebar__meta inline-flex min-h-[1rem] items-center self-start mt-7 overflow-hidden whitespace-nowrap px-[0.75rem] text-[0.68rem] leading-[1.2] font-semibold uppercase tracking-[0.12em] text-muted"
-        >{{ t('nav.foldersSpotlight') }}</span
-      >
-      <div
-        class="flex min-h-0 flex-col gap-[0.2rem] max-h-[22.5rem] overflow-y-auto [scrollbar-width:none]"
-      >
-        <RouterLink
-          v-for="folder in featuredFolders"
-          :key="folder.id"
-          custom
-          :to="folderReadingRoute(folder.slug, folder.canonicalCreatorId)"
-          v-slot="{ href, navigate, isActive }"
+      <template v-if="recentCreators.length > 0">
+        <span
+          class="sidebar__section-label sidebar__meta inline-flex min-h-[1rem] items-center self-start mt-7 overflow-hidden whitespace-nowrap px-[0.75rem] text-[0.68rem] leading-[1.2] font-semibold uppercase tracking-[0.12em] text-muted"
+          >{{ t('nav.recentCreators') }}</span
         >
-          <a
-            :href="href"
-            class="sidebar__folder sidebar-item"
-            :class="isActive ? sidebarActiveClass : ''"
-            :title="
-              folder.breadcrumb
-                ? `${folder.breadcrumb} / ${folder.name}`
-                : folder.name
-            "
-            @click="navigate"
+        <div
+          class="flex min-h-0 flex-col gap-[0.2rem] max-h-[22.5rem] overflow-y-auto [scrollbar-width:none]"
+        >
+          <RouterLink
+            v-for="folder in recentCreators"
+            :key="folder.id"
+            custom
+            :to="folderReadingRoute(folder.slug, folder.canonicalCreatorId)"
+            v-slot="{ href, navigate, isActive }"
           >
-            <Avatar
-              :name="formatFeaturedFolderTitle(folder)"
-              :src="folder.avatarUrl"
-              class="h-[1.75rem] w-[1.75rem]"
-            />
-            <span
-              class="sidebar__folder-copy sidebar__meta flex min-w-0 flex-col gap-[0.05rem] overflow-hidden whitespace-nowrap"
+            <a
+              :href="href"
+              class="sidebar__folder sidebar-item"
+              :class="isActive ? sidebarActiveClass : ''"
+              :title="
+                folder.breadcrumb
+                  ? `${folder.breadcrumb} / ${folder.name}`
+                  : folder.name
+              "
+              @click="navigate"
             >
-              <strong class="truncate text-[0.82rem]">{{ formatFeaturedFolderTitle(folder) }}</strong>
-              <small class="truncate text-[0.68rem] text-muted">{{
-                t('nav.folderPosts', { count: folder.postCount ?? folder.imageCount })
-              }}</small>
-            </span>
-          </a>
-        </RouterLink>
-      </div>
+              <Avatar
+                :name="formatRecentCreatorTitle(folder)"
+                :src="folder.avatarUrl"
+                class="h-[1.75rem] w-[1.75rem]"
+              />
+              <span
+                class="sidebar__folder-copy sidebar__meta flex min-w-0 flex-col gap-[0.05rem] overflow-hidden whitespace-nowrap"
+              >
+                <strong class="truncate text-[0.82rem]">{{ formatRecentCreatorTitle(folder) }}</strong>
+                <small class="truncate text-[0.68rem] text-muted">{{
+                  t('nav.folderPosts', { count: folder.postCount ?? folder.imageCount })
+                }}</small>
+              </span>
+            </a>
+          </RouterLink>
+        </div>
+      </template>
     </nav>
 
     <div
@@ -392,8 +394,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
   import { useFoldersStore } from "../stores/folders"
   import { usePlacesStore } from "../stores/places"
   import { formatFolderTitle } from "../utils/folder-titles"
-  import { buildLikedCountByFolder } from "../utils/home-recommendations"
-  import { selectSidebarFolders } from "../utils/sidebar-folders"
+  import { selectRecentCreators } from "../utils/sidebar-folders"
   import Avatar from "./Avatar.vue"
   import BrandMark from "./BrandMark.vue"
 
@@ -421,14 +422,10 @@ import { folderReadingRoute } from '../utils/work-gallery';
   let desktopMedia: MediaQueryList | undefined
   let touchMedia: MediaQueryList | undefined
 
-  const likedCountByFolder = computed(() =>
-    buildLikedCountByFolder(likesStore.items),
-  )
-  const featuredFolders = computed(() =>
-    selectSidebarFolders(
+  const recentCreators = computed(() =>
+    selectRecentCreators(
       foldersStore.items,
-      likedCountByFolder.value,
-      appStore.recentOpenedFolderSlugs,
+      appStore.recentOpenedCreatorKeys,
     ),
   )
   const appearanceLabel = computed(() =>
@@ -437,7 +434,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
   const showPlacesNav = computed(() =>
     placesStore.items.length > 0 && placesStore.listError === null,
   )
-  function formatFeaturedFolderTitle(folder: (typeof featuredFolders.value)[number]) {
+  function formatRecentCreatorTitle(folder: (typeof recentCreators.value)[number]) {
     return formatFolderTitle(folder, appStore.nestedFolderTitleFormat)
   }
   const isPlacesRoute = computed(() =>

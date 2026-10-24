@@ -49,7 +49,6 @@ async function bootstrap() {
 
   app.use(pinia);
   app.use(i18n);
-  app.use(router);
 
   const appStore = useAppStore(pinia);
   const authStore = useAuthStore(pinia);
@@ -67,6 +66,13 @@ async function bootstrap() {
     authStore.handleUnauthorized();
   });
 
+  // Register before the router starts its first navigation, including direct creator/work links.
+  // Do not block shell mounting on router.isReady(): route-load errors need the recovery UI.
+  router.afterEach((to, _from, failure) => {
+    if (!failure) appStore.recordOpenedRoute(to);
+  });
+  app.use(router);
+
   try {
     await authStore.initialize();
   } catch {
@@ -76,12 +82,6 @@ async function bootstrap() {
   if (!canAccessRoute(router.currentRoute.value)) {
     await router.replace({ name: 'home' });
   }
-
-  router.afterEach((to) => {
-    if (to.name === 'folder' && typeof to.params.slug === 'string') {
-      appStore.recordOpenedFolder(to.params.slug);
-    }
-  });
 
   app.mount('#app');
 

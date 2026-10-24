@@ -95,7 +95,7 @@
     "switchToLightMode": "Switch to light mode",
     "signOut": "Sign out",
     "returnToPublicView": "Return to public view",
-    "foldersSpotlight": "Featured creators",
+    "recentCreators": "Recently viewed",
     "likesAriaLabel": "{label} ({count})",
     "folderPosts": "{count} works"
   },

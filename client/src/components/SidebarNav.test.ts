@@ -6,15 +6,17 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import SidebarNav from './SidebarNav.vue';
 import { usePlacesStore } from '../stores/places';
 import { useFoldersStore } from '../stores/folders';
+import { useAppStore } from '../stores/app';
 import type { FolderSummary } from '../types/api';
 import { i18n } from '../locales';
 
 enableAutoUnmount(afterEach);
 
-async function setup(folders: FolderSummary[] = []) {
+async function setup(folders: FolderSummary[] = [], recentHistory: string[] = []) {
   const pinia = createPinia();
   setActivePinia(pinia);
   useFoldersStore().items = folders;
+  useAppStore().recentOpenedCreatorKeys = recentHistory;
   vi.spyOn(usePlacesStore(), 'fetchPlaces').mockResolvedValue(undefined);
   const router = createRouter({ history: createMemoryHistory(), routes:
     ['home', 'library', 'reels', 'explore', 'places', 'likes', 'collections', 'trash', 'archive-catalog', 'creator-admission', 'settings', 'folder']
@@ -102,7 +104,40 @@ describe('sidebar hover intent', () => {
   });
 });
 
-describe('featured creator summaries', () => {
+describe('recently viewed creators', () => {
+  function creator(id: number, overrides: Partial<FolderSummary> = {}): FolderSummary {
+    return {
+      id, canonicalCreatorId: id + 100, slug: `creator-${id}`, name: `Creator ${id}`, description: null,
+      folderPath: `creator-${id}`, breadcrumb: null, contentRating: 'R15',
+      postCount: 3, imageCount: 3, videoCount: 0, latestImageMtimeMs: null,
+      avatarImageId: null, avatarUrl: null, ...overrides
+    };
+  }
+
+  it('hides the entire recent section without valid browsing history instead of filling it with recommendations', async () => {
+    i18n.global.locale.value = 'zh';
+    const { sidebar } = await setup([creator(1)], ['missing-creator']);
+    expect(sidebar.find('.sidebar__section-label').exists()).toBe(false);
+    expect(sidebar.find('.sidebar__folder').exists()).toBe(false);
+    useAppStore().recentOpenedCreatorKeys = [];
+    await nextTick();
+    expect(sidebar.text()).not.toContain('最近浏览');
+  });
+
+  it('shows browsing order, deduplicates canonical creators and reacts to newly opened creators', async () => {
+    i18n.global.locale.value = 'zh';
+    const { sidebar } = await setup([
+      creator(1), creator(2), creator(3), creator(4, { canonicalCreatorId: 102 })
+    ], ['creator:102', 'creator-4', 'creator-1']);
+    const routes = () => sidebar.findAll('.sidebar__folder').map(link => link.attributes('href'));
+    expect(routes()).toEqual(['/library/102', '/library/101']);
+    useAppStore().recentOpenedCreatorKeys = ['creator:103', 'creator:102', 'creator-1'];
+    await nextTick();
+    expect(routes()).toEqual(['/library/103', '/library/102', '/library/101']);
+    expect(sidebar.text()).toContain('最近浏览');
+    expect(sidebar.text()).not.toContain('精选博主');
+  });
+
   it('shows the work count instead of a physical breadcrumb and opens the canonical creator', async () => {
     i18n.global.locale.value = 'zh';
     const { sidebar, router } = await setup([{
@@ -110,8 +145,8 @@ describe('featured creator summaries', () => {
       folderPath: 'Sample', breadcrumb: '旧父目录', contentRating: 'R15',
       postCount: 3, imageCount: 99, videoCount: 0, latestImageMtimeMs: null,
       avatarImageId: null, avatarUrl: null
-    }]);
-    expect(sidebar.text()).toContain('精选博主');
+    }], ['creator:42']);
+    expect(sidebar.text()).toContain('最近浏览');
     const link = sidebar.get('.sidebar__folder');
     expect(link.get('small').text()).toBe('3 个作品');
     expect(link.attributes('href')).toBe('/library/42');
