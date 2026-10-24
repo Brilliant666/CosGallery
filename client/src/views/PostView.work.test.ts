@@ -54,7 +54,7 @@ describe('PostView work deep links', () => {
     const wrapper = mount(PostView, { props: { id: '123' }, global: { plugins: [router], stubs: { PostViewer: true, ConfirmDialog: true } } });
     await flushPromises();
     expect(load).not.toHaveBeenCalled();
-    expect(wrapper.get('[role="alert"]').text()).toContain('Invalid canonical');
+    expect(wrapper.get('[role="alert"]').text()).toContain('creator identity is invalid');
     expect(router.currentRoute.value.name).toBe('image');
   });
 
@@ -65,7 +65,7 @@ describe('PostView work deep links', () => {
     await router.push(`/post/123?context=work&creator=166&media=${media}`);
     const wrapper = mount(PostView, { props: { id: '123' }, global: { plugins: [router], stubs: { PostViewer: true, ConfirmDialog: true } } });
     await flushPromises();
-    expect(wrapper.get('[role="alert"]').text()).toContain('Requested media');
+    expect(wrapper.get('[role="alert"]').text()).toContain('selected media does not exist');
     expect(wrapper.find('post-viewer-stub').exists()).toBe(false);
     expect(router.currentRoute.value.name).toBe('image');
   });
@@ -95,7 +95,7 @@ describe('PostView work deep links', () => {
     expect(wrapper.emitted('updatedWork')?.[0]?.[0]).toMatchObject({ id: 123, caption: 'Updated caption' });
     await router.replace('/library/166/works/123?media=999999');
     await flushPromises();
-    expect(wrapper.get('[role="alert"]').text()).toContain('Requested media');
+    expect(wrapper.get('[role="alert"]').text()).toContain('selected media does not exist');
     expect(wrapper.find('post-viewer-stub').exists()).toBe(false);
     expect(router.currentRoute.value.query.media).toBe('999999');
   });

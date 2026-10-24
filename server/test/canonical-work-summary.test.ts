@@ -107,8 +107,12 @@ describe.sequential('canonical creator work summaries', () => {
     const candidates = vi.spyOn(repos.canonicalCreatorGalleryRepository, 'listFolderCandidates');
     const aliases = vi.spyOn(repos.canonicalCreatorGalleryRepository, 'listAliases');
     try {
-      expect(gallery.getCanonicalCreator(1)).toMatchObject(full);
-      expect(gallery.getCanonicalCreator(1)).toMatchObject({ aliases: ['First alias'], preference: 'kept', contentRating: 'R18' });
+      const publicCreator = gallery.getCanonicalCreator(1);
+      expect(publicCreator).toMatchObject(full);
+      expect(publicCreator).toMatchObject({ aliases: ['First alias'], contentRating: 'R18' });
+      expect(full).not.toHaveProperty('preference');
+      expect(publicCreator).not.toHaveProperty('preference');
+      expect(gallery.getCanonicalCreator(1, true)).toMatchObject({ ...full, preference: 'kept' });
       expect(candidates).toHaveBeenCalledWith(1);
       expect(aliases).toHaveBeenCalledWith(1);
       expect(repos.canonicalCreatorGalleryRepository.listFolderCandidates(1)).toEqual(

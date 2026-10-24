@@ -1,9 +1,13 @@
 import { ManagedCreatorService } from './managed-creator-service.js';
+import { CreatorGalleryLabelService } from './creator-gallery-label-service.js';
+import type { GalleryLabel } from '../types/gallery-labels.js';
+import { parseAccentColor, type AccentColor } from '../types/accent-color.js';
 import { assertLegacyPostRemovalAllowed, assertLegacyPostRestoreAllowed } from './media-trash-service.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import {
+  APP_ACCENT_COLOR_SETTING_KEY,
   APP_DEFAULT_LOCALE_SETTING_KEY,
   CAROUSELS_APPLIED_MODE_SETTING_KEY,
   CAROUSELS_MIGRATION_DECISION_SETTING_KEY,
@@ -23,6 +27,7 @@ import { derivativeVersion as buildDerivativeVersion, imageDerivativeVersion } f
 import { isPublishedDerivativeFile } from '../utils/derivative-spec.js';
 import { appConfig } from '../config/env.js';
 import { databaseManager } from '../db/database.js';
+import { getGalleryStatistics } from '../db/gallery-statistics-repository.js';
 import { createReelQueuePager, ReelQueueExpiredError } from './reel-queue.js';
 import {
   appSettingsRepository,
@@ -817,6 +822,7 @@ type CosGalleryIdentityItem = {
   rosterStatus: 'active' | 'inactive' | 'unlinked';
   linkStatus: 'linked' | 'unlinked';
   preference: 'liked' | 'kept' | null;
+  galleryLabels: GalleryLabel[];
   folderIds: number[];
   folderNames: string[];
   folderPath: string;
@@ -852,8 +858,24 @@ function chooseCanonicalCreatorCover<T extends {
   })[0]!;
 }
 
-function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityItem[] {
+function hydrateCosGalleryCreatorCover(creator: CosGalleryIdentityItem): CosGalleryIdentityItem {
+  const cover = creator.coverImageId === null ? undefined : imageRepository.getById(creator.coverImageId);
+  const coverUrl = cover?.thumbnail_path
+    ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, imageDerivativeVersion(cover, 'thumbnail'))
+    : null;
+  return {
+    ...creator,
+    coverImageId: cover?.id ?? null,
+    coverUrl,
+    avatarUrl: coverUrl,
+    coverWidth: cover?.width ?? null,
+    coverHeight: cover?.height ?? null
+  };
+}
+
+function buildCosGalleryIdentityItems(creatorId?: number, options: { hydrateCovers?: boolean } = {}): CosGalleryIdentityItem[] {
   const candidates = canonicalCreatorGalleryRepository.listFolderCandidates(creatorId);
+  const labelsByCreator = new CreatorGalleryLabelService().list(creatorId);
   const aliasesByCreator = new Map<number, string[]>();
   for (const row of canonicalCreatorGalleryRepository.listAliases(creatorId)) {
     const aliases = aliasesByCreator.get(row.creatorId) ?? [];
@@ -873,16 +895,10 @@ function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityIte
   return [...grouped.entries()].map(([key, values]) => {
     const first = values[0]!;
     const coverSource = chooseCanonicalCreatorCover(values);
-    const cover = coverSource.coverImageId === null
-      ? undefined
-      : imageRepository.getById(coverSource.coverImageId);
     const canonicalCreatorId = first.canonicalCreatorId;
     const linked = canonicalCreatorId !== null;
     const localFolders = [...values].sort((left, right) => left.folderId - right.folderId);
-    const coverUrl = cover?.thumbnail_path
-      ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, imageDerivativeVersion(cover, 'thumbnail'))
-      : null;
-    return {
+    const creator: CosGalleryIdentityItem = {
       key,
       identityType: linked ? 'creator' as const : 'folder' as const,
       id: linked ? canonicalCreatorId : first.folderId,
@@ -895,6 +911,7 @@ function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityIte
         : 'unlinked' as const,
       linkStatus: linked ? 'linked' as const : 'unlinked' as const,
       preference: linked ? first.preference : null,
+      galleryLabels: linked ? labelsByCreator.get(canonicalCreatorId) ?? [] : [],
       folderIds: values.map(value => value.folderId).sort((left, right) => left - right),
       folderNames: values.map(value => value.folderName).sort((left, right) => left.localeCompare(right)),
       folderPath: coverSource.folderPath,
@@ -915,12 +932,13 @@ function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityIte
       ratingSourceCount: linked ? Number(first.ratingSourceCount) : 0,
       ratingConflict: false,
       aliases: linked ? aliasesByCreator.get(canonicalCreatorId) ?? [] : [],
-      coverImageId: cover?.id ?? null,
-      coverUrl,
-      avatarUrl: coverUrl,
-      coverWidth: cover?.width ?? null,
-      coverHeight: cover?.height ?? null
+      coverImageId: coverSource.coverImageId,
+      coverUrl: null,
+      avatarUrl: null,
+      coverWidth: null,
+      coverHeight: null
     };
+    return options.hydrateCovers === false ? creator : hydrateCosGalleryCreatorCover(creator);
   }).sort((left, right) =>
     (right.latestWorkAt ?? 0) - (left.latestWorkAt ?? 0)
     || left.name.localeCompare(right.name)
@@ -1348,13 +1366,20 @@ function listFallbackAvatarStoryItems(
   };
 }
 
+function presentGalleryCreator(creator: CosGalleryIdentityItem, includePreference: boolean) {
+  const { preference, ...publicCreator } = creator;
+  return includePreference ? { ...publicCreator, preference } : publicCreator;
+}
+
 export const galleryService = {
   getCosGalleryCreators(
     page = 1,
     limit = 60,
     contentRating?: 'R15' | 'R18' | 'unclassified' | 'unlinked' | 'inactive',
     query?: string,
-    preference?: 'liked' | 'kept'
+    preference?: 'liked' | 'kept',
+    label?: GalleryLabel,
+    includePreference = false
   ) {
     if (!storageService.getState().libraryAvailable) {
       return {
@@ -1364,7 +1389,12 @@ export const galleryService = {
     }
 
     const normalizedQuery = query?.trim().toLocaleLowerCase() ?? '';
-    const allItems = buildCosGalleryIdentityItems();
+    // A gallery label replaces even legacy lifecycle/rating query values.
+    if (label) contentRating = undefined;
+    if (!includePreference) preference = undefined;
+    // Identity grouping, sorting and global counts still cover the complete range.
+    // Thumbnail metadata is only needed for the filtered page returned below.
+    const allItems = buildCosGalleryIdentityItems(undefined, { hydrateCovers: false });
     const summary = {
       all: allItems.filter(item => item.rosterStatus !== 'inactive').length,
       R15: allItems.filter(item => item.rosterStatus !== 'inactive' && item.contentRating === 'R15').length,
@@ -1377,6 +1407,7 @@ export const galleryService = {
       // Apply user preference to the complete canonical identity range, before
       // pagination. It is not a work like, collection, or task priority.
       if (preference && creator.preference !== preference) return false;
+      if (label && !creator.galleryLabels.includes(label)) return false;
       if (contentRating === 'inactive') {
         if (creator.rosterStatus !== 'inactive') return false;
       } else {
@@ -1391,7 +1422,8 @@ export const galleryService = {
     });
     const offset = (page - 1) * limit;
     return {
-      items: filtered.slice(offset, offset + limit),
+      items: filtered.slice(offset, offset + limit).map(creator =>
+        presentGalleryCreator(hydrateCosGalleryCreatorCover(creator), includePreference)),
       page,
       limit,
       total: filtered.length,
@@ -1409,11 +1441,11 @@ export const galleryService = {
     ) ?? null;
   },
 
-  getCanonicalCreator(id: number) {
+  getCanonicalCreator(id: number, includePreference = false) {
     if (!storageService.getState().libraryAvailable) return null;
     const creator = buildCosGalleryIdentityItems(id)[0];
     return creator ? {
-      ...creator,
+      ...presentGalleryCreator(creator, includePreference),
       ...canonicalCreatorGalleryRepository.getVisibleMediaSummary(id),
       unavailablePrimaryWorks: canonicalCreatorGalleryRepository.listPrimaryCopies(id)
         .filter(copy => copy.indexedAvailable !== 1)
@@ -1426,9 +1458,10 @@ export const galleryService = {
     id: number,
     page: number,
     limit: number,
-    mediaType?: MediaType
+    mediaType?: MediaType,
+    includePreference = false
   ) {
-    const creator = this.getCanonicalCreator(id);
+    const creator = this.getCanonicalCreator(id, includePreference);
     if (!creator) return null;
     const total = canonicalCreatorGalleryRepository.countVisibleWorks(id, mediaType);
     const items = canonicalCreatorGalleryRepository.listVisibleWorks(
@@ -2336,6 +2369,7 @@ export const galleryService = {
       folders: storageState.libraryAvailable ? folderRepository.count() : 0,
       indexedImages: indexedPosts,
       indexedPosts,
+      galleryStatistics: storageState.libraryAvailable ? getGalleryStatistics() : { creators: 0, works: 0, photos: 0 },
       indexedMediaAssets: storageState.libraryAvailable ? imageRepository.countVisibleMediaAssets() : 0,
       indexedCarousels: postCounts.carousels,
       indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleVideoCandidates() : 0,
@@ -2350,6 +2384,7 @@ export const galleryService = {
         ignoredRootMediaCount: storageState.libraryAvailable ? countSupportedRootMediaFiles(appConfig.galleryRoot) : 0
       },
       preferences: {
+        accentColor: parseAccentColor(appSettingsRepository.get(APP_ACCENT_COLOR_SETTING_KEY)),
         defaultLocale,
         defaultHomeFeedMode,
         defaultReelsFeedMode,
@@ -2414,6 +2449,7 @@ export const galleryService = {
       indexedCarousels: postCounts.carousels,
       indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleVideoCandidates() : 0,
       deletedImages: storageState.libraryAvailable ? imageRepository.countDeleted() : 0,
+      galleryStatistics: storageState.libraryAvailable ? getGalleryStatistics() : { creators: 0, works: 0, photos: 0 },
       thumbnailCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.thumbnailsDir, 'thumbnail') : 0,
       previewCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.previewsDir, 'preview') : 0,
       lastScan: lastCompletedScan,
@@ -2434,6 +2470,7 @@ export const galleryService = {
         ignoredRootMediaCount: storageState.libraryAvailable ? countSupportedRootMediaFiles(currentGalleryRoot) : 0
       },
       preferences: {
+        accentColor: parseAccentColor(appSettingsRepository.get(APP_ACCENT_COLOR_SETTING_KEY)),
         defaultLocale,
         defaultHomeFeedMode,
         defaultReelsFeedMode,
@@ -2454,6 +2491,11 @@ export const galleryService = {
     return {
       defaultMode: mode
     };
+  },
+
+  setAccentColor(accentColor: AccentColor) {
+    appSettingsRepository.set(APP_ACCENT_COLOR_SETTING_KEY, accentColor);
+    return { accentColor };
   },
 
   setDefaultLocale(defaultLocale: SupportedLocale) {

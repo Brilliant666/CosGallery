@@ -32,6 +32,8 @@
       />
     </button>
 
+    <p v-if="quickError" class="collection-bookmark__quick-error" role="alert" data-test="bookmark-action-error">{{ quickError }}</p>
+
     <Teleport to="body">
       <div
         v-if="popoverOpen"
@@ -54,6 +56,7 @@
             type="button"
             :aria-label="t('collections.bookmark.createCollection')"
             :title="t('collections.bookmark.createCollection')"
+            :disabled="creatingCollection || collectionsStore.isPending(item.id)"
             @click="startCreating"
           >
             <span class="i-fluent-add-16-filled" aria-hidden="true" />
@@ -70,7 +73,7 @@
             :placeholder="t('collections.bookmark.namePlaceholder')"
             @keydown.esc.stop.prevent="cancelCreating"
           />
-          <button class="collection-bookmark__submit" type="submit" :disabled="creatingCollection">
+          <button class="collection-bookmark__submit" type="submit" :disabled="creatingCollection || collectionsStore.isPending(item.id)">
             <span class="i-fluent-checkmark-16-filled" aria-hidden="true" />
           </button>
         </form>
@@ -137,6 +140,7 @@ const creating = ref(false);
 const creatingCollection = ref(false);
 const collectionName = ref('');
 const localError = ref<string | null>(null);
+const quickError = ref<string | null>(null);
 const longPressTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const suppressNextClick = ref(false);
 let openTimer: ReturnType<typeof setTimeout> | null = null;
@@ -168,6 +172,8 @@ watch(
     immediate: true
   }
 );
+
+watch(() => props.item.id, () => { quickError.value = null; });
 
 function clearCloseTimer() {
   if (closeTimer) {
@@ -328,8 +334,16 @@ async function handleBookmarkClick() {
     return;
   }
 
-  await collectionsStore.toggleDefaultSave(props.item);
-  await collectionsStore.fetchMembership(props.item.id, true);
+  const item = props.item;
+  quickError.value = null;
+  try {
+    const error = await collectionsStore.toggleDefaultSave(item);
+    if (props.item.id === item.id) quickError.value = error ?? null;
+  } catch (error) {
+    if (props.item.id === item.id) {
+      quickError.value = error instanceof Error ? error.message : t('collections.detail.edit.updateError');
+    }
+  }
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -362,6 +376,7 @@ function clearLongPressTimer() {
 }
 
 async function startCreating() {
+  if (creatingCollection.value || collectionsStore.isPending(props.item.id)) return;
   creating.value = true;
   localError.value = null;
   await nextTick();
@@ -376,6 +391,11 @@ function cancelCreating() {
 }
 
 async function submitCreate() {
+  if (creatingCollection.value) return;
+  if (collectionsStore.isPending(props.item.id)) {
+    localError.value = t('collections.bookmark.errors.busy');
+    return;
+  }
   const name = collectionName.value.trim();
   if (!name) {
     localError.value = t('collections.detail.edit.required');
@@ -431,3 +451,23 @@ onBeforeUnmount(() => {
   removePopoverPositionListeners();
 });
 </script>
+
+<style scoped>
+.collection-bookmark__quick-error {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  width: max-content;
+  max-width: min(16rem, 75vw);
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(239 68 68 / 40%);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+</style>

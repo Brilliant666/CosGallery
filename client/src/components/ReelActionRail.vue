@@ -56,7 +56,7 @@
     >
       <span class="reel-action-rail__icon i-fluent-folder-16-regular" aria-hidden="true" />
     </RouterLink>
-    <p v-if="actionError" class="reel-action-rail__error" role="status">{{ actionError }}</p>
+    <p v-if="actionError || likesStore.actionError(item.postId)" class="reel-action-rail__error" role="status">{{ actionError || likesStore.actionError(item.postId) }}</p>
   </div>
 </template>
 

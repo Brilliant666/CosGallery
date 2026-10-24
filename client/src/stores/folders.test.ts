@@ -80,3 +80,36 @@ describe('folder list initialization ownership', () => {
     expect(store.items.map(item => item.id)).toEqual([2]);
   });
 });
+
+describe('folder work counts', () => {
+  beforeEach(() => { setActivePinia(createPinia()); });
+
+  it('preserves different work and legacy representative counts until the final work is removed', () => {
+    const store = useFoldersStore();
+    const summary = { ...folder(1), imageCount: 1, postCount: 2, videoCount: 0 };
+    store.items = [summary];
+    store.currentFolder = { ...summary };
+
+    expect(store.removeImage(10, '1')).toBe(false);
+    expect(store.items[0]).toMatchObject({ postCount: 1, imageCount: 0 });
+    expect(store.currentFolder).toMatchObject({ postCount: 1, imageCount: 0 });
+    expect(store.removeImage(11, '1')).toBe(true);
+    expect(store.items).toEqual([]);
+    expect(store.currentFolder).toBeNull();
+  });
+
+  it.each([true, false])('keeps recommendation and open-folder counts current after a work is removed (explicit count: %s)', explicit => {
+    const store = useFoldersStore();
+    const summary = { ...folder(1), imageCount: 2, videoCount: 0, ...(explicit ? { postCount: 2 } : {}) };
+    store.items = [summary];
+    store.currentFolder = { ...summary };
+
+    expect(store.removeImage(10, '1')).toBe(false);
+    expect(store.items[0].postCount ?? store.items[0].imageCount).toBe(1);
+    expect(store.items[0].imageCount).toBe(1);
+    expect(store.currentFolder!.postCount ?? store.currentFolder!.imageCount).toBe(1);
+    expect(store.removeImage(11, '1')).toBe(true);
+    expect(store.items).toEqual([]);
+    expect(store.currentFolder).toBeNull();
+  });
+});

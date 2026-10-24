@@ -4,7 +4,7 @@
       {{ t('workGallery.backToGallery') }}
     </RouterLink>
     <div v-if="viewError" role="alert">
-      <ErrorState title="Could not load post" :message="viewError" />
+      <ErrorState :title="t('post.loadError')" :message="viewError" />
       <button v-if="modal" type="button" class="btn" @click="emit('close')">{{ t('workGallery.backToGallery') }}</button>
     </div>
     <PostViewer
@@ -17,7 +17,7 @@
       @delete="openDeleteDialog"
     />
     <div v-else-if="viewerStore.loading" class="card p-8 text-center">
-      <p class="text-muted">Loading post...</p>
+      <p class="text-muted">{{ t('post.loading') }}</p>
     </div>
     <ConfirmDialog
       v-if="confirmDeleteOpen"
@@ -80,11 +80,11 @@ const canonicalCreatorId = computed(() => {
 });
 const activeImage = computed(() => (viewerStore.image?.id === imageId.value ? viewerStore.image : null));
 const identityError = computed(() => (route.name === 'canonical-work-gallery' || route.query.creator !== undefined)
-  && canonicalCreatorId.value === undefined ? 'Invalid canonical creator identity' : null);
+  && canonicalCreatorId.value === undefined ? t('post.invalidCreator') : null);
 const viewError = computed(() => identityError.value || viewerStore.error ||
   ((route.name === 'canonical-work-gallery' || (route.query.context === 'work' && route.query.creator !== undefined)) && activeImage.value
     && resolveMediaSelection(orderedMediaItems(activeImage.value.mediaItems), route.query.media).invalid
-    ? 'Requested media does not exist or does not belong to this work' : null));
+    ? t('post.invalidMedia') : null));
 const returnToWork = computed(() => {
   if (route.query.context !== 'work' || !activeImage.value) return null;
   const creatorValue = Array.isArray(route.query.creator) ? route.query.creator[0] : route.query.creator;

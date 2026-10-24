@@ -479,6 +479,33 @@
         <!-- CATEGORY: GENERAL -->
         <template v-if="currentCategory === 'general'">
           <section
+            v-if="authStore.canAccessSettings"
+            class="card grid gap-4 p-6"
+            data-test="sidebar-browser-preferences"
+          >
+            <div class="flex items-start justify-between gap-4 max-sm:flex-col max-sm:items-stretch">
+              <div class="grid gap-[0.3rem]">
+                <h2 class="m-0 text-xl">{{ t('settings.general.browserPreferences.title') }}</h2>
+                <p class="m-0 text-muted">{{ t('settings.general.browserPreferences.description') }}</p>
+              </div>
+              <label class="grid min-w-[13rem] gap-2 text-[0.9rem] font-semibold">
+                <span>{{ t('nav.sidebarInteraction') }}</span>
+                <select
+                  class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-text"
+                  :value="sidebarInteraction"
+                  :aria-label="t('nav.sidebarInteraction')"
+                  data-test="sidebar-interaction"
+                  @change="changeSidebarInteraction"
+                >
+                  <option value="click">{{ t('nav.sidebarClick') }}</option>
+                  <option value="hover">{{ t('nav.sidebarHover') }}</option>
+                </select>
+              </label>
+            </div>
+            <p class="m-0 text-[0.85rem] text-muted">{{ t('nav.sidebarLocalHint') }}</p>
+          </section>
+
+          <section
             v-if="showCarouselsMigrationNotice"
             class="card grid gap-[1rem] p-6 border-[color-mix(in_srgb,#d2a133_42%,var(--border)_58%)]"
             style="background: radial-gradient(circle at top right, rgba(210,161,51,0.18), transparent 40%), linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, #fff3cf 6%) 0%, color-mix(in srgb, var(--surface) 88%, #ffe6a6 12%) 100%);"
@@ -655,6 +682,35 @@
             </div>
 
             <div class="divide-y divide-border">
+              <fieldset class="m-0 min-w-0 border-0 px-6 py-4" data-testid="accent-color-settings">
+                <legend class="float-left mb-1 w-full p-0 text-[0.96rem] font-semibold text-text">{{ t('settings.general.accentColor.label') }}</legend>
+                <p class="clear-both m-0 text-[0.84rem] text-muted">{{ t('settings.general.accentColor.description') }}</p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <label
+                    v-for="option in accentColorOptions"
+                    :key="option.id"
+                    class="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-[0.65rem] border px-3 py-2 text-[0.85rem] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent"
+                    :class="[
+                      accentColorDraft === option.id ? 'border-accent bg-accent-soft font-semibold text-text' : 'border-border bg-surface-alt text-muted',
+                      savingGeneralSettings || waitingForInitialStatus ? 'cursor-not-allowed opacity-60' : 'hover:bg-surface-hover'
+                    ]"
+                  >
+                    <input
+                      v-model="accentColorDraft"
+                      class="sr-only"
+                      type="radio"
+                      name="site-accent-color"
+                      :value="option.id"
+                      :disabled="savingGeneralSettings || waitingForInitialStatus"
+                      @change="clearGeneralSettingsFeedback"
+                    />
+                    <span class="h-4 w-4 shrink-0 rounded-full border border-black/10" :style="{ backgroundColor: option.color }" aria-hidden="true" />
+                    <span>{{ t(`settings.general.accentColor.options.${option.id}`) }}</span>
+                    <span class="i-fluent-checkmark-20-filled h-4 w-4" :class="accentColorDraft === option.id ? 'opacity-100' : 'opacity-0'" aria-hidden="true" />
+                  </label>
+                </div>
+                <p class="m-0 mt-2 text-[0.78rem] text-muted">{{ t('settings.general.accentColor.helper') }}</p>
+              </fieldset>
               <div class="px-6 py-4">
                 <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                   <div class="min-w-0">
@@ -1367,6 +1423,7 @@ import {
   triggerManualScan,
   triggerThumbnailRebuild,
   updateAppLocale,
+  updateAccentColor,
   updateExcludedFolders,
   updateFolderImageOrderDefault,
   updateHomeFeedDefault,
@@ -1384,7 +1441,8 @@ import { useLikesStore } from '../stores/likes';
 import { useMomentsStore } from '../stores/moments';
 import { usePlacesStore } from '../stores/places';
 import { useViewerStore } from '../stores/viewer';
-import type { AppStats, FeedMode, FolderImageOrder, NestedFolderTitleFormat, ReelsFeedMode, ViewerAccessMode } from '../types/api';
+import { ACCENT_COLORS, type AccentColor, type AppStats, type FeedMode, type FolderImageOrder, type NestedFolderTitleFormat, type ReelsFeedMode, type ViewerAccessMode } from '../types/api';
+import { readSidebarInteraction, saveSidebarPreference, SIDEBAR_INTERACTION_KEY, SIDEBAR_PREFERENCE_EVENT } from '../utils/sidebar-preferences';
 
 const { t, locale } = useI18n();
 const appStore = useAppStore();
@@ -1397,6 +1455,7 @@ const placesStore = usePlacesStore();
 const viewerStore = useViewerStore();
 const route = useRoute();
 const currentCategory = ref<'library' | 'general' | 'places' | 'access' | 'status'>('library');
+const sidebarInteraction = ref(readSidebarInteraction());
 const scanError = ref<string | null>(null);
 const scanPipelineNotice = ref<string | null>(null);
 const rebuildError = ref<string | null>(null);
@@ -1423,6 +1482,13 @@ const homeFeedDefaultMode = ref<FeedMode>('random');
 const reelsFeedDefaultMode = ref<ReelsFeedMode>('random');
 const folderImageOrderDefault = ref<FolderImageOrder>('newest');
 const nestedFolderTitleFormat = ref<NestedFolderTitleFormat>('folder');
+const accentColorDraft = ref<AccentColor>('purple');
+const savedAccentColor = ref<AccentColor>('purple');
+const accentColorHydrated = ref(false);
+const accentColorSwatches: Record<AccentColor, string> = {
+  blue: '#0095f6', purple: '#7c3aed', rose: '#be185d', teal: '#0f766e', amber: '#a16207', slate: '#475569'
+};
+const accentColorOptions = ACCENT_COLORS.map(id => ({ id, color: accentColorSwatches[id] }));
 const savedLocaleSelection = ref<SupportedLocale | null>(appStore.savedDefaultLocale);
 const localeSelectionHydrated = ref(false);
 const storiesMode = ref(false);
@@ -1821,6 +1887,9 @@ const folderImageOrderDirty = computed(
 const nestedFolderTitleDirty = computed(
   () => feedDefaultsHydrated.value && nestedFolderTitleFormat.value !== savedNestedFolderTitleFormat.value
 );
+const accentColorDirty = computed(
+  () => accentColorHydrated.value && accentColorDraft.value !== savedAccentColor.value
+);
 const defaultSettingsDirtyCount = computed(
   () =>
     [
@@ -1828,7 +1897,8 @@ const defaultSettingsDirtyCount = computed(
       homeFeedDefaultDirty.value,
       reelsFeedDefaultDirty.value,
       folderImageOrderDirty.value,
-      nestedFolderTitleDirty.value
+      nestedFolderTitleDirty.value,
+      accentColorDirty.value
     ].filter(Boolean).length
 );
 const feedDefaultsDirty = computed(
@@ -1859,7 +1929,7 @@ const hasUnsavedFolderRuleChanges = computed(
   () => excludedFoldersDirty.value || hasUnsavedReservedFolderRuleChanges.value
 );
 const generalSettingsDirty = computed(
-  () => localeDirty.value || feedDefaultsDirty.value || storiesModeDirty.value || carouselsModeDirty.value || excludedFoldersDirty.value || storiesModeRequiresDecision.value || carouselsModeRequiresDecision.value
+  () => localeDirty.value || feedDefaultsDirty.value || accentColorDirty.value || storiesModeDirty.value || carouselsModeDirty.value || excludedFoldersDirty.value || storiesModeRequiresDecision.value || carouselsModeRequiresDecision.value
 );
 const showSavedDefaultLocaleNotice = computed(
   () => savedLocaleSelection.value !== null && appStore.locale !== savedLocaleSelection.value
@@ -1923,6 +1993,10 @@ const generalSettingsActionNote = computed(() => {
 
   if (nestedFolderTitleDirty.value) {
     return t('settings.general.actionNote.nestedFolderTitleOnly');
+  }
+
+  if (accentColorDirty.value) {
+    return t('settings.general.actionNote.accentColorOnly');
   }
 
   if (appStore.isCarouselsReconciliationPending) {
@@ -2750,14 +2824,17 @@ async function saveGeneralSettings() {
   const shouldSaveReels = reelsFeedDefaultDirty.value;
   const shouldSaveFolderOrder = folderImageOrderDirty.value;
   const shouldSaveNestedFolderTitle = nestedFolderTitleDirty.value;
+  const shouldSaveAccentColor = accentColorDirty.value;
+  const nextAccentColor = accentColorDraft.value;
   const shouldSaveAnyDefault =
-    shouldSaveLocale || shouldSaveHome || shouldSaveReels || shouldSaveFolderOrder || shouldSaveNestedFolderTitle;
+    shouldSaveLocale || shouldSaveHome || shouldSaveReels || shouldSaveFolderOrder || shouldSaveNestedFolderTitle || shouldSaveAccentColor;
   const savedDefaultCount = [
     shouldSaveLocale,
     shouldSaveHome,
     shouldSaveReels,
     shouldSaveFolderOrder,
-    shouldSaveNestedFolderTitle
+    shouldSaveNestedFolderTitle,
+    shouldSaveAccentColor
   ].filter(Boolean).length;
   const savedParts: string[] = [];
   const savedFolderRuleCount = [shouldSaveExcludedFolders, shouldSaveStories, shouldSaveCarousels].filter(Boolean).length;
@@ -2866,6 +2943,17 @@ async function saveGeneralSettings() {
       nestedFolderTitleFormat.value = payload.titleFormat;
     }
 
+    if (shouldSaveAccentColor) {
+      const payload = await updateAccentColor(nextAccentColor);
+      savedParts.push(t('settings.general.feedback.parts.accentColor'));
+      if (appStore.stats) {
+        appStore.stats.preferences.accentColor = payload.accentColor;
+      }
+      appStore.syncAccentFromStats();
+      savedAccentColor.value = appStore.accentColor;
+      accentColorDraft.value = appStore.accentColor;
+    }
+
     await appStore.fetchStats({ background: true });
 
     if (shouldSaveStories || shouldSaveCarousels || shouldSaveExcludedFolders) {
@@ -2913,6 +3001,8 @@ async function saveGeneralSettings() {
         'success',
         t('settings.general.feedback.nestedFolderTitleSaved', { label: selectedNestedFolderTitleOption.value.label })
       );
+    } else if (shouldSaveAccentColor) {
+      setGeneralSettingsFeedback('success', t('settings.general.feedback.accentColorSaved'));
     }
   } catch (error) {
     await appStore.fetchStats({ background: true }).catch(() => {});
@@ -3065,8 +3155,30 @@ async function runThumbnailRebuild() {
   }
 }
 
+function changeSidebarInteraction(event: Event) {
+  if (!authStore.canAccessSettings) return;
+  const value = (event.target as HTMLSelectElement).value;
+  if (value !== 'click' && value !== 'hover') return;
+  sidebarInteraction.value = value;
+  saveSidebarPreference(SIDEBAR_INTERACTION_KEY, value);
+}
+
+function handleSidebarPreferenceChange(event: Event) {
+  const detail = (event as CustomEvent<{ key?: string; value?: string }>).detail;
+  if (detail?.key !== SIDEBAR_INTERACTION_KEY || (detail.value !== 'click' && detail.value !== 'hover')) return;
+  sidebarInteraction.value = detail.value;
+}
+
+function handleSidebarPreferenceStorage(event: StorageEvent) {
+  if (event.key === null || event.key === SIDEBAR_INTERACTION_KEY) {
+    sidebarInteraction.value = readSidebarInteraction(true);
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('message', handleArchiveTaskSyncResult);
+  window.addEventListener(SIDEBAR_PREFERENCE_EVENT, handleSidebarPreferenceChange);
+  window.addEventListener('storage', handleSidebarPreferenceStorage);
   if (!appStore.stats && !appStore.loadingStats) {
     await appStore.fetchStats();
   }
@@ -3083,6 +3195,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('message', handleArchiveTaskSyncResult);
+  window.removeEventListener(SIDEBAR_PREFERENCE_EVENT, handleSidebarPreferenceChange);
+  window.removeEventListener('storage', handleSidebarPreferenceStorage);
 });
 
 watch(
@@ -3120,6 +3234,22 @@ watch(
   {
     immediate: true
   }
+);
+
+watch(
+  () => [appStore.stats, appStore.loadingStats, appStore.accentColor, savingGeneralSettings.value] as const,
+  ([stats, loadingStats, savedAccent, saving]) => {
+    // Status refreshes must not replace an unsaved selection, including while
+    // another general setting is being saved before this one.
+    if (!stats || loadingStats || saving) return;
+    const preserveDraft = accentColorHydrated.value && accentColorDirty.value;
+    savedAccentColor.value = savedAccent;
+    if (!preserveDraft) {
+      accentColorDraft.value = savedAccent;
+    }
+    accentColorHydrated.value = true;
+  },
+  { immediate: true }
 );
 
 watch(

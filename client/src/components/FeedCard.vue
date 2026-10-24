@@ -62,7 +62,7 @@
       :items="item.mediaItems!"
       :prefer-preview="isHomeContext"
       :retry-while="appStore.isScanning"
-      :loading="isHomeContext ? 'eager' : 'lazy'"
+      loading="lazy"
       :muted="appStore.videoMuted"
     />
 
@@ -205,6 +205,7 @@
     </div>
 
     <div class="grid gap-[0.6rem] px-4 pt-[0.7rem] pb-[0.15rem]">
+      <p v-if="likesStore.actionError(item.id)" class="m-0 rounded-lg border border-red-500/40 px-3 py-2 text-sm text-text" role="alert" data-test="like-action-error">{{ likesStore.actionError(item.id) }}</p>
       <div class="flex items-center justify-between gap-[0.65rem]">
         <div class="flex items-center gap-[0.65rem]">
           <button

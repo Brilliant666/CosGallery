@@ -47,7 +47,7 @@ describe('CollectionsView', () => {
     setActivePinia(createPinia());
   });
 
-  it('shows All Posts as the first collection card without the synthetic tabs UI', async () => {
+  it('shows All saved as the first collection card without the synthetic tabs UI', async () => {
     const collectionsStore = useCollectionsStore();
     collectionsStore.$patch({
       loading: false,
@@ -80,7 +80,7 @@ describe('CollectionsView', () => {
     expect(wrapper.find('[aria-label="Collections sections"]').exists()).toBe(false);
     const cards = wrapper.findAll('a[data-to]');
     expect(cards).toHaveLength(2);
-    expect(cards[0]?.text()).toContain('All Posts');
+    expect(cards[0]?.text()).toContain('All saved');
     expect(cards[0]?.attributes('data-to')).toContain('"slug":"saved"');
     expect(cards[0]?.findAll('img[data-test="cover"]')).toHaveLength(4);
     expect(cards[1]?.text()).toContain('Travel');

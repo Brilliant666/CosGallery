@@ -4,6 +4,24 @@ const indexingError = 'Scoped media indexing did not complete';
 const noSupportedMediaError = 'No supported media found; nothing admitted';
 const chineseMessageStart = /^\s*[“「（【]?\s*[\u3400-\u9fff]/;
 
+const reviewPhases: Record<string, string> = {
+  inspecting: '正在检查本项文件', ready: '审核预览已就绪，尚未执行', submitted: '已提交，等待处理',
+  resuming: '正在恢复原审核', verifying: '正在核对文件与原审核记录', preserving_files: '正在按确认选择保留或移出文件',
+  resuming_original_job: '正在继续原入库任务', resuming_original_plan: '正在继续原入库计划',
+  completed: '本项审核处理已完成', interrupted: '处理已中断，原范围保留', failed: '处理失败，原现场保留'
+};
+
+/** Translate known phases without claiming that an unknown future phase succeeded. */
+export function admissionReviewMessage(phase: string, message?: string | null): string {
+  if (message && chineseMessageStart.test(message)) return message;
+  if (!message || message === phase) return reviewPhases[phase] ?? '状态待核对，请查看技术详情';
+  return '状态待核对，请查看技术详情';
+}
+
+export function admissionReviewActionState(state?: string | null): string {
+  return ({ intent: '已登记处置，尚未确认完成', moved: '文件已移出' } as Record<string, string>)[state ?? ''] ?? '处置状态待核对';
+}
+
 /** Keep raw errors available as evidence, while the visible notice stays in Chinese. */
 export function admissionErrorMessage(error?: string | null, message?: string | null, code?: string): string {
   if (message && chineseMessageStart.test(message)) return message;

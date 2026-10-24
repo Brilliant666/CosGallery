@@ -44,17 +44,14 @@ samples.clockTime = fs.existsSync(path.join(evidence, 'samples.json'))
   ? JSON.parse(fs.readFileSync(path.join(evidence, 'samples.json'), 'utf8')).clockTime ?? new Date().toISOString()
   : new Date().toISOString();
 samples.library.returnCreatorId = library.items[0].id;
-// The real sidebar selects a bounded daily/recent-visit set independently of
-// the library page. Prepare its exact candidate union for this navigation test.
-const { selectSidebarFolders } = await import(pathToFileURL(path.join(builtRoot, 'client/src/utils/sidebar-folders.ts')).href);
+// The sidebar only shows recent creators. Prepare the avatar union for the
+// synthetic visit states exercised by this navigation test.
+const { selectRecentCreators } = await import(pathToFileURL(path.join(builtRoot, 'client/src/utils/sidebar-folders.ts')).href);
 const folders = (await api('/folders')).items;
-const likes = (await api('/likes')).items;
-const likedCounts = new Map();
-for (const item of likes) likedCounts.set(item.folderSlug, (likedCounts.get(item.folderSlug) ?? 0) + 1);
 const visitedIds = new Set([ordinaryId, multiId, largeId, samples.library.returnCreatorId]);
-const visitStates = [[], ...folders.filter(f => visitedIds.has(f.canonicalCreatorId)).map(f => [f.slug])];
-for (const recent of visitStates) for (const counts of [new Map(), likedCounts]) {
-  for (const folder of selectSidebarFolders(folders, counts, recent, new Date(samples.clockTime))) add(folder.avatarUrl, 'thumbnail');
+const visitStates = [[], ...folders.filter(f => visitedIds.has(f.canonicalCreatorId)).map(f => [`creator:${f.canonicalCreatorId}`])];
+for (const recent of visitStates) {
+  for (const folder of selectRecentCreators(folders, recent)) add(folder.avatarUrl, 'thumbnail');
 }
 const returnPage = await api(`/cos-gallery/creators/${samples.library.returnCreatorId}/works?page=1&limit=24`);
 add(returnPage.creator.avatarUrl, 'thumbnail');

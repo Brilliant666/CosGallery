@@ -42,7 +42,8 @@
       "itemCountOther": "{count} elementos",
       "latestDate": "Último {date}",
       "noRecentActivity": "Sin actividad reciente"
-    }
+    },
+    "automaticLoading": "Se carga más contenido automáticamente al llegar al final."
   },
   "app": {
     "authLoading": {
@@ -88,6 +89,12 @@
     "more": "Más",
     "trash": "Papelera",
     "archiveCatalog": "Catálogo del archivo",
+    "sidebarExpand": "Expandir barra lateral",
+    "sidebarCollapse": "Contraer barra lateral",
+    "sidebarInteraction": "Interacción de la barra lateral",
+    "sidebarClick": "Clic para expandir / contraer",
+    "sidebarHover": "Expandir al pasar el cursor",
+    "sidebarLocalHint": "Solo se guarda en este navegador. El modo de clic recuerda si la barra está expandida.",
     "settings": "Ajustes",
     "unlockAdmin": "Desbloquear admin",
     "switchAppearance": "Cambiar apariencia",
@@ -95,9 +102,9 @@
     "switchToLightMode": "Cambiar al modo claro",
     "signOut": "Cerrar sesión",
     "returnToPublicView": "Volver a la vista pública",
-    "foldersSpotlight": "Carpetas destacadas",
+    "recentCreators": "Vistos recientemente",
     "likesAriaLabel": "{label} ({count})",
-    "folderPosts": "{count} publicaciones"
+    "folderPosts": "{count} obras"
   },
   "settings": {
     "eyebrow": "Ajustes",
@@ -198,6 +205,10 @@
       "card": {
         "title": "Ajustes generales",
         "description": "Valores predeterminados de toda la app para idioma, títulos de carpetas anidadas, carpetas stories, carpetas excluidas, Inicio, Reels y carpetas de la app."
+      },
+      "browserPreferences": {
+        "title": "Preferencias de navegación",
+        "description": "Se aplica de inmediato sin pulsar Guardar cambios."
       },
       "language": {
         "label": "Idioma de la aplicación",
@@ -318,7 +329,8 @@
         "folderOnly": "Esto actualiza el orden de fotos predeterminado usado por las cuadrículas de carpetas de la app.",
         "nestedFolderTitleOnly": "Esto actualiza cómo se etiquetan las carpetas anidadas de la app en toda la aplicación.",
         "carouselReconciliation": "El modo de las carpetas de carrusel está guardado. Completa la acción de biblioteca indicada arriba para aplicarlo al índice.",
-        "idle": "Estos son los valores actuales de toda la app para idioma, Inicio, Reels, carpetas de la app, títulos de carpetas anidadas, carpetas stories, carpetas de carrusel y carpetas excluidas."
+        "idle": "Estos son los valores actuales de toda la app para idioma, Inicio, Reels, carpetas de la app, títulos de carpetas anidadas, carpetas stories, carpetas de carrusel y carpetas excluidas.",
+        "accentColorOnly": "El color se aplicará a todo el sitio al guardar. No requiere escanear ni reconstruir la biblioteca."
       },
       "rescanNotice": {
         "rebuildRequired": "Guarda estos cambios y luego reconstruye el índice de la biblioteca para aplicar el comportamiento de carpetas seleccionado a la ubicación actual de la galería.",
@@ -352,13 +364,28 @@
           "homeFeedDefault": "predeterminado del feed de Inicio",
           "reelsFeedDefault": "predeterminado de Reels",
           "appFolderOrder": "orden de las carpetas de la app",
-          "nestedFolderTitles": "títulos de carpetas anidadas"
-        }
+          "nestedFolderTitles": "títulos de carpetas anidadas",
+          "accentColor": "color de acento del sitio"
+        },
+        "accentColorSaved": "Color de acento del sitio guardado."
       },
       "errors": {
         "validateExcludedFolders": "No se pudieron validar las reglas de carpetas excluidas.",
         "update": "No se pudieron actualizar los ajustes generales.",
         "partialUpdate": "Se guardaron algunos ajustes ({parts}), pero la actualización no terminó: {message}"
+      },
+      "accentColor": {
+        "label": "Color de acento del sitio",
+        "description": "Unifica el color de botones, enlaces, selección y foco para administradores y visitantes.",
+        "helper": "Selecciona un color y pulsa Guardar cambios. Morado restaura el valor predeterminado; el modo claro/oscuro sigue siendo una preferencia del navegador.",
+        "options": {
+          "blue": "Azul",
+          "purple": "Morado",
+          "rose": "Rosa",
+          "teal": "Verde azulado",
+          "amber": "Ámbar",
+          "slate": "Pizarra"
+        }
       }
     },
     "library": {
@@ -628,43 +655,51 @@
       }
     }
   },
+  "galleryStatistics": {
+    "title": "Estadísticas de la galería",
+    "creators": "Creadores",
+    "works": "Obras",
+    "photos": "Fotos",
+    "pending": "Estadísticas sin cargar",
+    "unavailable": "Estadísticas no disponibles"
+  },
   "home": {
+    "feedModesLabel": "Modo de exploración",
     "sidebar": {
-      "ariaLabel": "Recomendaciones de carpetas",
-      "suggestedFolders": "Carpetas sugeridas",
-      "viewLikes": "Ver me gusta",
-      "viewFavorites": "Ver favoritos",
-      "openFolder": "Abrir",
-      "openSourceText": "Foldergram es de código abierto.",
-      "viewOnGitHub": "Ver en GitHub"
+      "ariaLabel": "Recomendaciones de creadores",
+      "suggestedFolders": "Creadores recomendados",
+      "viewAll": "Ver todos",
+      "workCount": "{count} obras",
+      "openFolder": "Ver obras",
+      "openSourceText": "Basado en Foldergram"
     }
   },
   "likes": {
     "labels": {
       "sharedCollection": "Me gusta",
       "localCollection": "Favoritos",
-      "sharedSection": "Publicaciones con me gusta",
-      "localSection": "Publicaciones favoritas"
+      "sharedSection": "Contenido con me gusta",
+      "localSection": "Contenido favorito"
     },
     "view": {
       "rebuilding": "Se está reconstruyendo el índice de la biblioteca. {label} volverá cuando termine de cargarse la biblioteca actualizada.",
       "sectionsAria": "Secciones de {label}"
     },
     "states": {
-      "sharedEmptyTitle": "Aún no hay publicaciones con me gusta",
+      "sharedEmptyTitle": "Aún no hay contenido con me gusta",
       "localEmptyTitle": "Aún no hay favoritos",
-      "sharedEmptyDescription": "Toca el corazón debajo de cualquier publicación y aparecerá aquí.",
-      "localEmptyDescription": "Toca el corazón debajo de cualquier publicación y aparecerá aquí en este navegador.",
+      "sharedEmptyDescription": "Toca el corazón debajo de cualquier contenido y aparecerá aquí.",
+      "localEmptyDescription": "Toca el corazón debajo de cualquier contenido para guardarlo en este navegador y mostrarlo aquí.",
       "sharedLoadingLabel": "Cargando me gusta...",
       "localLoadingLabel": "Cargando favoritos...",
       "sharedErrorTitle": "No se pudieron cargar los me gusta",
       "localErrorTitle": "No se pudieron cargar los favoritos"
     },
     "actions": {
-      "likePost": "Marcar me gusta en la publicación",
-      "unlikePost": "Quitar me gusta de la publicación",
-      "favoritePost": "Agregar publicación a favoritos",
-      "removeFavoriteFromPost": "Quitar publicación de favoritos"
+      "likePost": "Marcar me gusta en este contenido",
+      "unlikePost": "Quitar me gusta de este contenido",
+      "favoritePost": "Agregar este contenido a favoritos",
+      "removeFavoriteFromPost": "Quitar este contenido de favoritos"
     },
     "errors": {
       "loadShared": "No se pudieron cargar los me gusta",
@@ -855,12 +890,12 @@
       "next": "Siguiente reel"
     },
     "rail": {
-      "parentLoadError": "No se pudo cargar la publicación. Inténtalo de nuevo.",
+      "parentLoadError": "No se pudo cargar el elemento multimedia al que pertenece. Inténtalo de nuevo.",
       "hideDetails": "Ocultar detalles del reel",
       "showDetails": "Mostrar detalles del reel",
       "downloadOriginal": "Descargar archivo original",
       "openAlbum": "Abrir el álbum en este vídeo",
-      "parentPostActions": "Los me gusta, favoritos y descripciones se aplican a la publicación o al álbum completo.",
+      "parentPostActions": "Los Me gusta, los favoritos y las descripciones se aplican al elemento multimedia o al álbum al que pertenece.",
       "openFolder": "Abrir carpeta"
     },
     "info": {
@@ -883,11 +918,11 @@
   },
   "post": {
     "carousel": {
-      "label": "Carrusel con {count} elementos",
+      "label": "Grupo multimedia con {count} elementos",
       "position": "{current} / {count}",
       "previousItem": "Elemento anterior del carrusel",
       "nextItem": "Elemento siguiente del carrusel",
-      "open": "Abrir carrusel con {count} elementos"
+      "open": "Abrir grupo multimedia con {count} elementos"
     },
     "captionModal": {
       "title": "Editar descripción",
@@ -899,11 +934,11 @@
       }
     },
     "viewer": {
-      "close": "Cerrar publicación",
-      "previous": "Publicación anterior",
-      "next": "Siguiente publicación",
-      "showDetails": "Mostrar detalles de la publicación",
-      "hideDetails": "Ocultar detalles de la publicación",
+      "close": "Cerrar vista previa",
+      "previous": "Elemento anterior",
+      "next": "Elemento siguiente",
+      "showDetails": "Mostrar detalles del archivo",
+      "hideDetails": "Ocultar detalles del archivo",
       "togglePlayback": "Alternar reproducción",
       "toggleSound": "Alternar sonido",
       "toggleFullscreen": "Alternar pantalla completa",
@@ -934,31 +969,35 @@
       "setAsCover": "Establecer como portada de la carpeta",
       "downloadOriginalFile": "Descargar archivo original",
       "openOriginalFile": "Abrir archivo original",
-      "deletePost": "Eliminar publicación"
+      "deletePost": "Mover a la papelera"
     },
     "feedCard": {
       "openStories": "Abrir historias de {name}",
       "openFolderAvatar": "Abrir {name}",
       "openReel": "Abrir reel",
-      "openPost": "Abrir publicación",
+      "openPost": "Abrir contenido multimedia",
       "moreOptions": "Más opciones",
       "delete": {
-        "title": "¿Eliminar esta publicación?",
-        "messagePermanent": "Esto eliminará permanentemente la publicación de la app y quitará el archivo original del disco.",
-        "messageTrash": "Esto eliminará la publicación de la app y la moverá a la Papelera. El archivo original seguirá en el disco a menos que elijas la eliminación permanente.",
+        "title": "¿Mover a la papelera o eliminar este elemento multimedia?",
+        "messagePermanent": "Esto elimina permanentemente este elemento y todos los archivos multimedia originales que contiene del disco.",
+        "messageTrash": "Esto mueve el elemento a la papelera y conserva sus archivos originales para poder restaurarlo.",
         "confirmPermanent": "Eliminar permanentemente",
-        "confirm": "Eliminar",
+        "confirm": "Mover a la papelera",
         "deleteOriginalLabel": "Eliminar también de forma permanente el archivo original del disco",
-        "deleteOriginalDescription": "Déjalo desmarcado para mover la publicación a la Papelera mientras conservas el archivo fuente en el disco.",
+        "deleteOriginalDescription": "Deja esta opción sin marcar para mover el elemento a la papelera y conservar todos sus archivos originales.",
         "deleteOriginalWarning": "Esto eliminará permanentemente del disco el archivo original, la miniatura y la vista previa. Esta acción no se puede deshacer."
       }
-    }
+    },
+    "loading": "Cargando contenido multimedia...",
+    "loadError": "No se pudo cargar el contenido multimedia",
+    "invalidCreator": "La identidad del creador no es válida. Vuelve a la biblioteca y ábrelo de nuevo.",
+    "invalidMedia": "El archivo seleccionado no existe o no pertenece a esta obra. Vuelve a la obra y selecciona otro."
   },
   "collections": {
     "shared": {
-      "defaultName": "Todas las publicaciones",
-      "postCountOne": "{count} publicación",
-      "postCountOther": "{count} publicaciones"
+      "defaultName": "Todo lo guardado",
+      "postCountOne": "{count} elemento",
+      "postCountOther": "{count} elementos"
     },
     "bookmark": {
       "dialogLabel": "Colecciones",
@@ -966,10 +1005,13 @@
       "createCollection": "Crear colección",
       "namePlaceholder": "Nombre de la colección",
       "empty": "Aún no hay colecciones",
-      "savePost": "Guardar publicación",
-      "removeSavedPost": "Quitar publicación guardada",
+      "savePost": "Guardar este elemento",
+      "removeSavedPost": "Quitar de guardados",
       "errors": {
-        "loadCollections": "No se pudieron cargar las colecciones"
+        "loadCollections": "No se pudieron cargar las colecciones",
+        "busy": "Hay otra acción de guardado en curso para este archivo. Inténtalo de nuevo en unos momentos.",
+        "createdWithoutMedia": "La colección «{name}» se ha creado, pero no se pudo confirmar que se añadiera el archivo. Comprueba la lista de colecciones antes de reintentarlo. {error}",
+        "refreshAfterSave": "El estado guardado se ha actualizado, pero no se pudo actualizar la lista de colecciones. Actualiza la página para ver el estado más reciente."
       }
     },
     "list": {
@@ -977,7 +1019,7 @@
       "loadErrorTitle": "No se pudieron cargar las colecciones",
       "loading": "Cargando colecciones...",
       "emptyTitle": "Aún no hay colecciones",
-      "emptyDescription": "Las publicaciones guardadas aparecerán en Todas las publicaciones."
+      "emptyDescription": "El contenido guardado aparece en Todo lo guardado."
     },
     "detail": {
       "fallbackTitle": "Colección",
@@ -987,8 +1029,8 @@
       "options": "Opciones de la colección",
       "actionsLabel": "Acciones de la colección",
       "emptyTitle": "{name} está vacía",
-      "emptyDescriptionDefault": "Usa la acción de marcador debajo de cualquier publicación para guardarla aquí.",
-      "emptyDescriptionCustom": "Las publicaciones guardadas asignadas a esta colección aparecerán aquí.",
+      "emptyDescriptionDefault": "Usa la opción de guardar de cualquier elemento multimedia para añadirlo aquí.",
+      "emptyDescriptionCustom": "Los elementos guardados asignados a esta colección aparecerán aquí.",
       "loading": "Cargando colección...",
       "menu": {
         "delete": "Eliminar colección",
@@ -1077,7 +1119,7 @@
   "libraryPage": {
     "eyebrow": "Biblioteca",
     "title": "Todas las carpetas",
-    "description": "Explora y busca cada carpeta de la app indexada.",
+    "description": "Explora y busca todas las carpetas indexadas de la biblioteca.",
     "stats": {
       "folders": "Carpetas",
       "posts": "Publicaciones"
@@ -1135,10 +1177,10 @@
   },
   "trashPage": {
     "eyebrow": "Papelera",
-    "title": "Publicaciones eliminadas",
-    "description": "Las publicaciones movidas aquí permanecen en el disco hasta que las elimines de forma permanente.",
-    "selectedOne": "{count} publicación seleccionada",
-    "selectedOther": "{count} publicaciones seleccionadas",
+    "title": "Obras y archivos multimedia en la papelera",
+    "description": "Las obras y los archivos multimedia en la papelera conservan sus originales. Puedes restaurarlos o eliminarlos permanentemente tras confirmar.",
+    "selectedOne": "{count} registro de papelera seleccionado",
+    "selectedOther": "{count} registros de papelera seleccionados",
     "restoreButton": "Restaurar",
     "deleteButton": "Eliminar permanentemente",
     "libraryUnavailableTitle": "Almacenamiento de la biblioteca no disponible",
@@ -1146,35 +1188,35 @@
     "loadErrorTitle": "No se pudo cargar la papelera",
     "loading": "Cargando papelera...",
     "emptyTitle": "La papelera está vacía",
-    "emptyDescription": "Las publicaciones eliminadas aparecerán aquí para que puedas restaurarlas o quitarlas permanentemente.",
+    "emptyDescription": "Los registros de papelera aparecen aquí para restaurarlos o eliminarlos permanentemente.",
     "selectItem": "Seleccionar {label}",
     "deselectItem": "Deseleccionar {label}",
     "trashedAt": "En papelera {date}",
     "recently": "recientemente",
     "openFolder": "Abrir carpeta",
     "restoreDialog": {
-      "title": "¿Restaurar las publicaciones seleccionadas?",
-      "messageOne": "¿Restaurar {count} publicación seleccionada en la app?",
-      "messageOther": "¿Restaurar {count} publicaciones seleccionadas en la app?",
+      "title": "¿Restaurar los registros seleccionados?",
+      "messageOne": "¿Restaurar el registro seleccionado de la papelera ({count}) a la biblioteca?",
+      "messageOther": "¿Restaurar los {count} registros seleccionados de la papelera a la biblioteca?",
       "confirm": "Restaurar",
       "loading": "Restaurando..."
     },
     "deleteDialog": {
-      "title": "¿Eliminar permanentemente las publicaciones seleccionadas?",
-      "messageOne": "Esto eliminará permanentemente {count} publicación seleccionada y quitará el archivo original del disco.",
-      "messageOther": "Esto eliminará permanentemente {count} publicaciones seleccionadas y quitará los archivos originales del disco.",
+      "title": "¿Eliminar permanentemente los registros seleccionados?",
+      "messageOne": "Se eliminará permanentemente el registro seleccionado ({count}) y sus archivos originales.",
+      "messageOther": "Se eliminarán permanentemente los {count} registros seleccionados y sus archivos originales.",
       "confirm": "Eliminar permanentemente",
       "loading": "Eliminando...",
       "warning": "Los archivos originales, las miniaturas y las vistas previas se eliminarán permanentemente. Esta acción no se puede deshacer."
     },
     "errors": {
       "refresh": "No se pudo refrescar el estado actualizado de la biblioteca.",
-      "processOne": "No se pudo procesar {count} publicación.",
-      "processOther": "No se pudieron procesar {count} publicaciones."
+      "processOne": "No se pudo procesar {count} registro de papelera.",
+      "processOther": "No se pudieron procesar {count} registros de papelera."
     }
   },
   "explore": {
-    "back": "Volver a publicaciones de explorar",
+    "back": "Volver a Explorar",
     "searchPlaceholder": "Buscar",
     "clearSearch": "Borrar búsqueda",
     "recentTitle": "Reciente",
@@ -1182,20 +1224,21 @@
     "tabsAria": "Pestañas de resultados de búsqueda",
     "tabs": {
       "media": "Fotos y videos",
-      "folders": "Carpetas de la app"
+      "folders": "Carpetas de la biblioteca"
     },
     "errors": {
-      "search": "No se pudieron buscar publicaciones",
+      "search": "No se pudieron buscar archivos multimedia",
       "load": "No se pudo cargar Explorar"
     },
     "emptySearchTitle": "No hay fotos ni videos que coincidan",
     "emptySearchDescription": "Prueba con otro nombre de archivo o palabra clave de carpeta.",
-    "loadingFolders": "Cargando carpetas...",
-    "noFoldersFound": "No se encontraron carpetas de la app.",
+    "loadingFolders": "Cargando carpetas de la biblioteca...",
+    "noFoldersFound": "No se encontraron carpetas de la biblioteca que coincidan.",
     "emptyTitle": "Todavía no hay nada para explorar",
-    "emptyDescription": "Indexa algunas carpetas y esta página empezará a mostrar publicaciones aquí.",
-    "folderPostsOne": "{count} publicación",
-    "folderPostsOther": "{count} publicaciones"
+    "emptyDescription": "Todavía no hay archivos multimedia para mostrar en la biblioteca.",
+    "folderPostsOne": "{count} elemento multimedia",
+    "folderPostsOther": "{count} elementos multimedia",
+    "searchLabel": "Buscar medios o carpetas de la biblioteca"
   },
   "mediaRemoval": {
     "legacyTitle": "Otras galerías en la papelera",

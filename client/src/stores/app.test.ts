@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_LOCALE, i18n } from '../locales';
-import type { AppStatus } from '../types/api';
+import { ACCENT_COLORS, type AppStatus } from '../types/api';
 import { useAppStore } from './app';
 import { useAuthStore } from './auth';
 
@@ -91,12 +91,64 @@ function createAppStatus(defaultLocale: AppStatus['preferences']['defaultLocale'
   };
 }
 
+describe('browser-local creator history', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    window.localStorage.clear();
+  });
+
+  it('keeps legacy history and restores canonical creator visits in the latest order after reload', () => {
+    window.localStorage.setItem('foldergram-last-opened-folder', 'legacy-a');
+    window.localStorage.setItem('foldergram-recent-opened-folders', JSON.stringify(['legacy-b', 'legacy-a']));
+    const store = useAppStore();
+    store.initializeLastOpenedFolder();
+    store.recordOpenedRoute({ name: 'canonical-creator', params: { creatorId: '42' } });
+    store.recordOpenedRoute({ name: 'canonical-work-gallery', params: { creatorId: '7', postId: '900' } });
+    store.recordOpenedRoute({ name: 'canonical-work-gallery', params: { creatorId: '42', postId: '901' } });
+    expect(store.recentOpenedCreatorKeys).toEqual(['creator:42', 'creator:7', 'legacy-a', 'legacy-b']);
+    expect(store.recentOpenedFolderSlugs).toEqual(['legacy-a', 'legacy-b']);
+    expect(store.lastOpenedFolderSlug).toBe('legacy-a');
+    expect(JSON.parse(window.localStorage.getItem('foldergram-recent-opened-folders')!)).toEqual(['legacy-a', 'legacy-b']);
+    expect(window.localStorage.getItem('foldergram-last-opened-folder')).toBe('legacy-a');
+
+    setActivePinia(createPinia());
+    const reloaded = useAppStore();
+    reloaded.initializeLastOpenedFolder();
+    expect(reloaded.recentOpenedCreatorKeys).toEqual(store.recentOpenedCreatorKeys);
+    expect(reloaded.recentOpenedFolderSlugs).toEqual(store.recentOpenedFolderSlugs);
+  });
+
+  it('records legacy folder and work routes while ignoring unrelated pages and malformed creator ids', () => {
+    const store = useAppStore();
+    store.recordOpenedRoute({ name: 'folder', params: { slug: 'legacy-a' } });
+    store.recordOpenedRoute({ name: 'work-gallery', params: { slug: 'legacy-b', postId: '99' } });
+    for (const creatorId of ['0', '-1', 'NaN', '12suffix', '9007199254740992', ['42']]) {
+      store.recordOpenedRoute({ name: 'canonical-creator', params: { creatorId } });
+    }
+    store.recordOpenedRoute({ name: 'library', params: {} });
+    store.recordOpenedRoute({ name: 'archive-catalog', params: { creatorId: '42' } });
+    expect(store.recentOpenedFolderSlugs).toEqual(['legacy-b', 'legacy-a']);
+    expect(store.recentOpenedCreatorKeys).toEqual(['legacy-b', 'legacy-a']);
+    expect(JSON.parse(window.localStorage.getItem('foldergram-recent-opened-folders')!)).toEqual(['legacy-b', 'legacy-a']);
+  });
+
+  it('does not import old history again after a deliberately empty creator history is saved', () => {
+    window.localStorage.setItem('foldergram-last-opened-folder', 'legacy-a');
+    window.localStorage.setItem('cosgallery-recent-viewed-creators', '[]');
+    const store = useAppStore();
+    store.initializeLastOpenedFolder();
+    expect(store.recentOpenedCreatorKeys).toEqual([]);
+    expect(store.lastOpenedFolderSlug).toBe('legacy-a');
+  });
+});
+
 describe('useAppStore locale preferences', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     window.localStorage.clear();
     setNavigatorLocales(['en-US']);
     document.documentElement.lang = '';
+    delete document.documentElement.dataset.accent;
     i18n.global.locale.value = DEFAULT_LOCALE;
     fetchAdminScanProgressMock.mockReset();
     fetchAdminStatsMock.mockReset();
@@ -117,6 +169,52 @@ describe('useAppStore locale preferences', () => {
     fetchAdminStatsMock.mockResolvedValueOnce(createAppStatus());
     await store.fetchStats();
     expect(store.stats).not.toBeNull();
+  });
+
+  it.each(ACCENT_COLORS)('applies public site accent %s without changing browser theme or saving a local override', async (accentColor) => {
+    useAuthStore().$patch({ role: 'anonymous', authenticated: false, accessMode: 'public', capabilities: { canAccessSettings: false } });
+    const status = createAppStatus(); status.preferences.accentColor = accentColor;
+    fetchStatusMock.mockResolvedValueOnce(status);
+    const store = useAppStore(); store.setTheme('dark');
+    await store.fetchStats();
+    expect(store.accentColor).toBe(accentColor);
+    expect(document.documentElement.dataset.accent).toBe(accentColor);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    store.setTheme('light');
+    expect(document.documentElement.dataset.accent).toBe(accentColor);
+    expect(window.localStorage.length).toBe(1);
+    expect(fetchAdminStatsMock).not.toHaveBeenCalled();
+  });
+
+  it('uses purple before the initial status is available without making a request or saving an override', () => {
+    const store = useAppStore();
+    expect(store.stats).toBeNull();
+    expect(store.accentColor).toBe('purple');
+    store.syncAccentFromStats();
+    expect(document.documentElement.dataset.accent).toBe('purple');
+    expect(fetchStatusMock).not.toHaveBeenCalled();
+    expect(fetchAdminStatsMock).not.toHaveBeenCalled();
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it.each([undefined, null, 'unknown', 'RED'])('uses purple for an absent or invalid public accent (%s)', async (value) => {
+    const status = createAppStatus();
+    status.preferences.accentColor = value as AppStatus['preferences']['accentColor'];
+    fetchAdminStatsMock.mockResolvedValueOnce(status);
+    await useAppStore().fetchStats();
+    expect(useAppStore().accentColor).toBe('purple');
+    expect(document.documentElement.dataset.accent).toBe('purple');
+  });
+
+  it('does not apply a stale admin accent response after an anonymous refresh', async () => {
+    let resolveOld!: (value: AppStatus) => void;
+    fetchAdminStatsMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolveOld = done; }));
+    const store = useAppStore(); const old = store.fetchStats();
+    useAuthStore().$patch({ role: 'anonymous', capabilities: { canAccessSettings: false } });
+    const current = createAppStatus(); current.preferences.accentColor = 'teal';
+    fetchStatusMock.mockResolvedValueOnce(current); await store.fetchStats();
+    const stale = createAppStatus(); stale.preferences.accentColor = 'rose'; resolveOld(stale); await old;
+    expect(document.documentElement.dataset.accent).toBe('teal');
   });
 
   it('shares equivalent light initialization even for an administrator', async () => {

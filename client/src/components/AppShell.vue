@@ -5,14 +5,19 @@
     class="app-shell flex min-h-screen overflow-x-clip"
     :class="{
       'app-shell--standalone': isStandaloneDisplay,
+      'app-shell--sidebar-expanded': sidebarExpanded,
       'app-shell--explore': isExploreShell,
       'app-shell--reels': isReelsShell
     }"
   >
     <!-- Sidebar: fixed on desktop, hidden on mobile -->
-    <SidebarNav class="hidden md:flex fixed top-0 left-0 h-screen z-30" />
+    <SidebarNav
+      class="hidden md:flex fixed top-0 left-0 h-screen z-30"
+      :expanded="sidebarExpanded"
+      @expanded-change="sidebarExpanded = $event"
+    />
     <!-- Content: margin-left matches sidebar width on desktop -->
-    <div class="app-shell__content flex flex-1 min-h-screen min-w-0 flex-col md:ml-[4.85rem]">
+    <div class="app-shell__content flex flex-1 min-h-screen min-w-0 flex-col">
       <TopNav />
       <main
         class="app-shell__main flex-1 min-h-0"
@@ -98,6 +103,7 @@ import {
 
 const appStore = useAppStore();
 const route = useRoute();
+const sidebarExpanded = ref(false);
 const isStandaloneDisplay = ref(false);
 const isExploreShell = computed(() => route.meta.shell === 'explore');
 const isReelsShell = computed(() => route.meta.shell === 'reels');
@@ -133,6 +139,10 @@ onMounted(() => {
 
 <style scoped>
 .app-shell {
+  --sidebar-collapsed-width: 4.85rem;
+  --sidebar-expanded-width: 15rem;
+  --sidebar-width-duration: 180ms;
+  --sidebar-motion-easing: cubic-bezier(0.22, 1, 0.36, 1);
   --mobile-safe-area-bottom: 0px;
   --mobile-bottom-nav-height: calc(3.55rem + var(--mobile-safe-area-bottom));
 }
@@ -165,6 +175,24 @@ onMounted(() => {
 
 .app-shell__scan-status {
   bottom: 1rem;
+}
+
+/* The sidebar and content share one explicit expansion state and timing. */
+@media (min-width: 48rem) {
+  .app-shell__content {
+    margin-left: var(--sidebar-collapsed-width);
+    transition: margin-left var(--sidebar-width-duration) var(--sidebar-motion-easing);
+  }
+
+  .app-shell--sidebar-expanded > .app-shell__content {
+    margin-left: var(--sidebar-expanded-width);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell {
+    --sidebar-width-duration: 0ms;
+  }
 }
 
 @media (max-width: 767.98px) {

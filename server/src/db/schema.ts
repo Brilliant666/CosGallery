@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS archive_catalog_creators (
   normalized_name TEXT NOT NULL,
   preference TEXT NULL,
   effective_rating TEXT NULL,
+  gallery_labels_revision INTEGER NOT NULL DEFAULT 0 CHECK (gallery_labels_revision >= 0),
   is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
   deactivated_at TEXT NULL,
   preferred_local_creator_folder_id INTEGER NULL
@@ -231,6 +232,12 @@ CREATE TABLE IF NOT EXISTS archive_catalog_creators (
   UNIQUE(seed_source, seed_source_creator_id),
   CHECK (preference IS NULL OR preference IN ('liked', 'kept')),
   CHECK (effective_rating IS NULL OR effective_rating IN ('R15', 'R18'))
+);
+
+CREATE TABLE IF NOT EXISTS archive_catalog_creator_gallery_labels (
+  creator_id INTEGER NOT NULL REFERENCES archive_catalog_creators(id) ON DELETE CASCADE,
+  label TEXT NOT NULL CHECK (label IN ('cosplay', 'portrait', 'selfie', 'fuliji')),
+  PRIMARY KEY (creator_id, label)
 );
 
 CREATE TABLE IF NOT EXISTS archive_catalog_creator_aliases (

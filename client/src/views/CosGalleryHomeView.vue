@@ -1,9 +1,9 @@
 <template>
-  <section class="mx-auto w-full max-w-[92rem] px-2 pb-12 sm:px-5 lg:px-8">
+  <section class="creator-gallery mx-auto w-full max-w-[92rem] px-2 pb-12 sm:px-5 lg:px-8">
     <header class="mb-7 grid gap-5">
       <div>
         <p class="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-muted">CosGallery</p>
-        <h1 class="m-0 text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">我的图库</h1>
+        <h1 class="m-0 text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">{{ activeLabelTitle ? `${activeLabelTitle}图库` : '全部图库' }}</h1>
       </div>
 
       <form class="flex gap-2" @submit.prevent="applyFilters">
@@ -20,38 +20,45 @@
       </form>
 
       <div class="flex flex-wrap items-center gap-3" aria-label="博主筛选">
-        <div role="group" aria-label="分级" class="flex flex-wrap items-center gap-2 text-sm font-semibold">
-          <span aria-hidden="true" class="mr-1 text-muted">分级</span>
-          <button v-for="option in ratingOptions" :key="option.value" type="button" :value="option.value" :aria-pressed="rating === option.value"
-            class="rounded-full border px-4 py-2.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-            :class="rating === option.value ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-text hover:border-accent/60'"
-            @click="setRating(option.value)">{{ option.label }}</button>
+        <!-- Keep filter wrapping stable without rendering grading controls on category pages. -->
+        <div class="min-h-[2.625rem] w-64 max-w-full" :aria-hidden="label ? true : undefined">
+          <div v-if="!label" role="group" aria-label="分级" class="grid grid-cols-[auto_repeat(3,minmax(0,1fr))] items-center gap-2 text-sm font-semibold">
+            <span aria-hidden="true" class="mr-1 text-muted">分级</span>
+            <button v-for="option in ratingOptions" :key="option.value" type="button" :value="option.value" :aria-pressed="rating === option.value"
+              class="rounded-full border px-3 py-2.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              :class="rating === option.value ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-text hover:border-accent/60'"
+              @click="setRating(option.value)">{{ option.label }}</button>
+          </div>
         </div>
-        <div role="group" aria-label="偏好" class="flex flex-wrap items-center gap-2 text-sm font-semibold">
+        <div v-if="auth.isAdmin" role="group" aria-label="偏好" class="flex flex-wrap items-center gap-2 text-sm font-semibold">
           <span aria-hidden="true" class="mr-1 text-muted">偏好</span>
           <button v-for="option in preferenceOptions" :key="option.value" type="button" :value="option.value" :aria-pressed="preference === option.value"
             class="rounded-full border px-4 py-2.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             :class="preference === option.value ? 'border-accent bg-accent text-white' : 'border-border bg-surface text-text hover:border-accent/60'"
             @click="setPreference(option.value)">{{ option.label }}</button>
         </div>
-        <span class="ml-auto text-sm text-muted">{{ total }} 位博主 · 每页 {{ PAGE_SIZE }} 位</span>
+        <span v-if="hasCurrentResults" class="ml-auto text-sm text-muted">{{ total }} 位博主 · 每页 {{ PAGE_SIZE }} 位</span>
       </div>
       <p v-if="legacyRatingLabel" role="status" class="m-0 rounded-xl border border-amber-300 px-4 py-3 text-sm text-amber-700">当前沿用旧链接的“{{ legacyRatingLabel }}”筛选，范围未改变。日常入口已收起；选择分级“全部”可退出此筛选，身份管理请前往博主库。</p>
     </header>
 
-    <p v-if="error" class="rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-red-700">{{ error }}</p>
+    <div v-if="error" class="flex flex-wrap items-center gap-3 rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-red-700" role="alert">
+      <p class="m-0 flex-1">{{ error }}</p>
+      <button type="button" class="btn-primary" data-test="retry-creators" :disabled="loading" @click="retryCreators">{{ t('common.retry') }}</button>
+    </div>
 
     <div
-      v-if="creators.length"
+      v-if="hasCurrentResults && creators.length && !error"
       class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
       aria-label="博主目录"
+      :aria-busy="loading"
     >
-      <RouterLink
+      <article
         v-for="creator in creators"
         :key="creator.key"
-        :to="creatorRoute(creator)"
-        class="group min-w-0 overflow-hidden rounded-2xl border border-border bg-surface text-text no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-lg"
+        class="creator-card group min-w-0 overflow-hidden rounded-2xl border border-border bg-surface text-text no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-lg"
       >
+        <RouterLink :to="creatorRoute(creator)" class="block text-inherit no-underline">
         <div class="relative aspect-[4/5] overflow-hidden bg-surface-alt">
           <img
             v-if="creator.coverUrl"
@@ -64,6 +71,8 @@
             {{ creatorInitial(creator.name) }}
           </div>
           <span
+            v-if="!label"
+            data-test="creator-rating"
             class="absolute left-2 top-2 rounded-full px-2.5 py-1 text-xs font-bold text-white shadow-sm"
             :class="ratingBadgeClass(creator.contentRating)"
           >
@@ -79,26 +88,41 @@
           <p v-else-if="creator.linkStatus === 'unlinked'" class="mt-1 mb-0 text-xs text-muted">请在博主库关联目录</p>
           <p v-else class="mt-1 mb-0 text-xs text-muted">点击查看全部图册</p>
         </div>
-      </RouterLink>
+        </RouterLink>
+        <div v-if="!label && (creator.galleryLabels?.length || (auth.isAdmin && creator.identityType === 'creator'))" class="creator-classification flex items-center gap-2 px-3.5 pb-3.5" data-test="creator-classification">
+          <div v-if="creator.galleryLabels?.length" class="min-w-0 flex-1 flex flex-wrap gap-1" data-test="creator-gallery-labels">
+            <span v-for="item in creator.galleryLabels" :key="item" :title="galleryLabelTitle(item)" class="creator-classification-label max-w-full truncate rounded-full border border-border px-2 py-0.5 text-xs text-muted">{{ galleryLabelTitle(item) }}</span>
+          </div>
+          <button v-if="auth.isAdmin && creator.identityType === 'creator'" type="button" class="creator-classification-edit shrink-0 rounded-lg border border-border bg-surface px-2 py-2 text-xs font-semibold hover:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" :aria-label="`编辑 ${creator.name} 的分类`" title="编辑分类" data-test="edit-gallery-labels" @click="editingCreator = creator">
+            <span class="creator-classification-edit__text">编辑分类</span>
+            <span class="creator-classification-edit__icon i-fluent-edit-20-regular hidden h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      </article>
     </div>
 
     <div v-else-if="loading" class="py-20 text-center text-muted">正在加载博主目录…</div>
-    <div v-else class="rounded-2xl border border-dashed border-border py-16 text-center text-muted">
+    <div v-else-if="hasCurrentResults && !error" class="rounded-2xl border border-dashed border-border py-16 text-center text-muted">
       没有符合当前条件的博主。
     </div>
-    <nav v-if="totalPages > 1" class="mt-7 flex items-center justify-center gap-4" aria-label="博主分页">
+    <nav v-if="hasCurrentResults && totalPages > 1 && !error" class="mt-7 flex items-center justify-center gap-4" aria-label="博主分页">
       <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page <= 1 || loading" @click="setPage(page - 1)">上一页</button>
       <span class="text-sm text-muted">第 {{ page }} / {{ totalPages }} 页</span>
       <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page >= totalPages || loading" @click="setPage(page + 1)">下一页</button>
     </nav>
+    <CreatorGalleryLabelsDialog v-if="editingCreator && auth.isAdmin && !label" :creator="editingCreator" @close="editingCreator = null" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { RouterLink, useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 
 import { fetchCosGalleryCreators } from '../api/gallery';
+import CreatorGalleryLabelsDialog from '../components/CreatorGalleryLabelsDialog.vue';
+import { useAuthStore } from '../stores/auth';
+import { creatorGalleryLabelOptions, parseCreatorGalleryLabel, sanitizedGalleryQuery } from '../utils/creator-gallery-labels';
 import type { ContentRating, CosGalleryCreator } from '../types/api';
 import { canonicalCreatorRoute } from '../utils/work-gallery';
 import { useCreatorReadingStore } from '../stores/creator-reading';
@@ -106,6 +130,7 @@ import { useCreatorReadingStore } from '../stores/creator-reading';
 type RatingFilter = 'all' | ContentRating | 'unclassified' | 'unlinked' | 'inactive';
 type PreferenceFilter = 'all' | 'liked' | 'kept';
 const PAGE_SIZE = 60;
+const { t } = useI18n();
 const ratingOptions = [{ value: 'all', label: '全部' }, { value: 'R15', label: 'R15' }, { value: 'R18', label: 'R18' }] as const;
 const preferenceOptions = [{ value: 'all', label: '全部' }, { value: 'liked', label: '喜欢' }, { value: 'kept', label: '保留' }] as const;
 const legacyLabels = { unclassified: '待分类', unlinked: '未关联', inactive: '已停用' };
@@ -115,6 +140,10 @@ const creators = ref<CosGalleryCreator[]>([]);
 const route = useRoute();
 const router = useRouter();
 const reading = useCreatorReadingStore();
+const auth = useAuthStore();
+const editingCreator = ref<CosGalleryCreator | null>(null);
+const label = computed(() => parseCreatorGalleryLabel(route.query.label));
+const activeLabelTitle = computed(() => galleryLabelTitle(label.value));
 let requestToken = 0;
 let generation = reading.generation;
 let navigationIntent: 'filter' | 'page' | null = null;
@@ -128,9 +157,14 @@ const page = ref(typeof initialPage === 'string' && /^\d+$/.test(initialPage) &&
 const total = ref(0);
 const loading = ref(false);
 const error = ref('');
+// A pending retry may retain data only for the same applied route and access context.
+const resultContext = ref<string | null>(null);
+const currentResultContext = computed(() => JSON.stringify([cacheKey(), reading.generation, auth.isAdmin]));
+const hasCurrentResults = computed(() => resultContext.value === currentResultContext.value);
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
-const legacyRatingLabel = computed(() => legacyLabels[rating.value as keyof typeof legacyLabels] ?? '');
+const legacyRatingLabel = computed(() => label.value ? '' : legacyLabels[rating.value as keyof typeof legacyLabels] ?? '');
 function cacheKey(path = route.fullPath) { return `library:${PAGE_SIZE}:${path}`; }
+function galleryLabelTitle(value: unknown) { return creatorGalleryLabelOptions.find(option => option.value === value)?.label ?? ''; }
 
 function creatorInitial(name: string) {
   return Array.from(name.trim())[0]?.toLocaleUpperCase() ?? '?';
@@ -159,37 +193,49 @@ async function correctOutOfRangePage(resultTotal: number) {
   return true;
 }
 
-async function loadCreators(scroll: 'restore' | 'top' | 'preserve') {
+async function loadCreators(scroll: 'restore' | 'top' | 'preserve', force = false) {
   const token = ++requestToken;
   generation = reading.generation;
+  const requestGeneration = generation;
+  const admin = auth.isAdmin;
+  const context = currentResultContext.value;
+  const isCurrent = () => token === requestToken && requestGeneration === reading.generation && admin === auth.isAdmin && context === currentResultContext.value;
   loading.value = true;
   error.value = '';
-  const cached = reading.libraryPages[cacheKey()];
+  const cached = force ? undefined : reading.libraryPages[cacheKey()];
   if (cached) {
     if (await correctOutOfRangePage(cached.total)) return;
-    if (token !== requestToken) return;
+    if (!isCurrent()) return;
     creators.value = cached.items;
     total.value = cached.total;
+    resultContext.value = context;
     loading.value = false;
     await nextTick();
     requestAnimationFrame(() => { if (token === requestToken && scroll !== 'preserve') window.scrollTo({ top: scroll === 'restore' ? cached.scrollY : 0 }); });
     return;
   }
   try {
-    const payload = await fetchCosGalleryCreators(rating.value === 'all' ? undefined : rating.value, query.value, page.value, PAGE_SIZE, preference.value === 'all' ? undefined : preference.value);
-    if (token !== requestToken) return;
+    const routeQuery = Array.isArray(route.query.q) ? route.query.q[0] : route.query.q;
+    const appliedQuery = typeof routeQuery === 'string' ? routeQuery : '';
+    const payload = await fetchCosGalleryCreators(label.value || rating.value === 'all' ? undefined : rating.value, appliedQuery, page.value, PAGE_SIZE, !admin || preference.value === 'all' ? undefined : preference.value, label.value);
+    if (!isCurrent()) return;
     if (await correctOutOfRangePage(payload.total)) return;
-    if (token !== requestToken) return;
+    if (!isCurrent()) return;
     creators.value = payload.items;
     total.value = payload.total;
+    resultContext.value = context;
     await nextTick();
     if (token === requestToken && scroll === 'top') window.scrollTo({ top: 0 });
   } catch (reason) {
-    if (token !== requestToken) return;
+    if (!isCurrent()) return;
     error.value = reason instanceof Error ? reason.message : '无法读取博主目录';
   } finally {
     if (token === requestToken) loading.value = false;
   }
+}
+
+async function retryCreators() {
+  if (!loading.value) await loadCreators('preserve', true);
 }
 
 async function syncLocation(intent: 'filter' | 'page') {
@@ -197,8 +243,8 @@ async function syncLocation(intent: 'filter' | 'page') {
     name: 'library',
     query: {
       ...(query.value.trim() ? { q: query.value.trim() } : {}),
-      ...(rating.value !== 'all' ? { rating: rating.value } : {}),
-      ...(preference.value !== 'all' ? { preference: preference.value } : {}),
+      ...(label.value ? { label: label.value } : rating.value !== 'all' ? { rating: rating.value } : {}),
+      ...(auth.isAdmin && preference.value !== 'all' ? { preference: preference.value } : {}),
       ...(page.value > 1 ? { page: String(page.value) } : {})
     }
   };
@@ -214,6 +260,7 @@ async function applyFilters() {
 }
 
 async function setRating(value: RatingFilter) {
+  if (label.value) return;
   if (rating.value === value) return;
   rating.value = value;
   page.value = 1;
@@ -221,6 +268,7 @@ async function setRating(value: RatingFilter) {
 }
 
 async function setPreference(value: PreferenceFilter) {
+  if (!auth.isAdmin) return;
   if (preference.value === value) return;
   preference.value = value;
   page.value = 1;
@@ -239,7 +287,7 @@ function creatorRoute(creator: CosGalleryCreator) {
 }
 
 function saveReadingPosition() {
-  if (!loading.value && !error.value && generation === reading.generation) {
+  if (!loading.value && !error.value && hasCurrentResults.value && generation === reading.generation) {
     reading.libraryPages[cacheKey()] = { items: [...creators.value], total: total.value, scrollY: window.scrollY };
     const keys = Object.keys(reading.libraryPages);
     if (keys.length > 10) delete reading.libraryPages[keys[0]!];
@@ -247,15 +295,71 @@ function saveReadingPosition() {
 }
 onBeforeRouteLeave(saveReadingPosition);
 onBeforeRouteUpdate(saveReadingPosition);
-watch(() => [route.fullPath, reading.generation] as const, (_current, previous) => {
+watch(() => [route.fullPath, reading.generation, reading.libraryResetVersion, auth.isAdmin] as const, (_current, previous) => {
   if (route.name !== 'library') return;
-  query.value = typeof route.query.q === 'string' ? route.query.q : '';
-  rating.value = typeof route.query.rating === 'string' && validRatings.includes(route.query.rating) ? route.query.rating as RatingFilter : 'all';
-  preference.value = route.query.preference === 'liked' || route.query.preference === 'kept' ? route.query.preference : 'all';
+  if (label.value) editingCreator.value = null;
+  if (previous && previous[3] !== auth.isAdmin) { creators.value = []; total.value = 0; editingCreator.value = null; error.value = ''; }
+  const cleanQuery = sanitizedGalleryQuery(route.query, auth.isAdmin);
+  if (JSON.stringify(cleanQuery) !== JSON.stringify(route.query)) {
+    requestToken += 1;
+    void router.replace({ name: 'library', query: cleanQuery });
+    return;
+  }
+  const routeQuery = Array.isArray(route.query.q) ? route.query.q[0] : route.query.q;
+  query.value = typeof routeQuery === 'string' ? routeQuery : '';
+  rating.value = !label.value && typeof route.query.rating === 'string' && validRatings.includes(route.query.rating) ? route.query.rating as RatingFilter : 'all';
+  preference.value = auth.isAdmin && (route.query.preference === 'liked' || route.query.preference === 'kept') ? route.query.preference : 'all';
   page.value = typeof route.query.page === 'string' && /^\d+$/.test(route.query.page) && Number(route.query.page) > 0 ? Number(route.query.page) : 1;
-  const scroll = navigationIntent ? 'top' : previous && previous[1] !== reading.generation ? 'preserve' : 'restore';
+  const scroll = navigationIntent || reading.libraryNavigationIntent === 'reset' ? 'top' : previous && previous[1] !== reading.generation ? 'preserve' : 'restore';
+  reading.libraryNavigationIntent = null;
   navigationIntent = null;
   void loadCreators(scroll);
 }, { immediate: true });
 onBeforeUnmount(() => { requestToken += 1; });
 </script>
+
+<style scoped>
+.creator-card {
+  container-type: inline-size;
+}
+
+@container (max-width: 180px) {
+  .creator-classification {
+    gap: 0.25rem;
+    padding-inline: 0.375rem;
+  }
+
+  .creator-classification-label {
+    padding-inline: 0.25rem;
+  }
+
+  .creator-classification-edit {
+    display: grid;
+    place-items: center;
+    padding: 0.375rem;
+  }
+
+  .creator-classification-edit__text {
+    display: none;
+  }
+
+  .creator-classification-edit__icon {
+    display: block;
+  }
+}
+
+@container (max-width: 120px) {
+  .creator-classification {
+    gap: 0.125rem;
+    padding-inline: 0.125rem;
+  }
+
+  .creator-classification-label {
+    font-size: 0.6875rem;
+  }
+}
+
+:global(html:has(.creator-gallery)) {
+  scrollbar-gutter: stable;
+}
+</style>

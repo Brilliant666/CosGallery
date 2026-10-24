@@ -242,12 +242,19 @@
             </div>
             <div v-if="localIngestJobs.length" class="overflow-x-auto rounded-xl border border-border">
               <table class="w-full min-w-[70rem] border-collapse text-left text-sm">
-                <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主 / 压缩包</th><th class="p-3">映射</th><th class="p-3">状态</th><th class="p-3">校验 / 清理</th><th class="p-3">预览</th><th class="p-3">操作</th></tr></thead>
+                <thead class="bg-bg text-xs text-muted"><tr><th class="p-3">博主 / 压缩包</th><th class="p-3">映射</th><th class="p-3">状态</th><th class="p-3">校验 / 回收</th><th class="p-3">预览</th><th class="p-3">操作</th></tr></thead>
                 <tbody><tr v-for="job in localIngestJobs" :id="`costuan-job-${job.id}`" :key="job.id" :data-job-id="job.id" :class="job.id === linkedJobId ? 'bg-blue-50' : ''" class="border-t border-border align-top">
                   <td class="p-3"><strong>{{ job.creatorName }}</strong><small class="mt-1 block font-mono text-muted">{{ job.sourceArchiveName }} · {{ formatBytes(job.sourceArchiveSize) }}</small></td>
                   <td class="p-3"><span class="font-mono text-xs">source {{ job.sourceWorkId ?? '—' }}</span><small class="mt-1 block text-muted">task {{ job.archiveDownloadTaskId ?? '—' }}</small></td>
                   <td class="p-3"><strong>{{ localIngestStatusLabel(job.status) }}</strong><small class="mt-1 block text-muted">{{ localIngestPhaseLabel(job.phase) }}</small><small v-if="job.errorCode" class="mt-1 block text-red-700">{{ localIngestErrorLabel(job) }}</small><div v-if="job.status === 'awaiting_review'" data-test="local-ingest-review-evidence" class="mt-2 rounded-lg bg-amber-50 p-2 text-xs leading-5 text-amber-900"><strong>人工核查证据</strong><span class="mt-1 block">未知文件：{{ jobSummaryList(job, 'unknownFiles') }}</span><span class="block break-all">处理目录：{{ job.processingPath ?? '未建立' }}</span><span class="block">正式目录：尚未提交</span><span v-if="job.targetPath" class="block break-all">计划路径：{{ job.targetPath }}</span></div></td>
-                  <td class="p-3">{{ job.validationStatus }}<small class="mt-1 block text-muted">cleanup: {{ job.cleanupStatus }}</small></td>
+                  <td class="p-3">
+                    <span data-test="local-ingest-validation-status">校验：{{ localIngestValidationLabel(job.validationStatus) }}</span>
+                    <small data-test="local-ingest-cleanup-status" class="mt-1 block text-muted">源包与处理目录：{{ localIngestCleanupLabel(job.cleanupStatus) }}</small>
+                    <details data-test="local-ingest-status-details" class="mt-2 text-xs">
+                      <summary class="cursor-pointer text-accent">校验与回收技术详情</summary>
+                      <dl class="mt-1 break-all text-muted"><dt>校验原码</dt><dd>{{ job.validationStatus }}</dd><dt>回收原码</dt><dd>{{ job.cleanupStatus }}</dd></dl>
+                    </details>
+                  </td>
                   <td class="p-3 text-xs"><template v-if="job.summary">图片 {{ jobSummaryValue(job, 'imageCount') }} · 视频 {{ jobSummaryValue(job, 'videoCount') }} · 广告 {{ jobSummaryValue(job, 'advertisementFileCount') }}<small class="mt-1 block break-all text-muted">{{ jobSummaryValue(job, 'plannedTargetPath') }}</small><small v-if="Number(job.summary.retainedOriginalCount) > 0" data-test="retained-originals-summary" class="mt-1 block break-all text-amber-800">另保留 {{ jobSummaryValue(job, 'retainedOriginalCount') }} 张原件，暂不支持展示<small class="block">{{ jobSummaryValue(job, 'retainedOriginalDirectory') }}</small></small><details class="mt-2 max-w-[30rem]"><summary class="cursor-pointer font-semibold text-accent">完整入库预览</summary><dl class="mt-2 grid grid-cols-[6rem_minmax(12rem,1fr)] gap-x-2 gap-y-1 break-all leading-5 text-muted"><dt>原始标题</dt><dd>{{ jobSummaryValue(job, 'rawTitle') }}</dd><dt>源压缩包</dt><dd>{{ job.sourceArchivePath }}</dd><dt>SHA-256</dt><dd class="font-mono">{{ job.sourceArchiveSha256 }}</dd><dt>外层格式</dt><dd>{{ jobSummaryValue(job, 'outerFormat') }}</dd><dt>第一层输出</dt><dd>{{ jobSummaryList(job, 'levelOneOutput') }}</dd><dt>内层原名</dt><dd>{{ jobSummaryValue(job, 'innerOriginalName') }}</dd><dt>内层工作名</dt><dd>{{ jobSummaryValue(job, 'innerWorkingName') }}</dd><dt>未知文件</dt><dd>{{ jobSummaryList(job, 'unknownFiles') }}</dd><dt>警告</dt><dd>{{ jobSummaryList(job, 'warnings') }}</dd></dl></details><IngestPerformance :performance="job.summary.performance" /></template><span v-else class="text-muted">尚无预览</span></td>
                   <td class="p-3"><a v-if="job.status === 'awaiting_review'" :href="`/local-review?kind=stage3&jobId=${job.id}&creatorId=${job.creatorId}`" data-test="review-local-ingest-job" class="block rounded-lg border border-border bg-bg px-3 py-2 text-xs font-semibold text-accent">查看并处理</a><button v-else-if="job.status !== 'ingested'" type="button" data-test="run-local-ingest-job" class="rounded-lg border border-border bg-bg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked" :title="stage3LockReason" @click="runLocalJob(job.id)">继续任务</button><button v-else-if="job.status === 'ingested' && job.cleanupStatus === 'failed'" type="button" data-test="retry-local-ingest-cleanup" class="rounded-lg border border-border bg-bg px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50" :disabled="stage3WriteLocked" :title="stage3LockReason" @click="retryLocalCleanup(job.id)">重试回收</button><span v-else class="text-xs text-muted">—</span></td>
                 </tr></tbody>
@@ -494,6 +501,28 @@ function localIngestPhaseLabel(phase?: string) {
 
 function localIngestStatusLabel(status: LocalIngestJob['status']) {
   return ({ queued: '待处理', running: '处理中', awaiting_review: '待人工核查', reconciling: '对账中', ingested: '已入库', failed: '失败' } as const)[status];
+}
+
+function localIngestValidationLabel(status: string) {
+  switch (status) {
+    case 'unknown': return '尚未完成校验';
+    case 'passed': return '校验通过';
+    case 'warning': return '有警告，请查看入库预览';
+    case 'failed': return '未通过，需人工核查';
+    default: return '状态待核对，请查看技术详情';
+  }
+}
+
+function localIngestCleanupLabel(status: string) {
+  switch (status) {
+    // This can also mean automatic recycling is disabled or originals must be retained.
+    case 'not_ready': return '未安排回收';
+    case 'pending': return '等待回收';
+    case 'recycling': return '正在回收';
+    case 'recycled': return '已回收';
+    case 'failed': return '回收失败';
+    default: return '回收状态待核对，请查看技术详情';
+  }
 }
 
 function localIngestErrorLabel(job: LocalIngestJob) {
@@ -908,7 +937,7 @@ async function runLocalJob(id: number) {
   try {
     const result = await runLocalIngestJob(id);
     if (!currentRead('ingest', generation)) return;
-    localIngestNotice.value = `${result.creatorName}/${result.sourceArchiveName}：${localIngestStatusLabel(result.status)}（${result.phase}）`;
+    localIngestNotice.value = `${result.creatorName}/${result.sourceArchiveName}：${localIngestStatusLabel(result.status)}（${localIngestPhaseLabel(result.phase)}）`;
     await settleStage3Request('single-job', true);
   } catch (reason) {
     if (!currentRead('ingest', generation)) return;
@@ -1244,7 +1273,7 @@ onBeforeUnmount(() => {
 .ingest-list-dialog { width: min(36rem, 100%); }
 .ingest-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
 .ingest-dialog-actions button { min-height: 2.5rem; padding: .5rem 1rem; border: 1px solid var(--border); border-radius: .75rem; }
-.ingest-dialog-actions button:last-child { background: var(--accent); color: white; }
+.ingest-dialog-actions button:last-child { background: var(--accent-fill,var(--accent)); color: white; }
 .ingest-dialog button:disabled { opacity: .5; cursor: not-allowed; }
 .metadata-table {
   table-layout: fixed;

@@ -56,7 +56,7 @@ describe('CollectionView', () => {
     setActivePinia(createPinia());
   });
 
-  it('uses All Posts as the default collection title and Collections as the back label', async () => {
+  it('uses All saved as the default collection title and Collections as the back label', async () => {
     const collectionsStore = useCollectionsStore();
     collectionsStore.$patch({
       currentCollection: createCollection('saved', 'Saved', true),
@@ -93,8 +93,8 @@ describe('CollectionView', () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain('Collections');
-    expect(wrapper.text()).toContain('All Posts');
-    expect(wrapper.text()).toContain('Use the bookmark action under any post to save it here.');
+    expect(wrapper.text()).toContain('All saved');
+    expect(wrapper.text()).toContain('Use the bookmark action on any media entry to save it here.');
     expect(wrapper.find('.collection-page__menu-button').exists()).toBe(false);
   });
 
@@ -135,5 +135,32 @@ describe('CollectionView', () => {
 
     expect(wrapper.find('[data-test="folder-grid"]').attributes('data-columns')).toBe('three');
     expect(wrapper.find('[data-test="folder-grid"]').attributes('data-variant')).toBe('posts');
+  });
+
+  it('returns from a delete confirmation to the stable options button without deleting the collection', async () => {
+    const collectionsStore = useCollectionsStore();
+    collectionsStore.$patch({ currentCollection: createCollection('portraits', 'Portraits'), currentImages: [] });
+    vi.spyOn(collectionsStore, 'loadCollection').mockResolvedValue(undefined);
+    const remove = vi.spyOn(collectionsStore, 'deleteCollection').mockResolvedValue(undefined);
+    const wrapper = mount(CollectionView, {
+      attachTo: document.body,
+      props: { slug: 'portraits' },
+      global: { stubs: { FolderGrid: true, InfiniteLoader: true } },
+    });
+    await flushPromises();
+    const opener = wrapper.get('.collection-page__menu-button');
+    (opener.element as HTMLElement).focus();
+    await opener.trigger('click'); await flushPromises();
+    expect(document.activeElement).toBe(wrapper.get('.collection-action-sheet').element);
+    await wrapper.get('.collection-action-sheet__item--danger').trigger('click'); await flushPromises();
+    const dialog = wrapper.get('.collection-delete-dialog');
+    expect(document.activeElement).toBe(dialog.element);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(dialog.findAll('button')[1].element);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flushPromises();
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false);
+    expect(document.activeElement).toBe(opener.element);
+    expect(remove).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 });

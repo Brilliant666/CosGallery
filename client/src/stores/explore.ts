@@ -327,6 +327,19 @@ export const useExploreStore = defineStore('explore', {
           this.searchLoading = false;
         }
       }
+    },
+
+    async retrySearch(query?: string) {
+      if (this.searchLoading) return;
+      const retryQuery = query ?? this.searchQuery;
+      if (retryQuery.trim() !== this.searchQuery) {
+        await this.loadSearch(retryQuery, true);
+        return;
+      }
+      if (!this.searchError) return;
+      // Resume the failed page; keep earlier results and the current query.
+      this.searchHasMore = true;
+      await this.loadMoreSearch();
     }
   }
 });

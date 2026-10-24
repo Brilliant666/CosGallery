@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useAuthStore } from '../stores/auth';
+import { useLikesStore } from '../stores/likes';
 import type { FeedItem } from '../types/api';
 import FeedCard from './FeedCard.vue';
 
@@ -159,6 +160,21 @@ describe('FeedCard', () => {
     );
   });
 
+  it('shows a failed favorite action next to its card without leaking another item error', async () => {
+    const store = useLikesStore();
+    const wrapper = mount(FeedCard, { props: { item: createImageItem(501), avatarUrl: null }, global: { stubs: globalStubs } });
+    store.actionErrors[502] = 'Other item failed';
+    await flushPromises();
+    expect(wrapper.find('[data-test=like-action-error]').exists()).toBe(false);
+    store.actionErrors[501] = 'Save failed';
+    await flushPromises();
+    expect(wrapper.get('[data-test=like-action-error][role=alert]').text()).toBe('Save failed');
+    delete store.actionErrors[501];
+    await flushPromises();
+    expect(wrapper.find('[data-test=like-action-error]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('updates the home video aspect ratio from the loaded video element when metadata disagrees with indexed dimensions', async () => {
     const wrapper = mount(FeedCard, {
       props: {
@@ -312,8 +328,8 @@ describe('FeedCard', () => {
     await flushPromises();
 
     expect(wrapper.get('button[aria-label="More options"]').attributes('title')).toBe('More options');
-    expect(wrapper.get('button[aria-label="Like post"]').attributes('title')).toBe('Like post');
-    expect(wrapper.get('a[aria-label="Open post"]').attributes('title')).toBe('Open post');
+    expect(wrapper.get('button[aria-label="Like this content"]').attributes('title')).toBe('Like this content');
+    expect(wrapper.get('a[aria-label="Open media"]').attributes('title')).toBe('Open media');
     const postRouteLink = wrapper
       .findAll('a[data-to]')
       .find((candidate) => candidate.attributes('data-to')?.includes('"name":"image"'));

@@ -181,6 +181,37 @@ describe('CollectionBookmark', () => {
     wrapper.unmount();
   });
 
+  it('shows a quick-save failure without opening the popover and allows retry', async () => {
+    window.localStorage.clear();
+    const store = useCollectionsStore();
+    await store.initialize();
+    const wrapper = mount(CollectionBookmark, { props: { item: createFeedItem(432), placement: 'feed' } });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => { throw new Error('Storage full'); });
+    await wrapper.get('.collection-bookmark__button').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test=bookmark-action-error][role=alert]').text()).toBe('Storage full');
+    expect(document.querySelector('.collection-bookmark__popover')).toBeNull();
+    expect(store.isSaved(432)).toBe(false);
+    expect(wrapper.get('.collection-bookmark__button').attributes('disabled')).toBeUndefined();
+    await wrapper.get('.collection-bookmark__button').trigger('click');
+    await flushPromises();
+    expect(store.isSaved(432)).toBe(true);
+    expect(wrapper.find('[data-test=bookmark-action-error]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('does not carry a quick-save error over to another media item', async () => {
+    const store = useCollectionsStore();
+    let finish!: (error: string) => void;
+    vi.spyOn(store, 'toggleDefaultSave').mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const wrapper = mount(CollectionBookmark, { props: { item: createFeedItem(433), placement: 'viewer' } });
+    await wrapper.get('.collection-bookmark__button').trigger('click');
+    await wrapper.setProps({ item: createFeedItem(434) });
+    finish('Old item failed'); await flushPromises();
+    expect(wrapper.find('[data-test=bookmark-action-error]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('creates a collection from the popover and keeps the default collection hidden', async () => {
     const item = createFeedItem(84);
     const collectionsStore = useCollectionsStore();
@@ -257,7 +288,7 @@ describe('CollectionBookmark', () => {
 
     expect(createAndAddSpy).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.collection-bookmark__popover')).toBeNull();
-    expect(wrapper.get('.collection-bookmark__button').attributes('aria-label')).toBe('Remove saved post');
+    expect(wrapper.get('.collection-bookmark__button').attributes('aria-label')).toBe('Remove from saved');
 
     wrapper.unmount();
   });
@@ -310,6 +341,41 @@ describe('CollectionBookmark', () => {
     expect(document.querySelector('.collection-bookmark__popover')).not.toBeNull();
     expect(document.body.textContent).toContain('Unable to update collection');
 
+    wrapper.unmount();
+  });
+
+  it('preserves the new collection form while media is busy and blocks duplicate submissions until the retry completes', async () => {
+    const item = createFeedItem(87);
+    const store = useCollectionsStore();
+    const saved = createCollection('saved', 'Saved', true);
+    const membership = { imageId: item.id, isSaved: false, items: [createMembership(saved, false)] };
+    store.$patch({ items: [saved], membershipByImageId: { [item.id]: membership } });
+    vi.spyOn(store, 'fetchMembership').mockResolvedValue(membership);
+    let finishCreate!: () => void;
+    const create = vi.spyOn(store, 'createAndAdd').mockImplementation(() => new Promise(resolve => { finishCreate = resolve; }));
+    const wrapper = mount(CollectionBookmark, { attachTo: document.body, props: { item, placement: 'feed' } });
+    await wrapper.trigger('focusin'); vi.advanceTimersByTime(1_000); await flushPromises();
+    const createButton = document.querySelector<HTMLButtonElement>('.collection-bookmark__create-button')!;
+    createButton.click(); await flushPromises();
+    const input = document.querySelector<HTMLInputElement>('.collection-bookmark__input')!;
+    input.value = 'Trip'; input.dispatchEvent(new Event('input')); await flushPromises();
+    store.pendingImageIds.push(item.id); await flushPromises();
+    expect(createButton.disabled).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('.collection-bookmark__submit')!.disabled).toBe(true);
+    const form = document.querySelector<HTMLFormElement>('.collection-bookmark__create')!;
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flushPromises();
+    expect(create).not.toHaveBeenCalled();
+    expect(input.value).toBe('Trip');
+    expect(document.querySelector('.collection-bookmark__popover')).not.toBeNull();
+    expect(document.querySelector('.collection-bookmark__error')?.textContent).toBeTruthy();
+
+    store.pendingImageIds = []; await flushPromises();
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flushPromises();
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await flushPromises();
+    expect(create).toHaveBeenCalledExactlyOnceWith('Trip', item);
+    expect(document.querySelector('.collection-bookmark__popover')).not.toBeNull();
+    finishCreate(); await flushPromises();
+    expect(document.querySelector('.collection-bookmark__popover')).toBeNull();
     wrapper.unmount();
   });
 

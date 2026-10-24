@@ -60,7 +60,7 @@ describe('ReelInfoSidebar', () => {
   it('uses current video metadata without fetching the parent post or all album media',async()=>{
     const item={...createReelItem(11),postId:999,mediaPosition:3,postType:'carousel' as const,caption:'Parent album description'};
     const wrapper=sidebar(item);await flushPromises();
-    expect(fetchImage).not.toHaveBeenCalled();expect(wrapper.text()).toContain('MP4');expect(wrapper.text()).toContain('24.00 MB');expect(wrapper.text()).toContain('1080 x 1920');expect(wrapper.text()).toContain('Parent album description');expect(wrapper.text()).toContain('parent post or album');
+    expect(fetchImage).not.toHaveBeenCalled();expect(wrapper.text()).toContain('MP4');expect(wrapper.text()).toContain('24.00 MB');expect(wrapper.text()).toContain('1080 x 1920');expect(wrapper.text()).toContain('Parent album description');expect(wrapper.text()).toContain('parent media entry or album');
     await wrapper.setProps({item:{...item,id:12,mediaId:12,mediaPosition:4,width:1920,height:1080,fileSize:5*1024*1024,mimeType:'video/webm'}});await flushPromises();
     expect(wrapper.text()).toContain('1920 x 1080');expect(wrapper.text()).toContain('5.00 MB');expect(wrapper.text()).toContain('WEBM');expect(fetchImage).not.toHaveBeenCalled();
   });

@@ -14,6 +14,7 @@ export const REELS_FEED_DEFAULT_MODE_SETTING_KEY = 'feed.default_reels_mode';
 export const FOLDER_IMAGE_DEFAULT_ORDER_SETTING_KEY = 'folder.default_image_order';
 export const NESTED_FOLDER_TITLE_FORMAT_SETTING_KEY = 'folder.nested_title_format';
 export const APP_DEFAULT_LOCALE_SETTING_KEY = 'app.default_locale';
+export const APP_ACCENT_COLOR_SETTING_KEY = 'app.accent_color';
 export const AUTH_PASSWORD_HASH_SETTING_KEY = 'auth.password_hash';
 export const AUTH_PASSWORD_SALT_SETTING_KEY = 'auth.password_salt';
 export const AUTH_SESSION_SECRET_SETTING_KEY = 'auth.session_secret';

@@ -4,9 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 
 import { i18n } from '../locales';
-import type { AppStatus, ScanProgress } from '../types/api';
+import type { AppStatus, FolderSummary, ScanProgress } from '../types/api';
 import { useAppStore } from '../stores/app';
 import { useFeedStore } from '../stores/feed';
+import { useFoldersStore } from '../stores/folders';
 import { useMomentsStore } from '../stores/moments';
 import { useAuthStore } from '../stores/auth';
 import * as galleryApi from '../api/gallery';
@@ -123,6 +124,15 @@ function mountHomeView() {
   });
 }
 
+function recommendationFolder(id: number, overrides: Partial<FolderSummary> = {}): FolderSummary {
+  return {
+    id, canonicalCreatorId: id + 100, slug: `creator-${id}`, name: `Creator ${id}`,
+    description: null, folderPath: `creator-${id}`, breadcrumb: null, contentRating: 'R15',
+    imageCount: 17, postCount: 17, videoCount: 0, latestImageMtimeMs: id,
+    avatarImageId: null, avatarUrl: null, ...overrides
+  };
+}
+
 describe('HomeView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -137,6 +147,82 @@ describe('HomeView', () => {
       writable: true,
       value: 1280
     });
+  });
+
+  it('keeps recent creators eligible in recommendations while preserving work counts and canonical links', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }), recentOpenedCreatorKeys: ['creator:102'] });
+    useFoldersStore().items = Array.from({ length: 6 }, (_, index) => recommendationFolder(index + 1,
+      index === 0 ? { postCount: 7, imageCount: 999 } : {}));
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
+    vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+
+    const rail = wrapper.get('aside[aria-label="Creator recommendations"]');
+    expect(rail.element.firstElementChild?.querySelector('h2')?.textContent).toBe('Recommended creators');
+    const links = rail.findAllComponents(routerLinkStub).filter(link => link.attributes('aria-label')?.endsWith('View works'));
+    expect(links).toHaveLength(6);
+    expect(new Set(links.map(link => JSON.stringify(link.props('to')))).size).toBe(6);
+    expect(links.some(link => link.text().includes('Creator 2'))).toBe(true);
+    const countedCreator = links.find(link => link.props('to').params.creatorId === '101');
+    expect(countedCreator?.text()).toContain('7 works');
+    expect(countedCreator?.text()).not.toContain('999');
+    expect(countedCreator?.props('to')).toEqual({ name: 'canonical-creator', params: { creatorId: '101' } });
+    expect(rail.findAll('a a')).toHaveLength(0);
+    const all = rail.findAllComponents(routerLinkStub).find(link => link.text() === 'View all');
+    expect(all?.props('to')).toEqual({ name: 'library' });
+    const attribution = rail.get('a[href="https://github.com/foldergram/foldergram"]');
+    expect(attribution.text()).toBe('Built on Foldergram');
+    expect(attribution.attributes('target')).toBe('_blank');
+    expect(attribution.attributes('rel')).toBe('noreferrer');
+    wrapper.unmount();
+  });
+
+  it('does not reorder or hide recommendations when local browsing history changes', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }), recentOpenedCreatorKeys: ['creator:101'] });
+    useFoldersStore().items = [recommendationFolder(1), recommendationFolder(2), recommendationFolder(3)];
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
+    vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+    const creatorIds = () => wrapper.findAllComponents(routerLinkStub)
+      .filter(link => link.attributes('aria-label')?.endsWith('View works'))
+      .map(link => link.props('to').params.creatorId).sort();
+    expect(creatorIds()).toEqual(['101', '102', '103']);
+    useAppStore().recentOpenedCreatorKeys = ['creator:102', 'creator:101'];
+    await flushPromises();
+    expect(creatorIds()).toEqual(['101', '102', '103']);
+    useAppStore().recentOpenedCreatorKeys = ['creator:103', 'creator:102', 'creator:101'];
+    await flushPromises();
+    expect(creatorIds()).toEqual(['101', '102', '103']);
+    wrapper.unmount();
+  });
+
+  it('uses the same complete-library destination for public visitors and keeps the single-creator and empty cases coherent', async () => {
+    i18n.global.locale.value = 'zh';
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
+    useAuthStore().$patch({ authenticated: false, role: 'anonymous', accessMode: 'public', enabled: true });
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    useFoldersStore().items = [recommendationFolder(1, { postCount: undefined, breadcrumb: 'Legacy source path' })];
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
+    vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    const wrapper = mountHomeView();
+    await flushPromises();
+
+    const rail = wrapper.get('aside[aria-label="博主推荐"]');
+    expect(rail.get('h2').text()).toBe('推荐博主');
+    expect(rail.findAllComponents(routerLinkStub).filter(link => link.attributes('aria-label')?.endsWith('查看作品'))).toHaveLength(1);
+    expect(rail.text()).toContain('17 个作品');
+    expect(rail.findAll('p')[0].text()).not.toContain('Legacy source path');
+    expect(rail.text()).not.toContain('查看收藏');
+    expect(rail.text()).not.toContain('查看赞过');
+    expect(rail.findAllComponents(routerLinkStub).find(link => link.text() === '查看全部')?.props('to')).toEqual({ name: 'library' });
+    useFoldersStore().items = [];
+    await flushPromises();
+    expect(wrapper.find('aside').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it('shows an explicit startup scan phase badge and updates it with the current phase', async () => {
@@ -190,56 +276,54 @@ describe('HomeView', () => {
     wrapper.unmount();
   });
 
-  it('waits for first feed settlement and a paint opportunity before moments, with a stable rail slot', async () => {
+  it('keeps three mode circles visible while the feed is pending, failed, or moments are unavailable', async () => {
     useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
-    let complete!: () => void;
-    vi.spyOn(useFeedStore(), 'loadInitial').mockImplementation(() => new Promise<void>(resolve => { complete = resolve; }));
+    let rejectFeed!: (error: Error) => void;
+    vi.spyOn(galleryApi, 'fetchFeed').mockImplementation(() => new Promise((_resolve, reject) => { rejectFeed = reject; }));
     const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
-    const frames: FrameRequestCallback[] = [];
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frames.push(callback); return frames.length; });
+    useMomentsStore().$patch({ items: [], listError: 'old moments error' });
     const wrapper = mountHomeView();
     await flushPromises();
+    expect(wrapper.findAll('[data-feed-mode]').map(button => button.attributes('data-feed-mode'))).toEqual(['recent', 'rediscover', 'random']);
+    expect(wrapper.get('[data-feed-mode="random"]').attributes('aria-busy')).toBe('true');
+    expect(wrapper.find('.story-rail__loading').exists()).toBe(true);
+    expect(wrapper.find('[data-test="moments-slot"]').exists()).toBe(false);
     expect(moments).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-test="moments-slot"]').attributes('aria-busy')).toBe('true');
-    complete();
-    await flushPromises();
-    expect(moments).not.toHaveBeenCalled();
-    frames.shift()!(0);
-    await flushPromises();
-    expect(moments).not.toHaveBeenCalled();
-    frames.shift()!(16);
-    await flushPromises();
-    expect(moments).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
-  });
-
-  it('still requests moments after a failed first feed, without waiting forever', async () => {
-    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
-    vi.spyOn(galleryApi, 'fetchFeed').mockRejectedValue(new Error('feed offline'));
-    const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
-    const wrapper = mountHomeView();
+    rejectFeed(new Error('feed offline'));
     await flushPromises();
     expect(useFeedStore().error).toBe('feed offline');
-    expect(moments).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-feed-mode="random"]').attributes('aria-busy')).toBe('false');
+    expect(wrapper.findAll('[data-feed-mode]')).toHaveLength(3);
+    expect(moments).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
-  it.each(['leave', 'access', 'reset'] as const)('does not dispatch a delayed rail after %s', async reason => {
-    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
-    let complete!: () => void;
-    vi.spyOn(useFeedStore(), 'loadInitial').mockImplementation(() => new Promise<void>(resolve => { complete = resolve; }));
+  it('switches the lower feed with the circles and repeated random clicks create a new seed', async () => {
+    const status = createAppStatus({ isScanning: false });
+    status.preferences.defaultHomeFeedMode = 'recent';
+    useAppStore().$patch({ stats: status });
+    const fetch = vi.spyOn(galleryApi, 'fetchFeed').mockImplementation(async (page, limit, mode) => ({ items: [], page, limit, total: 0, hasMore: false, mode }));
     const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    let seed = 100;
+    vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((array: any) => { array[0] = ++seed; return array; });
     const wrapper = mountHomeView();
     await flushPromises();
-    if (reason === 'leave') wrapper.unmount();
-    if (reason === 'access') useAuthStore().$patch({ authenticated: false, role: 'anonymous', accessMode: 'password', enabled: true });
-    if (reason === 'reset') useAppStore().resetProtectedState();
-    complete();
+    expect(wrapper.get('[data-feed-mode="recent"]').attributes('aria-pressed')).toBe('true');
+    await wrapper.get('[data-feed-mode="rediscover"]').trigger('click');
     await flushPromises();
+    expect(fetch).toHaveBeenLastCalledWith(1, 18, 'rediscover', undefined);
+    expect(wrapper.get('[data-feed-mode="rediscover"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-feed-mode="recent"]').attributes('aria-pressed')).toBe('false');
+    await wrapper.get('[data-feed-mode="random"]').trigger('click');
+    await flushPromises();
+    expect(fetch).toHaveBeenLastCalledWith(1, 18, 'random', 101);
+    await wrapper.get('[data-feed-mode="random"]').trigger('click');
+    await flushPromises();
+    expect(fetch).toHaveBeenLastCalledWith(1, 18, 'random', 102);
+    expect(wrapper.findComponent({ name: 'StoriesModal' }).exists()).toBe(false);
     expect(moments).not.toHaveBeenCalled();
-    if (reason !== 'leave') wrapper.unmount();
+    wrapper.unmount();
   });
-
   it('keeps an explicit mode choice while preferences are pending', async () => {
     let resolve!: (status: AppStatus) => void;
     vi.spyOn(galleryApi, 'fetchStats').mockImplementationOnce(() => new Promise(done => { resolve = done; }));
@@ -278,73 +362,34 @@ describe('HomeView', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('renders the home stories rail with a dedicated horizontal scroll track', async () => {
-    const appStore = useAppStore();
-    const feedStore = useFeedStore();
-    const momentsStore = useMomentsStore();
-
-    appStore.$patch({
-      stats: createAppStatus({
-        isScanning: false
-      })
-    });
-    feedStore.$patch({
-      initialized: true,
-      loading: false,
-      items: []
-    });
-    momentsStore.$patch({
-      items: [
-        createMomentCapsule('moment-1', 'One'),
-        createMomentCapsule('moment-2', 'Two'),
-        createMomentCapsule('moment-3', 'Three'),
-        createMomentCapsule('moment-4', 'Four')
-      ]
-    });
-
-    vi.spyOn(feedStore, 'loadInitial').mockResolvedValue();
-    vi.spyOn(momentsStore, 'fetchMoments').mockResolvedValue();
-
+  it('shows fixed localized mode labels even when legacy moment capsules contain different titles', async () => {
+    i18n.global.locale.value = 'zh';
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    useMomentsStore().$patch({ railKind: 'highlights', items: [createMomentCapsule('highlight-recent-batches', 'Recent Batches')] });
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
+    const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
     const wrapper = mountHomeView();
-
     await flushPromises();
-
-    expect(wrapper.get('.stories-bar.story-rail').attributes('aria-label')).toBe('Moments');
-    expect(wrapper.get('.story-rail__track').classes()).not.toContain('justify-center');
-    expect(wrapper.findAll('.story-rail__item')).toHaveLength(4);
+    expect(wrapper.findAll('.story-rail__label').map(label => label.text())).toEqual(['最新', '重新发现', '随机']);
+    expect(wrapper.get('.story-rail--feed-modes').attributes('role')).toBe('group');
+    expect(wrapper.text()).not.toContain('近期批次');
+    expect(moments).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 
-  it('localizes static highlight capsule titles on the home rail', async () => {
-    const appStore = useAppStore();
-    const feedStore = useFeedStore();
-    const momentsStore = useMomentsStore();
-
-    i18n.global.locale.value = 'zh';
-
-    appStore.$patch({
-      stats: createAppStatus({
-        isScanning: false
-      })
-    });
-    feedStore.$patch({
-      initialized: true,
-      loading: false,
-      items: []
-    });
-    momentsStore.$patch({
-      railKind: 'highlights',
-      items: [
-        createMomentCapsule('highlight-recent-batches', 'Recent Batches')
-      ]
-    });
-
-    vi.spyOn(feedStore, 'loadInitial').mockResolvedValue();
-    vi.spyOn(momentsStore, 'fetchMoments').mockResolvedValue();
-
+  it('reuses existing lightweight thumbnails and falls back without losing the mode button', async () => {
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    useFoldersStore().items = [recommendationFolder(1, { avatarUrl: '/thumbnails/creator-1.webp' })];
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
     const wrapper = mountHomeView();
-
     await flushPromises();
-
-    expect(wrapper.text()).toContain('近期批次');
+    const recent = wrapper.get('[data-feed-mode="recent"]');
+    expect(recent.get('img').attributes('src')).toBe('/thumbnails/creator-1.webp');
+    expect(wrapper.get('[data-feed-mode="rediscover"]').find('img').exists()).toBe(false);
+    await recent.get('img').trigger('error');
+    expect(recent.find('img').exists()).toBe(false);
+    expect(recent.find('.story-rail__fallback').exists()).toBe(true);
+    expect(wrapper.findAll('[data-feed-mode]')).toHaveLength(3);
+    wrapper.unmount();
   });
 });

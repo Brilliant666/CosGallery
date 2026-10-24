@@ -94,4 +94,26 @@ describe('whole-work removal confirmation', () => {
     expect(wrapper.emitted('stale')).toHaveLength(1);
     expect(executeWorkRemoval).toHaveBeenCalledTimes(1);
   });
+  it('keeps focus in the confirmation and does not dismiss an executing request', async () => {
+    let finish!: (value: Awaited<ReturnType<typeof executeWorkRemoval>>) => void;
+    vi.mocked(executeWorkRemoval).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const wrapper = mount(WorkRemovalDialog, {
+      attachTo: document.body,
+      props: { workId: 22, creatorId: 1, mode: 'trash' },
+    });
+    await flushPromises();
+    expect(document.activeElement).toBe(wrapper.get('[role=dialog]').element);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    expect(document.activeElement).toBe(wrapper.get('button').element);
+    await wrapper.get('[data-test="confirm-work-removal"]').trigger('click');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await wrapper.trigger('click');
+    expect(wrapper.emitted('close')).toBeUndefined();
+    finish({ operationId: 1, workId: 22, mode: 'trash', state: 'completed', filesRemoved: false, cleanupPending: false });
+    await flushPromises();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    expect(executeWorkRemoval).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
 });

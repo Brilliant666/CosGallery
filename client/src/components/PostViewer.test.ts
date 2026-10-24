@@ -198,6 +198,15 @@ describe('PostViewer', () => {
     document.body.innerHTML = '';
   });
 
+  it('shows a favorite failure for the current media and clears it when moving to another item', async () => {
+    const store = useLikesStore();
+    store.actionErrors[501] = 'Save failed';
+    const wrapper = mount(PostViewer, { props: { image: createImageDetail(501, { previousImageId: null, nextImageId: 502 }), isModal: true }, global: { stubs: globalStubs } });
+    expect(wrapper.get('[data-test=like-action-error][role=alert]').text()).toBe('Save failed');
+    await wrapper.setProps({ image: createImageDetail(502, { previousImageId: 501, nextImageId: null }) });
+    expect(wrapper.find('[data-test=like-action-error]').exists()).toBe(false);
+  });
+
   it('uses likes-page neighbors instead of folder neighbors when opened from likes', () => {
     const appStore = useAppStore();
     const likesStore = useLikesStore();
@@ -218,8 +227,8 @@ describe('PostViewer', () => {
       }
     });
 
-    expect(wrapper.get('a[aria-label="Previous post"]').attributes('data-to')).toContain('"id":"11"');
-    expect(wrapper.get('a[aria-label="Next post"]').attributes('data-to')).toContain('"id":"13"');
+    expect(wrapper.get('a[aria-label="Previous item"]').attributes('data-to')).toContain('"id":"11"');
+    expect(wrapper.get('a[aria-label="Next item"]').attributes('data-to')).toContain('"id":"13"');
     expect(wrapper.text()).toContain('Folder Path');
     expect(wrapper.text()).toContain('animal-planet/post-12.jpg');
   });

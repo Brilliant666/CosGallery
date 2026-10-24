@@ -88,8 +88,9 @@ export const useFoldersStore = defineStore('folders', {
           return [folder];
         }
 
+        const nextPostCount = Math.max(0, (folder.postCount ?? folder.imageCount) - 1);
         const nextImageCount = Math.max(0, folder.imageCount - 1);
-        if (nextImageCount === 0) {
+        if (nextPostCount === 0) {
           removedFolder = true;
           return [];
         }
@@ -97,6 +98,7 @@ export const useFoldersStore = defineStore('folders', {
         return [
           {
             ...folder,
+            ...(folder.postCount === undefined ? {} : { postCount: nextPostCount }),
             imageCount: nextImageCount,
             videoCount: mediaType === 'video' ? Math.max(0, folder.videoCount - 1) : folder.videoCount
           }
@@ -108,14 +110,16 @@ export const useFoldersStore = defineStore('folders', {
           this.currentImages = this.currentImages.filter((item) => item.id !== imageId);
         }
 
+        const nextPostCount = Math.max(0, (this.currentFolder.postCount ?? this.currentFolder.imageCount) - 1);
         const nextImageCount = Math.max(0, this.currentFolder.imageCount - 1);
-        if (nextImageCount === 0) {
+        if (nextPostCount === 0) {
           this.currentFolder = null;
           this.currentPage = 1;
           this.currentHasMore = false;
         } else {
           this.currentFolder = {
             ...this.currentFolder,
+            ...(this.currentFolder.postCount === undefined ? {} : { postCount: nextPostCount }),
             imageCount: nextImageCount,
             videoCount: mediaType === 'video' ? Math.max(0, this.currentFolder.videoCount - 1) : this.currentFolder.videoCount
           };

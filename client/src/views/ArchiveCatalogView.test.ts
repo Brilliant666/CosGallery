@@ -747,6 +747,34 @@ describe('ArchiveCatalogView', () => {
     expect(wrapper.get('[data-test="local-ingest-notice"]').text()).toContain('执行权被占用 0');
   });
 
+  it.each([
+    ['unknown', 'not_ready', '尚未完成校验', '未安排回收'],
+    ['passed', 'pending', '校验通过', '等待回收'],
+    ['warning', 'recycling', '有警告，请查看入库预览', '正在回收'],
+    ['passed', 'recycled', '校验通过', '已回收'],
+    ['failed', 'failed', '未通过，需人工核查', '回收失败'],
+    ['future_validation', 'future_cleanup', '状态待核对，请查看技术详情', '回收状态待核对，请查看技术详情']
+  ])('separates ingest validation %s and cleanup %s while retaining raw evidence', async (validationStatus, cleanupStatus, validationLabel, cleanupLabel) => {
+    const job = { ...localIngestJob, validationStatus, cleanupStatus } as LocalIngestJob;
+    vi.mocked(fetchLocalIngestJobs).mockResolvedValue(localIngestDashboard(job));
+    const wrapper = await mountCostuan('ingest');
+    await flushPromises();
+    await wrapper.get('[data-test="local-ingest-creators"] button').trigger('click');
+    await flushPromises();
+
+    const row = wrapper.get(`[data-job-id="${job.id}"]`);
+    expect(row.get('[data-test="local-ingest-validation-status"]').text()).toBe(`校验：${validationLabel}`);
+    expect(row.get('[data-test="local-ingest-cleanup-status"]').text()).toBe(`源包与处理目录：${cleanupLabel}`);
+    const details = row.get('[data-test="local-ingest-status-details"]');
+    expect(details.attributes()).not.toHaveProperty('open');
+    expect(details.findAll('dd').map(value => value.text())).toEqual([validationStatus, cleanupStatus]);
+    expect(row.text()).toContain('已入库');
+    expect(row.find('[data-test="run-local-ingest-job"]').exists()).toBe(false);
+    expect(row.find('[data-test="retry-local-ingest-cleanup"]').exists()).toBe(cleanupStatus === 'failed');
+    expect(runLocalIngestJob).not.toHaveBeenCalled();
+    expect(retryLocalIngestCleanup).not.toHaveBeenCalled();
+  });
+
   it('shows concrete evidence for an awaiting-review job without offering a bulk or single run action', async () => {
     const reviewJob: LocalIngestJob = {
       ...localIngestJob,

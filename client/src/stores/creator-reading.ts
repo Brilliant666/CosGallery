@@ -7,6 +7,8 @@ export interface CreatorReadingState {
 export const useCreatorReadingStore = defineStore('creator-reading', {
   state: () => ({
     generation: 0,
+    libraryResetVersion: 0,
+    libraryNavigationIntent: null as 'reset' | null,
     pages: {} as Record<string, CreatorReadingState>,
     libraryPages: {} as Record<string, { items: CosGalleryCreator[]; total: number; scrollY: number }>
   }),

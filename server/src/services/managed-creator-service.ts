@@ -346,6 +346,7 @@ export class ManagedCreatorService {
       this.database.prepare('DELETE FROM archive_catalog_collections WHERE creator_id=?').run(id);
       this.database.prepare('DELETE FROM archive_catalog_creator_sources WHERE creator_id=?').run(id);
       this.database.prepare('DELETE FROM archive_catalog_creator_aliases WHERE creator_id=?').run(id);
+      this.database.prepare('DELETE FROM archive_catalog_creator_gallery_labels WHERE creator_id=?').run(id);
       this.database.prepare('DELETE FROM archive_catalog_creators WHERE id=?').run(id);
       // Creator/alias delete triggers dirty the catalog: clean AFTER those triggers,
       // atomically invalidate revisions, and reject any stale prepared worker result.

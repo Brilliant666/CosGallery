@@ -29,6 +29,13 @@ export interface AppLocaleSetting {
   defaultLocale: SupportedLocale;
 }
 
+export const ACCENT_COLORS = ['blue', 'purple', 'rose', 'teal', 'amber', 'slate'] as const;
+export type AccentColor = typeof ACCENT_COLORS[number];
+
+export interface AccentColorSetting {
+  accentColor: AccentColor;
+}
+
 export interface ReelsFeedDefaultSetting {
   defaultMode: ReelsFeedMode;
 }
@@ -171,6 +178,8 @@ export interface FolderSummary {
   breadcrumb: string | null;
   workNavigationMode?: 'post' | 'work-gallery';
   contentRating: ContentRating;
+  postCount?: number;
+  /** Legacy visible post-representative count, not the number of original media files. */
   imageCount: number;
   videoCount: number;
   latestImageMtimeMs: number | null;
@@ -530,6 +539,12 @@ export interface ImageCaptionMutationResult {
   image: ImageDetail;
 }
 
+export type CreatorGalleryLabel = 'cosplay' | 'portrait' | 'selfie' | 'fuliji';
+export interface CreatorGalleryLabelsState {
+  galleryLabels: CreatorGalleryLabel[];
+  revision: string;
+}
+
 export interface CosGalleryCreator {
   unavailablePrimaryWorks?: Array<{ workId: number; postId: number | null; title: string; reason: string }>;
   avatarUrl?: string | null;
@@ -551,7 +566,8 @@ export interface CosGalleryCreator {
   folderIds: number[];
   folderNames: string[];
   aliases: string[];
-  preference: ArchiveCatalogPreference | null;
+  preference?: ArchiveCatalogPreference | null;
+  galleryLabels: CreatorGalleryLabel[];
   workCount: number;
   latestWorkAt: number | null;
   contentRating: ContentRating | null;
@@ -1141,6 +1157,8 @@ export interface RebuildThumbnailsResult {
 }
 
 export interface AppStatus {
+  /** Canonical visible creators/works and photos in their selected local copies. */
+  galleryStatistics?: { creators: number; works: number; photos: number };
   folders: number;
   indexedImages: number;
   indexedPosts: number;
@@ -1158,6 +1176,7 @@ export interface AppStatus {
     ignoredRootMediaCount: number;
   };
   preferences: {
+    accentColor?: AccentColor;
     defaultLocale?: SupportedLocale | null;
     defaultHomeFeedMode: FeedMode;
     defaultReelsFeedMode: ReelsFeedMode;

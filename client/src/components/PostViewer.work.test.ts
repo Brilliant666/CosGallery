@@ -81,7 +81,7 @@ describe('PostViewer work context', () => {
     expect(wrapper.get('.viewer__sidebar-stats').text()).toContain('1:02');
     expect(replace).toHaveBeenCalledTimes(2);
     expect(push).not.toHaveBeenCalled();
-    expect(wrapper.find('a[aria-label="Next post"], button[aria-label="Next carousel item"]').exists()).toBe(false);
+    expect(wrapper.find('a[aria-label="Next item"], button[aria-label="Next carousel item"]').exists()).toBe(false);
   });
 
   it.each(['', 'feed', 'likes', 'collection', 'place', 'search'])('retains first-item framing outside work context (%s)', async (context) => {
@@ -133,7 +133,7 @@ describe('PostViewer work context', () => {
   it('keeps likes, bookmarks and caption at Post level but trashes the selected media', async () => {
     const like = vi.spyOn(useLikesStore(), 'toggleLike').mockResolvedValue();
     const { wrapper } = await render();
-    await wrapper.get('button[aria-label="Like post"]').trigger('click');
+    await wrapper.get('button[aria-label="Like this content"]').trigger('click');
     expect(like.mock.calls[0]?.[0].id).toBe(123);
     expect(wrapper.getComponent(CollectionBookmark).props('item').id).toBe(123);
     expect(wrapper.get('.viewer__sidebar-caption').text()).toContain('Creator NO.033 Work');
@@ -143,7 +143,7 @@ describe('PostViewer work context', () => {
 
   it('disables both outer post links and clamps keys, wheel and swipes at the work boundary', async () => {
     const { wrapper, router, push } = await render('?context=work&media=705');
-    expect(wrapper.find('a[aria-label="Previous post"], a[aria-label="Next post"]').exists()).toBe(false);
+    expect(wrapper.find('a[aria-label="Previous item"], a[aria-label="Next item"]').exists()).toBe(false);
     expect(wrapper.find('button[aria-label="Next carousel item"]').exists()).toBe(false);
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     await wrapper.get('.viewer__media').trigger('wheel', { deltaY: 150, deltaX: 0 });
@@ -184,7 +184,7 @@ describe('PostViewer work context', () => {
   it('uses the media Image ID even for a single-media Post whose ID differs', async () => {
     const { wrapper, push } = await render('?context=work&media=701', workDetail([mediaItem(1)]));
     expect(wrapper.get('a[aria-label="Download original file"]').attributes('href')).toBe('/api/originals/701?download=1');
-    expect(wrapper.find('a[aria-label="Next post"]').exists()).toBe(false);
+    expect(wrapper.find('a[aria-label="Next item"]').exists()).toBe(false);
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
     expect(push).not.toHaveBeenCalled();
   });

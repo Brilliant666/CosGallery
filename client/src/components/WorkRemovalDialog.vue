@@ -7,10 +7,12 @@
       role="dialog"
       aria-modal="true"
       aria-labelledby="work-removal-title"
+      aria-describedby="work-removal-description"
+      v-dialog-focus="{ close, locked: executing }"
       class="max-h-[85vh] w-[min(100%,42rem)] overflow-auto rounded-xl border border-border bg-surface p-6"
     >
       <h2 id="work-removal-title">{{ t(`workRemoval.${mode}.title`) }}</h2>
-      <p>{{ t(`workRemoval.${mode}.message`) }}</p>
+      <p id="work-removal-description">{{ t(`workRemoval.${mode}.message`) }}</p>
       <p v-if="loading" role="status">{{ t('workRemoval.loading') }}</p>
       <template v-if="preview">
         <h3>{{ preview.work.title }}</h3>
@@ -83,6 +85,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { vAdmissionDialog as vDialogFocus } from '../utils/admission-dialog';
 import { RequestError } from '../api/http';
 import { workRemovalStatusKey } from '../utils/work-removal-status';
 import {

@@ -1,4 +1,5 @@
 import { acceptHMRUpdate, defineStore } from 'pinia';
+import { i18n } from '../locales';
 
 import {
   addImageToCollection,
@@ -41,6 +42,7 @@ interface CollectionsState {
   mode: CollectionsMode;
   items: CollectionSummary[];
   membershipByImageId: Record<number, ImageCollectionsPayload>;
+  membershipRefreshRequired: number[];
   savedStateByImageId: Record<number, boolean>;
   bookmarkedStateByImageId: Record<number, boolean>;
   pendingImageIds: number[];
@@ -262,11 +264,67 @@ function getCollectionMode(): CollectionsMode {
   return authStore.canUseSharedCollections ? 'shared' : 'local';
 }
 
+type MembershipMutationStore = Pick<CollectionsState,
+  'mode' | 'items' | 'error' | 'membershipByImageId' | 'membershipRefreshRequired' | 'savedStateByImageId' | 'pendingCollectionKeys'> & {
+  initialize(): Promise<void>;
+  fetchMembership(imageId: number): Promise<ImageCollectionsPayload>;
+  setSavedState(imageId: number, saved: boolean): void;
+  updateLocalCollectionMembership(slug: string, item: FeedItem, shouldAdd: boolean): void;
+  refreshAfterMembershipChange(imageId: number): Promise<void>;
+};
+
+class MembershipRefreshError extends Error {}
+
+// Both callers hold the media lock for their whole operation. In particular,
+// createAndAdd must not release it between creating a collection and adding media.
+async function changeCollectionMembership(store: MembershipMutationStore, collectionSlug: string, item: FeedItem, forceAdd: boolean) {
+  const key = `${collectionSlug}:${item.id}`;
+  store.pendingCollectionKeys.push(key);
+  let committed = false;
+  try {
+    await store.initialize();
+    // Resolve an earlier successful write with an uncertain readback before
+    // deciding whether an ordinary toggle should add or remove the item.
+    const membership = await store.fetchMembership(item.id);
+    const containsImage = membership.items.find(entry => entry.slug === collectionSlug)?.containsImage === true;
+    const shouldAdd = forceAdd || !containsImage;
+    if (store.mode === 'local') {
+      store.updateLocalCollectionMembership(collectionSlug, item, shouldAdd);
+      if (shouldAdd) store.setSavedState(item.id, true);
+    } else {
+      const result = shouldAdd
+        ? await addImageToCollection(collectionSlug, item.id)
+        : await removeImageFromCollection(collectionSlug, item.id);
+      if (typeof result?.isSaved === 'boolean') store.setSavedState(item.id, result.isSaved);
+    }
+
+    committed = true;
+    const entries = membership.items.map(entry => ({
+      ...entry,
+      containsImage: entry.slug === collectionSlug ? shouldAdd : entry.isDefault && shouldAdd ? true : entry.containsImage
+    }));
+    const summary = store.items.find(entry => entry.slug === collectionSlug);
+    if (summary && !entries.some(entry => entry.slug === collectionSlug)) entries.push({ ...summary, containsImage: shouldAdd });
+    store.membershipByImageId[item.id] = { ...membership, isSaved: store.savedStateByImageId[item.id] === true, items: entries };
+    if (!store.membershipRefreshRequired.includes(item.id)) store.membershipRefreshRequired.push(item.id);
+    await store.refreshAfterMembershipChange(item.id);
+  } catch (error) {
+    const mutationError = committed
+      ? new MembershipRefreshError(i18n.global.t('collections.bookmark.errors.refreshAfterSave'))
+      : error instanceof Error ? error : new Error(i18n.global.t('collections.detail.edit.updateError'));
+    store.error = mutationError.message;
+    throw mutationError;
+  } finally {
+    store.pendingCollectionKeys = store.pendingCollectionKeys.filter(entry => entry !== key);
+  }
+}
+
 export const useCollectionsStore = defineStore('collections', {
   state: (): CollectionsState => ({
     mode: 'shared',
     items: [],
     membershipByImageId: {},
+    membershipRefreshRequired: [],
     savedStateByImageId: {},
     bookmarkedStateByImageId: {},
     pendingImageIds: [],
@@ -299,7 +357,7 @@ export const useCollectionsStore = defineStore('collections', {
       return state.savedStateByImageId[id] === true;
     },
     isPending: (state) => (id: number) => state.pendingImageIds.includes(id),
-    isCollectionPending: (state) => (slug: string, id: number) => state.pendingCollectionKeys.includes(`${slug}:${id}`)
+    isCollectionPending: (state) => (slug: string, id: number) => state.pendingImageIds.includes(id) || state.pendingCollectionKeys.includes(`${slug}:${id}`)
   },
   actions: {
     syncSavedState(item: FeedItem) {
@@ -326,6 +384,7 @@ export const useCollectionsStore = defineStore('collections', {
       this.mode = getCollectionMode();
       this.items = [];
       this.membershipByImageId = {};
+      this.membershipRefreshRequired = [];
       this.savedStateByImageId = {};
       this.bookmarkedStateByImageId = {};
       this.pendingImageIds = [];
@@ -380,7 +439,7 @@ export const useCollectionsStore = defineStore('collections', {
 
     async fetchMembership(imageId: number, force = false) {
       await this.initialize();
-      if (!force && this.membershipByImageId[imageId]) {
+      if (!force && !this.membershipRefreshRequired.includes(imageId) && this.membershipByImageId[imageId]) {
         return this.membershipByImageId[imageId];
       }
 
@@ -396,12 +455,14 @@ export const useCollectionsStore = defineStore('collections', {
           items
         };
         this.membershipByImageId[imageId] = payload;
+        this.membershipRefreshRequired = this.membershipRefreshRequired.filter(id => id !== imageId);
         this.setSavedState(imageId, payload.isSaved);
         return payload;
       }
 
       const payload = await fetchImageCollections(imageId);
       this.membershipByImageId[imageId] = payload;
+      this.membershipRefreshRequired = this.membershipRefreshRequired.filter(id => id !== imageId);
       this.setSavedState(imageId, payload.isSaved);
       return payload;
     },
@@ -412,13 +473,16 @@ export const useCollectionsStore = defineStore('collections', {
         return;
       }
 
-      await this.initialize();
-      this.syncSavedState(item);
-      const wasSaved = this.savedStateByImageId[item.id] === true;
       this.pendingImageIds.push(item.id);
-      this.setSavedState(item.id, !wasSaved);
+      let wasSaved: boolean | undefined;
+      let savedChangeCommitted = false;
 
       try {
+        await this.initialize();
+        this.syncSavedState(item);
+        wasSaved = this.savedStateByImageId[item.id] === true;
+        this.error = null;
+        this.setSavedState(item.id, !wasSaved);
         if (this.mode === 'local') {
           this.toggleLocalDefaultSave(item, wasSaved);
         } else if (wasSaved) {
@@ -427,10 +491,15 @@ export const useCollectionsStore = defineStore('collections', {
           await saveImage(item.id);
         }
 
+        savedChangeCommitted = true;
+        if (!this.membershipRefreshRequired.includes(item.id)) this.membershipRefreshRequired.push(item.id);
         await this.refreshAfterMembershipChange(item.id);
       } catch (error) {
-        this.setSavedState(item.id, wasSaved);
-        this.error = error instanceof Error ? error.message : 'Unable to update saved post';
+        if (!savedChangeCommitted && wasSaved !== undefined) this.setSavedState(item.id, wasSaved);
+        this.error = savedChangeCommitted
+          ? i18n.global.t('collections.bookmark.errors.refreshAfterSave')
+          : error instanceof Error ? error.message : i18n.global.t('collections.detail.edit.updateError');
+        return this.error;
       } finally {
         this.pendingImageIds = this.pendingImageIds.filter((id) => id !== item.id);
       }
@@ -441,33 +510,51 @@ export const useCollectionsStore = defineStore('collections', {
       if (!trimmedName) {
         throw new Error('Collection name is required.');
       }
-
-      await this.initialize();
-      if (this.items.some((collection) => collection.name.toLocaleLowerCase() === trimmedName.toLocaleLowerCase())) {
-        throw new Error('Collection name already exists.');
+      if (this.pendingImageIds.includes(item.id)) {
+        throw new Error(i18n.global.t('collections.bookmark.errors.busy'));
       }
 
-      if (this.mode === 'local') {
-        const collections = readLocalCollections();
-        const slug = createUniqueSlug(trimmedName, new Set(collections.map((collection) => collection.slug)));
-        const timestamp = nowIso();
-        collections.push({
-          slug,
-          name: trimmedName,
-          isDefault: false,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-          items: []
-        });
-        writeLocalCollections(collections);
-        this.items = collections.map(toCollectionSummary);
-        await this.toggleCollectionMembership(slug, item, true);
-        return;
-      }
+      this.pendingImageIds.push(item.id);
+      this.error = null;
+      let created: CollectionSummary | undefined;
+      try {
+        await this.initialize();
+        if (this.items.some(collection => collection.name.toLocaleLowerCase() === trimmedName.toLocaleLowerCase())) {
+          throw new Error('Collection name already exists.');
+        }
 
-      const payload = await createCollection(trimmedName);
-      this.items = (await fetchCollections()).items;
-      await this.toggleCollectionMembership(payload.collection.slug, item, true);
+        if (this.mode === 'local') {
+          const collections = readLocalCollections();
+          const timestamp = nowIso();
+          const collection: LocalCollection = {
+            slug: createUniqueSlug(trimmedName, new Set(collections.map(entry => entry.slug))),
+            name: trimmedName, isDefault: false, createdAt: timestamp, updatedAt: timestamp, items: []
+          };
+          collections.push(collection);
+          writeLocalCollections(collections);
+          created = toCollectionSummary(collection);
+        } else {
+          created = (await createCollection(trimmedName)).collection;
+        }
+
+        // Keep the confirmed creation visible even if adding or readback fails.
+        const collection = created;
+        this.items = [...this.items.filter(entry => entry.slug !== collection.slug), collection];
+        const membership = this.membershipByImageId[item.id];
+        if (membership && !membership.items.some(entry => entry.slug === collection.slug)) {
+          this.membershipByImageId[item.id] = { ...membership, items: [...membership.items, { ...collection, containsImage: false }] };
+        }
+        await changeCollectionMembership(this, collection.slug, item, true);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : i18n.global.t('collections.detail.edit.createError');
+        const creationError = created && !(error instanceof MembershipRefreshError)
+          ? new Error(i18n.global.t('collections.bookmark.errors.createdWithoutMedia', { name: created.name, error: message }))
+          : error instanceof Error ? error : new Error(message);
+        this.error = creationError.message;
+        throw creationError;
+      } finally {
+        this.pendingImageIds = this.pendingImageIds.filter(id => id !== item.id);
+      }
     },
 
     async updateCollectionName(collectionSlug: string, name: string) {
@@ -556,40 +643,20 @@ export const useCollectionsStore = defineStore('collections', {
     },
 
     async toggleCollectionMembership(collectionSlug: string, item: FeedItem, forceAdd = false) {
-      await this.initialize();
       if (collectionSlug === DEFAULT_COLLECTION_SLUG) {
         throw new Error('Default collection membership is managed by the bookmark button.');
       }
 
-      const key = `${collectionSlug}:${item.id}`;
-      if (this.pendingCollectionKeys.includes(key)) {
+      if (this.pendingImageIds.includes(item.id)) {
         return;
       }
 
-      const membership = await this.fetchMembership(item.id);
-      const collection = membership.items.find((entry) => entry.slug === collectionSlug);
-      const containsImage = collection?.containsImage === true;
-      const shouldAdd = forceAdd || !containsImage;
-
       this.error = null;
-      this.pendingCollectionKeys.push(key);
-
+      this.pendingImageIds.push(item.id);
       try {
-        if (this.mode === 'local') {
-          this.updateLocalCollectionMembership(collectionSlug, item, shouldAdd);
-        } else if (shouldAdd) {
-          await addImageToCollection(collectionSlug, item.id);
-        } else {
-          await removeImageFromCollection(collectionSlug, item.id);
-        }
-
-        await this.refreshAfterMembershipChange(item.id);
-      } catch (error) {
-        const mutationError = error instanceof Error ? error : new Error('Unable to update collection');
-        this.error = mutationError.message;
-        throw mutationError;
+        await changeCollectionMembership(this, collectionSlug, item, forceAdd);
       } finally {
-        this.pendingCollectionKeys = this.pendingCollectionKeys.filter((entry) => entry !== key);
+        this.pendingImageIds = this.pendingImageIds.filter(id => id !== item.id);
       }
     },
 

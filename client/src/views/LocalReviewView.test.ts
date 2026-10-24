@@ -20,6 +20,29 @@ describe('scoped review UI invokes original task instead of asking for JSON',()=
   enableAutoUnmount(afterEach);
   beforeEach(()=>{vi.resetAllMocks();localStorage.clear();vi.useRealTimers();vi.mocked(api.fetchLocalReviewTarget).mockResolvedValue({target:{kind:'stage3',jobId:9},creatorId:17,title:'本项中文作品',eligible:true,reason:'媒体审核暂停',sessionId:null});vi.mocked(api.createLocalReviewSession).mockResolvedValue({sessionId:'review-synthetic',status:'preparing'});vi.mocked(api.fetchLocalReviewSession).mockResolvedValue(session());vi.mocked(api.fetchLocalReviewFiles).mockResolvedValue({items:files,total:104,page:1,limit:50});vi.mocked(api.executeLocalReview).mockResolvedValue(session('submitted'));});
   afterEach(()=>vi.useRealTimers());
+  it.each([
+    ['inspecting', 'inspecting', '正在检查本项文件'],
+    ['preserving_files', 'preserving_files', '正在按确认选择保留或移出文件'],
+    ['resuming_original_plan', 'resuming_original_plan', '正在继续原入库计划'],
+    ['future_phase', 'future_phase', '状态待核对，请查看技术详情'],
+    ['completed', 'Unexpected new warning', '状态待核对，请查看技术详情']
+  ])('localizes the main review message for %s and preserves raw evidence',async(phase,message,label)=>{
+    vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session('running'),phase,message});
+    const {wrapper}=await render();
+    expect(wrapper.get('[data-test=review-phase-message]').text()).toBe(label);
+    const technical=wrapper.findAll('details').find(detail=>detail.text().includes('原始消息'))!;
+    expect(technical.text()).toContain(phase);
+    expect(technical.text()).toContain(message);
+    expect(api.executeLocalReview).not.toHaveBeenCalled();
+  });
+  it('does not present an intended file move as confirmed while preserving its raw action state',async()=>{
+    vi.mocked(api.fetchLocalReviewFiles).mockResolvedValue({items:[{...files[0]!,preservedAt:'synthetic/recovery/file.jpg',actionState:'intent'}],total:1,page:1,limit:50});
+    const {wrapper}=await render();
+    const row=wrapper.get('tbody tr');
+    expect(row.text()).toContain('已登记处置，尚未确认完成');
+    expect(row.text()).not.toContain('已可恢复保留');
+    expect(row.get('details').text()).toContain('intent');
+  });
   it.each(['Scoped media indexing did not complete','EACCES: permission denied, open 中文目录/001.jpg'])('shows Chinese review errors and keeps the original %s only in technical details',async(raw)=>{
     vi.mocked(api.fetchLocalReviewSession).mockResolvedValue({...session('failed'),error:raw,message:raw});
     vi.mocked(api.fetchLocalReviewFiles).mockRejectedValueOnce(new Error('EIO: unable to read 中文清单'));

@@ -113,7 +113,7 @@ describe.sequential(
       const previous = path.join(root, 'through-000029');
       fs.mkdirSync(previous);
       for (const name of fs.readdirSync(migrations))
-        if (name !== filename)
+        if (name < filename)
           fs.copyFileSync(new URL(name, migrations), path.join(previous, name));
       run({
         databasePath: service.config.sourceDbPath,
