@@ -4,9 +4,16 @@
 
 CosGallery 基于 [Foldergram](https://github.com/foldergram/foldergram)，沿用 Vue、Express、SQLite 与本地媒体处理能力，并增加博主账本、自有资源目录和入库工作流。许可证仍为 [AGPL-3.0](LICENSE)，保留上游署名。
 
+> 文档于 2026-10-24 按已合并的 PR52（`4c56531`）核对。源码、已安装产物和当前运行服务可能处于不同版本，更新文档不代表自动部署。
+
 ## 主要能力与页面结构
 
 ```text
+浏览图库
+├─ 首页：最新 / 重新发现 / 随机、推荐博主
+├─ 图库：全部博主，或 Cosplay / 写真 / 自拍 / 福利姬
+└─ 发现与短片：媒体发现、独立视频及图集内视频
+
 图库账本
 ├─ 博主库：规范名称、别名、分类、启用状态及本地目录关系
 └─ 资源目录：恢复明确或上次有效范围，无可恢复选择时显示全部博主；搜索、编号及 TXT / CSV 导出
@@ -16,19 +23,22 @@ CosGallery 基于 [Foldergram](https://github.com/foldergram/foldergram)，沿�
 └─ Costuan：来源检查 → 网盘暂存 → Costuan入库
 ```
 
-- **图库浏览**：`/library` 每页 60 位规范博主，分级与偏好使用常驻按钮组，与名称 / 别名联合筛选；博主页图集仍每页 24 套摘要，打开图集才读取完整媒体，Viewer 在当前图集内复用详情。
+- **图库浏览**：`/library` 每页 60 位规范博主，支持名称 / 别名搜索。同一博主可有多个分类标签；菜单每次选一个分类，只展示博主。R15 / R18 仅在全部图库筛选，喜欢 / 保留仅管理员可见、可用。分类编辑位于全部图库，分类页隐藏标签和编辑入口。
+- **作品浏览与发现**：博主页每页 24 套作品摘要，打开图集才读取完整媒体；首页圆形入口切换最新 / 重新发现 / 随机，下方内容随之切换。侧栏三行统计为博主、独立作品、照片，首页另有推荐博主；不再展示侧栏最近浏览列表。
 - **博主管理**：卡片提供“资源目录”和“管理资料”；管理面板默认只读概览，资料与本地目录分别保存。“为该博主入库”位于面板的“本地目录”标签。
 - **本地入库**：从允许的已解压等待区集中选择多位博主与作品，网页核对身份、附件和冲突后提交，后台执行并保留结果与原计划。
 - **自有目录**：按 Work 编目，不因多个来源或副本重复计数；持久化派生目录由后台 Worker 更新，普通翻页不重新编目全库。
 - **来源与补缺**：原始资料、精确作品对应、本地版本接受及实际入库历史分别保存。不以“来源套数减本地套数”直接推定缺失。
 - **异常审核**：针对具体计划 / Job 与具体文件审核，不提供“忽略所有错误”的通行开关。
-- **短片播放**：`/reels` 先由原生视频元素尝试已索引原件，兼容性失败后才检查无损换封装，必要时使用兼容预览；冷生成仍需等待完整文件，不能保证所有格式秒开。详见[媒体处理](docs/media-processing.md#reels-original-lossless-remux-then-compatible-preview)。
+- **照片与视频**：照片继续使用缩略图 / 缓存预览；短片和图集内视频优先尝试原件，兼容性失败后才检查无损换封装，必要时使用兼容预览。短片同时包含独立视频和混合图集内视频；冷生成仍需等待完整文件。详见[媒体处理](docs/media-processing.md#reels-original-lossless-remux-then-compatible-preview)。
+- **回收与删除**：单张详情回收当前媒体；资源目录回收独立作品及其全部本地副本。恢复、永久删除和删除博主分别核验范围与关联，不把删除一张图当作删除整套。见[回收与删除](docs/album-media-deletion-design.md)。
+- **外观与侧栏**：管理员在常规设置中配置全站强调色，未设置时默认紫色；侧栏点击 / 悬停模式则按当前浏览器保存，默认点击。匿名访客暂不提供模式设置页。详见[功能与边界](docs/features.md)。
 
-日常入口为 `/archive-catalog` 和 `/creator-admission`。旧链接保留兼容跳转；详细操作见[页面地图](docs/creator-admission-navigation.md)。
+浏览从首页或 `/library` 开始；管理与收录入口为 `/archive-catalog` 和 `/creator-admission`。公开浏览是否开放由访问设置决定，管理入口仍受权限保护。旧链接保留兼容跳转；详细操作见[页面地图](docs/creator-admission-navigation.md)。
 
 ## 本机快速开始
 
-推荐使用已验证的 **Node.js 24、pnpm 10.28.0** 与本机源码构建。CI 同时验证 Node.js 22 和 24，支持范围以根目录 `package.json` 的 `engines` 为准。视频处理需要 FFmpeg / FFprobe，Costuan 归档处理另需配置 7-Zip。完整步骤见[安装](docs/installation.md)。
+推荐使用 **Node.js 24.21.0、pnpm 10.28.0** 与本机源码构建。CI 同时验证 Node.js 22 和 24，支持范围以根目录 `package.json` 的 `engines` 为准。视频处理需要 FFmpeg / FFprobe，Costuan 归档处理另需配置 7-Zip。完整步骤见[安装](docs/installation.md)。
 
 ```powershell
 git clone https://github.com/Brilliant666/CosGallery.git
@@ -82,7 +92,7 @@ pnpm start
 
 [CostuanArchiveManager](https://github.com/Brilliant666/Script/tree/main/CostuanArchiveManager)是独立浏览器扩展，不随 CosGallery 自动安装或重载。
 
-已核对的配套版本 0.11.10 支持来源资料留存与范围审核协议；这不绕过严格检查 / 自动暂存的校验，也不会自动恢复历史队列。文件更新不等于浏览器已重载，安装、连接和后续版本核对以 Script 仓库的 README 与 manifest 为准。
+此前核对的配套版本 0.11.10 支持来源资料留存与范围审核协议，这是历史配套记录，不代表本轮确认的插件最新版；它不绕过严格检查 / 自动暂存的校验，也不会自动恢复历史队列。文件更新不等于浏览器已重载，安装、连接和后续版本核对以 Script 仓库的 README 与 manifest 为准。
 
 **CosGallery Companion** 是另一款独立浏览辅助插件，不是 CostuanArchiveManager 改名。CosGallery 提供可撤销、会到期的专用只读授权，用于身份查询、独立 Work 摘要、分页名单和别名同步；名单中的喜欢 / 保留偏好只读，仍在 CosGallery 修改。离线同步由插件手动发起，不触发采集或入库；未知统计不是零，跨页须保持共同身份版本。接口与权限见[Companion 只读契约](docs/companion-readonly-api.md)。
 
@@ -97,6 +107,7 @@ pnpm start
 - 历史未完成状态可能已被后续计划覆盖，应查看当前去向，不重跑已完成项目。
 - 博主删除适用于所有来源身份，需先停用并通过关联核验；本地作品（含回收站）、目录绑定或其他阻断引用仍存在时不能删除。详见[删除博主](docs/unused-manual-creator-deletion.md)。
 - 本项目不是经过公网加固的多用户云端图库；首次编目、完整性校验与首次图片生成没有固定耗时承诺。
+- 将缩略图 / 预览图发布到 Cloudflare R2，以及原作 / 角色 / 主题发现入口，仍是后续讨论方向，当前没有对应完整发布流程。
 
 ## 文档与上游
 

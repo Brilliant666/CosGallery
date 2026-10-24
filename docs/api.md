@@ -1,6 +1,6 @@
 ---
 title: API
-description: Backend endpoints, parameters, response shapes, and mutation rules in Foldergram.
+description: CosGallery 业务路由入口及继承的媒体 API 参考。
 ---
 
 # API
@@ -18,6 +18,10 @@ description: Backend endpoints, parameters, response shapes, and mutation rules 
 | `/api/admin/archive-catalog` | `api.ts` 与 `creator-sync-read-routes.ts`：博主管理和来源 / 任务读取 |
 | `/api/admin/local-ingest` | `api.ts`：Costuan 入库、配置与名单 |
 | `/api/archive-bridge` | `archive-bridge.ts`：独立的本地插件令牌协议 |
+| `/api/admin/archive-catalog/creators/:id/gallery-labels` | `api.ts`：管理员读取 / 更新规范博主标签及编辑版本 |
+| `/api/admin/settings/accent-color` | `api.ts`：管理员保存全站强调色；侧栏交互模式不通过此接口保存 |
+| `/api/works/:workId/removal-preview`、`/api/works/:workId/removal` | `work-removal-routes.ts`：整 Work 回收 / 恢复 / 永久删除的范围预览与确认执行 |
+| `/api/trash/works`、`/api/work-removal-operations/:operationId` | `work-removal-routes.ts`：作品回收站与可追溯操作状态 |
 
 普通使用请走[网页入库](local-admission-web.md)，不要用孤立的接口成功响应代替完成文件、索引与账本的确认。字段、确认 token、请求键和错误边界以对应路由 schema 与测试为准；已有服务能力不等于全部有通用网页维护入口。
 
@@ -52,7 +56,7 @@ cookie-based session.
 
 ## Mutation requirements
 
-All mutating API routes are protected by `requireTrustedMutationRequest`.
+Ordinary `/api` mutations pass through `requireTrustedMutationRequest`; the separately mounted archive bridge follows its own loopback/token contract described above.
 
 ### Required header
 
@@ -62,12 +66,15 @@ x-foldergram-intent: 1
 
 ### Local-origin checks
 
-For mutating requests:
+For ordinary mutating requests, Host admission, trusted origin and role/capability checks are separate:
 
-- if `Origin` is present, it must be `localhost`, `127.0.0.1`, or `::1`
-- in development and test, the origin port must match `DEV_SERVER_PORT` or the reserved dev-client range from `DEV_CLIENT_PORT` through `DEV_CLIENT_PORT + 3`
-- in production, loopback origins are allowed and same-host origins are allowed when they match the host serving the app on `SERVER_PORT`
-- if `Origin` is absent but `Referer` is present, the same loopback check is applied to the referer origin
+- `SERVER_ALLOWED_HOSTS` accepts exact hosts; a wildcard listening address does not trust every incoming Host.
+- Explicit `CSRF_TRUSTED_ORIGINS` entries are checked first. Otherwise production requests must match the direct serving protocol, host and port; loopback alone does not bypass that comparison. Forwarded headers do not establish implicit trust.
+- In development/test, implicit trust is limited to loopback with the configured backend or reserved client ports.
+- A present `Origin` must be valid and trusted. A present `Referer` is also validated; when both are present their origins must agree.
+- CLI requests may omit browser metadata but still require intent and authentication/capabilities. Missing provenance combined with browser fetch metadata is not an automatic bypass.
+
+See [configuration](configuration.md) and [security](security.md); these checks do not themselves establish a verified public deployment.
 
 The shipped frontend adds `x-foldergram-intent: 1` automatically for `POST`,
 `PUT`, `PATCH`, and `DELETE` requests.

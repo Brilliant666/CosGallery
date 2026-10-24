@@ -7,7 +7,7 @@ description: Create, order, scan, view, and manage carousel posts in Foldergram.
 
 > 上游技术参考：此页的 `carousels/` 保留目录及 2–20 媒体限制属于 Foldergram Carousel Post，不是 CosGallery 一套 Work 图集的媒体上限。日常收录使用[本地入库](local-admission-web.md)，无需按此页改造每套作品。
 
-A carousel is one swipeable post containing 2–20 supported images, animated images, videos, or a mixture of them. It has one caption and one set of like, save, collection, trash, delete, and sharing actions.
+A carousel is one swipeable post containing 2–20 supported images, animated images, videos, or a mixture of them. It has one caption and shared like, save, and collection actions; media and Work removal use the separate scopes described below.
 
 ## Folder structure
 
@@ -63,9 +63,9 @@ Use **Set as folder cover** in the post viewer to select the currently active ca
 
 ## Captions and actions
 
-A carousel has one editable caption. Without a custom caption, the display-safe carousel child-folder name is shown, such as `Lions`, even when anonymous-public responses redact the underlying source path. Likes, saves, collection membership, trash, restore, and deletion apply to the whole post, never to one item.
+A carousel has one editable caption. Without a custom caption, the display-safe carousel child-folder name is shown, such as `Lions`, even when anonymous-public responses redact the underlying source path. Likes, saves, and collection membership apply to the owning post.
 
-In the viewer, Download original, Open original, dimensions, file size, format, EXIF details, and Set as folder cover follow the active item. Deleting a carousel permanently removes all included originals and generated derivatives.
+In the viewer, Download original, Open original, dimensions, file size, format, EXIF details, and Set as folder cover follow the active item. CosGallery's viewer trash action also targets the active media item and retains its original. Whole-Work trash and permanent deletion have a separate scope and confirmation in the resource catalog and trash views; see [单张媒体与独立作品回收](album-media-deletion-design.md).
 
 ## Item ordering
 
@@ -78,7 +78,9 @@ If multiple slides in a carousel match the search query, the carousel appears ex
 
 ## Reels and mixed videos
 
-Videos play inside the carousel using the integrated video player with interactive timeline scrubbing, play/pause controls, mute toggling, and optional HD source switching. In the post viewer, the active video starts automatically. When a browser blocks audible autoplay, Foldergram retries muted and updates the shared video mute preference so playback can begin without another click. The HD button appears only when the original video is larger than the generated preview and uses a browser-supported direct playback format (`playbackStrategy: 'original'`). Toggling HD switches resolution without resetting current playback time or playing state.
+Videos play inside the carousel using the integrated video player with timeline scrubbing, play/pause controls, and mute toggling. CosGallery's gallery viewer first tries the active video's original file. A compatibility failure can request a lossless MP4 remux or a compatible preview; opening the viewer does not pre-generate a cold preview. If autoplay is blocked, the viewer asks for a click. Photos retain their cached preview path. See [video playback policy](media-processing.md#reels-original-lossless-remux-then-compatible-preview) for fallback conditions.
+
+Share viewers retain their share-authorized preview player. Where an original is compatible and larger than the preview, that player can offer an HD switch; this is separate from the gallery viewer's original-first policy.
 
 Swiping or navigating through slides isolates video controls so that dragging the time slider or tapping player buttons does not trigger slide changes, and unmounting or switching slides pauses background playback cleanly.
 
@@ -133,7 +135,7 @@ Structural problems complete the scan with warnings instead of reporting a proce
 - **Only 20 items appear:** this is the per-post limit; split the remaining files into another child folder.
 - **Nested items are missing:** move them directly into the carousel child; nested discovery is intentionally disabled.
 - **An emptied carousel disappears:** removing every supported item soft-deletes that post on the next scan; restoring items reactivates the same indexed post when its media identities can be reconciled.
-- **A video is absent from Reels:** videos in a multi-item carousel are intentionally excluded.
+- **A video is absent from Reels:** visible videos in multi-item carousels are included. Check whether the media or owning work is in the trash, whether it belongs to the currently displayed local copy, and whether the queue needs reloading after adding or restoring it.
 - **Caption fallback is unexpected:** edit the shared caption or rename the carousel child and rescan.
 - **Cover is unexpected:** position 1 controls the post cover; manual or direct `cover.*` rules control the App Folder avatar.
 - **Folder mode has not taken effect:** follow the pending update message in **Settings → Scan & Library**. Run **Scan Library**, or use **Rebuild Library Index** when Settings reports that a rebuild is required.

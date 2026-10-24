@@ -5,7 +5,7 @@ titleTemplate: false
 hero:
   name: CosGallery
   text: 以本地作品为核心的自有图库
-  tagline: 管理规范博主、独立作品与本地副本；来源用于补充，目录由自己的作品事实生成。
+  tagline: 按博主分类发现照片与视频，管理独立作品、本地副本和入库过程。
   image:
     src: /logo.svg
     alt: Foldergram 上游项目标志
@@ -20,6 +20,9 @@ hero:
       text: GitHub
       link: https://github.com/Brilliant666/CosGallery
 features:
+  - title: 分类与浏览
+    details: 图库按 Cosplay、写真、自拍、福利姬发现博主；首页切换最新、重新发现与随机，照片使用缓存预览，视频原件优先。
+    link: /features
   - title: 图库账本
     details: 规范博主与自有资源目录分工明确；按 Work 编目，个人编号与全库搜索共存。
     link: /own-resource-catalog
@@ -36,6 +39,8 @@ features:
 
 ## 按需要阅读
 
+- 文档于 2026-10-24 按已合并的 PR52（`4c56531`）核对；功能说明不等于当前服务部署状态，历史证据另见参考索引。
+- 浏览与整理：[功能与边界](features.md)、[页面地图](creator-admission-navigation.md)、[回收与删除](album-media-deletion-design.md)。
 - 第一次安装：[快速开始](quick-start.md)、[配置](configuration.md)。
 - 日常收录：[本地入库](local-admission-web.md)、[Costuan 入库](local-ingest-closed-loop.md)、[来源资料](source-evidence-local-admission.md)。
 - 暂停或历史结果：[排错](troubleshooting.md)、[FAQ](faq.md)。
