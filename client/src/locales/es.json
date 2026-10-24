@@ -318,7 +318,8 @@
         "folderOnly": "Esto actualiza el orden de fotos predeterminado usado por las cuadrículas de carpetas de la app.",
         "nestedFolderTitleOnly": "Esto actualiza cómo se etiquetan las carpetas anidadas de la app en toda la aplicación.",
         "carouselReconciliation": "El modo de las carpetas de carrusel está guardado. Completa la acción de biblioteca indicada arriba para aplicarlo al índice.",
-        "idle": "Estos son los valores actuales de toda la app para idioma, Inicio, Reels, carpetas de la app, títulos de carpetas anidadas, carpetas stories, carpetas de carrusel y carpetas excluidas."
+        "idle": "Estos son los valores actuales de toda la app para idioma, Inicio, Reels, carpetas de la app, títulos de carpetas anidadas, carpetas stories, carpetas de carrusel y carpetas excluidas.",
+        "accentColorOnly": "El color se aplicará a todo el sitio al guardar. No requiere escanear ni reconstruir la biblioteca."
       },
       "rescanNotice": {
         "rebuildRequired": "Guarda estos cambios y luego reconstruye el índice de la biblioteca para aplicar el comportamiento de carpetas seleccionado a la ubicación actual de la galería.",
@@ -352,13 +353,28 @@
           "homeFeedDefault": "predeterminado del feed de Inicio",
           "reelsFeedDefault": "predeterminado de Reels",
           "appFolderOrder": "orden de las carpetas de la app",
-          "nestedFolderTitles": "títulos de carpetas anidadas"
-        }
+          "nestedFolderTitles": "títulos de carpetas anidadas",
+          "accentColor": "color de acento del sitio"
+        },
+        "accentColorSaved": "Color de acento del sitio guardado."
       },
       "errors": {
         "validateExcludedFolders": "No se pudieron validar las reglas de carpetas excluidas.",
         "update": "No se pudieron actualizar los ajustes generales.",
         "partialUpdate": "Se guardaron algunos ajustes ({parts}), pero la actualización no terminó: {message}"
+      },
+      "accentColor": {
+        "label": "Color de acento del sitio",
+        "description": "Unifica el color de botones, enlaces, selección y foco para administradores y visitantes.",
+        "helper": "Selecciona un color y pulsa Guardar cambios. Azul restaura el valor predeterminado; el modo claro/oscuro sigue siendo una preferencia del navegador.",
+        "options": {
+          "blue": "Azul",
+          "purple": "Morado",
+          "rose": "Rosa",
+          "teal": "Verde azulado",
+          "amber": "Ámbar",
+          "slate": "Pizarra"
+        }
       }
     },
     "library": {

@@ -15,7 +15,7 @@ import {
   syncDocumentLanguage,
   type SupportedLocale
 } from '../locales';
-import type { AppStatus, FeedMode, FolderImageOrder, ReelsFeedMode, ScanProgress } from '../types/api';
+import { ACCENT_COLORS, type AccentColor, type AppStatus, type FeedMode, type FolderImageOrder, type ReelsFeedMode, type ScanProgress } from '../types/api';
 import { useAuthStore } from './auth';
 
 interface AppState {
@@ -87,6 +87,10 @@ function resolveSavedDefaultLocale(locale: string | null | undefined): Supported
   return resolveSupportedLocale(locale);
 }
 
+function resolveAccentColor(value: unknown): AccentColor {
+  return ACCENT_COLORS.includes(value as AccentColor) ? value as AccentColor : 'blue';
+}
+
 export const useAppStore = defineStore('app', {
   state: (): AppState => ({
     stats: null,
@@ -114,6 +118,7 @@ export const useAppStore = defineStore('app', {
     hasCompletedScan: (state) => state.stats?.scan.lastCompletedScan !== null,
     isInitialScan: (state) => state.stats?.scan.isScanning === true && state.stats?.scan.lastCompletedScan === null,
     defaultHomeFeedMode: (state): FeedMode => state.stats?.preferences.defaultHomeFeedMode ?? 'random',
+    accentColor: (state): AccentColor => resolveAccentColor(state.stats?.preferences.accentColor),
     savedDefaultLocale: (state): SupportedLocale | null => resolveSupportedLocale(state.stats?.preferences.defaultLocale ?? null),
     defaultReelsFeedMode: (state): ReelsFeedMode => state.stats?.preferences.defaultReelsFeedMode ?? 'random',
     defaultFolderImageOrder: (state): FolderImageOrder => state.stats?.preferences.defaultFolderImageOrder ?? 'newest',
@@ -222,6 +227,10 @@ export const useAppStore = defineStore('app', {
 
     syncLocaleFromStats(stats?: AppStatus | null) {
       this.syncLocaleFromSavedDefault((stats ?? this.stats)?.preferences.defaultLocale ?? null);
+    },
+
+    syncAccentFromStats(stats?: AppStatus | null) {
+      document.documentElement.dataset.accent = resolveAccentColor((stats ?? this.stats)?.preferences.accentColor);
     },
 
     syncLocaleFromAuthStatus(defaultLocale: string | null | undefined) {
@@ -475,6 +484,7 @@ export const useAppStore = defineStore('app', {
         this.stats = stats;
         this.statsContext = accessContextKey();
         this.syncLocaleFromStats(this.stats);
+        this.syncAccentFromStats(this.stats);
         this.statsPollFailures = 0;
         if (options.background && this.error) this.error = null;
         if (this.stats.scan.isScanning) {

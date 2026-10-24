@@ -160,6 +160,7 @@ describe('SettingsView', () => {
     setActivePinia(createPinia());
     vi.restoreAllMocks();
     window.localStorage.clear();
+    document.documentElement.dataset.accent = 'blue';
     // These fixtures model an existing English app preference, not a fresh profile.
     useAppStore().setLocale('en', { persist: false });
     scrollIntoViewSpy.mockReset();
@@ -177,6 +178,75 @@ describe('SettingsView', () => {
     expect(wrapper.find('application-recovery-panel-stub').exists()).toBe(true);
     await openGeneralSettingsSidebarTab(wrapper);
     expect(wrapper.find('application-recovery-panel-stub').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('hydrates six native radio choices, preserves an unsaved accent across refreshes, and applies it only after saving', async () => {
+    const appStore = useAppStore();
+    const initial = createAppStatus(); initial.preferences.accentColor = 'purple';
+    appStore.$patch({ stats: initial }); appStore.syncAccentFromStats();
+    vi.spyOn(appStore, 'fetchStats').mockResolvedValue();
+    const update = vi.spyOn(galleryApi, 'updateAccentColor').mockResolvedValue({ accentColor: 'rose' });
+    const wrapper = mountSettingsView(); await flushPromises(); await openGeneralSettingsSidebarTab(wrapper);
+    const radios = wrapper.findAll<HTMLInputElement>('input[name="site-accent-color"]');
+    expect(radios).toHaveLength(6);
+    expect(wrapper.get<HTMLInputElement>('input[value="purple"]').element.checked).toBe(true);
+    const refreshed = createAppStatus(); refreshed.preferences.accentColor = 'teal';
+    appStore.$patch({ stats: refreshed }); appStore.syncAccentFromStats(); await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('input[value="teal"]').element.checked).toBe(true);
+    await wrapper.get('input[value="rose"]').setValue();
+    appStore.$patch({ stats: { ...refreshed, preferences: { ...refreshed.preferences } } });
+    await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('input[value="rose"]').element.checked).toBe(true);
+    expect(document.documentElement.dataset.accent).toBe('teal');
+    expect(update).not.toHaveBeenCalled();
+    await wrapper.findAll('button').find(button => button.text() === 'Save changes')!.trigger('click');
+    await flushPromises();
+    expect(update).toHaveBeenCalledExactlyOnceWith('rose');
+    expect(document.documentElement.dataset.accent).toBe('rose');
+    expect(appStore.accentColor).toBe('rose');
+    expect(wrapper.text()).toContain('Site accent color saved.');
+    expect(wrapper.findAll('button').find(button => button.text() === 'Saved')!.attributes('disabled')).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it('keeps the prior site color and editable selection when saving an accent fails', async () => {
+    const appStore = useAppStore(); appStore.$patch({ stats: createAppStatus() });
+    vi.spyOn(appStore, 'fetchStats').mockResolvedValue();
+    vi.spyOn(galleryApi, 'updateAccentColor').mockRejectedValue(new Error('Accent save failed'));
+    const wrapper = mountSettingsView(); await flushPromises(); await openGeneralSettingsSidebarTab(wrapper);
+    await wrapper.get('input[value="slate"]').setValue();
+    await wrapper.findAll('button').find(button => button.text() === 'Save changes')!.trigger('click');
+    await flushPromises();
+    expect(document.documentElement.dataset.accent).toBe('blue');
+    expect(appStore.accentColor).toBe('blue');
+    expect(wrapper.get<HTMLInputElement>('input[value="slate"]').element.checked).toBe(true);
+    expect(wrapper.text()).toContain('Accent save failed');
+    expect(wrapper.findAll('button').find(button => button.text() === 'Save changes')!.attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('retains the accent draft after an earlier setting succeeds and retries only the failed accent', async () => {
+    const appStore = useAppStore(); appStore.$patch({ stats: createAppStatus() });
+    vi.spyOn(appStore, 'fetchStats').mockResolvedValue();
+    const nested = vi.spyOn(galleryApi, 'updateNestedFolderTitleFormat').mockResolvedValue({ titleFormat: 'parent-plus-folder' });
+    const accent = vi.spyOn(galleryApi, 'updateAccentColor').mockRejectedValueOnce(new Error('Try again'))
+      .mockResolvedValueOnce({ accentColor: 'amber' });
+    const wrapper = mountSettingsView(); await flushPromises(); await openGeneralSettingsSidebarTab(wrapper);
+    await wrapper.get('input[value="amber"]').setValue();
+    await wrapper.findAll('button[aria-expanded]')[3]!.trigger('click');
+    await wrapper.findAll('button').find(button => button.text().includes('Parent + folder name'))!.trigger('click');
+    await wrapper.findAll('button').find(button => button.text() === 'Save changes')!.trigger('click');
+    await flushPromises();
+    expect(accent).toHaveBeenCalledWith('amber');
+    expect(wrapper.text()).toContain('Some settings were saved (nested folder titles)');
+    expect(wrapper.get<HTMLInputElement>('input[value="amber"]').element.checked).toBe(true);
+    expect(document.documentElement.dataset.accent).toBe('blue');
+    await wrapper.findAll('button').find(button => button.text() === 'Save changes')!.trigger('click');
+    await flushPromises();
+    expect(nested).toHaveBeenCalledTimes(1);
+    expect(accent).toHaveBeenCalledTimes(2);
+    expect(document.documentElement.dataset.accent).toBe('amber');
     wrapper.unmount();
   });
 

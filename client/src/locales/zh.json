@@ -318,7 +318,8 @@
         "folderOnly": "这会更新应用文件夹网格使用的默认照片顺序。",
         "nestedFolderTitleOnly": "这会更新整个应用中嵌套应用文件夹的标签显示方式。",
         "carouselReconciliation": "轮播文件夹模式已保存。请完成上方提示的图库操作，将其应用到索引。",
-        "idle": "这些是当前适用于语言、首页、短片、应用文件夹、嵌套文件夹标题、stories 文件夹、轮播文件夹和排除文件夹的全局默认项。"
+        "idle": "这些是当前适用于语言、首页、短片、应用文件夹、嵌套文件夹标题、stories 文件夹、轮播文件夹和排除文件夹的全局默认项。",
+        "accentColorOnly": "保存后应用到整个网站，无需扫描或重建图库。"
       },
       "rescanNotice": {
         "rebuildRequired": "保存这些更改后，请重建图库索引，以便将所选文件夹行为应用到当前图库位置。",
@@ -352,13 +353,28 @@
           "homeFeedDefault": "首页动态默认项",
           "reelsFeedDefault": "短片默认项",
           "appFolderOrder": "应用文件夹顺序",
-          "nestedFolderTitles": "嵌套文件夹标题"
-        }
+          "nestedFolderTitles": "嵌套文件夹标题",
+          "accentColor": "网站强调色"
+        },
+        "accentColorSaved": "网站强调色已保存。"
       },
       "errors": {
         "validateExcludedFolders": "无法验证已排除文件夹规则。",
         "update": "无法更新常规设置。",
         "partialUpdate": "部分设置已保存（{parts}），但更新未能完成：{message}"
+      },
+      "accentColor": {
+        "label": "网站强调色",
+        "description": "统一设置按钮、链接、选中状态和焦点的强调色，管理员与访客共用。",
+        "helper": "选择后点击下方“保存更改”生效。恢复默认请选择蓝色；亮色／深色模式仍由各浏览器决定。",
+        "options": {
+          "blue": "蓝色",
+          "purple": "紫色",
+          "rose": "玫红",
+          "teal": "青绿",
+          "amber": "琥珀",
+          "slate": "灰色"
+        }
       }
     },
     "library": {

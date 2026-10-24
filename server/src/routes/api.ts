@@ -1,5 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
+import { ACCENT_COLORS } from '../types/accent-color.js';
 
 import { AUTH_PASSWORD_MAX_LENGTH, AUTH_PASSWORD_MIN_LENGTH, authService } from '../services/auth-service.js';
 import { ARCHIVE_CATALOG_INBOX_ROOT_SETTING_KEY } from '../constants/app-setting-keys.js';
@@ -407,6 +408,7 @@ const homeFeedDefaultBodySchema = z.object({
 const appLocaleBodySchema = z.object({
   defaultLocale: z.enum(['en', 'es', 'zh'])
 });
+const accentColorBodySchema = z.object({ accentColor: z.enum(ACCENT_COLORS) }).strict();
 const reelsFeedDefaultBodySchema = z.object({
   defaultMode: z.enum(['recommended', 'recent', 'random'])
 });
@@ -561,6 +563,7 @@ export const authRequestBodySchemas = {
 };
 
 export const settingsRequestBodySchemas = {
+  accentColor: accentColorBodySchema,
   homeFeedDefault: homeFeedDefaultBodySchema,
   appLocale: appLocaleBodySchema,
   reelsFeedDefault: reelsFeedDefaultBodySchema,
@@ -912,6 +915,15 @@ router.get('/scan-progress', (_request, response) => {
 router.get('/admin/scan-progress', requireCapability('canAccessSettings', 'Admin access is required.'), (_request, response) => {
   response.json(galleryService.getAdminScanProgress());
 });
+
+router.put(
+  '/admin/settings/accent-color',
+  requireCapability('canAccessSettings', 'Admin access is required.'),
+  (request, response) => {
+    const body = accentColorBodySchema.parse(request.body);
+    response.json(galleryService.setAccentColor(body.accentColor));
+  }
+);
 
 router.put(
   '/admin/settings/app-locale',

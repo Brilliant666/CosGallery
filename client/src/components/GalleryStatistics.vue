@@ -34,14 +34,14 @@ const rows = computed(() => (['creators', 'works', 'photos'] as const).map(key =
 
 <style scoped>
 .gallery-statistics { color: var(--text); }
-.gallery-statistics h2 { margin: 0 0 .65rem; font-size: .85rem; font-weight: 650; }
-.gallery-statistics dl { margin: 0; display: grid; gap: .45rem; }
+.gallery-statistics h2 { margin: 0 0 .5rem; font-size: .85rem; font-weight: 650; }
+.gallery-statistics dl { margin: 0; display: grid; gap: .35rem; }
 .gallery-statistics dl > div {
   display: flex; align-items: center; justify-content: space-between; gap: .75rem;
-  border-radius: .7rem; padding: .55rem .7rem;
+  border-radius: .6rem; padding: .35rem .65rem;
   background: color-mix(in srgb, var(--surface) 70%, var(--bg) 30%);
 }
-.gallery-statistics dt { color: var(--muted); font-size: .8rem; white-space: nowrap; }
-.gallery-statistics dd { margin: 0; font-size: 1.1rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
+.gallery-statistics dt { color: var(--muted); font-size: .78rem; white-space: nowrap; }
+.gallery-statistics dd { margin: 0; font-size: 1rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
 .gallery-statistics__status { margin: .5rem 0 0; color: var(--muted); font-size: .72rem; }
 </style>

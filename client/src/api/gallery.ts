@@ -1,6 +1,8 @@
 import type {
   ReelPlayback,
   AppLocaleSetting,
+  AccentColor,
+  AccentColorSetting,
   AppStatus,
   AppStats,
   AuthMutationResult,
@@ -799,6 +801,14 @@ export function updateAppLocale(defaultLocale: AppLocaleSetting['defaultLocale']
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ defaultLocale })
+  });
+}
+
+export function updateAccentColor(accentColor: AccentColor) {
+  return requestJson<AccentColorSetting>('/api/admin/settings/accent-color', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ accentColor })
   });
 }
 

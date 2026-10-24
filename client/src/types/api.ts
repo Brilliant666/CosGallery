@@ -29,6 +29,13 @@ export interface AppLocaleSetting {
   defaultLocale: SupportedLocale;
 }
 
+export const ACCENT_COLORS = ['blue', 'purple', 'rose', 'teal', 'amber', 'slate'] as const;
+export type AccentColor = typeof ACCENT_COLORS[number];
+
+export interface AccentColorSetting {
+  accentColor: AccentColor;
+}
+
 export interface ReelsFeedDefaultSetting {
   defaultMode: ReelsFeedMode;
 }
@@ -1169,6 +1176,7 @@ export interface AppStatus {
     ignoredRootMediaCount: number;
   };
   preferences: {
+    accentColor?: AccentColor;
     defaultLocale?: SupportedLocale | null;
     defaultHomeFeedMode: FeedMode;
     defaultReelsFeedMode: ReelsFeedMode;

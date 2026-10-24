@@ -1,11 +1,13 @@
 import { ManagedCreatorService } from './managed-creator-service.js';
 import { CreatorGalleryLabelService } from './creator-gallery-label-service.js';
 import type { GalleryLabel } from '../types/gallery-labels.js';
+import { parseAccentColor, type AccentColor } from '../types/accent-color.js';
 import { assertLegacyPostRemovalAllowed, assertLegacyPostRestoreAllowed } from './media-trash-service.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import {
+  APP_ACCENT_COLOR_SETTING_KEY,
   APP_DEFAULT_LOCALE_SETTING_KEY,
   CAROUSELS_APPLIED_MODE_SETTING_KEY,
   CAROUSELS_MIGRATION_DECISION_SETTING_KEY,
@@ -2369,6 +2371,7 @@ export const galleryService = {
         ignoredRootMediaCount: storageState.libraryAvailable ? countSupportedRootMediaFiles(appConfig.galleryRoot) : 0
       },
       preferences: {
+        accentColor: parseAccentColor(appSettingsRepository.get(APP_ACCENT_COLOR_SETTING_KEY)),
         defaultLocale,
         defaultHomeFeedMode,
         defaultReelsFeedMode,
@@ -2454,6 +2457,7 @@ export const galleryService = {
         ignoredRootMediaCount: storageState.libraryAvailable ? countSupportedRootMediaFiles(currentGalleryRoot) : 0
       },
       preferences: {
+        accentColor: parseAccentColor(appSettingsRepository.get(APP_ACCENT_COLOR_SETTING_KEY)),
         defaultLocale,
         defaultHomeFeedMode,
         defaultReelsFeedMode,
@@ -2474,6 +2478,11 @@ export const galleryService = {
     return {
       defaultMode: mode
     };
+  },
+
+  setAccentColor(accentColor: AccentColor) {
+    appSettingsRepository.set(APP_ACCENT_COLOR_SETTING_KEY, accentColor);
+    return { accentColor };
   },
 
   setDefaultLocale(defaultLocale: SupportedLocale) {

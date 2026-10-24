@@ -1244,7 +1244,7 @@ onBeforeUnmount(() => {
 .ingest-list-dialog { width: min(36rem, 100%); }
 .ingest-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
 .ingest-dialog-actions button { min-height: 2.5rem; padding: .5rem 1rem; border: 1px solid var(--border); border-radius: .75rem; }
-.ingest-dialog-actions button:last-child { background: var(--accent); color: white; }
+.ingest-dialog-actions button:last-child { background: var(--accent-fill,var(--accent)); color: white; }
 .ingest-dialog button:disabled { opacity: .5; cursor: not-allowed; }
 .metadata-table {
   table-layout: fixed;

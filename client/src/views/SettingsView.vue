@@ -655,6 +655,35 @@
             </div>
 
             <div class="divide-y divide-border">
+              <fieldset class="m-0 min-w-0 border-0 px-6 py-4" data-testid="accent-color-settings">
+                <legend class="float-left mb-1 w-full p-0 text-[0.96rem] font-semibold text-text">{{ t('settings.general.accentColor.label') }}</legend>
+                <p class="clear-both m-0 text-[0.84rem] text-muted">{{ t('settings.general.accentColor.description') }}</p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <label
+                    v-for="option in accentColorOptions"
+                    :key="option.id"
+                    class="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-[0.65rem] border px-3 py-2 text-[0.85rem] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent"
+                    :class="[
+                      accentColorDraft === option.id ? 'border-accent bg-accent-soft font-semibold text-text' : 'border-border bg-surface-alt text-muted',
+                      savingGeneralSettings || waitingForInitialStatus ? 'cursor-not-allowed opacity-60' : 'hover:bg-surface-hover'
+                    ]"
+                  >
+                    <input
+                      v-model="accentColorDraft"
+                      class="sr-only"
+                      type="radio"
+                      name="site-accent-color"
+                      :value="option.id"
+                      :disabled="savingGeneralSettings || waitingForInitialStatus"
+                      @change="clearGeneralSettingsFeedback"
+                    />
+                    <span class="h-4 w-4 shrink-0 rounded-full border border-black/10" :style="{ backgroundColor: option.color }" aria-hidden="true" />
+                    <span>{{ t(`settings.general.accentColor.options.${option.id}`) }}</span>
+                    <span class="i-fluent-checkmark-20-filled h-4 w-4" :class="accentColorDraft === option.id ? 'opacity-100' : 'opacity-0'" aria-hidden="true" />
+                  </label>
+                </div>
+                <p class="m-0 mt-2 text-[0.78rem] text-muted">{{ t('settings.general.accentColor.helper') }}</p>
+              </fieldset>
               <div class="px-6 py-4">
                 <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                   <div class="min-w-0">
@@ -1367,6 +1396,7 @@ import {
   triggerManualScan,
   triggerThumbnailRebuild,
   updateAppLocale,
+  updateAccentColor,
   updateExcludedFolders,
   updateFolderImageOrderDefault,
   updateHomeFeedDefault,
@@ -1384,7 +1414,7 @@ import { useLikesStore } from '../stores/likes';
 import { useMomentsStore } from '../stores/moments';
 import { usePlacesStore } from '../stores/places';
 import { useViewerStore } from '../stores/viewer';
-import type { AppStats, FeedMode, FolderImageOrder, NestedFolderTitleFormat, ReelsFeedMode, ViewerAccessMode } from '../types/api';
+import { ACCENT_COLORS, type AccentColor, type AppStats, type FeedMode, type FolderImageOrder, type NestedFolderTitleFormat, type ReelsFeedMode, type ViewerAccessMode } from '../types/api';
 
 const { t, locale } = useI18n();
 const appStore = useAppStore();
@@ -1423,6 +1453,13 @@ const homeFeedDefaultMode = ref<FeedMode>('random');
 const reelsFeedDefaultMode = ref<ReelsFeedMode>('random');
 const folderImageOrderDefault = ref<FolderImageOrder>('newest');
 const nestedFolderTitleFormat = ref<NestedFolderTitleFormat>('folder');
+const accentColorDraft = ref<AccentColor>('blue');
+const savedAccentColor = ref<AccentColor>('blue');
+const accentColorHydrated = ref(false);
+const accentColorSwatches: Record<AccentColor, string> = {
+  blue: '#0095f6', purple: '#7c3aed', rose: '#be185d', teal: '#0f766e', amber: '#a16207', slate: '#475569'
+};
+const accentColorOptions = ACCENT_COLORS.map(id => ({ id, color: accentColorSwatches[id] }));
 const savedLocaleSelection = ref<SupportedLocale | null>(appStore.savedDefaultLocale);
 const localeSelectionHydrated = ref(false);
 const storiesMode = ref(false);
@@ -1821,6 +1858,9 @@ const folderImageOrderDirty = computed(
 const nestedFolderTitleDirty = computed(
   () => feedDefaultsHydrated.value && nestedFolderTitleFormat.value !== savedNestedFolderTitleFormat.value
 );
+const accentColorDirty = computed(
+  () => accentColorHydrated.value && accentColorDraft.value !== savedAccentColor.value
+);
 const defaultSettingsDirtyCount = computed(
   () =>
     [
@@ -1828,7 +1868,8 @@ const defaultSettingsDirtyCount = computed(
       homeFeedDefaultDirty.value,
       reelsFeedDefaultDirty.value,
       folderImageOrderDirty.value,
-      nestedFolderTitleDirty.value
+      nestedFolderTitleDirty.value,
+      accentColorDirty.value
     ].filter(Boolean).length
 );
 const feedDefaultsDirty = computed(
@@ -1859,7 +1900,7 @@ const hasUnsavedFolderRuleChanges = computed(
   () => excludedFoldersDirty.value || hasUnsavedReservedFolderRuleChanges.value
 );
 const generalSettingsDirty = computed(
-  () => localeDirty.value || feedDefaultsDirty.value || storiesModeDirty.value || carouselsModeDirty.value || excludedFoldersDirty.value || storiesModeRequiresDecision.value || carouselsModeRequiresDecision.value
+  () => localeDirty.value || feedDefaultsDirty.value || accentColorDirty.value || storiesModeDirty.value || carouselsModeDirty.value || excludedFoldersDirty.value || storiesModeRequiresDecision.value || carouselsModeRequiresDecision.value
 );
 const showSavedDefaultLocaleNotice = computed(
   () => savedLocaleSelection.value !== null && appStore.locale !== savedLocaleSelection.value
@@ -1923,6 +1964,10 @@ const generalSettingsActionNote = computed(() => {
 
   if (nestedFolderTitleDirty.value) {
     return t('settings.general.actionNote.nestedFolderTitleOnly');
+  }
+
+  if (accentColorDirty.value) {
+    return t('settings.general.actionNote.accentColorOnly');
   }
 
   if (appStore.isCarouselsReconciliationPending) {
@@ -2750,14 +2795,17 @@ async function saveGeneralSettings() {
   const shouldSaveReels = reelsFeedDefaultDirty.value;
   const shouldSaveFolderOrder = folderImageOrderDirty.value;
   const shouldSaveNestedFolderTitle = nestedFolderTitleDirty.value;
+  const shouldSaveAccentColor = accentColorDirty.value;
+  const nextAccentColor = accentColorDraft.value;
   const shouldSaveAnyDefault =
-    shouldSaveLocale || shouldSaveHome || shouldSaveReels || shouldSaveFolderOrder || shouldSaveNestedFolderTitle;
+    shouldSaveLocale || shouldSaveHome || shouldSaveReels || shouldSaveFolderOrder || shouldSaveNestedFolderTitle || shouldSaveAccentColor;
   const savedDefaultCount = [
     shouldSaveLocale,
     shouldSaveHome,
     shouldSaveReels,
     shouldSaveFolderOrder,
-    shouldSaveNestedFolderTitle
+    shouldSaveNestedFolderTitle,
+    shouldSaveAccentColor
   ].filter(Boolean).length;
   const savedParts: string[] = [];
   const savedFolderRuleCount = [shouldSaveExcludedFolders, shouldSaveStories, shouldSaveCarousels].filter(Boolean).length;
@@ -2866,6 +2914,17 @@ async function saveGeneralSettings() {
       nestedFolderTitleFormat.value = payload.titleFormat;
     }
 
+    if (shouldSaveAccentColor) {
+      const payload = await updateAccentColor(nextAccentColor);
+      savedParts.push(t('settings.general.feedback.parts.accentColor'));
+      if (appStore.stats) {
+        appStore.stats.preferences.accentColor = payload.accentColor;
+      }
+      appStore.syncAccentFromStats();
+      savedAccentColor.value = appStore.accentColor;
+      accentColorDraft.value = appStore.accentColor;
+    }
+
     await appStore.fetchStats({ background: true });
 
     if (shouldSaveStories || shouldSaveCarousels || shouldSaveExcludedFolders) {
@@ -2913,6 +2972,8 @@ async function saveGeneralSettings() {
         'success',
         t('settings.general.feedback.nestedFolderTitleSaved', { label: selectedNestedFolderTitleOption.value.label })
       );
+    } else if (shouldSaveAccentColor) {
+      setGeneralSettingsFeedback('success', t('settings.general.feedback.accentColorSaved'));
     }
   } catch (error) {
     await appStore.fetchStats({ background: true }).catch(() => {});
@@ -3120,6 +3181,22 @@ watch(
   {
     immediate: true
   }
+);
+
+watch(
+  () => [appStore.stats, appStore.loadingStats, appStore.accentColor, savingGeneralSettings.value] as const,
+  ([stats, loadingStats, savedAccent, saving]) => {
+    // Status refreshes must not replace an unsaved selection, including while
+    // another general setting is being saved before this one.
+    if (!stats || loadingStats || saving) return;
+    const preserveDraft = accentColorHydrated.value && accentColorDirty.value;
+    savedAccentColor.value = savedAccent;
+    if (!preserveDraft) {
+      accentColorDraft.value = savedAccent;
+    }
+    accentColorHydrated.value = true;
+  },
+  { immediate: true }
 );
 
 watch(

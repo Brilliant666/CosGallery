@@ -208,6 +208,7 @@ describe.sequential('viewer-safe status payload', () => {
     const status = galleryService.getStatus();
 
     expect(status.preferences).toEqual({
+      accentColor: 'blue',
       defaultLocale: null,
       defaultHomeFeedMode: 'random',
       defaultReelsFeedMode: 'random',
@@ -227,6 +228,7 @@ describe.sequential('viewer-safe status payload', () => {
     const status = galleryService.getStatus();
 
     expect(status.preferences).toEqual({
+      accentColor: 'blue',
       defaultLocale: 'zh',
       defaultHomeFeedMode: 'rediscover',
       defaultReelsFeedMode: 'recommended',

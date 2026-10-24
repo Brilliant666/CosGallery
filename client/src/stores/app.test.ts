@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_LOCALE, i18n } from '../locales';
-import type { AppStatus } from '../types/api';
+import { ACCENT_COLORS, type AppStatus } from '../types/api';
 import { useAppStore } from './app';
 import { useAuthStore } from './auth';
 
@@ -148,6 +148,7 @@ describe('useAppStore locale preferences', () => {
     window.localStorage.clear();
     setNavigatorLocales(['en-US']);
     document.documentElement.lang = '';
+    document.documentElement.dataset.accent = 'blue';
     i18n.global.locale.value = DEFAULT_LOCALE;
     fetchAdminScanProgressMock.mockReset();
     fetchAdminStatsMock.mockReset();
@@ -168,6 +169,41 @@ describe('useAppStore locale preferences', () => {
     fetchAdminStatsMock.mockResolvedValueOnce(createAppStatus());
     await store.fetchStats();
     expect(store.stats).not.toBeNull();
+  });
+
+  it.each(ACCENT_COLORS)('applies public site accent %s without changing browser theme or saving a local override', async (accentColor) => {
+    useAuthStore().$patch({ role: 'anonymous', authenticated: false, accessMode: 'public', capabilities: { canAccessSettings: false } });
+    const status = createAppStatus(); status.preferences.accentColor = accentColor;
+    fetchStatusMock.mockResolvedValueOnce(status);
+    const store = useAppStore(); store.setTheme('dark');
+    await store.fetchStats();
+    expect(store.accentColor).toBe(accentColor);
+    expect(document.documentElement.dataset.accent).toBe(accentColor);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    store.setTheme('light');
+    expect(document.documentElement.dataset.accent).toBe(accentColor);
+    expect(window.localStorage.length).toBe(1);
+    expect(fetchAdminStatsMock).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, 'unknown', 'RED'])('uses blue for an absent or invalid public accent (%s)', async (value) => {
+    const status = createAppStatus();
+    status.preferences.accentColor = value as AppStatus['preferences']['accentColor'];
+    fetchAdminStatsMock.mockResolvedValueOnce(status);
+    await useAppStore().fetchStats();
+    expect(useAppStore().accentColor).toBe('blue');
+    expect(document.documentElement.dataset.accent).toBe('blue');
+  });
+
+  it('does not apply a stale admin accent response after an anonymous refresh', async () => {
+    let resolveOld!: (value: AppStatus) => void;
+    fetchAdminStatsMock.mockImplementationOnce(() => new Promise<AppStatus>(done => { resolveOld = done; }));
+    const store = useAppStore(); const old = store.fetchStats();
+    useAuthStore().$patch({ role: 'anonymous', capabilities: { canAccessSettings: false } });
+    const current = createAppStatus(); current.preferences.accentColor = 'teal';
+    fetchStatusMock.mockResolvedValueOnce(current); await store.fetchStats();
+    const stale = createAppStatus(); stale.preferences.accentColor = 'rose'; resolveOld(stale); await old;
+    expect(document.documentElement.dataset.accent).toBe('teal');
   });
 
   it('shares equivalent light initialization even for an administrator', async () => {

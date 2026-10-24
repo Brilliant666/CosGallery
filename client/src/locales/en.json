@@ -318,7 +318,8 @@
         "folderOnly": "This updates the default photo order used by app folder grids.",
         "nestedFolderTitleOnly": "This updates how nested app folders are labeled throughout the app.",
         "carouselReconciliation": "The Carousel folder mode is saved. Complete the library action above to apply it to the index.",
-        "idle": "These are the current app-wide defaults for language, Home, Reels, app folders, nested folder titles, stories folders, carousel folders, and excluded folders."
+        "idle": "These are the current app-wide defaults for language, Home, Reels, app folders, nested folder titles, stories folders, carousel folders, and excluded folders.",
+        "accentColorOnly": "Apply this color across the site after saving. No library scan or rebuild is needed."
       },
       "rescanNotice": {
         "rebuildRequired": "Save these changes, then rebuild the library index so the selected folder behavior is applied to the current gallery location.",
@@ -352,13 +353,28 @@
           "homeFeedDefault": "Home feed default",
           "reelsFeedDefault": "Reels feed default",
           "appFolderOrder": "app folder order",
-          "nestedFolderTitles": "nested folder titles"
-        }
+          "nestedFolderTitles": "nested folder titles",
+          "accentColor": "site accent color"
+        },
+        "accentColorSaved": "Site accent color saved."
       },
       "errors": {
         "validateExcludedFolders": "Unable to validate the excluded folder rules.",
         "update": "Unable to update the general settings.",
         "partialUpdate": "Some settings were saved ({parts}), but the update did not finish: {message}"
+      },
+      "accentColor": {
+        "label": "Site accent color",
+        "description": "Set one accent for buttons, links, selection and focus, shared by administrators and visitors.",
+        "helper": "Select a color, then Save changes below. Choose Blue to restore the default; light/dark mode remains a browser preference.",
+        "options": {
+          "blue": "Blue",
+          "purple": "Purple",
+          "rose": "Rose",
+          "teal": "Teal",
+          "amber": "Amber",
+          "slate": "Slate"
+        }
       }
     },
     "library": {
