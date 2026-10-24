@@ -543,9 +543,11 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
     void nextTick(() => moreButton.value?.focus({ preventScroll: true }))
   }
 
-  function resetInteraction() {
+  function resetInteraction(preserveKeyboardFocus = false) {
+    const keepKeyboardFocus = preserveKeyboardFocus && keyboardFocus.value &&
+      Boolean(sidebar.value?.contains(document.activeElement))
     clearTimers()
-    keyboardFocus.value = false
+    keyboardFocus.value = keepKeyboardFocus
     touchExpanded.value = false
     pointerInside = !touchControls.value && Boolean(lastPointerPosition && pointerIsOverSidebar(lastPointerPosition))
     closeMoreMenu()
@@ -556,7 +558,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
     if (event.key !== null && event.key !== SIDEBAR_INTERACTION_KEY && event.key !== SIDEBAR_CLICK_EXPANDED_KEY) return
     sidebarInteraction.value = readSidebarInteraction()
     clickExpanded.value = readSidebarClickExpanded()
-    resetInteraction()
+    resetInteraction(true)
   }
 
   function handlePointerDown(event: PointerEvent) {

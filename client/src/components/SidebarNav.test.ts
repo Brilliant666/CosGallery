@@ -279,6 +279,24 @@ describe('personal sidebar interaction', () => {
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
   });
 
+  it('preserves keyboard focus expansion when another tab switches to hover without stealing focus', async () => {
+    const { sidebar } = await setup();
+    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    const link = sidebar.get<HTMLAnchorElement>('a[href="/library"]');
+    link.element.focus();
+    await nextTick();
+    localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
+    window.dispatchEvent(new StorageEvent('storage', { key: SIDEBAR_INTERACTION_KEY }));
+    await vi.advanceTimersByTimeAsync(450);
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+    expect(document.activeElement).toBe(link.element);
+    link.element.blur();
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(120);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+  });
+
   it('synchronizes sidebar preference events without touching unrelated storage', async () => {
     const { sidebar } = await setup();
     localStorage.setItem('retained-preference', 'unchanged');
