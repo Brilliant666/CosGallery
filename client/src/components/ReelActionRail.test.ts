@@ -128,6 +128,19 @@ describe('ReelActionRail', () => {
     await wrapper.get('button').trigger('click');await flushPromises();expect(unlike).toHaveBeenCalledExactlyOnceWith(900);expect(galleryApi.fetchPostSummary).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a failed parent favorite action and clears the message after a successful retry', async () => {
+    useAuthStore().$patch({ likesMode: 'shared', capabilities: { canUseSharedLikes: true, canUseLocalFavorites: false } });
+    vi.spyOn(galleryApi, 'likeImage').mockRejectedValueOnce(new Error('Like failed')).mockResolvedValueOnce({ id: 900, liked: true, ok: true });
+    const wrapper = mountRail({ ...createReelItem(22), postId: 900 });
+    await wrapper.get('button').trigger('click'); await flushPromises();
+    expect(wrapper.get('[role=status]').text()).toBe('Like failed');
+    expect(wrapper.get('button').attributes('aria-pressed')).toBe('false');
+    await wrapper.get('button').trigger('click'); await flushPromises();
+    expect(wrapper.find('[role=status]').exists()).toBe(false);
+    expect(wrapper.get('button').attributes('aria-pressed')).toBe('true');
+    wrapper.unmount();
+  });
+
   it('does not store a reel or issue a like when parent loading fails or returns another identity',async()=>{
     vi.mocked(galleryApi.fetchPostSummary).mockRejectedValueOnce(new Error('Parent unavailable'));
     const wrapper=mountRail(createReelItem(22));await wrapper.get('button').trigger('click');await flushPromises();

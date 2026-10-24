@@ -1,8 +1,16 @@
 import type { ObjectDirective } from 'vue';
 
-interface DialogControls { close: () => void; locked: boolean }
+interface DialogControls { close: () => void; locked: boolean; returnFocus?: HTMLElement | null }
 interface DialogState { controls: DialogControls; previous: HTMLElement | null; cleanup: () => void }
 const dialogs = new WeakMap<HTMLElement, DialogState>();
+const dialogStack: HTMLElement[] = [];
+
+function topDialog() {
+  for (let index = dialogStack.length - 1; index >= 0; index--) {
+    const dialog = dialogStack[index];
+    if (dialog.isConnected && !dialog.closest('[hidden], [inert]')) return dialog;
+  }
+}
 
 function focusable(dialog: HTMLElement) {
   return [...dialog.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, summary, [tabindex]')].filter(element => {
@@ -21,12 +29,14 @@ function focusable(dialog: HTMLElement) {
 export const vAdmissionDialog: ObjectDirective<HTMLElement, DialogControls> = {
   mounted(element, binding) {
     element.tabIndex = -1;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previous = binding.value.returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const state: DialogState = { controls: binding.value, previous, cleanup: () => undefined };
-    const active = () => element.isConnected && !element.closest('[hidden], [inert]');
+    dialogStack.push(element);
+    const active = () => element.isConnected && !element.closest('[hidden], [inert]') &&
+      topDialog() === element;
     const onKey = (event: KeyboardEvent) => {
       if (!active()) return;
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !event.isComposing) {
         event.preventDefault(); event.stopPropagation();
         if (!state.controls.locked) state.controls.close();
       } else if (event.key === 'Tab') {
@@ -55,6 +65,8 @@ export const vAdmissionDialog: ObjectDirective<HTMLElement, DialogControls> = {
   beforeUnmount(element) {
     const state = dialogs.get(element);
     state?.cleanup(); dialogs.delete(element);
+    const index = dialogStack.indexOf(element);
+    if (index !== -1) dialogStack.splice(index, 1);
     if (state?.previous?.isConnected && element.contains(document.activeElement)) state.previous.focus({ preventScroll: true });
   }
 };

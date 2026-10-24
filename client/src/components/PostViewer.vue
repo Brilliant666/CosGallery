@@ -444,6 +444,7 @@
         </dl>
 
         <!-- Actions -->
+        <p v-if="likesStore.actionError(image.id)" class="mx-5 mb-2 rounded-lg border border-red-500/40 px-3 py-2 text-sm text-text" role="alert" data-test="like-action-error">{{ likesStore.actionError(image.id) }}</p>
         <div
           class="viewer__sidebar-actions flex items-center justify-between gap-3 px-5 pt-[0.7rem] pb-5 mt-auto"
         >

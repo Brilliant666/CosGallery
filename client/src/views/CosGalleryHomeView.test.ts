@@ -7,7 +7,7 @@ import { fetchCosGalleryCreators } from '../api/gallery';
 
 vi.mock('../api/gallery', () => ({ fetchCosGalleryCreators: vi.fn() }));
 const routerState = vi.hoisted(() => ({
-  route: { name: 'library', query: {} as Record<string, string>, fullPath: '/library' },
+  route: { name: 'library', query: {} as Record<string, string | string[]>, fullPath: '/library' },
   replace: vi.fn(),
   push: vi.fn()
 }));
@@ -41,6 +41,40 @@ describe('managed gallery classifications', () => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
     routerState.route.query = {};
     routerState.route.fullPath = '/library';
+  });
+  it('retries the current library query and page, ignoring unsubmitted search text', async () => {
+    routerState.route.query = { q: ['applied', 'ignored'], rating: 'R18', page: '2' };
+    routerState.route.fullPath = '/library?q=applied&q=ignored&rating=R18&page=2';
+    vi.mocked(fetchCosGalleryCreators).mockRejectedValueOnce(new Error('Offline'));
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } });
+    await flushPromises();
+    expect(wrapper.get('[role=alert]').text()).toContain('Offline');
+    expect(wrapper.text()).not.toContain('没有符合当前条件');
+    await wrapper.get('input[type=search]').setValue('not submitted');
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValueOnce(creatorPage(120, 2));
+    await wrapper.get('[data-test=retry-creators]').trigger('click');
+    await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R18', 'applied', 2, 60, undefined, undefined);
+    expect(routerState.replace).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test=retry-creators]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('Last valid page creator');
+    wrapper.unmount();
+  });
+  it('hides cards from a previous filter when the next filter request fails', async () => {
+    vi.mocked(fetchCosGalleryCreators).mockResolvedValueOnce(creatorPage(1, 1)).mockRejectedValueOnce(new Error('New filter failed')).mockResolvedValueOnce(creatorPage(1, 1));
+    const wrapper = mount(CosGalleryHomeView, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } });
+    await flushPromises();
+    expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(true);
+    routerState.route.query = { rating: 'R15' };
+    routerState.route.fullPath = '/library?rating=R15';
+    await flushPromises();
+    expect(wrapper.get('[role=alert]').text()).toContain('New filter failed');
+    expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('没有符合当前条件');
+    await wrapper.get('[data-test=retry-creators]').trigger('click'); await flushPromises();
+    expect(fetchCosGalleryCreators).toHaveBeenLastCalledWith('R15', '', 1, 60, undefined, undefined);
+    expect(wrapper.find('[aria-label="博主目录"]').exists()).toBe(true);
+    wrapper.unmount();
   });
   it('distinguishes linked null, unlinked and inactive while keeping folder navigation', async () => {
     vi.mocked(fetchCosGalleryCreators).mockResolvedValue({total:3,page:1,limit:50,hasMore:false,summary:{all:2,R15:0,R18:0,unclassified:1,unlinked:1,inactive:1},items:[

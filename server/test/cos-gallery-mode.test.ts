@@ -232,6 +232,30 @@ describe.sequential('COS gallery mode', () => {
     const all = await requestTestApp(app, 'GET', '/api/cos-gallery/creators?page=1&limit=50');
     expect(all.status).toBe(200);
     expect(all.body).toMatchObject({ total: 3, page: 1, limit: 50, hasMore: false });
+    const { imageRepository } = await import('../src/db/repositories.js');
+    const coverReads = vi.spyOn(imageRepository, 'getById');
+    try {
+      for (let page = 1; page <= 3; page += 1) {
+        coverReads.mockClear();
+        const paged = await requestTestApp(app, 'GET', `/api/cos-gallery/creators?page=${page}&limit=1`);
+        expect(paged.body.items).toEqual([all.body.items[page - 1]]);
+        expect(paged.body.summary).toEqual(all.body.summary);
+        expect(paged.body.total).toBe(3);
+        expect(coverReads).toHaveBeenCalledTimes(1);
+      }
+      for (const query of ['page=99&limit=1', 'q=missing-creator']) {
+        coverReads.mockClear();
+        const empty = await requestTestApp(app, 'GET', `/api/cos-gallery/creators?${query}`);
+        expect(empty.body.items).toEqual([]);
+        expect(empty.body.summary).toEqual(all.body.summary);
+        expect(coverReads).not.toHaveBeenCalled();
+      }
+      coverReads.mockClear();
+      const alias = await requestTestApp(app, 'GET', '/api/cos-gallery/creators?q=Moon%20Alias');
+      expect(alias.body.items).toEqual(all.body.items.filter((item: { id: number; identityType: string }) => item.id === lunana.id && item.identityType === 'creator'));
+      expect(alias.body.summary).toEqual(all.body.summary);
+      expect(coverReads).toHaveBeenCalledTimes(1);
+    } finally { coverReads.mockRestore(); }
     const canonical = all.body.items.find((item: { key: string }) => item.key === `creator:${lunana.id}`);
     expect(canonical).toMatchObject({
       identityType: 'creator',

@@ -425,13 +425,13 @@ describe('TrashView', () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain('Papelera');
-    expect(wrapper.text()).toContain('Publicaciones eliminadas');
-    expect(wrapper.text()).toContain('0 publicaciones seleccionadas');
+    expect(wrapper.text()).toContain('Obras y archivos multimedia en la papelera');
+    expect(wrapper.text()).toContain('0 registros de papelera seleccionados');
     expect(wrapper.text()).toContain('Restaurar');
     expect(wrapper.text()).toContain('Eliminar permanentemente');
     expect(wrapper.text()).toContain('En papelera');
     expect(wrapper.text()).toContain('Abrir carpeta');
-    expect(wrapper.text()).not.toContain('Deleted posts');
+    expect(wrapper.text()).not.toContain('Trashed works and media');
     expect(wrapper.text()).not.toContain('Permanently Delete');
 
     await wrapper.get('input[type="checkbox"]').setValue(true);
@@ -445,8 +445,8 @@ describe('TrashView', () => {
     await restoreButton!.trigger('click');
     await flushPromises();
 
-    expect(wrapper.get('[data-test="confirm-title"]').text()).toBe('¿Restaurar las publicaciones seleccionadas?');
-    expect(wrapper.get('[data-test="confirm-message"]').text()).toBe('¿Restaurar 1 publicación seleccionada en la app?');
+    expect(wrapper.get('[data-test="confirm-title"]').text()).toBe('¿Restaurar los registros seleccionados?');
+    expect(wrapper.get('[data-test="confirm-message"]').text()).toBe('¿Restaurar el registro seleccionado de la papelera (1) a la biblioteca?');
     expect(wrapper.get('[data-test="cancel-button"]').text()).toBe('Cancelar');
   });
 

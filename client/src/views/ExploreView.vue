@@ -30,7 +30,7 @@
           </svg>
         </button>
 
-        <label
+        <div
           class="explore-view__search flex flex-1 items-center gap-3 rounded-full bg-surface-alt px-4 py-[0.82rem]"
         >
           <svg
@@ -62,6 +62,7 @@
             v-model="searchQuery"
             class="w-full border-0 bg-transparent p-0 text-[1rem] text-text outline-none placeholder:text-muted"
             type="search"
+            :aria-label="t('explore.searchLabel')"
             :placeholder="t('explore.searchPlaceholder')"
             spellcheck="false"
             @focus="activateSearch"
@@ -90,7 +91,7 @@
               />
             </svg>
           </button>
-        </label>
+        </div>
       </header>
 
       <section
@@ -201,13 +202,15 @@
           </div>
 
           <section
-            v-else-if="exploreStore.searchError"
+            v-else-if="exploreStore.searchError && exploreStore.searchItems.length === 0"
             class="explore-view__message-card mx-auto"
+            role="alert"
           >
             <h1 class="m-0 text-[1.15rem] font-semibold text-text">
               {{ t('explore.errors.search') }}
             </h1>
             <p class="m-0 text-muted">{{ exploreStore.searchError }}</p>
+            <button class="btn-primary" type="button" data-test="retry-search" :disabled="exploreStore.searchLoading" @click="retrySearch">{{ t('common.retry') }}</button>
           </section>
 
           <section
@@ -230,7 +233,11 @@
               :items="exploreStore.searchItems"
               @open="handleSearchMediaOpen"
             />
-            <InfiniteLoader
+            <section v-if="exploreStore.searchError" class="explore-view__message-card mx-auto" role="alert">
+              <p class="m-0 text-muted">{{ exploreStore.searchError }}</p>
+              <button class="btn-primary" type="button" data-test="retry-search" :disabled="exploreStore.searchLoading" @click="retrySearch">{{ t('common.retry') }}</button>
+            </section>
+            <InfiniteLoader v-else
               :loading="exploreStore.searchLoading"
               :has-more="exploreStore.searchHasMore"
               :button-fallback="false"
@@ -240,6 +247,10 @@
         </template>
 
         <section v-else class="max-w-[35rem]">
+          <div v-if="foldersStore.listError" class="explore-view__message-card" role="alert">
+            <p class="m-0 text-muted">{{ foldersStore.listError }}</p>
+            <button class="btn-primary" type="button" data-test="retry-directories" :disabled="foldersStore.loadingList" @click="foldersStore.fetchFolders(true)">{{ t('common.retry') }}</button>
+          </div>
           <p
             v-if="foldersStore.loadingList && foldersStore.items.length === 0"
             class="m-0 text-[0.96rem] text-muted"
@@ -273,7 +284,7 @@
             </button>
 
             <p
-              v-if="folderSearchResults.length === 0"
+              v-if="folderSearchResults.length === 0 && !foldersStore.listError"
               class="m-0 pt-2 text-[1rem] text-muted"
             >
               {{ t('explore.noFoldersFound') }}
@@ -297,13 +308,15 @@
         </div>
 
         <section
-          v-else-if="exploreStore.error"
+          v-else-if="exploreStore.error && rankedItems.length === 0"
           class="explore-view__message-card mx-auto"
+          role="alert"
         >
           <h1 class="m-0 text-[1.15rem] font-semibold text-text">
             {{ t('explore.errors.load') }}
           </h1>
           <p class="m-0 text-muted">{{ exploreStore.error }}</p>
+          <button class="btn-primary" type="button" data-test="retry-explore" :disabled="exploreStore.loading" @click="loadMore">{{ t('common.retry') }}</button>
         </section>
 
         <section
@@ -320,7 +333,11 @@
 
         <template v-else>
           <ExploreGrid :items="rankedItems" />
-          <InfiniteLoader
+          <section v-if="exploreStore.error" class="explore-view__message-card mx-auto" role="alert">
+            <p class="m-0 text-muted">{{ exploreStore.error }}</p>
+            <button class="btn-primary" type="button" data-test="retry-explore" :disabled="exploreStore.loading" @click="loadMore">{{ t('common.retry') }}</button>
+          </section>
+          <InfiniteLoader v-else
             :loading="exploreStore.loading"
             :has-more="exploreStore.hasMore"
             :button-fallback="false"
@@ -600,6 +617,14 @@ async function loadMoreSearch() {
   }
 
   await exploreStore.loadMoreSearch();
+}
+
+async function retrySearch() {
+  if (searchDebounceTimer !== null) {
+    window.clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = null;
+  }
+  await exploreStore.retrySearch(trimmedSearchQuery.value);
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {

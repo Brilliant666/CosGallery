@@ -42,12 +42,16 @@
       <p v-if="legacyRatingLabel" role="status" class="m-0 rounded-xl border border-amber-300 px-4 py-3 text-sm text-amber-700">当前沿用旧链接的“{{ legacyRatingLabel }}”筛选，范围未改变。日常入口已收起；选择分级“全部”可退出此筛选，身份管理请前往博主库。</p>
     </header>
 
-    <p v-if="error" class="rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-red-700">{{ error }}</p>
+    <div v-if="error" class="flex flex-wrap items-center gap-3 rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-red-700" role="alert">
+      <p class="m-0 flex-1">{{ error }}</p>
+      <button type="button" class="btn-primary" data-test="retry-creators" :disabled="loading" @click="retryCreators">{{ t('common.retry') }}</button>
+    </div>
 
     <div
-      v-if="creators.length"
+      v-if="creators.length && !error"
       class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
       aria-label="博主目录"
+      :aria-busy="loading"
     >
       <article
         v-for="creator in creators"
@@ -98,10 +102,10 @@
     </div>
 
     <div v-else-if="loading" class="py-20 text-center text-muted">正在加载博主目录…</div>
-    <div v-else class="rounded-2xl border border-dashed border-border py-16 text-center text-muted">
+    <div v-else-if="!error" class="rounded-2xl border border-dashed border-border py-16 text-center text-muted">
       没有符合当前条件的博主。
     </div>
-    <nav v-if="totalPages > 1" class="mt-7 flex items-center justify-center gap-4" aria-label="博主分页">
+    <nav v-if="totalPages > 1 && !error" class="mt-7 flex items-center justify-center gap-4" aria-label="博主分页">
       <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page <= 1 || loading" @click="setPage(page - 1)">上一页</button>
       <span class="text-sm text-muted">第 {{ page }} / {{ totalPages }} 页</span>
       <button type="button" class="rounded-full border border-border bg-surface px-5 py-2 text-sm font-semibold" :disabled="page >= totalPages || loading" @click="setPage(page + 1)">下一页</button>
@@ -112,6 +116,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { RouterLink, useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 
 import { fetchCosGalleryCreators } from '../api/gallery';
@@ -125,6 +130,7 @@ import { useCreatorReadingStore } from '../stores/creator-reading';
 type RatingFilter = 'all' | ContentRating | 'unclassified' | 'unlinked' | 'inactive';
 type PreferenceFilter = 'all' | 'liked' | 'kept';
 const PAGE_SIZE = 60;
+const { t } = useI18n();
 const ratingOptions = [{ value: 'all', label: '全部' }, { value: 'R15', label: 'R15' }, { value: 'R18', label: 'R18' }] as const;
 const preferenceOptions = [{ value: 'all', label: '全部' }, { value: 'liked', label: '喜欢' }, { value: 'kept', label: '保留' }] as const;
 const legacyLabels = { unclassified: '待分类', unlinked: '未关联', inactive: '已停用' };
@@ -183,7 +189,7 @@ async function correctOutOfRangePage(resultTotal: number) {
   return true;
 }
 
-async function loadCreators(scroll: 'restore' | 'top' | 'preserve') {
+async function loadCreators(scroll: 'restore' | 'top' | 'preserve', force = false) {
   const token = ++requestToken;
   generation = reading.generation;
   const requestGeneration = generation;
@@ -191,7 +197,7 @@ async function loadCreators(scroll: 'restore' | 'top' | 'preserve') {
   const isCurrent = () => token === requestToken && requestGeneration === reading.generation && admin === auth.isAdmin;
   loading.value = true;
   error.value = '';
-  const cached = reading.libraryPages[cacheKey()];
+  const cached = force ? undefined : reading.libraryPages[cacheKey()];
   if (cached) {
     if (await correctOutOfRangePage(cached.total)) return;
     if (!isCurrent()) return;
@@ -203,7 +209,9 @@ async function loadCreators(scroll: 'restore' | 'top' | 'preserve') {
     return;
   }
   try {
-    const payload = await fetchCosGalleryCreators(label.value || rating.value === 'all' ? undefined : rating.value, query.value, page.value, PAGE_SIZE, !admin || preference.value === 'all' ? undefined : preference.value, label.value);
+    const routeQuery = Array.isArray(route.query.q) ? route.query.q[0] : route.query.q;
+    const appliedQuery = typeof routeQuery === 'string' ? routeQuery : '';
+    const payload = await fetchCosGalleryCreators(label.value || rating.value === 'all' ? undefined : rating.value, appliedQuery, page.value, PAGE_SIZE, !admin || preference.value === 'all' ? undefined : preference.value, label.value);
     if (!isCurrent()) return;
     if (await correctOutOfRangePage(payload.total)) return;
     if (!isCurrent()) return;
@@ -217,6 +225,10 @@ async function loadCreators(scroll: 'restore' | 'top' | 'preserve') {
   } finally {
     if (token === requestToken) loading.value = false;
   }
+}
+
+async function retryCreators() {
+  if (!loading.value) await loadCreators('preserve', true);
 }
 
 async function syncLocation(intent: 'filter' | 'page') {
@@ -286,7 +298,8 @@ watch(() => [route.fullPath, reading.generation, reading.libraryResetVersion, au
     void router.replace({ name: 'library', query: cleanQuery });
     return;
   }
-  query.value = typeof route.query.q === 'string' ? route.query.q : '';
+  const routeQuery = Array.isArray(route.query.q) ? route.query.q[0] : route.query.q;
+  query.value = typeof routeQuery === 'string' ? routeQuery : '';
   rating.value = !label.value && typeof route.query.rating === 'string' && validRatings.includes(route.query.rating) ? route.query.rating as RatingFilter : 'all';
   preference.value = auth.isAdmin && (route.query.preference === 'liked' || route.query.preference === 'kept') ? route.query.preference : 'all';
   page.value = typeof route.query.page === 'string' && /^\d+$/.test(route.query.page) && Number(route.query.page) > 0 ? Number(route.query.page) : 1;

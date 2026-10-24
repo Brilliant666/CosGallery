@@ -5,6 +5,26 @@ import { vAdmissionDialog } from './admission-dialog';
 
 afterEach(() => { document.body.innerHTML = ''; });
 describe('admission confirmation keyboard boundary', () => {
+  it('lets only the top dialog own focus and Escape, then restores the parent action', async () => {
+    const wrapper = mount(defineComponent({
+      directives: { admissionDialog: vAdmissionDialog },
+      setup: () => ({ parent: ref(true), child: ref(false) }),
+      template: `<section v-if="parent" data-parent v-admission-dialog="{close:()=>parent=false,locked:false}">
+        <button data-open @click="child=true">Review</button>
+        <section v-if="child" data-child v-admission-dialog="{close:()=>child=false,locked:false}"><button>Cancel</button></section>
+      </section>`,
+    }), { attachTo: document.body });
+    await flushPromises();
+    const opener = wrapper.get('[data-open]'); (opener.element as HTMLElement).focus();
+    await opener.trigger('click'); await flushPromises();
+    expect(document.activeElement).toBe(wrapper.get('[data-child]').element);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+    expect(wrapper.find('[data-child]').exists()).toBe(false);
+    expect(wrapper.find('[data-parent]').exists()).toBe(true);
+    expect(document.activeElement).toBe(opener.element);
+    wrapper.unmount();
+  });
   it('contains Tab focus, closes with Escape, and returns to the originating action without submitting', async () => {
     const wrapper = mount(defineComponent({
       directives: { admissionDialog: vAdmissionDialog },

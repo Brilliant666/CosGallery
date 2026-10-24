@@ -20,6 +20,7 @@
           <h1 class="collection-page__title">{{ collectionTitle }}</h1>
           <button
             v-if="canManageCurrentCollection"
+            ref="menuButtonElement"
             class="collection-page__menu-button"
             type="button"
             :aria-label="t('collections.detail.options')"
@@ -54,6 +55,7 @@
         role="dialog"
         aria-modal="true"
         :aria-label="t('collections.detail.actionsLabel')"
+        v-dialog-focus="{ close: () => menuOpen = false, locked: false, returnFocus: menuButtonElement }"
       >
         <button class="collection-action-sheet__item collection-action-sheet__item--danger" type="button" @click="openDeleteDialog">
           {{ t('collections.detail.menu.delete') }}
@@ -68,7 +70,7 @@
     </div>
 
     <div v-if="editDialogOpen" class="collection-action-backdrop" @click.self="closeEditDialog">
-      <section class="collection-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-collection-title">
+      <section class="collection-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-collection-title" v-dialog-focus="{ close: closeEditDialog, locked: editingCollection, returnFocus: menuButtonElement }">
         <header class="collection-edit-dialog__header">
           <h2 id="edit-collection-title">{{ t('collections.detail.edit.title') }}</h2>
           <button
@@ -91,7 +93,7 @@
             maxlength="80"
             :disabled="editingCollection"
           />
-          <p v-if="actionError" class="collection-management-error">{{ actionError }}</p>
+          <p v-if="actionError" class="collection-management-error" role="alert">{{ actionError }}</p>
           <button class="collection-edit-dialog__done" type="submit" :disabled="editingCollection">
             {{ editingCollection ? t('collections.detail.edit.saving') : t('collections.detail.edit.done') }}
           </button>
@@ -100,12 +102,12 @@
     </div>
 
     <div v-if="deleteDialogOpen" class="collection-action-backdrop" @click.self="closeDeleteDialog">
-      <section class="collection-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-collection-title">
+      <section class="collection-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-collection-title" aria-describedby="delete-collection-message" v-dialog-focus="{ close: closeDeleteDialog, locked: deletingCollection, returnFocus: menuButtonElement }">
         <div class="collection-delete-dialog__copy">
           <h2 id="delete-collection-title">{{ t('collections.detail.delete.title') }}</h2>
-          <p>{{ t('collections.detail.delete.message') }}</p>
+          <p id="delete-collection-message">{{ t('collections.detail.delete.message') }}</p>
         </div>
-        <p v-if="actionError" class="collection-management-error collection-management-error--dialog">{{ actionError }}</p>
+        <p v-if="actionError" class="collection-management-error collection-management-error--dialog" role="alert">{{ actionError }}</p>
         <button
           class="collection-delete-dialog__action collection-delete-dialog__action--danger"
           type="button"
@@ -138,6 +140,7 @@ import FolderGrid from '../components/FolderGrid.vue';
 import InfiniteLoader from '../components/InfiniteLoader.vue';
 import { useAppStore } from '../stores/app';
 import { useCollectionsStore } from '../stores/collections';
+import { vAdmissionDialog as vDialogFocus } from '../utils/admission-dialog';
 
 const props = defineProps<{
   slug: string;
@@ -148,6 +151,7 @@ const collectionsStore = useCollectionsStore();
 const router = useRouter();
 const { t } = useI18n();
 const menuOpen = ref(false);
+const menuButtonElement = ref<HTMLButtonElement | null>(null);
 const editDialogOpen = ref(false);
 const deleteDialogOpen = ref(false);
 const editInputElement = ref<HTMLInputElement | null>(null);

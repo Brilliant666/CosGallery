@@ -858,7 +858,22 @@ function chooseCanonicalCreatorCover<T extends {
   })[0]!;
 }
 
-function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityItem[] {
+function hydrateCosGalleryCreatorCover(creator: CosGalleryIdentityItem): CosGalleryIdentityItem {
+  const cover = creator.coverImageId === null ? undefined : imageRepository.getById(creator.coverImageId);
+  const coverUrl = cover?.thumbnail_path
+    ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, imageDerivativeVersion(cover, 'thumbnail'))
+    : null;
+  return {
+    ...creator,
+    coverImageId: cover?.id ?? null,
+    coverUrl,
+    avatarUrl: coverUrl,
+    coverWidth: cover?.width ?? null,
+    coverHeight: cover?.height ?? null
+  };
+}
+
+function buildCosGalleryIdentityItems(creatorId?: number, options: { hydrateCovers?: boolean } = {}): CosGalleryIdentityItem[] {
   const candidates = canonicalCreatorGalleryRepository.listFolderCandidates(creatorId);
   const labelsByCreator = new CreatorGalleryLabelService().list(creatorId);
   const aliasesByCreator = new Map<number, string[]>();
@@ -880,16 +895,10 @@ function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityIte
   return [...grouped.entries()].map(([key, values]) => {
     const first = values[0]!;
     const coverSource = chooseCanonicalCreatorCover(values);
-    const cover = coverSource.coverImageId === null
-      ? undefined
-      : imageRepository.getById(coverSource.coverImageId);
     const canonicalCreatorId = first.canonicalCreatorId;
     const linked = canonicalCreatorId !== null;
     const localFolders = [...values].sort((left, right) => left.folderId - right.folderId);
-    const coverUrl = cover?.thumbnail_path
-      ? toPublicMediaUrl('/thumbnails', cover.thumbnail_path, imageDerivativeVersion(cover, 'thumbnail'))
-      : null;
-    return {
+    const creator: CosGalleryIdentityItem = {
       key,
       identityType: linked ? 'creator' as const : 'folder' as const,
       id: linked ? canonicalCreatorId : first.folderId,
@@ -923,12 +932,13 @@ function buildCosGalleryIdentityItems(creatorId?: number): CosGalleryIdentityIte
       ratingSourceCount: linked ? Number(first.ratingSourceCount) : 0,
       ratingConflict: false,
       aliases: linked ? aliasesByCreator.get(canonicalCreatorId) ?? [] : [],
-      coverImageId: cover?.id ?? null,
-      coverUrl,
-      avatarUrl: coverUrl,
-      coverWidth: cover?.width ?? null,
-      coverHeight: cover?.height ?? null
+      coverImageId: coverSource.coverImageId,
+      coverUrl: null,
+      avatarUrl: null,
+      coverWidth: null,
+      coverHeight: null
     };
+    return options.hydrateCovers === false ? creator : hydrateCosGalleryCreatorCover(creator);
   }).sort((left, right) =>
     (right.latestWorkAt ?? 0) - (left.latestWorkAt ?? 0)
     || left.name.localeCompare(right.name)
@@ -1382,7 +1392,9 @@ export const galleryService = {
     // A gallery label replaces even legacy lifecycle/rating query values.
     if (label) contentRating = undefined;
     if (!includePreference) preference = undefined;
-    const allItems = buildCosGalleryIdentityItems();
+    // Identity grouping, sorting and global counts still cover the complete range.
+    // Thumbnail metadata is only needed for the filtered page returned below.
+    const allItems = buildCosGalleryIdentityItems(undefined, { hydrateCovers: false });
     const summary = {
       all: allItems.filter(item => item.rosterStatus !== 'inactive').length,
       R15: allItems.filter(item => item.rosterStatus !== 'inactive' && item.contentRating === 'R15').length,
@@ -1410,7 +1422,8 @@ export const galleryService = {
     });
     const offset = (page - 1) * limit;
     return {
-      items: filtered.slice(offset, offset + limit).map(creator => presentGalleryCreator(creator, includePreference)),
+      items: filtered.slice(offset, offset + limit).map(creator =>
+        presentGalleryCreator(hydrateCosGalleryCreatorCover(creator), includePreference)),
       page,
       limit,
       total: filtered.length,

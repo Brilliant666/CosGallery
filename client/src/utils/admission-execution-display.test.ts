@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import AdmissionErrorNotice from '../components/AdmissionErrorNotice.vue';
 import type { AdmissionBatch, AdmissionItem } from '../types/local-admission';
-import { admissionErrorMessage, admissionExecutionSummary, admissionIssueKind, admissionItemError, admissionItemPhase, admissionQueueNotice } from './admission-execution-display';
+import { admissionErrorMessage, admissionExecutionSummary, admissionIssueKind, admissionItemError, admissionItemPhase, admissionQueueNotice, admissionReviewActionState, admissionReviewMessage } from './admission-execution-display';
 
 const item = (overrides: Partial<AdmissionItem> = {}): AdmissionItem => ({
   key: 'album', sourceRelativePath: '合成图集', targetPath: 'R:/图库/合成图集', displayTitle: '合成图集', group: 'A',
@@ -11,6 +11,17 @@ const item = (overrides: Partial<AdmissionItem> = {}): AdmissionItem => ({
 const review = item({state:'files_verified',lastError:'Scoped media indexing did not complete',executionIssue:{kind:'review',code:'MEDIA_INDEX_INCOMPLETE',message:'图集索引未完成，请核对异常文件'}});
 
 describe('local admission execution display', () => {
+  it('localizes review phases without hiding unknown messages or claiming unconfirmed actions completed', () => {
+    expect(admissionReviewMessage('inspecting', 'inspecting')).toBe('正在检查本项文件');
+    expect(admissionReviewMessage('resuming_original_plan')).toBe('正在继续原入库计划');
+    expect(admissionReviewMessage('ready', '请选择本次明确处置；未选择的附件保持。')).toBe('请选择本次明确处置；未选择的附件保持。');
+    expect(admissionReviewMessage('future_phase', 'future_phase')).toContain('状态待核对');
+    expect(admissionReviewMessage('completed', 'Unexpected new warning')).toContain('状态待核对');
+    expect(admissionReviewActionState('intent')).toBe('已登记处置，尚未确认完成');
+    expect(admissionReviewActionState('moved')).toBe('文件已移出');
+    expect(admissionReviewActionState('future_action')).toBe('处置状态待核对');
+  });
+
   it('translates historical indexing failures and keeps unknown errors out of visible English notices', () => {
     expect(admissionErrorMessage('Scoped media indexing did not complete: fixture.jpg')).toBe('图集索引未完成，请核对异常文件');
     expect(admissionErrorMessage('SQLITE_BUSY: database is locked')).toBe('入库未完成，请查看技术详情并核对原因');

@@ -32,6 +32,8 @@
       />
     </button>
 
+    <p v-if="quickError" class="collection-bookmark__quick-error" role="alert" data-test="bookmark-action-error">{{ quickError }}</p>
+
     <Teleport to="body">
       <div
         v-if="popoverOpen"
@@ -137,6 +139,7 @@ const creating = ref(false);
 const creatingCollection = ref(false);
 const collectionName = ref('');
 const localError = ref<string | null>(null);
+const quickError = ref<string | null>(null);
 const longPressTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const suppressNextClick = ref(false);
 let openTimer: ReturnType<typeof setTimeout> | null = null;
@@ -168,6 +171,8 @@ watch(
     immediate: true
   }
 );
+
+watch(() => props.item.id, () => { quickError.value = null; });
 
 function clearCloseTimer() {
   if (closeTimer) {
@@ -328,8 +333,16 @@ async function handleBookmarkClick() {
     return;
   }
 
-  await collectionsStore.toggleDefaultSave(props.item);
-  await collectionsStore.fetchMembership(props.item.id, true);
+  const item = props.item;
+  quickError.value = null;
+  try {
+    const error = await collectionsStore.toggleDefaultSave(item);
+    if (props.item.id === item.id) quickError.value = error ?? null;
+  } catch (error) {
+    if (props.item.id === item.id) {
+      quickError.value = error instanceof Error ? error.message : t('collections.detail.edit.updateError');
+    }
+  }
 }
 
 function handlePointerDown(event: PointerEvent) {
@@ -431,3 +444,23 @@ onBeforeUnmount(() => {
   removePopoverPositionListeners();
 });
 </script>
+
+<style scoped>
+.collection-bookmark__quick-error {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  width: max-content;
+  max-width: min(16rem, 75vw);
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(239 68 68 / 40%);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+</style>

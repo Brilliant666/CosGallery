@@ -13,6 +13,7 @@ interface LikesState {
   pendingIds: number[];
   loading: boolean;
   error: string | null;
+  actionErrors: Record<number, string>;
   initialized: boolean;
 }
 
@@ -94,11 +95,13 @@ export const useLikesStore = defineStore('likes', {
     pendingIds: [],
     loading: false,
     error: null,
+    actionErrors: {},
     initialized: false
   }),
   getters: {
     isLiked: (state) => (id: number) => state.likedIds.includes(id),
     isPending: (state) => (id: number) => state.pendingIds.includes(id),
+    actionError: (state) => (id: number) => state.actionErrors[id] ?? null,
     collectionLabel: (state) => {
       void i18n.global.locale.value;
       return state.mode === 'local'
@@ -160,6 +163,7 @@ export const useLikesStore = defineStore('likes', {
       this.pendingIds = [];
       this.loading = false;
       this.error = null;
+      this.actionErrors = {};
       this.initialized = false;
     },
 
@@ -207,7 +211,7 @@ export const useLikesStore = defineStore('likes', {
       const wasLiked = this.likedIds.includes(item.id);
       this.mode = mode;
       this.pendingIds.push(item.id);
-      this.error = null;
+      delete this.actionErrors[item.id];
 
       if (wasLiked) {
         this.likedIds = this.likedIds.filter((id) => id !== item.id);
@@ -235,16 +239,14 @@ export const useLikesStore = defineStore('likes', {
           this.items = this.items.filter((entry) => entry.id !== item.id);
         }
 
-        this.error = error instanceof Error
+        this.actionErrors[item.id] = error instanceof Error
           ? error.message
           : mode === 'local'
             ? i18n.global.t('likes.errors.updateLocal')
             : i18n.global.t('likes.errors.updateShared');
       } finally {
-        if (mode === 'local') {
-          writeLocalFavorites(this.items);
-        }
-
+        // A failed localStorage setItem leaves its previous value intact. Do
+        // not repeat the same failing write while rolling back in-memory state.
         this.pendingIds = this.pendingIds.filter((id) => id !== item.id);
       }
     },

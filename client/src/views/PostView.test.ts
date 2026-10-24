@@ -134,7 +134,7 @@ describe('PostView', () => {
     });
 
     expect(wrapper.find('[data-test="post-viewer"]').exists()).toBe(false);
-    expect(wrapper.text()).toContain('Loading post...');
+    expect(wrapper.text()).toContain('Loading media...');
 
     resolveLoad?.();
     await flushPromises();

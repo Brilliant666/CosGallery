@@ -42,7 +42,8 @@
       "itemCountOther": "{count} items",
       "latestDate": "Latest {date}",
       "noRecentActivity": "No recent activity"
-    }
+    },
+    "automaticLoading": "More content loads automatically when you reach the end."
   },
   "app": {
     "authLoading": {
@@ -880,12 +881,12 @@
       "next": "Next reel"
     },
     "rail": {
-      "parentLoadError": "Could not load the parent post. Please try again.",
+      "parentLoadError": "Could not load the parent media entry. Please try again.",
       "hideDetails": "Hide reel details",
       "showDetails": "Show reel details",
       "downloadOriginal": "Download original file",
       "openAlbum": "Open album at this video",
-      "parentPostActions": "Likes, favorites and captions apply to the parent post or album.",
+      "parentPostActions": "Likes, favorites and captions apply to the parent media entry or album.",
       "openFolder": "Open folder"
     },
     "info": {
@@ -908,11 +909,11 @@
   },
   "post": {
     "carousel": {
-      "label": "Carousel with {count} items",
+      "label": "Media group with {count} items",
       "position": "{current} / {count}",
       "previousItem": "Previous carousel item",
       "nextItem": "Next carousel item",
-      "open": "Open carousel with {count} items"
+      "open": "Open media group with {count} items"
     },
     "captionModal": {
       "title": "Edit caption",
@@ -924,11 +925,11 @@
       }
     },
     "viewer": {
-      "close": "Close post",
-      "previous": "Previous post",
-      "next": "Next post",
-      "showDetails": "Show post details",
-      "hideDetails": "Hide post details",
+      "close": "Close preview",
+      "previous": "Previous item",
+      "next": "Next item",
+      "showDetails": "Show media details",
+      "hideDetails": "Hide media details",
       "togglePlayback": "Toggle playback",
       "toggleSound": "Toggle sound",
       "toggleFullscreen": "Toggle fullscreen",
@@ -959,31 +960,35 @@
       "setAsCover": "Set as folder cover",
       "downloadOriginalFile": "Download original file",
       "openOriginalFile": "Open original file",
-      "deletePost": "Delete post"
+      "deletePost": "Move to Trash"
     },
     "feedCard": {
       "openStories": "Open {name} stories",
       "openFolderAvatar": "Open {name}",
       "openReel": "Open reel",
-      "openPost": "Open post",
+      "openPost": "Open media",
       "moreOptions": "More options",
       "delete": {
-        "title": "Delete this post?",
-        "messagePermanent": "This will permanently delete the post from the app and remove original media from disk.",
-        "messageTrash": "This will delete the post from the app and move it to Trash. The original file will stay on disk unless you choose permanent deletion.",
+        "title": "Trash or delete this media entry?",
+        "messagePermanent": "This permanently deletes this media entry and every original media file it contains from disk.",
+        "messageTrash": "This moves this media entry to Trash and keeps its original files so it can be restored later.",
         "confirmPermanent": "Permanently Delete",
-        "confirm": "Delete",
+        "confirm": "Move to Trash",
         "deleteOriginalLabel": "Also permanently delete original file from disk",
-        "deleteOriginalDescription": "Keep this unchecked to move the post to Trash while keeping the source file on disk.",
+        "deleteOriginalDescription": "Leave unchecked to move this media entry to Trash and keep all original files it contains.",
         "deleteOriginalWarning": "This will permanently delete the original file, thumbnail, and preview from disk. This action cannot be undone."
       }
-    }
+    },
+    "loading": "Loading media...",
+    "loadError": "Could not load media",
+    "invalidCreator": "The creator identity is invalid. Return to the library and open it again.",
+    "invalidMedia": "The selected media does not exist or does not belong to this work. Return to the work and choose again."
   },
   "collections": {
     "shared": {
-      "defaultName": "All Posts",
-      "postCountOne": "{count} post",
-      "postCountOther": "{count} posts"
+      "defaultName": "All saved",
+      "postCountOne": "{count} entry",
+      "postCountOther": "{count} entries"
     },
     "bookmark": {
       "dialogLabel": "Collections",
@@ -991,10 +996,11 @@
       "createCollection": "Create collection",
       "namePlaceholder": "Collection name",
       "empty": "No collections yet",
-      "savePost": "Save post",
-      "removeSavedPost": "Remove saved post",
+      "savePost": "Save this item",
+      "removeSavedPost": "Remove from saved",
       "errors": {
-        "loadCollections": "Unable to load collections"
+        "loadCollections": "Unable to load collections",
+        "refreshAfterSave": "Saved state updated, but the collection list could not refresh. Refresh the page to see the latest state."
       }
     },
     "list": {
@@ -1002,7 +1008,7 @@
       "loadErrorTitle": "Could not load collections",
       "loading": "Loading collections...",
       "emptyTitle": "No collections yet",
-      "emptyDescription": "Saved posts will appear in All Posts."
+      "emptyDescription": "Saved content appears in All saved."
     },
     "detail": {
       "fallbackTitle": "Collection",
@@ -1012,8 +1018,8 @@
       "options": "Collection options",
       "actionsLabel": "Collection actions",
       "emptyTitle": "{name} is empty",
-      "emptyDescriptionDefault": "Use the bookmark action under any post to save it here.",
-      "emptyDescriptionCustom": "Bookmarked posts assigned to this collection will appear here.",
+      "emptyDescriptionDefault": "Use the bookmark action on any media entry to save it here.",
+      "emptyDescriptionCustom": "Saved entries assigned to this collection will appear here.",
       "loading": "Loading collection...",
       "menu": {
         "delete": "Delete collection",
@@ -1102,7 +1108,7 @@
   "libraryPage": {
     "eyebrow": "Library",
     "title": "All folders",
-    "description": "Browse and search every indexed app folder.",
+    "description": "Browse and search all indexed library folders.",
     "stats": {
       "folders": "Folders",
       "posts": "Posts"
@@ -1160,10 +1166,10 @@
   },
   "trashPage": {
     "eyebrow": "Trash",
-    "title": "Deleted posts",
-    "description": "Posts moved here stay on disk until you permanently delete them.",
-    "selectedOne": "{count} selected post",
-    "selectedOther": "{count} selected posts",
+    "title": "Trashed works and media",
+    "description": "Trashed works and media keep their original files. Restore them, or permanently delete them after confirmation.",
+    "selectedOne": "{count} trash entry selected",
+    "selectedOther": "{count} trash entries selected",
     "restoreButton": "Restore",
     "deleteButton": "Permanently Delete",
     "libraryUnavailableTitle": "Library storage unavailable",
@@ -1171,35 +1177,35 @@
     "loadErrorTitle": "Could not load trash",
     "loading": "Loading trash...",
     "emptyTitle": "Trash is empty",
-    "emptyDescription": "Deleted posts will appear here so you can restore them or remove them permanently.",
+    "emptyDescription": "Trash entries appear here so you can restore or permanently delete them.",
     "selectItem": "Select {label}",
     "deselectItem": "Deselect {label}",
     "trashedAt": "Trashed {date}",
     "recently": "recently",
     "openFolder": "Open folder",
     "restoreDialog": {
-      "title": "Restore selected posts?",
-      "messageOne": "Restore {count} selected post to the app?",
-      "messageOther": "Restore {count} selected posts to the app?",
+      "title": "Restore selected trash entries?",
+      "messageOne": "Restore the selected {count} trash entry to the library?",
+      "messageOther": "Restore the selected {count} trash entries to the library?",
       "confirm": "Restore",
       "loading": "Restoring..."
     },
     "deleteDialog": {
-      "title": "Permanently delete selected posts?",
-      "messageOne": "This will permanently delete {count} selected post and remove the original file from disk.",
-      "messageOther": "This will permanently delete {count} selected posts and remove original files from disk.",
+      "title": "Permanently delete selected trash entries?",
+      "messageOne": "This permanently deletes the selected {count} trash entry and its original files.",
+      "messageOther": "This permanently deletes the selected {count} trash entries and their original files.",
       "confirm": "Permanently Delete",
       "loading": "Deleting...",
       "warning": "Original files, thumbnails, and previews will be removed permanently. This action cannot be undone."
     },
     "errors": {
       "refresh": "Unable to refresh the updated library state.",
-      "processOne": "{count} post could not be processed.",
-      "processOther": "{count} posts could not be processed."
+      "processOne": "Could not process {count} trash entry.",
+      "processOther": "Could not process {count} trash entries."
     }
   },
   "explore": {
-    "back": "Back to explore posts",
+    "back": "Back to explore",
     "searchPlaceholder": "Search",
     "clearSearch": "Clear search",
     "recentTitle": "Recent",
@@ -1207,20 +1213,21 @@
     "tabsAria": "Search result tabs",
     "tabs": {
       "media": "Photos & Videos",
-      "folders": "App Folders"
+      "folders": "Library folders"
     },
     "errors": {
-      "search": "Could not search posts",
+      "search": "Could not search media",
       "load": "Could not load explore"
     },
     "emptySearchTitle": "No matching photos or videos",
     "emptySearchDescription": "Try a different filename or folder keyword.",
-    "loadingFolders": "Loading folders...",
-    "noFoldersFound": "No app folders found.",
+    "loadingFolders": "Loading library folders...",
+    "noFoldersFound": "No matching library folders found.",
     "emptyTitle": "Nothing to explore yet",
-    "emptyDescription": "Index a few folders and this page will start surfacing posts here.",
-    "folderPostsOne": "{count} post",
-    "folderPostsOther": "{count} posts"
+    "emptyDescription": "There is no media to display in the library yet.",
+    "folderPostsOne": "{count} media item",
+    "folderPostsOther": "{count} media items",
+    "searchLabel": "Search media or library folders"
   },
   "mediaRemoval": {
     "legacyTitle": "Other trashed galleries",

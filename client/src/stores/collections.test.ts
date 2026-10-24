@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CollectionSummary, FeedItem } from '../types/api';
 import { useAuthStore } from './auth';
 import { useCollectionsStore } from './collections';
+import { i18n } from '../locales';
 
 const {
   addImageToCollectionMock,
@@ -262,11 +263,77 @@ describe('collections store', () => {
     const item = createFeedItem(9);
     await collectionsStore.initialize();
 
-    await collectionsStore.toggleDefaultSave(item);
+    expect(await collectionsStore.toggleDefaultSave(item)).toBe('Save failed');
 
     expect(collectionsStore.isSaved(item.id)).toBe(false);
     expect(collectionsStore.isBookmarked(item.id)).toBe(false);
     expect(collectionsStore.error).toBe('Save failed');
+    expect(collectionsStore.isPending(item.id)).toBe(false);
+  });
+
+  it('keeps a committed save when refreshing the list fails and explains the partial success', async () => {
+    fetchCollectionsMock.mockResolvedValueOnce({ items: [createCollection('saved', 'Saved', true)] }).mockRejectedValueOnce(new Error('Refresh failed'));
+    saveImageMock.mockResolvedValue({ ok: true });
+    const store = useCollectionsStore();
+    await store.initialize();
+    const error = await store.toggleDefaultSave(createFeedItem(19));
+    expect(store.isSaved(19)).toBe(true);
+    expect(store.isPending(19)).toBe(false);
+    expect(error).toBe(i18n.global.t('collections.bookmark.errors.refreshAfterSave'));
+    expect(error).not.toBe('Refresh failed');
+    expect(saveImageMock).toHaveBeenCalledOnce();
+  });
+
+  it('requires a successful membership readback before another toggle after a committed custom save failed to refresh', async () => {
+    const saved = createCollection('saved', 'Saved', true);
+    const travel = createCollection('travel', 'Travel');
+    fetchCollectionsMock.mockResolvedValueOnce({ items: [saved, travel] }).mockRejectedValueOnce(new Error('List unavailable'));
+    fetchImageCollectionsMock.mockResolvedValueOnce({ imageId: 20, isSaved: false, items: [{ ...saved, containsImage: false }, { ...travel, containsImage: false }] });
+    addImageToCollectionMock.mockResolvedValue({ ok: true, imageId: 20, isSaved: true });
+    const store = useCollectionsStore();
+    await store.initialize();
+    await expect(store.toggleCollectionMembership('travel', createFeedItem(20))).rejects.toThrow(i18n.global.t('collections.bookmark.errors.refreshAfterSave'));
+    expect(store.isSaved(20)).toBe(true);
+    expect(store.membershipByImageId[20].items.find(entry => entry.slug === 'travel')?.containsImage).toBe(true);
+    fetchImageCollectionsMock.mockRejectedValueOnce(new Error('Readback unavailable'));
+    await expect(store.toggleCollectionMembership('travel', createFeedItem(20))).rejects.toThrow('Readback unavailable');
+    expect(addImageToCollectionMock).toHaveBeenCalledOnce();
+    expect(removeImageFromCollectionMock).not.toHaveBeenCalled();
+    expect(fetchImageCollectionsMock).toHaveBeenCalledTimes(2);
+    expect(store.pendingCollectionKeys).toEqual([]);
+  });
+
+  it.each(['default', 'custom'] as const)('serializes %s saves against other collection actions for the same media, from initialization through refresh', async firstAction => {
+    const store = useCollectionsStore();
+    const travel = createCollection('travel', 'Travel');
+    store.membershipByImageId[30] = { imageId: 30, isSaved: false, items: [{ ...travel, containsImage: false }] };
+    store.membershipByImageId[31] = { imageId: 31, isSaved: false, items: [{ ...travel, containsImage: false }] };
+    let initialized!: () => void;
+    vi.spyOn(store, 'initialize').mockResolvedValue().mockImplementationOnce(() => new Promise(resolve => { initialized = resolve; }));
+    let refreshed!: () => void;
+    vi.spyOn(store, 'refreshAfterMembershipChange').mockImplementation(async id => {
+      if (id === 30) await new Promise<void>(resolve => { refreshed = resolve; });
+    });
+    saveImageMock.mockResolvedValue({ ok: true, imageId: 30, isSaved: true });
+    addImageToCollectionMock.mockResolvedValue({ ok: true, imageId: 30, isSaved: true });
+    const first = firstAction === 'default' ? store.toggleDefaultSave(createFeedItem(30)) : store.toggleCollectionMembership('travel', createFeedItem(30));
+    expect(store.isPending(30)).toBe(true);
+    expect(store.isCollectionPending('another-collection', 30)).toBe(true);
+    await store.toggleDefaultSave(createFeedItem(30));
+    await store.toggleCollectionMembership('another-collection', createFeedItem(30));
+    expect(saveImageMock).not.toHaveBeenCalled();
+    expect(addImageToCollectionMock).not.toHaveBeenCalled();
+    await store.toggleCollectionMembership('travel', createFeedItem(31));
+    expect(addImageToCollectionMock).toHaveBeenCalledExactlyOnceWith('travel', 31);
+    initialized();
+    await vi.waitFor(() => expect(refreshed).toBeTypeOf('function'));
+    await store.toggleDefaultSave(createFeedItem(30));
+    await store.toggleCollectionMembership('another-collection', createFeedItem(30));
+    expect(saveImageMock).toHaveBeenCalledTimes(firstAction === 'default' ? 1 : 0);
+    expect(addImageToCollectionMock).toHaveBeenCalledTimes(firstAction === 'custom' ? 2 : 1);
+    refreshed(); await first;
+    expect(store.pendingImageIds).toEqual([]);
+    expect(store.pendingCollectionKeys).toEqual([]);
   });
 
   it('rejects shared custom membership failures so the popover can keep the inline error visible', async () => {

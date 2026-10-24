@@ -908,7 +908,7 @@ async function runLocalJob(id: number) {
   try {
     const result = await runLocalIngestJob(id);
     if (!currentRead('ingest', generation)) return;
-    localIngestNotice.value = `${result.creatorName}/${result.sourceArchiveName}：${localIngestStatusLabel(result.status)}（${result.phase}）`;
+    localIngestNotice.value = `${result.creatorName}/${result.sourceArchiveName}：${localIngestStatusLabel(result.status)}（${localIngestPhaseLabel(result.phase)}）`;
     await settleStage3Request('single-job', true);
   } catch (reason) {
     if (!currentRead('ingest', generation)) return;

@@ -42,7 +42,8 @@
       "itemCountOther": "{count} 项",
       "latestDate": "最新 {date}",
       "noRecentActivity": "最近没有活动"
-    }
+    },
+    "automaticLoading": "到达列表末尾后会自动加载更多内容。"
   },
   "app": {
     "authLoading": {
@@ -880,12 +881,12 @@
       "next": "下一条短片"
     },
     "rail": {
-      "parentLoadError": "无法读取所属帖子，请重试。",
+      "parentLoadError": "无法读取所属媒体条目，请重试。",
       "hideDetails": "隐藏短片详情",
       "showDetails": "显示短片详情",
       "downloadOriginal": "下载原始文件",
       "openAlbum": "打开图集中的当前视频",
-      "parentPostActions": "喜欢、收藏和说明作用于所属帖子或整个图集。",
+      "parentPostActions": "喜欢、收藏和说明作用于所属媒体条目或整个图集。",
       "openFolder": "打开文件夹"
     },
     "info": {
@@ -908,11 +909,11 @@
   },
   "post": {
     "carousel": {
-      "label": "包含 {count} 项的轮播帖子",
+      "label": "包含 {count} 项的媒体组",
       "position": "{current} / {count}",
       "previousItem": "上一个轮播项目",
       "nextItem": "下一个轮播项目",
-      "open": "打开包含 {count} 项的轮播帖子"
+      "open": "打开包含 {count} 项的媒体组"
     },
     "captionModal": {
       "title": "编辑说明",
@@ -924,11 +925,11 @@
       }
     },
     "viewer": {
-      "close": "关闭帖子",
-      "previous": "上一条帖子",
-      "next": "下一条帖子",
-      "showDetails": "显示帖子详情",
-      "hideDetails": "隐藏帖子详情",
+      "close": "关闭预览",
+      "previous": "上一项",
+      "next": "下一项",
+      "showDetails": "显示媒体详情",
+      "hideDetails": "隐藏媒体详情",
       "togglePlayback": "切换播放",
       "toggleSound": "切换声音",
       "toggleFullscreen": "切换全屏",
@@ -959,31 +960,35 @@
       "setAsCover": "设为文件夹封面",
       "downloadOriginalFile": "下载原始文件",
       "openOriginalFile": "打开原始文件",
-      "deletePost": "删除帖子"
+      "deletePost": "移入回收站"
     },
     "feedCard": {
       "openStories": "打开 {name} 的动态",
       "openFolderAvatar": "打开 {name}",
       "openReel": "打开短片",
-      "openPost": "打开帖子",
+      "openPost": "打开媒体",
       "moreOptions": "更多选项",
       "delete": {
-        "title": "删除这条帖子？",
-        "messagePermanent": "这会从应用中永久删除这条帖子，并从磁盘移除原始媒体文件。",
-        "messageTrash": "这会从应用中删除这条帖子并将其移入回收站。除非你选择永久删除，否则原始文件仍会保留在磁盘上。",
+        "title": "回收或删除此媒体条目？",
+        "messagePermanent": "这会永久删除此媒体条目，并从磁盘移除其包含的所有原始媒体文件。",
+        "messageTrash": "这会将此媒体条目移入回收站，并保留其包含的原始文件，之后可以恢复。",
         "confirmPermanent": "永久删除",
-        "confirm": "删除",
+        "confirm": "移入回收站",
         "deleteOriginalLabel": "同时从磁盘永久删除原始文件",
-        "deleteOriginalDescription": "保持未勾选可将帖子移入回收站，同时保留磁盘上的源文件。",
+        "deleteOriginalDescription": "保持未勾选可将此媒体条目移入回收站，保留其包含的全部原始文件。",
         "deleteOriginalWarning": "这会从磁盘永久删除原始文件、缩略图和预览图。此操作无法撤销。"
       }
-    }
+    },
+    "loading": "正在加载媒体…",
+    "loadError": "无法加载媒体",
+    "invalidCreator": "博主身份无效，请返回图库重新打开。",
+    "invalidMedia": "所选媒体不存在或不属于此作品，请返回作品重新选择。"
   },
   "collections": {
     "shared": {
-      "defaultName": "全部帖子",
-      "postCountOne": "{count} 篇帖子",
-      "postCountOther": "{count} 篇帖子"
+      "defaultName": "全部收藏",
+      "postCountOne": "{count} 项内容",
+      "postCountOther": "{count} 项内容"
     },
     "bookmark": {
       "dialogLabel": "合集",
@@ -991,10 +996,11 @@
       "createCollection": "创建合集",
       "namePlaceholder": "合集名称",
       "empty": "还没有合集",
-      "savePost": "收藏帖子",
-      "removeSavedPost": "取消收藏帖子",
+      "savePost": "收藏此内容",
+      "removeSavedPost": "取消收藏",
       "errors": {
-        "loadCollections": "无法加载合集"
+        "loadCollections": "无法加载合集",
+        "refreshAfterSave": "收藏状态已更新，但列表刷新失败。请刷新页面查看最新状态。"
       }
     },
     "list": {
@@ -1002,7 +1008,7 @@
       "loadErrorTitle": "无法加载合集",
       "loading": "正在加载合集...",
       "emptyTitle": "还没有合集",
-      "emptyDescription": "已保存的帖子会显示在“全部帖子”中。"
+      "emptyDescription": "已收藏的内容会显示在“全部收藏”中。"
     },
     "detail": {
       "fallbackTitle": "合集",
@@ -1012,8 +1018,8 @@
       "options": "合集选项",
       "actionsLabel": "合集操作",
       "emptyTitle": "{name}为空",
-      "emptyDescriptionDefault": "在任意帖子下方使用收藏操作即可把它保存到这里。",
-      "emptyDescriptionCustom": "分配到此合集的已收藏帖子会显示在这里。",
+      "emptyDescriptionDefault": "在媒体内容下方点击收藏，即可将它保存到这里。",
+      "emptyDescriptionCustom": "归入此合集的已收藏内容会显示在这里。",
       "loading": "正在加载合集...",
       "menu": {
         "delete": "删除合集",
@@ -1102,7 +1108,7 @@
   "libraryPage": {
     "eyebrow": "图库",
     "title": "全部文件夹",
-    "description": "浏览并搜索所有已索引的应用文件夹。",
+    "description": "浏览并搜索所有已索引的图库目录。",
     "stats": {
       "folders": "文件夹",
       "posts": "帖子"
@@ -1160,10 +1166,10 @@
   },
   "trashPage": {
     "eyebrow": "回收站",
-    "title": "已删除的帖子",
-    "description": "移到这里的帖子会保留在磁盘上，直到你将其永久删除。",
-    "selectedOne": "已选 {count} 条帖子",
-    "selectedOther": "已选 {count} 条帖子",
+    "title": "已回收的作品与媒体",
+    "description": "移入回收站的作品和媒体会保留原始文件，可恢复，也可在确认后永久删除。",
+    "selectedOne": "已选 {count} 条回收记录",
+    "selectedOther": "已选 {count} 条回收记录",
     "restoreButton": "恢复",
     "deleteButton": "永久删除",
     "libraryUnavailableTitle": "图库存储不可用",
@@ -1171,35 +1177,35 @@
     "loadErrorTitle": "无法加载回收站",
     "loading": "正在加载回收站...",
     "emptyTitle": "回收站为空",
-    "emptyDescription": "已删除的帖子会显示在这里，方便你恢复或永久移除。",
+    "emptyDescription": "回收记录会显示在这里，方便你恢复或永久删除。",
     "selectItem": "选择 {label}",
     "deselectItem": "取消选择 {label}",
     "trashedAt": "{date} 已移入回收站",
     "recently": "刚刚",
     "openFolder": "打开文件夹",
     "restoreDialog": {
-      "title": "恢复所选帖子？",
-      "messageOne": "要将所选的 {count} 条帖子恢复到应用中吗？",
-      "messageOther": "要将所选的 {count} 条帖子恢复到应用中吗？",
+      "title": "恢复所选回收记录？",
+      "messageOne": "要将所选的 {count} 条回收记录恢复到图库中吗？",
+      "messageOther": "要将所选的 {count} 条回收记录恢复到图库中吗？",
       "confirm": "恢复",
       "loading": "正在恢复..."
     },
     "deleteDialog": {
-      "title": "永久删除所选帖子？",
-      "messageOne": "这将永久删除所选的 {count} 条帖子，并从磁盘移除原始文件。",
-      "messageOther": "这将永久删除所选的 {count} 条帖子，并从磁盘移除原始文件。",
+      "title": "永久删除所选回收记录？",
+      "messageOne": "这将永久删除所选的 {count} 条回收记录及其原始文件。",
+      "messageOther": "这将永久删除所选的 {count} 条回收记录及其原始文件。",
       "confirm": "永久删除",
       "loading": "正在删除...",
       "warning": "原始文件、缩略图和预览图都会被永久删除。此操作无法撤销。"
     },
     "errors": {
       "refresh": "无法刷新更新后的图库状态。",
-      "processOne": "有 {count} 条帖子无法处理。",
-      "processOther": "有 {count} 条帖子无法处理。"
+      "processOne": "有 {count} 条回收记录无法处理。",
+      "processOther": "有 {count} 条回收记录无法处理。"
     }
   },
   "explore": {
-    "back": "返回探索帖子",
+    "back": "返回探索",
     "searchPlaceholder": "搜索",
     "clearSearch": "清除搜索",
     "recentTitle": "最近",
@@ -1207,20 +1213,21 @@
     "tabsAria": "搜索结果标签页",
     "tabs": {
       "media": "照片和视频",
-      "folders": "应用文件夹"
+      "folders": "图库目录"
     },
     "errors": {
-      "search": "无法搜索帖子",
+      "search": "无法搜索媒体",
       "load": "无法加载探索页"
     },
     "emptySearchTitle": "没有匹配的照片或视频",
     "emptySearchDescription": "请尝试其他文件名或文件夹关键词。",
-    "loadingFolders": "正在加载文件夹...",
-    "noFoldersFound": "未找到应用文件夹。",
+    "loadingFolders": "正在加载图库目录…",
+    "noFoldersFound": "未找到匹配的图库目录。",
     "emptyTitle": "暂时没有可探索内容",
-    "emptyDescription": "先为几个文件夹建立索引，这个页面就会开始在这里展示帖子。",
-    "folderPostsOne": "{count} 篇帖子",
-    "folderPostsOther": "{count} 篇帖子"
+    "emptyDescription": "图库暂时没有可展示的媒体内容。",
+    "folderPostsOne": "{count} 项媒体",
+    "folderPostsOther": "{count} 项媒体",
+    "searchLabel": "搜索媒体或图库目录"
   },
   "mediaRemoval": {
     "legacyTitle": "其他图集回收记录",
