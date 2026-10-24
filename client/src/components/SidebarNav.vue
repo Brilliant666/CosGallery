@@ -102,7 +102,7 @@
         </a>
       </RouterLink>
 
-      <LibraryNavigation variant="desktop" :collapsed="!expanded" @navigate="closeMoreMenu" @open-change="libraryMenuOpen = $event" />
+      <LibraryNavigation variant="desktop" :collapsed="!expanded" @navigate="closeMoreMenu" />
 
       <RouterLink
         v-if="showPlacesNav"
@@ -409,7 +409,6 @@ import { folderReadingRoute } from '../utils/work-gallery';
   const placesStore = usePlacesStore()
   const route = useRoute()
   const moreMenuOpen = ref(false)
-  const libraryMenuOpen = ref(false)
   const sidebar = ref<HTMLElement | null>(null)
   const desktop = ref(false)
   const touchControls = ref(false)
@@ -482,9 +481,10 @@ import { folderReadingRoute } from '../utils/work-gallery';
 
   function hasExpansionHold() {
     // Touch uses the explicit fallback button, including folding an open category list.
+    // Category visibility follows the sidebar; its open choice must not pin the width.
     return keyboardFocus.value || (touchControls.value
       ? touchExpanded.value
-      : libraryMenuOpen.value || moreMenuOpen.value)
+      : moreMenuOpen.value)
   }
 
   function reconcileExpansion() {
@@ -628,7 +628,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
     },
   )
 
-  watch([libraryMenuOpen, moreMenuOpen, keyboardFocus, touchExpanded], reconcileExpansion, { flush: 'sync' })
+  watch([moreMenuOpen, keyboardFocus, touchExpanded], reconcileExpansion, { flush: 'sync' })
   watch(moreMenuOpen, open => {
     // Removing a focused menu item does not reliably dispatch focusout.
     if (!open && !sidebar.value?.contains(document.activeElement)) keyboardFocus.value = false

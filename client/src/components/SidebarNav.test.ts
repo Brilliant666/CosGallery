@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { enableAutoUnmount, mount } from '@vue/test-utils';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { nextTick } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -22,7 +22,7 @@ async function setup() {
     template: '<SidebarNav :expanded="expanded" @expanded-change="expanded = $event" />'
   }, { global: { plugins: [pinia, router] } });
   await nextTick();
-  return { wrapper, sidebar: wrapper.getComponent(SidebarNav) };
+  return { wrapper, sidebar: wrapper.getComponent(SidebarNav), router };
 }
 
 describe('sidebar hover intent', () => {
@@ -62,5 +62,35 @@ describe('sidebar hover intent', () => {
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
     await vi.advanceTimersByTimeAsync(1);
     expect(sidebar.classes()).toContain('sidebar--expanded');
+  });
+
+  it.each(['cosplay', 'portrait', 'selfie', 'fuliji'])('collapses after leaving %s while preserving its open list and selected route', async label => {
+    const { sidebar, router } = await setup();
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse' });
+    await vi.advanceTimersByTimeAsync(100);
+    const toggle = sidebar.get('button[aria-label="展开图库分类"]');
+    await toggle.trigger('click');
+    await sidebar.get(`.library-nav__menu a[href="/library?label=${label}"]`).trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ label });
+    await sidebar.trigger('pointerleave', { pointerType: 'mouse' });
+    await vi.advanceTimersByTimeAsync(219);
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    expect(toggle.attributes('aria-expanded')).toBe('true');
+    expect(toggle.attributes('disabled')).toBeDefined();
+    expect(sidebar.find('.library-nav__menu').exists()).toBe(false);
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse' });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+    expect(sidebar.get(`.library-nav__menu a[href="/library?label=${label}"]`).attributes('aria-current')).toBe('page');
+    expect(sidebar.findAll('.library-nav__menu a')).toHaveLength(4);
+    await sidebar.trigger('pointerleave', { pointerType: 'mouse' });
+    await vi.advanceTimersByTimeAsync(120);
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse' });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+    expect(router.currentRoute.value.query).toEqual({ label });
   });
 });

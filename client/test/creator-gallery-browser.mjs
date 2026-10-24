@@ -40,7 +40,7 @@ const server = await createServer({
     load(id) { if (id === '\0synthetic-home-unused-media') return 'export default { render: () => null }'; }
   }]
 });
-const errors = [], unexpected = [], requests = [], evidence = [], layouts = [], classificationRows = [], sidebarFrames = [], homeLayouts = [], storageChecks = [];
+const errors = [], unexpected = [], requests = [], evidence = [], layouts = [], classificationRows = [], sidebarFrames = [], homeLayouts = [], storageChecks = [], categoryExitChecks = [];
 let browser;
 const sample = (id, name, galleryLabels, contentRating) => ({
   id, key: `creator:${id}`, identityType: 'creator', canonicalCreatorId: id, name, canonicalName: name,
@@ -282,20 +282,47 @@ try {
     await expectOpenMenu('desktop');
     const openGrid = await shellGridBounds();
     for (const [label, title, count] of [['cosplay', 'Cosplay', 1], ['portrait', '写真', 1], ['selfie', '自拍', 1], ['fuliji', '福利姬', 0]]) {
-      await checkSidebarTransition('persistent-category-' + label, async () => {
+      await checkSidebarTransition('persistent-category-selection-' + label, async () => {
         await nav('desktop').getByRole('link', { name: title, exact: true }).click();
         await page.waitForURL(url => url.hash.includes('label=' + label));
         await expectCards(count);
-        await leaveSidebar();
       });
       await expectOpenMenu('desktop');
       await expectCategoryCards();
-      assert.equal(await sidebarExpanded(), true, 'Open categories keep the sidebar expanded after pointer exit');
       if (count) {
         const currentGrid = await shellGridBounds();
         for (const coordinate of ['x', 'y', 'width']) assert(Math.abs(currentGrid[coordinate] - openGrid[coordinate]) <= 1,
           width + 'px ' + label + ': grid.' + coordinate + ' stays stable with the category menu open');
       }
+      const categoryCollapsed = await checkSidebarTransition('category-pointer-exit-collapses-' + label, async () => {
+        await leaveSidebar();
+        await page.waitForFunction(() => !document.querySelector('.sidebar').classList.contains('sidebar--expanded'));
+        const leavingMenu = await nav('desktop').locator('.library-nav__menu').evaluateAll(menus => menus.map(menu => ({
+          inert: menu.hasAttribute('inert'), hidden: menu.getAttribute('aria-hidden'),
+          links: [...menu.querySelectorAll('a')].map(link => {
+            link.focus();
+            return { tabIndex: link.tabIndex, focusRejected: document.activeElement !== link };
+          })
+        })));
+        for (const menu of leavingMenu) {
+          assert(menu.inert && menu.hidden === 'true', 'The category exit animation must be inaccessible immediately');
+          assert(menu.links.every(link => link.tabIndex === -1 && link.focusRejected), 'Leaving category links cannot receive keyboard or programmatic focus');
+        }
+        categoryExitChecks.push({ width, label, leavingMenu });
+      });
+      assert(Math.abs(categoryCollapsed.sidebarWidth - 77.6) < 1, `${width}px ${label}: pointer exit folds the sidebar`);
+      await expectClosedMenu('desktop');
+      assert.equal(await nav('desktop').getByRole('button', { name: '展开图库分类', includeHidden: true }).getAttribute('aria-expanded'), 'true', 'Folding keeps the independent category list open state');
+      assert(new URL(page.url()).hash.includes('label=' + label), 'Folding preserves the selected category route');
+      assert(await nav('desktop').evaluate(node => !node.querySelector('.library-nav__menu')?.contains(document.activeElement)), 'Hidden categories retain no focus target');
+      if (width === 1440 && label === 'cosplay') await saveScreenshot('category-1440-collapsed', 'Cosplay选中后移出侧栏收起，分类列表隐藏而选择保留');
+      const categoryRestored = await checkSidebarTransition('category-reentry-restores-list-' + label, enterSidebar);
+      assert(Math.abs(categoryRestored.sidebarWidth - 240) < 1);
+      await expectOpenMenu('desktop');
+      assert.equal((await nav('desktop').locator('a[aria-current="page"]').textContent()).trim(), title);
+      assert(await nav('desktop').locator('.library-nav__menu').evaluate(menu => !menu.hasAttribute('inert') && !menu.hasAttribute('aria-hidden')
+        && [...menu.querySelectorAll('a')].every(link => link.tabIndex >= 0)), 'Reentry restores all category interactions');
+      if (width === 1440 && label === 'cosplay') await saveScreenshot('category-1440-restored', '再次悬停恢复四分类，Cosplay选中与链接交互保持');
     }
     // A pointer click leaves DOM focus on this link; that focus must not pin width.
     await nav('desktop').getByRole('link', { name: '图库', exact: true }).click();
@@ -324,6 +351,27 @@ try {
     await enterSidebar();
   });
   assert(Math.abs(reversed.sidebarWidth - 240) < 1);
+  await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
+  await nav('desktop').getByRole('link', { name: 'Cosplay', exact: true }).click();
+  await expectCards(1);
+  const categoryReentered = await checkSidebarTransition('open-category-reentry-cancels-collapse', async () => {
+    await leaveSidebar();
+    await page.waitForTimeout(120);
+    assert.equal(await sidebarExpanded(), true);
+    await enterSidebar();
+  });
+  assert(Math.abs(categoryReentered.sidebarWidth - 240) < 1);
+  const categoryReversed = await checkSidebarTransition('open-category-exit-animation-reversal', async () => {
+    await leaveSidebar();
+    await page.waitForTimeout(260);
+    await enterSidebar();
+  });
+  assert(Math.abs(categoryReversed.sidebarWidth - 240) < 1);
+  await expectOpenMenu('desktop');
+  assert(await nav('desktop').locator('.library-nav__menu').evaluate(menu => !menu.hasAttribute('inert') && !menu.hasAttribute('aria-hidden')
+    && [...menu.querySelectorAll('a')].every(link => link.tabIndex >= 0)), 'Hover reversal restores category focusability');
+  await nav('desktop').getByRole('link', { name: '图库', exact: true }).click();
+  await expectCards(3);
   await setSidebar(false);
   const keyboard = await checkSidebarTransition('keyboard-focus-visible-expands-immediately', async () => {
     await page.locator('.sidebar__brand').focus();
@@ -339,6 +387,14 @@ try {
   assert(await nav('desktop').getByRole('link', { name: 'Cosplay', exact: true }).evaluate(link => link === document.activeElement));
   await page.keyboard.press('Enter');
   await expectCards(1);
+  const keyboardCategoryHeld = await checkSidebarTransition('keyboard-category-focus-holds-on-pointer-exit', leaveSidebar);
+  assert(Math.abs(keyboardCategoryHeld.sidebarWidth - 240) < 1);
+  assert(await nav('desktop').getByRole('link', { name: 'Cosplay', exact: true }).evaluate(link => link === document.activeElement));
+  const keyboardCategoryReleased = await checkSidebarTransition('keyboard-focus-exits-open-category', () => page.locator('main input[type="search"]').focus());
+  assert(Math.abs(keyboardCategoryReleased.sidebarWidth - 77.6) < 1);
+  await setSidebar(true);
+  await expectOpenMenu('desktop');
+  await nav('desktop').getByRole('button', { name: '展开图库分类' }).focus();
   await page.keyboard.press('Escape');
   await expectClosedMenu('desktop');
   assert(await nav('desktop').getByRole('button', { name: '展开图库分类' }).evaluate(button => button === document.activeElement));
@@ -504,12 +560,15 @@ try {
   await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
   assert.deepEqual((await nav('desktop').locator('.library-nav__menu a').allTextContents()).map(text => text.trim()), ['Cosplay', '写真', '自拍', '福利姬']);
   await page.mouse.move(600, 200);
-  await page.waitForFunction(() => document.querySelector('.sidebar').getBoundingClientRect().width >= 200);
+  await setSidebar(false);
+  await expectClosedMenu('desktop');
+  await setSidebar(true);
+  await expectOpenMenu('desktop');
   assert(await nav('desktop').locator('.library-nav__menu').evaluate(menu => {
     const bounds = menu.getBoundingClientRect();
     return [...menu.querySelectorAll('a')].every(link => link.scrollWidth <= link.clientWidth
       && link.getBoundingClientRect().right <= bounds.right);
-  }), 'Desktop category menu must remain expanded and readable after the pointer leaves');
+  }), 'Desktop category menu becomes readable again after pointer exit and reentry');
   await saveScreenshot('desktop-menu', '全部图库选择R18后展开四项分类菜单');
   await nav('desktop').getByRole('link', { name: 'Cosplay', exact: true }).click();
   await page.waitForURL(/label=cosplay/);
@@ -730,12 +789,12 @@ try {
   assert.equal(requests.filter(request => request.method !== 'GET').length, writesBeforeLayoutChecks, 'Layout checks must not send label writes');
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
-  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, requests, errors, unexpected }, null, 2));
+  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, categoryExitChecks, requests, errors, unexpected }, null, 2));
   console.log(JSON.stringify({ status: 'PASS', output, isolatedPort: port, screenshots: evidence.length, requests: requests.length, layoutSamples: layouts.length, classificationRows: classificationRows.length,
-    sidebarTransitions: sidebarFrames.length, sidebarFrameCount: sidebarFrames.reduce((total, transition) => total + transition.frames.length, 0), homeLayouts: homeLayouts.length, storageChecks,
-    scenarios: ['desktop navigation and return', '100ms hover dwell and 220ms exit delay; brief passes and reentry', 'mouse-click focus does not pin sidebar; keyboard focus-visible expands immediately', 'category and more-menu holders including fixed backdrop click and outside Escape', 'keyboard focused more-menu item removal with Escape and Enter', 'touch desktop button fallback with independent category state', 'retired storage preference ignored and preserved', 'real HomeView recent batches remain outside the sidebar at rest and throughout transitions', 'reduced-motion sidebar/content alignment', '767/768 breakpoint and 390 mobile navigation without desktop gap', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes at matching sidebar states'] }));
+    sidebarTransitions: sidebarFrames.length, sidebarFrameCount: sidebarFrames.reduce((total, transition) => total + transition.frames.length, 0), homeLayouts: homeLayouts.length, storageChecks, categoryExitChecks: categoryExitChecks.length,
+    scenarios: ['desktop navigation and return', '100ms hover dwell and 220ms exit delay; brief passes and reentry', 'mouse-click focus does not pin sidebar; keyboard focus-visible expands immediately', 'all four categories collapse on pointer exit and restore open list and selection on reentry', 'category exit animation inert links and reversal; keyboard category focus holds only until focus leaves', 'more-menu holder including fixed backdrop click and outside Escape', 'keyboard focused more-menu item removal with Escape and Enter', 'touch desktop button fallback with independent category state', 'retired storage preference ignored and preserved', 'real HomeView recent batches remain outside the sidebar at rest and throughout transitions', 'reduced-motion sidebar/content alignment', '767/768 breakpoint and 390 mobile navigation without desktop gap', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes at matching sidebar states'] }));
 } catch (error) {
-  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ status: 'FAIL', message: error.message, evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, requests, errors, unexpected }, null, 2));
+  writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ status: 'FAIL', message: error.message, evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, categoryExitChecks, requests, errors, unexpected }, null, 2));
   for (const context of browser?.contexts() ?? []) for (const page of context.pages()) {
     await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
     console.error(JSON.stringify({ url: page.url(), errors, unexpected,
