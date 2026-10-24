@@ -7,10 +7,11 @@ description: Supported formats, derivative generation rules, and video playback 
 
 > 底层媒体参考：本页介绍继承的解码与派生行为。CosGallery 的身份与入库流程见[本地入库与审核](local-admission-web.md)。受限 JPEG 的原件保留不是成功解码；PDF 附件也不会变成普通图片。媒体生成与资源目录数据库编目是不同工作。
 
-Foldergram generates derivatives so feed and detail views can stay fast without
-touching original files on every request. Depending on configuration, those
-derivatives are either created during scans or lazily on first request and then
-cached on disk.
+CosGallery retains Foldergram's thumbnail and image-preview pipeline. Depending
+on configuration, derivatives are created during scans or lazily on first
+request and then cached on disk. Gallery video viewers and Reels use the
+original-first playback policy below; cached image browsing does not imply that
+videos must be converted before playback.
 
 ## Supported formats
 
@@ -34,9 +35,9 @@ cached on disk.
 
 TS files must contain a valid video stream in an MPEG-TS container. An audio-only
 stream, a renamed file in another container, or a TypeScript source file does
-not qualify as a video. Originals remain unchanged; album playback uses the
-existing MP4 preview, and reels can fall back to that preview when the browser
-cannot play the original.
+not qualify as a video. Originals remain unchanged. Gallery video viewers and
+Reels try the original first and can request compatible playback media when the
+browser cannot play it.
 
 ## Output sizes
 
@@ -181,8 +182,8 @@ When a video needs a derived preview, Foldergram transcodes it with `ffmpeg` to:
 
 ## Direct-original video playback
 
-Foldergram can mark the original video as eligible for direct playback in the
-detail player when all of these are true:
+Foldergram's indexed `playbackStrategy` can mark an original as eligible for the
+legacy preview/HD player when all of these are true:
 
 - the file extension is `.mp4`
 - the container is compatible with MP4
@@ -190,12 +191,12 @@ detail player when all of these are true:
 - the pixel format is `yuv420p`
 - the audio codec is AAC, or there is no audio track
 
-When that happens:
-
-- `playbackStrategy` is set to `original`
-- generated previews still remain the default playback source
-- the detail player can expose an `HD` switch when the original is compatible and higher resolution than the generated preview
-- ordinary feed cards and other list surfaces continue to use generated preview media
+The flag is set to `original` in that case. The legacy player, including share
+viewers, starts from its authorized preview and can expose an `HD` switch when
+the original has higher resolution. Feed cards also retain their preview path.
+This indexed flag does not decide whether the current gallery viewer or Reels
+will try an original: those players use the policy below, even for an old
+`preview` flag.
 
 ### Reels: original, lossless remux, then compatible preview
 

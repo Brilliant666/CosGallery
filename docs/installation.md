@@ -12,7 +12,7 @@ description: 从 CosGallery 源码安装本机服务，区分运行环境、媒�
 | 项目 | 当前要求与验证范围 |
 | --- | --- |
 | Git | 用于取得本仓库及记录版本。 |
-| Node.js | 推荐 Node 24.21.0，当前 Windows 本地入库与发布验证使用该版本。仓库使用 `node:sqlite`；GitHub Verify 同时验证 Node 22 和 24。根 `package.json` 的 `engines` 声明支持 `>=22.16.0 <23` 或 `>=24.0.0 <25`，不承诺其他版本可用。 |
+| Node.js | 推荐 Node 24.21.0，由 `.node-version` / `.nvmrc` 固定。仓库使用 `node:sqlite`；GitHub Verify 同时验证 Node 22 和 24。根 `package.json` 的 `engines` 声明支持 `>=22.16.0 <23` 或 `>=24.0.0 <25`，不承诺其他版本可用。 |
 | pnpm | 使用根 `package.json` 指定的 `10.28.0`，依赖由 `pnpm-lock.yaml` 锁定。本文不将 npm 安装视为等价验证路径。 |
 | FFmpeg / FFprobe | 视频元数据、缩略图、预览及动画 AVIF 处理需要；通过 PATH 或配置中的完整路径提供。 |
 | 7-Zip | Costuan 压缩包入库需要，在本机启动配置中设置 `LOCAL_INGEST_SEVEN_ZIP_PATH` 绝对路径，网页只读显示并验证。已解压图集的本地入库不需要先重新压缩。 |
@@ -41,7 +41,7 @@ LOCAL_INGEST_STARTUP_SCAN=false
 
 这只关闭 Stage3 的启动等待区补偿扫描，不是关闭数据库迁移、完整校验或资源目录 Worker。全新的空索引仍可能触发首次图库扫描，因此第一次启动前应确认 `GALLERY_ROOT` 指向预期图库，而不是混乱的下载等待区。
 
-完成配置后：
+以下是配套构建与 production 启动入口。用于正式实例前，先确认目标版本的精确 Head 已通过 Verify，并按[最小部署检查](/governance-runtime#分级验证与最小部署检查)准备所需恢复材料和切换步骤；构建成功本身不代替候选验证。
 
 ```powershell
 pnpm build
@@ -68,17 +68,17 @@ Windows 本机路径是当前重点验证环境。Linux、NAS、云端或网络�
 
 ## 升级现有实例
 
-先保留当前一致性数据库备份、原始媒体及配置；本地加密解压密码还依赖独立 key 文件，见[密码配置](/local-ingest-password-settings)。不要把一份旧数据库恢复到已有新入库事实的目录上来“清理状态”。
+先核对目标候选的精确 Head Verify、实际运行来源、业务空闲状态及适用恢复材料，保留原始媒体和配置；已有恢复点可用时不机械重复备份。本地加密解压密码还依赖独立 key 文件，见[密码配置](/local-ingest-password-settings)。不要把一份旧数据库恢复到已有新入库事实的目录上来“清理状态”。
 
-准备新版本的独立构建，确认业务空闲后停止旧服务，再切换配套前端、后端及维护 CLI，随后按正常入口启动。不要在旧后端仍运行时先覆盖新前端，也不要让新 CLI 指向另一版本的数据库结构。
+准备新版本的配套前端、后端和维护 CLI。确需切换时，按“只读核对 → 精确停止 → 确认退出 → 启动 → 健康检查”分阶段操作，在旧进程退出后安装配套产物；HTTP 检查与进程启停分开执行。不要在旧后端仍运行时先覆盖新前端，也不要让新 CLI 指向另一版本的数据库结构。仅文档或 Squash 身份变化且应用构建输入等价时，可按[运行时治理](/governance-runtime#_4141-最小部署闭环)复用既有进程与产物，如实记录实际版本。
 
-正常启动按序应用待执行迁移。当前文档基线包含至 `000026` 的迁移；后续版本以仓库实际迁移文件为准。已应用版本不应反复升级或执行 down，不能删除迁移记录绕过异常。发生失败时保留真实错误与恢复材料，见[故障处理](/troubleshooting)。
+正常启动按序应用待执行迁移，具体版本以目标候选的 `server/db/migrations/` 为准。已应用版本不应反复升级或执行 down，不能删除迁移记录绕过异常。发生失败时保留真实错误与恢复材料，见[故障处理](/troubleshooting)。
 
 ## Docker 与上游参考
 
 仓库保留 `Dockerfile`、`docker-compose.yml` 和 `docker-compose.local.yml`。其中默认 Compose 使用 `ghcr.io/foldergram/foldergram:latest`，是 **Foldergram 上游镜像**，不能用它代表当前 CosGallery 功能。
 
-本地 Docker 构建文件可供开发者研究，但本文不把它列为已经完整验证的 CosGallery Windows 入库、7-Zip、回收站或本地密码恢复方案。没有发布可验证的 CosGallery 镜像或在线演示时，不以虚构地址替代。
+原 GHCR tag 自动发布已暂停，容器工作流仅支持手工构建检查，不推送镜像。现存 Docker/Compose 属于上游遗留链路，可供开发者研究，**不作为已验收的 CosGallery 部署方式**，也不代表 Windows 入库、7-Zip、回收站或本地密码恢复闭环已经验证。发行与部署边界见[运行时治理](/governance-runtime#最小检查与发行边界)。
 
 ## 开发与文档站
 

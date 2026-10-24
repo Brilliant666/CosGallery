@@ -18,7 +18,8 @@ const productItems = [
   { text: '本地入库与审核', link: '/local-admission-web' },
   { text: 'Costuan 入库', link: '/local-ingest-closed-loop' },
   { text: '来源资料与插件', link: '/source-evidence-local-admission' },
-  { text: '自有资源目录', link: '/own-resource-catalog' }
+  { text: '自有资源目录', link: '/own-resource-catalog' },
+  { text: '回收与删除', link: '/album-media-deletion-design' }
 ];
 
 const referenceItems = [

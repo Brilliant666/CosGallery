@@ -16,9 +16,10 @@
 | [解压密码](local-ingest-password-settings.md) | 管理接口、加密保存与独立 key |
 | [Costuan Job 状态](local-ingest-status-model.md) | 入库结果与回收结果分开 |
 | [删除博主](unused-manual-creator-deletion.md) | 删除资格、引用核验与确认边界 |
+| [回收与删除](album-media-deletion-design.md) | 单媒体、独立作品及全部本地副本的回收 / 永久删除边界；保留兼容文件名 |
 | [范围编号](costuan-range-source-diagnostics.md)、[无逐行姓名目录](costuan-unnamed-directory-identity.md) | 特定来源解析契约，不代表任意网站适配 |
 | [API](api.md)、[开发](development.md) | 代码入口、脚本与隔离验证 |
-| [媒体处理](media-processing.md)、[Foldergram Carousel](carousel-posts.md) | 继承的底层能力；Carousel 限制不是 CosGallery 图集上限 |
+| [媒体处理](media-processing.md)、[Foldergram Carousel](carousel-posts.md) | 图片缓存预览、视频原件优先与按需兼容；上游 Carousel 限制不是 CosGallery 图集上限 |
 
 ## 历史研究与验证
 
@@ -47,4 +48,4 @@
 
 ## 尚未确认的范围
 
-当前文档以合并代码与已有本机验证为依据；不宣称已重新完成干净机器安装、公网部署、NAS、Docker CosGallery 全链路或所有平台回收验证。既有性能报告不能预测另一台机器的耗时。文档整理不启动服务、采集网站或执行真实入库。
+本轮文档于 2026-10-24 按已合并的 PR52（`4c56531`）及已有证据核对；分支 Head、已安装构建和运行服务版本必须分别看待。更新记录见[PR52 文档核对](evidence/pr52-documentation-refresh.md)。本轮不宣称重新完成干净机器安装、公网部署、NAS、Docker CosGallery 全链路或所有平台回收验证。既有性能报告不能预测另一台机器的耗时。Cloudflare R2 发布及原作 / 角色 / 主题发现仍是讨论方向。文档整理不启动服务、采集网站或执行真实入库。
