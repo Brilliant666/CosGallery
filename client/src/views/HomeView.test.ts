@@ -149,10 +149,10 @@ describe('HomeView', () => {
     });
   });
 
-  it('excludes recently viewed creators from the titled recommendation list and preserves work counts and creator links', async () => {
+  it('keeps recent creators eligible in recommendations while preserving work counts and canonical links', async () => {
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
     useAppStore().$patch({ stats: createAppStatus({ isScanning: false }), recentOpenedCreatorKeys: ['creator:102'] });
-    useFoldersStore().items = Array.from({ length: 7 }, (_, index) => recommendationFolder(index + 1,
+    useFoldersStore().items = Array.from({ length: 6 }, (_, index) => recommendationFolder(index + 1,
       index === 0 ? { postCount: 7, imageCount: 999 } : {}));
     vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
     vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
@@ -164,7 +164,7 @@ describe('HomeView', () => {
     const links = rail.findAllComponents(routerLinkStub).filter(link => link.attributes('aria-label')?.endsWith('View works'));
     expect(links).toHaveLength(6);
     expect(new Set(links.map(link => JSON.stringify(link.props('to')))).size).toBe(6);
-    expect(links.some(link => link.text().includes('Creator 2'))).toBe(false);
+    expect(links.some(link => link.text().includes('Creator 2'))).toBe(true);
     const countedCreator = links.find(link => link.props('to').params.creatorId === '101');
     expect(countedCreator?.text()).toContain('7 works');
     expect(countedCreator?.text()).not.toContain('999');
@@ -179,7 +179,7 @@ describe('HomeView', () => {
     wrapper.unmount();
   });
 
-  it('updates recommendations when recent history changes and never refills a small library with recent creators', async () => {
+  it('does not reorder or hide recommendations when local browsing history changes', async () => {
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
     useAppStore().$patch({ stats: createAppStatus({ isScanning: false }), recentOpenedCreatorKeys: ['creator:101'] });
     useFoldersStore().items = [recommendationFolder(1), recommendationFolder(2), recommendationFolder(3)];
@@ -190,13 +190,13 @@ describe('HomeView', () => {
     const creatorIds = () => wrapper.findAllComponents(routerLinkStub)
       .filter(link => link.attributes('aria-label')?.endsWith('View works'))
       .map(link => link.props('to').params.creatorId).sort();
-    expect(creatorIds()).toEqual(['102', '103']);
+    expect(creatorIds()).toEqual(['101', '102', '103']);
     useAppStore().recentOpenedCreatorKeys = ['creator:102', 'creator:101'];
     await flushPromises();
-    expect(creatorIds()).toEqual(['103']);
+    expect(creatorIds()).toEqual(['101', '102', '103']);
     useAppStore().recentOpenedCreatorKeys = ['creator:103', 'creator:102', 'creator:101'];
     await flushPromises();
-    expect(wrapper.find('aside[aria-label="Creator recommendations"]').exists()).toBe(false);
+    expect(creatorIds()).toEqual(['101', '102', '103']);
     wrapper.unmount();
   });
 
@@ -276,56 +276,54 @@ describe('HomeView', () => {
     wrapper.unmount();
   });
 
-  it('waits for first feed settlement and a paint opportunity before moments, with a stable rail slot', async () => {
+  it('keeps three mode circles visible while the feed is pending, failed, or moments are unavailable', async () => {
     useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
-    let complete!: () => void;
-    vi.spyOn(useFeedStore(), 'loadInitial').mockImplementation(() => new Promise<void>(resolve => { complete = resolve; }));
+    let rejectFeed!: (error: Error) => void;
+    vi.spyOn(galleryApi, 'fetchFeed').mockImplementation(() => new Promise((_resolve, reject) => { rejectFeed = reject; }));
     const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
-    const frames: FrameRequestCallback[] = [];
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frames.push(callback); return frames.length; });
+    useMomentsStore().$patch({ items: [], listError: 'old moments error' });
     const wrapper = mountHomeView();
     await flushPromises();
+    expect(wrapper.findAll('[data-feed-mode]').map(button => button.attributes('data-feed-mode'))).toEqual(['recent', 'rediscover', 'random']);
+    expect(wrapper.get('[data-feed-mode="random"]').attributes('aria-busy')).toBe('true');
+    expect(wrapper.find('.story-rail__loading').exists()).toBe(true);
+    expect(wrapper.find('[data-test="moments-slot"]').exists()).toBe(false);
     expect(moments).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-test="moments-slot"]').attributes('aria-busy')).toBe('true');
-    complete();
-    await flushPromises();
-    expect(moments).not.toHaveBeenCalled();
-    frames.shift()!(0);
-    await flushPromises();
-    expect(moments).not.toHaveBeenCalled();
-    frames.shift()!(16);
-    await flushPromises();
-    expect(moments).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
-  });
-
-  it('still requests moments after a failed first feed, without waiting forever', async () => {
-    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
-    vi.spyOn(galleryApi, 'fetchFeed').mockRejectedValue(new Error('feed offline'));
-    const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
-    const wrapper = mountHomeView();
+    rejectFeed(new Error('feed offline'));
     await flushPromises();
     expect(useFeedStore().error).toBe('feed offline');
-    expect(moments).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-feed-mode="random"]').attributes('aria-busy')).toBe('false');
+    expect(wrapper.findAll('[data-feed-mode]')).toHaveLength(3);
+    expect(moments).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
-  it.each(['leave', 'access', 'reset'] as const)('does not dispatch a delayed rail after %s', async reason => {
-    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
-    let complete!: () => void;
-    vi.spyOn(useFeedStore(), 'loadInitial').mockImplementation(() => new Promise<void>(resolve => { complete = resolve; }));
+  it('switches the lower feed with the circles and repeated random clicks create a new seed', async () => {
+    const status = createAppStatus({ isScanning: false });
+    status.preferences.defaultHomeFeedMode = 'recent';
+    useAppStore().$patch({ stats: status });
+    const fetch = vi.spyOn(galleryApi, 'fetchFeed').mockImplementation(async (page, limit, mode) => ({ items: [], page, limit, total: 0, hasMore: false, mode }));
     const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
+    let seed = 100;
+    vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((array: any) => { array[0] = ++seed; return array; });
     const wrapper = mountHomeView();
     await flushPromises();
-    if (reason === 'leave') wrapper.unmount();
-    if (reason === 'access') useAuthStore().$patch({ authenticated: false, role: 'anonymous', accessMode: 'password', enabled: true });
-    if (reason === 'reset') useAppStore().resetProtectedState();
-    complete();
+    expect(wrapper.get('[data-feed-mode="recent"]').attributes('aria-pressed')).toBe('true');
+    await wrapper.get('[data-feed-mode="rediscover"]').trigger('click');
     await flushPromises();
+    expect(fetch).toHaveBeenLastCalledWith(1, 18, 'rediscover', undefined);
+    expect(wrapper.get('[data-feed-mode="rediscover"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-feed-mode="recent"]').attributes('aria-pressed')).toBe('false');
+    await wrapper.get('[data-feed-mode="random"]').trigger('click');
+    await flushPromises();
+    expect(fetch).toHaveBeenLastCalledWith(1, 18, 'random', 101);
+    await wrapper.get('[data-feed-mode="random"]').trigger('click');
+    await flushPromises();
+    expect(fetch).toHaveBeenLastCalledWith(1, 18, 'random', 102);
+    expect(wrapper.findComponent({ name: 'StoriesModal' }).exists()).toBe(false);
     expect(moments).not.toHaveBeenCalled();
-    if (reason !== 'leave') wrapper.unmount();
+    wrapper.unmount();
   });
-
   it('keeps an explicit mode choice while preferences are pending', async () => {
     let resolve!: (status: AppStatus) => void;
     vi.spyOn(galleryApi, 'fetchStats').mockImplementationOnce(() => new Promise(done => { resolve = done; }));
@@ -364,73 +362,34 @@ describe('HomeView', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('renders the home stories rail with a dedicated horizontal scroll track', async () => {
-    const appStore = useAppStore();
-    const feedStore = useFeedStore();
-    const momentsStore = useMomentsStore();
-
-    appStore.$patch({
-      stats: createAppStatus({
-        isScanning: false
-      })
-    });
-    feedStore.$patch({
-      initialized: true,
-      loading: false,
-      items: []
-    });
-    momentsStore.$patch({
-      items: [
-        createMomentCapsule('moment-1', 'One'),
-        createMomentCapsule('moment-2', 'Two'),
-        createMomentCapsule('moment-3', 'Three'),
-        createMomentCapsule('moment-4', 'Four')
-      ]
-    });
-
-    vi.spyOn(feedStore, 'loadInitial').mockResolvedValue();
-    vi.spyOn(momentsStore, 'fetchMoments').mockResolvedValue();
-
+  it('shows fixed localized mode labels even when legacy moment capsules contain different titles', async () => {
+    i18n.global.locale.value = 'zh';
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    useMomentsStore().$patch({ railKind: 'highlights', items: [createMomentCapsule('highlight-recent-batches', 'Recent Batches')] });
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
+    const moments = vi.spyOn(useMomentsStore(), 'fetchMoments').mockResolvedValue();
     const wrapper = mountHomeView();
-
     await flushPromises();
-
-    expect(wrapper.get('.stories-bar.story-rail').attributes('aria-label')).toBe('Moments');
-    expect(wrapper.get('.story-rail__track').classes()).not.toContain('justify-center');
-    expect(wrapper.findAll('.story-rail__item')).toHaveLength(4);
+    expect(wrapper.findAll('.story-rail__label').map(label => label.text())).toEqual(['最新', '重新发现', '随机']);
+    expect(wrapper.get('.story-rail--feed-modes').attributes('role')).toBe('group');
+    expect(wrapper.text()).not.toContain('近期批次');
+    expect(moments).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 
-  it('localizes static highlight capsule titles on the home rail', async () => {
-    const appStore = useAppStore();
-    const feedStore = useFeedStore();
-    const momentsStore = useMomentsStore();
-
-    i18n.global.locale.value = 'zh';
-
-    appStore.$patch({
-      stats: createAppStatus({
-        isScanning: false
-      })
-    });
-    feedStore.$patch({
-      initialized: true,
-      loading: false,
-      items: []
-    });
-    momentsStore.$patch({
-      railKind: 'highlights',
-      items: [
-        createMomentCapsule('highlight-recent-batches', 'Recent Batches')
-      ]
-    });
-
-    vi.spyOn(feedStore, 'loadInitial').mockResolvedValue();
-    vi.spyOn(momentsStore, 'fetchMoments').mockResolvedValue();
-
+  it('reuses existing lightweight thumbnails and falls back without losing the mode button', async () => {
+    useAppStore().$patch({ stats: createAppStatus({ isScanning: false }) });
+    useFoldersStore().items = [recommendationFolder(1, { avatarUrl: '/thumbnails/creator-1.webp' })];
+    vi.spyOn(useFeedStore(), 'loadInitial').mockResolvedValue();
     const wrapper = mountHomeView();
-
     await flushPromises();
-
-    expect(wrapper.text()).toContain('近期批次');
+    const recent = wrapper.get('[data-feed-mode="recent"]');
+    expect(recent.get('img').attributes('src')).toBe('/thumbnails/creator-1.webp');
+    expect(wrapper.get('[data-feed-mode="rediscover"]').find('img').exists()).toBe(false);
+    await recent.get('img').trigger('error');
+    expect(recent.find('img').exists()).toBe(false);
+    expect(recent.find('.story-rail__fallback').exists()).toBe(true);
+    expect(wrapper.findAll('[data-feed-mode]')).toHaveLength(3);
+    wrapper.unmount();
   });
 });

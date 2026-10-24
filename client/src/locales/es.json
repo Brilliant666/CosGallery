@@ -628,7 +628,16 @@
       }
     }
   },
+  "galleryStatistics": {
+    "title": "Estadísticas de la galería",
+    "creators": "Creadores",
+    "works": "Obras",
+    "photos": "Fotos",
+    "pending": "Estadísticas sin cargar",
+    "unavailable": "Estadísticas no disponibles"
+  },
   "home": {
+    "feedModesLabel": "Modo de exploración",
     "sidebar": {
       "ariaLabel": "Recomendaciones de creadores",
       "suggestedFolders": "Creadores recomendados",

@@ -628,7 +628,16 @@
       }
     }
   },
+  "galleryStatistics": {
+    "title": "图库统计",
+    "creators": "博主",
+    "works": "作品",
+    "photos": "照片",
+    "pending": "统计尚未加载",
+    "unavailable": "统计暂不可用"
+  },
   "home": {
+    "feedModesLabel": "浏览方式",
     "sidebar": {
       "ariaLabel": "博主推荐",
       "suggestedFolders": "推荐博主",

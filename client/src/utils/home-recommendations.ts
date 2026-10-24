@@ -1,5 +1,5 @@
 import type { FeedItem, FolderSummary } from '../types/api';
-import { creatorIdentity, selectRecentCreators } from './sidebar-folders';
+import { creatorIdentity } from './sidebar-folders';
 
 const DAILY_RECOMMENDATION_COUNT = 6;
 const RANKED_POOL_SIZE = 12;
@@ -24,12 +24,10 @@ export function buildLikedCountByFolder(items: FeedItem[]): Map<string, number> 
 export function selectHomeRecommendations(
   folders: FolderSummary[],
   likedCountByFolder: Map<string, number>,
-  recentHistoryKeys: string[],
   now = new Date()
 ): FolderSummary[] {
-  const recentIdentities = new Set(selectRecentCreators(folders, recentHistoryKeys).map(creatorIdentity));
   const rankedCandidates = folders
-    .filter((folder) => (folder.postCount ?? folder.imageCount) > 0 && !recentIdentities.has(creatorIdentity(folder)))
+    .filter((folder) => (folder.postCount ?? folder.imageCount) > 0)
     .map((folder) => ({
       folder,
       score: getRecommendationScore(folder, likedCountByFolder, now.getTime()),

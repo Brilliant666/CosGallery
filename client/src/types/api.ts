@@ -1150,6 +1150,8 @@ export interface RebuildThumbnailsResult {
 }
 
 export interface AppStatus {
+  /** Canonical visible creators/works and photos in their selected local copies. */
+  galleryStatistics?: { creators: number; works: number; photos: number };
   folders: number;
   indexedImages: number;
   indexedPosts: number;

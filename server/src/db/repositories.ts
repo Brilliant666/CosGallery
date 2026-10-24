@@ -101,7 +101,7 @@ const DEFAULT_WORK_COPY_SQL = `NOT EXISTS (
 )`;
 const READABLE_POST_WHERE_SQL =
   `posts.is_deleted = 0 AND posts.is_trashed = 0 AND ${NORMAL_FOLDER_ROLE_SQL} AND ${NOT_EXPLICIT_FOLDER_COVER_SQL}`;
-const VISIBLE_POST_WHERE_SQL = `${READABLE_POST_WHERE_SQL} AND ${DEFAULT_WORK_COPY_SQL}`;
+export const VISIBLE_POST_WHERE_SQL = `${READABLE_POST_WHERE_SQL} AND ${DEFAULT_WORK_COPY_SQL}`;
 // Match the gallery identity projection: ambiguous physical owners are not a
 // canonical creator's readable scope, even if a damaged legacy index permits them.
 const CANONICAL_CREATOR_FOLDER_IDS_SQL = `

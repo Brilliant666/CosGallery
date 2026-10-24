@@ -53,35 +53,16 @@ describe('recent creators', () => {
 });
 
 describe('home recommendations', () => {
-  it('excludes every displayed recent creator, including alternate local directories', () => {
-    const folders = [...fixtures, folder(101, { canonicalCreatorId: 1, imageCount: 40, postCount: 40 })];
-    const history = ['creator:1', 'creator-2', 'creator:3'];
-    const result = selectHomeRecommendations(folders, noLikes, history, now);
-    const recent = new Set(selectRecentCreators(folders, history).map(creatorIdentity));
-    expect(result).toHaveLength(6);
-    expect(result.every(f => !recent.has(creatorIdentity(f)))).toBe(true);
-    expect(result.some(f => f.canonicalCreatorId === 1)).toBe(false);
-  });
-
-  it('does not fill a small library with recent creators or empty works', () => {
+  it('recommends every eligible creator in a small library without adding an extra top slot', () => {
     const folders = [folder(1), folder(2), folder(3, { postCount: 0 })];
-    expect(selectHomeRecommendations(folders, noLikes, ['creator:1'], now).map(f => f.id)).toEqual([2]);
-    expect(selectHomeRecommendations(folders, noLikes, ['creator:1', 'creator:2'], now)).toEqual([]);
-    expect(selectHomeRecommendations([], noLikes, [], now)).toEqual([]);
+    expect(selectHomeRecommendations(folders, noLikes, now).map(f => f.id).sort()).toEqual([1, 2]);
+    expect(selectHomeRecommendations([], noLikes, now)).toEqual([]);
   });
-
-  it('only excludes the eight currently displayed recent creators', () => {
-    const folders = fixtures.slice(0, 9);
-    const history = folders.map(f => `creator:${f.id}`);
-    expect(selectRecentCreators(folders, history)).toHaveLength(8);
-    expect(selectHomeRecommendations(folders, noLikes, history, now).map(f => f.id)).toEqual([9]);
-  });
-
   it('deduplicates creators before forming the ranked pool', () => {
     const duplicateFolders = Array.from({ length: 15 }, (_, i) => folder(101 + i, {
       canonicalCreatorId: 1, postCount: 100, imageCount: 100, latestImageMtimeMs: now.getTime()
     }));
-    const result = selectHomeRecommendations([...duplicateFolders, ...fixtures.slice(1, 7)], noLikes, [], now);
+    const result = selectHomeRecommendations([...duplicateFolders, ...fixtures.slice(1, 7)], noLikes, now);
     expect(result).toHaveLength(6);
     expect(new Set(result.map(creatorIdentity)).size).toBe(6);
   });
@@ -89,18 +70,17 @@ describe('home recommendations', () => {
   it('uses work counts for eligibility, including video-only works and legacy responses', () => {
     const folders = [folder(1, { postCount: 1, imageCount: 0, videoCount: 1 }),
       folder(2, { postCount: 0, imageCount: 9 }), folder(3, { postCount: undefined, imageCount: 1 })];
-    expect(selectHomeRecommendations(folders, noLikes, [], now).map(f => f.id).sort()).toEqual([1, 3]);
+    expect(selectHomeRecommendations(folders, noLikes, now).map(f => f.id).sort()).toEqual([1, 3]);
   });
 
-  it('keeps the daily order stable without mutating folders or visit history', () => {
+  it('keeps the daily order stable without mutating folders', () => {
     const folders = fixtures.map(f => ({ ...f }));
-    const history = ['creator:1', 'creator:2'];
-    const before = structuredClone({ folders, history });
-    const first = selectHomeRecommendations(folders, noLikes, history, now);
-    const second = selectHomeRecommendations(folders, noLikes, history, new Date('2026-03-12T18:30:00.000Z'));
+    const before = structuredClone(folders);
+    const first = selectHomeRecommendations(folders, noLikes, now);
+    const second = selectHomeRecommendations(folders, noLikes, new Date('2026-03-12T18:30:00.000Z'));
     expect(first.map(creatorIdentity)).toEqual(second.map(creatorIdentity));
     expect(first).toHaveLength(6);
-    expect({ folders, history }).toEqual(before);
+    expect(folders).toEqual(before);
   });
 
   it('uses work favorites as a ranking signal without changing the input map', () => {
@@ -109,7 +89,7 @@ describe('home recommendations', () => {
     expect(likes.get('creator-20')).toBe(2);
     const selectedAcrossDays = new Set<number>();
     for (let day = 12; day < 20; day++) {
-      for (const result of selectHomeRecommendations(older, likes, [], new Date(`2026-03-${day}T12:00:00Z`))) selectedAcrossDays.add(result.id);
+      for (const result of selectHomeRecommendations(older, likes, new Date(`2026-03-${day}T12:00:00Z`))) selectedAcrossDays.add(result.id);
     }
     expect(selectedAcrossDays.has(20)).toBe(true);
     expect([...likes]).toEqual([['creator-20', 2]]);

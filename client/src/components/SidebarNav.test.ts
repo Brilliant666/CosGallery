@@ -104,54 +104,16 @@ describe('sidebar hover intent', () => {
   });
 });
 
-describe('recently viewed creators', () => {
-  function creator(id: number, overrides: Partial<FolderSummary> = {}): FolderSummary {
-    return {
-      id, canonicalCreatorId: id + 100, slug: `creator-${id}`, name: `Creator ${id}`, description: null,
-      folderPath: `creator-${id}`, breadcrumb: null, contentRating: 'R15',
-      postCount: 3, imageCount: 3, videoCount: 0, latestImageMtimeMs: null,
-      avatarImageId: null, avatarUrl: null, ...overrides
-    };
-  }
-
-  it('hides the entire recent section without valid browsing history instead of filling it with recommendations', async () => {
+describe('gallery statistics placement', () => {
+  it('replaces recent creators without changing stored browsing history', async () => {
     i18n.global.locale.value = 'zh';
-    const { sidebar } = await setup([creator(1)], ['missing-creator']);
-    expect(sidebar.find('.sidebar__section-label').exists()).toBe(false);
-    expect(sidebar.find('.sidebar__folder').exists()).toBe(false);
-    useAppStore().recentOpenedCreatorKeys = [];
-    await nextTick();
+    const { sidebar, wrapper } = await setup([], ['creator:42']);
+    expect(sidebar.text()).toContain('图库统计');
     expect(sidebar.text()).not.toContain('最近浏览');
-  });
-
-  it('shows browsing order, deduplicates canonical creators and reacts to newly opened creators', async () => {
-    i18n.global.locale.value = 'zh';
-    const { sidebar } = await setup([
-      creator(1), creator(2), creator(3), creator(4, { canonicalCreatorId: 102 })
-    ], ['creator:102', 'creator-4', 'creator-1']);
-    const routes = () => sidebar.findAll('.sidebar__folder').map(link => link.attributes('href'));
-    expect(routes()).toEqual(['/library/102', '/library/101']);
-    useAppStore().recentOpenedCreatorKeys = ['creator:103', 'creator:102', 'creator-1'];
-    await nextTick();
-    expect(routes()).toEqual(['/library/103', '/library/102', '/library/101']);
-    expect(sidebar.text()).toContain('最近浏览');
-    expect(sidebar.text()).not.toContain('精选博主');
-  });
-
-  it('shows the work count instead of a physical breadcrumb and opens the canonical creator', async () => {
-    i18n.global.locale.value = 'zh';
-    const { sidebar, router } = await setup([{
-      id: 11, canonicalCreatorId: 42, slug: 'sample', name: '合成博主', description: null,
-      folderPath: 'Sample', breadcrumb: '旧父目录', contentRating: 'R15',
-      postCount: 3, imageCount: 99, videoCount: 0, latestImageMtimeMs: null,
-      avatarImageId: null, avatarUrl: null
-    }], ['creator:42']);
-    expect(sidebar.text()).toContain('最近浏览');
-    const link = sidebar.get('.sidebar__folder');
-    expect(link.get('small').text()).toBe('3 个作品');
-    expect(link.attributes('href')).toBe('/library/42');
-    await link.trigger('click');
-    await flushPromises();
-    expect(router.currentRoute.value.params.creatorId).toBe('42');
+    expect(sidebar.find('.sidebar__folder').exists()).toBe(false);
+    expect(sidebar.get('.sidebar__statistics').attributes('aria-hidden')).toBe('true');
+    await wrapper.setData({ expanded: true });
+    expect(sidebar.get('.sidebar__statistics').attributes('aria-hidden')).toBe('false');
+    expect(useAppStore().recentOpenedCreatorKeys).toEqual(['creator:42']);
   });
 });

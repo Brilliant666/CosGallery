@@ -33,84 +33,39 @@
         </div>
       </section>
 
-      <section v-if="!appStore.isLibraryUnavailable" class="grid min-w-0 gap-[1rem] mb-5 w-full max-w-[39.375rem]">
-        <section v-if="initialFeedReady || displayMomentItems.length" class="mb-2 min-w-0 min-h-[7.5rem]" data-test="moments-slot" :aria-busy="momentsPending || momentsStore.loadingList">
-          <p v-if="!displayMomentItems.length" class="m-0 flex min-h-[7.5rem] items-center gap-3 text-sm text-muted" role="status">
-            <template v-if="momentsPending || momentsStore.loadingList">正在加载回忆与精选…</template>
-            <template v-else-if="momentsStore.listError">回忆与精选暂时无法加载。<button type="button" class="text-accent" @click="refreshHomeRail(true)">重试</button></template>
-            <template v-else>暂无可展示的回忆与精选</template>
-          </p>
-          <template v-else>
-          <div class="story-rail-shell">
-            <div class="stories-bar story-rail pb-5 pt-[0.12rem]" :aria-label="momentsStore.displayRailTitle">
-              <div class="story-rail__track">
+      <section v-if="!appStore.isLibraryUnavailable" class="home-feed-modes mb-5 min-w-0 w-full max-w-[39.375rem]" data-test="feed-modes">
+        <div class="story-rail-shell story-rail-shell--feed-modes">
+          <div class="stories-bar story-rail story-rail--feed-modes" role="group" :aria-label="t('home.feedModesLabel')">
+            <div class="story-rail__track">
               <button
-                v-for="moment in displayMomentItems"
-                :key="moment.id"
+                v-for="mode in feedModes"
+                :key="mode.id"
                 class="story-rail__item story-rail__button"
-                :title="`${moment.title} · ${moment.subtitle}`"
+                :class="{ 'story-rail__button--selected': selectedFeedMode === mode.id }"
+                :title="mode.description"
+                :aria-label="`${mode.label}. ${mode.description}`"
+                :aria-pressed="selectedFeedMode === mode.id"
+                :aria-busy="selectedFeedMode === mode.id && feedStore.loading"
+                :data-feed-mode="mode.id"
                 type="button"
-                @click="openRailViewer(moment.id)"
+                @click="selectMode(mode.id)"
               >
-                <div
-                  class="story-rail__ring"
-                  style="background: var(--story-ring);"
-                >
-                  <div class="story-rail__ring-inner">
-                    <Avatar class="story-rail__avatar" :name="moment.title" :src="moment.coverImage.thumbnailUrl" />
-                  </div>
-                </div>
-                <span class="story-rail__label">{{ moment.title }}</span>
+                <span class="story-rail__ring">
+                  <span class="story-rail__ring-inner">
+                    <span class="story-rail__avatar story-rail__cover" aria-hidden="true">
+                      <img v-if="mode.coverUrl && !failedModeCovers.has(mode.coverUrl)" :src="mode.coverUrl" alt="" loading="lazy" @error="failedModeCovers.add(mode.coverUrl)" />
+                      <span v-else :class="mode.icon" class="story-rail__fallback" />
+                      <span v-if="selectedFeedMode === mode.id && feedStore.loading" class="story-rail__loading" />
+                    </span>
+                  </span>
+                </span>
+                <span class="story-rail__label">{{ mode.label }}</span>
               </button>
             </div>
           </div>
-          </div>
-          </template>
-        </section>
-
-        <div class="w-full max-w-[29.375rem] mx-auto flex items-center justify-between gap-[0.8rem] max-sm:flex-col max-sm:items-center">
-          <div class="flex flex-wrap gap-[0.35rem] max-sm:w-full max-sm:justify-center">
-            <button
-              v-for="mode in feedModes"
-              :key="mode.id"
-              class="min-h-[2rem] px-[0.82rem] rounded-full border text-[0.71rem] font-bold transition-[background-color,border-color,color,box-shadow] duration-180"
-              :class="feedStore.mode === mode.id ? 'border-[#1f2937] text-white shadow-[var(--shadow)]' : 'border-border text-text bg-surface hover:border-text/25 hover:bg-surface-alt'"
-              :style="
-                feedStore.mode === mode.id
-                  ? 'background: linear-gradient(135deg, #1f2937 0%, #111827 100%);'
-                  : undefined
-              "
-              :title="mode.description"
-              :aria-label="`${mode.label}. ${mode.description}`"
-              type="button"
-              @click="selectMode(mode.id)"
-            >
-              {{ mode.label }}
-            </button>
-          </div>
-
-          <div
-            v-if="appStore.stats"
-            class="m-0 shrink-0 flex items-center gap-[0.75rem] whitespace-nowrap text-[0.85rem] text-muted max-sm:mt-[3px] max-sm:justify-center"
-            :aria-label="indexedSummaryLabel"
-            role="status"
-          >
-            <span class="inline-flex items-center gap-[0.28rem]">
-              <span class="i-fluent-image-16-regular w-[1.1rem] h-[1.1rem]" aria-hidden="true" />
-              <strong class="font-semibold text-text">{{ formattedIndexedImageCount }}</strong>
-            </span>
-            <span class="inline-flex items-center gap-[0.28rem]">
-              <span class="i-fluent-play-circle-24-filled w-[1.1rem] h-[1.1rem]" aria-hidden="true" />
-              <strong class="font-semibold text-text">{{ formattedIndexedVideoCount }}</strong>
-            </span>
-            <span class="inline-flex items-center gap-[0.28rem]">
-              <span class="i-fluent-folder-16-regular w-[1.1rem] h-[1.1rem]" aria-hidden="true" />
-              <strong class="font-semibold text-text">{{ formattedFolderCount }}</strong>
-            </span>
-          </div>
         </div>
+        <p class="sr-only" role="status">{{ feedStore.loading ? t('common.loading') : '' }}</p>
       </section>
-
       <!-- States -->
       <EmptyState v-if="appStore.isLibraryUnavailable" title="Library storage unavailable" :description="appStore.libraryUnavailableReason" />
       <div v-else-if="!appStore.stats && appStore.error">
@@ -205,14 +160,6 @@
       </template>
 
       <StoriesModal
-        v-if="activeRailViewerId && displayMomentItems.length"
-        :items="displayMomentItems"
-        :initial-id="activeRailViewerId"
-        :rail-singular-label="momentsStore.displayRailSingularLabel"
-        :store="momentsStore"
-        @close="closeRailViewer"
-      />
-      <StoriesModal
         v-if="activeFeedStoryId && folderStoriesStore.items.length"
         :items="folderStoriesStore.items"
         :initial-id="activeFeedStoryId"
@@ -271,7 +218,7 @@
 
 <script setup lang="ts">
 import { folderReadingRoute } from '../utils/work-gallery';
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink } from 'vue-router';
 
@@ -288,7 +235,6 @@ import { useFeedStore } from '../stores/feed';
 import { useFolderStoriesStore } from '../stores/folder-stories';
 import { useLikesStore } from '../stores/likes';
 import { useFoldersStore } from '../stores/folders';
-import { useMomentsStore } from '../stores/moments';
 import type { FeedMode } from '../types/api';
 import { formatFolderTitle } from '../utils/folder-titles';
 import { buildLikedCountByFolder, selectHomeRecommendations } from '../utils/home-recommendations';
@@ -300,13 +246,11 @@ const feedStore = useFeedStore();
 const folderStoriesStore = useFolderStoriesStore();
 const likesStore = useLikesStore();
 const foldersStore = useFoldersStore();
-const momentsStore = useMomentsStore();
 const { t } = useI18n();
 const likedCountByFolder = computed(() => buildLikedCountByFolder(likesStore.items));
 const recommendedFolders = computed(() =>
-  selectHomeRecommendations(foldersStore.items, likedCountByFolder.value, appStore.recentOpenedCreatorKeys)
+  selectHomeRecommendations(foldersStore.items, likedCountByFolder.value)
 );
-const activeRailViewerId = ref<string | null>(null);
 const activeFeedStoryId = ref<string | null>(null);
 const feedStoryRetrySlug = ref<string | null>(null);
 const homeLayoutElement = ref<HTMLElement | null>(null);
@@ -316,8 +260,8 @@ const homeScanError = ref<string | null>(null);
 const feedStoryError = ref<string | null>(null);
 const initialFeedReady = ref(false);
 let homeActive = true;
-let explicitMode: FeedMode | null = null;
-const momentsPending = ref(false);
+const explicitMode = ref<FeedMode | null>(null);
+const failedModeCovers = ref(new Set<string>());
 const firstFeedSettled = ref(false);
 let homeGeneration = 0;
 const pendingHomeWaits = new Set<() => void>();
@@ -326,7 +270,6 @@ const homeAccessKey = () => JSON.stringify([authStore.role, authStore.authentica
 function cancelHomeWork() {
   homeGeneration += 1;
   for (const cancel of [...pendingHomeWaits]) cancel();
-  momentsPending.value = false;
 }
 
 function waitForFeedSettlement() {
@@ -338,45 +281,17 @@ function waitForFeedSettlement() {
   });
 }
 
-function paintOpportunity() {
-  if (document.hidden) return Promise.resolve();
-  return new Promise<void>(resolve => {
-    let frame = 0;
-    const finish = () => { cancelAnimationFrame(frame); pendingHomeWaits.delete(finish); resolve(); };
-    pendingHomeWaits.add(finish);
-    // Two frames allow the committed card DOM to paint before a new synchronous
-    // server read is dispatched. This is a render boundary, not an arbitrary delay.
-    frame = requestAnimationFrame(() => { frame = requestAnimationFrame(finish); });
-  });
-}
-
-async function feedThenRail(load: () => Promise<void>, forceRail = false) {
+async function loadHomeFeed(load: () => Promise<void>) {
   cancelHomeWork();
   const generation = homeGeneration, access = homeAccessKey(), feedGeneration = feedStore.generation;
   const current = () => homeActive && generation === homeGeneration && access === homeAccessKey()
     && feedGeneration === feedStore.generation
     && authStore.accessGranted && Boolean(appStore.stats) && !appStore.isLibraryUnavailable;
-  momentsPending.value = true;
-  try {
-    await load(); // The store records a feed failure; it must not starve the rail.
-    if (!current()) return;
-    await waitForFeedSettlement();
-    await nextTick();
-    if (!current()) return;
-    await paintOpportunity();
-    if (!current()) return;
-    firstFeedSettled.value = true;
-    await momentsStore.fetchMoments(forceRail);
-  } finally {
-    if (generation === homeGeneration) momentsPending.value = false;
-  }
+  await load();
+  if (!current()) return;
+  await waitForFeedSettlement();
+  if (current()) firstFeedSettled.value = true;
 }
-
-async function refreshHomeRail(force = false) {
-  if (!initialFeedReady.value || !homeActive || !authStore.accessGranted || appStore.isLibraryUnavailable) return;
-  await feedThenRail(async () => {}, force);
-}
-
 function formatDisplayFolderTitle(folder: (typeof recommendedFolders.value)[number]) {
   return formatFolderTitle(folder, appStore.nestedFolderTitleFormat);
 }
@@ -388,33 +303,32 @@ function formatCount(value: number) {
   return new Intl.NumberFormat().format(value);
 }
 
-const displayMomentItems = computed(() => momentsStore.localizedItems);
-
-const indexedSummaryLabel = computed(() => {
-  if (!appStore.stats) {
-    return '';
-  }
-
-  return `${formatCount(appStore.stats.indexedImages)} posts, ${formatCount(appStore.stats.indexedVideos)} videos across ${formatCount(appStore.stats.folders)} folders`;
-});
-const formattedIndexedImageCount = computed(() => formatCount(appStore.stats?.indexedImages ?? 0));
-const formattedIndexedVideoCount = computed(() => formatCount(appStore.stats?.indexedVideos ?? 0));
-const formattedFolderCount = computed(() => formatCount(appStore.stats?.folders ?? 0));
-const feedModes = computed<Array<{ id: FeedMode; label: string; description: string }>>(() => [
+const selectedFeedMode = computed(() => explicitMode.value ?? feedStore.mode);
+const modeThumbnailUrls = computed(() => [...new Set([
+  ...foldersStore.items.map(folder => folder.avatarUrl),
+  ...feedStore.items.map(item => item.thumbnailUrl)
+].filter((url): url is string => Boolean(url)))]);
+const feedModes = computed<Array<{ id: FeedMode; label: string; description: string; icon: string; coverUrl: string | null }>>(() => [
   {
     id: 'recent',
     label: t('settings.general.homeFeed.options.recent.label'),
-    description: t('settings.general.homeFeed.options.recent.description')
+    description: t('settings.general.homeFeed.options.recent.description'),
+    icon: 'i-fluent-clock-24-regular',
+    coverUrl: modeThumbnailUrls.value[0] ?? null
   },
   {
     id: 'rediscover',
     label: t('settings.general.homeFeed.options.rediscover.label'),
-    description: t('settings.general.homeFeed.options.rediscover.description')
+    description: t('settings.general.homeFeed.options.rediscover.description'),
+    icon: 'i-fluent-history-24-regular',
+    coverUrl: modeThumbnailUrls.value[1] ?? null
   },
   {
     id: 'random',
     label: t('settings.general.homeFeed.options.random.label'),
-    description: t('settings.general.homeFeed.options.random.description')
+    description: t('settings.general.homeFeed.options.random.description'),
+    icon: 'i-fluent-arrow-shuffle-24-regular',
+    coverUrl: modeThumbnailUrls.value[2] ?? null
   }
 ]);
 const showInitialScanState = computed(
@@ -513,20 +427,11 @@ async function warmScanStatus() {
 }
 
 async function selectMode(mode: FeedMode) {
-  explicitMode = mode;
+  explicitMode.value = mode;
   // User intent wins over a late saved preference, but storage/access status is
   // still required before any request is made.
   if (!initialFeedReady.value) return;
-  await feedThenRail(() => feedStore.setMode(mode));
-}
-
-function openRailViewer(id: string) {
-  activeFeedStoryId.value = null;
-  activeRailViewerId.value = id;
-}
-
-function closeRailViewer() {
-  activeRailViewerId.value = null;
+  await loadHomeFeed(() => feedStore.setMode(mode));
 }
 
 async function openFeedFolderStory(slug: string) {
@@ -534,7 +439,6 @@ async function openFeedFolderStory(slug: string) {
     return;
   }
 
-  activeRailViewerId.value = null;
   activeFeedStoryId.value = null;
   feedStoryRetrySlug.value = slug;
   feedStoryError.value = null;
@@ -592,7 +496,7 @@ async function runHomeScan() {
     void warmScanStatus();
     await request;
     await appStore.fetchStats({ background: true });
-    await Promise.all([foldersStore.fetchFolders(true), feedThenRail(() => feedStore.loadInitial(true), true)]);
+    await Promise.all([foldersStore.fetchFolders(true), loadHomeFeed(() => feedStore.loadInitial(true))]);
   } catch (error) {
     homeScanError.value = error instanceof Error ? error.message : 'Unable to start a library scan.';
   } finally {
@@ -602,11 +506,11 @@ async function runHomeScan() {
 
 async function initializeHomeFeed() {
   if (initialFeedReady.value || !homeActive || !appStore.stats || appStore.isLibraryUnavailable || !authStore.accessGranted) return;
-  if (explicitMode || !feedStore.initialized) {
-    feedStore.initializeMode(explicitMode ?? appStore.defaultHomeFeedMode);
+  if (explicitMode.value || !feedStore.initialized) {
+    feedStore.initializeMode(explicitMode.value ?? appStore.defaultHomeFeedMode);
   }
   initialFeedReady.value = true;
-  await feedThenRail(() => feedStore.loadInitial());
+  await loadHomeFeed(() => feedStore.loadInitial());
 }
 
 onMounted(async () => {
@@ -633,7 +537,7 @@ watch(() => appStore.stats, async (stats) => {
     cancelHomeWork();
     firstFeedSettled.value = false;
     initialFeedReady.value = false;
-    explicitMode = null;
+    explicitMode.value = null;
     return;
   }
   await initializeHomeFeed();
@@ -647,41 +551,12 @@ watch(
       return;
     }
 
-    // App owns folder-list refreshes. Its summary count is not necessarily the
-    // number of visible sidebar entries and must not trigger another fetch here.
+    // App owns folder-list refreshes. Retry an empty feed when indexing adds content,
+    // without issuing a second request for the folder list.
 
     if (indexedImages > 0 && feedStore.items.length === 0 && !feedStore.loading) {
-      await feedThenRail(() => feedStore.loadInitial(true), true);
+      await loadHomeFeed(() => feedStore.loadInitial(true));
       return;
-    }
-
-    if (indexedImages > 0 && momentsStore.items.length === 0 && !momentsStore.loadingList) {
-      await refreshHomeRail(true);
-    }
-  }
-);
-
-watch(
-  () => appStore.stats?.scan.lastCompletedScan?.id ?? null,
-  async (lastCompletedScanId, previousScanId) => {
-    if (
-      !initialFeedReady.value || !firstFeedSettled.value || appStore.isLibraryUnavailable ||
-      lastCompletedScanId === null ||
-      lastCompletedScanId === previousScanId ||
-      momentsStore.loadingList
-    ) {
-      return;
-    }
-
-    await refreshHomeRail(true);
-  }
-);
-
-watch(
-  () => momentsStore.items.map((item) => item.id),
-  (ids) => {
-    if (activeRailViewerId.value && !ids.includes(activeRailViewerId.value)) {
-      activeRailViewerId.value = ids[0] ?? null;
     }
   }
 );

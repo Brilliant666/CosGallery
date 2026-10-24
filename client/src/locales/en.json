@@ -628,7 +628,16 @@
       }
     }
   },
+  "galleryStatistics": {
+    "title": "Gallery statistics",
+    "creators": "Creators",
+    "works": "Works",
+    "photos": "Photos",
+    "pending": "Statistics not loaded",
+    "unavailable": "Statistics unavailable"
+  },
   "home": {
+    "feedModesLabel": "Browse mode",
     "sidebar": {
       "ariaLabel": "Creator recommendations",
       "suggestedFolders": "Recommended creators",

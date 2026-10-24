@@ -192,49 +192,9 @@
         </a>
       </RouterLink>
 
-      <template v-if="recentCreators.length > 0">
-        <span
-          class="sidebar__section-label sidebar__meta inline-flex min-h-[1rem] items-center self-start mt-7 overflow-hidden whitespace-nowrap px-[0.75rem] text-[0.68rem] leading-[1.2] font-semibold uppercase tracking-[0.12em] text-muted"
-          >{{ t('nav.recentCreators') }}</span
-        >
-        <div
-          class="flex min-h-0 flex-col gap-[0.2rem] max-h-[22.5rem] overflow-y-auto [scrollbar-width:none]"
-        >
-          <RouterLink
-            v-for="folder in recentCreators"
-            :key="folder.id"
-            custom
-            :to="folderReadingRoute(folder.slug, folder.canonicalCreatorId)"
-            v-slot="{ href, navigate, isActive }"
-          >
-            <a
-              :href="href"
-              class="sidebar__folder sidebar-item"
-              :class="isActive ? sidebarActiveClass : ''"
-              :title="
-                folder.breadcrumb
-                  ? `${folder.breadcrumb} / ${folder.name}`
-                  : folder.name
-              "
-              @click="navigate"
-            >
-              <Avatar
-                :name="formatRecentCreatorTitle(folder)"
-                :src="folder.avatarUrl"
-                class="h-[1.75rem] w-[1.75rem]"
-              />
-              <span
-                class="sidebar__folder-copy sidebar__meta flex min-w-0 flex-col gap-[0.05rem] overflow-hidden whitespace-nowrap"
-              >
-                <strong class="truncate text-[0.82rem]">{{ formatRecentCreatorTitle(folder) }}</strong>
-                <small class="truncate text-[0.68rem] text-muted">{{
-                  t('nav.folderPosts', { count: folder.postCount ?? folder.imageCount })
-                }}</small>
-              </span>
-            </a>
-          </RouterLink>
-        </div>
-      </template>
+      <div class="sidebar__statistics sidebar__meta" :aria-hidden="!expanded">
+        <GalleryStatistics />
+      </div>
     </nav>
 
     <div
@@ -383,7 +343,7 @@
 
 <script setup lang="ts">
 import LibraryNavigation from './LibraryNavigation.vue';
-import { folderReadingRoute } from '../utils/work-gallery';
+import GalleryStatistics from './GalleryStatistics.vue';
   import { computed, onMounted, onUnmounted, ref, watch } from "vue"
   import { useI18n } from "vue-i18n"
   import { RouterLink, useRoute } from "vue-router"
@@ -391,11 +351,7 @@ import { folderReadingRoute } from '../utils/work-gallery';
   import { useAppStore } from "../stores/app"
   import { useAuthStore } from "../stores/auth"
   import { useLikesStore } from "../stores/likes"
-  import { useFoldersStore } from "../stores/folders"
   import { usePlacesStore } from "../stores/places"
-  import { formatFolderTitle } from "../utils/folder-titles"
-  import { selectRecentCreators } from "../utils/sidebar-folders"
-  import Avatar from "./Avatar.vue"
   import BrandMark from "./BrandMark.vue"
 
   const props = withDefaults(defineProps<{ expanded?: boolean }>(), { expanded: false })
@@ -406,7 +362,6 @@ import { folderReadingRoute } from '../utils/work-gallery';
   const appStore = useAppStore()
   const authStore = useAuthStore()
   const likesStore = useLikesStore()
-  const foldersStore = useFoldersStore()
   const placesStore = usePlacesStore()
   const route = useRoute()
   const moreMenuOpen = ref(false)
@@ -422,21 +377,12 @@ import { folderReadingRoute } from '../utils/work-gallery';
   let desktopMedia: MediaQueryList | undefined
   let touchMedia: MediaQueryList | undefined
 
-  const recentCreators = computed(() =>
-    selectRecentCreators(
-      foldersStore.items,
-      appStore.recentOpenedCreatorKeys,
-    ),
-  )
   const appearanceLabel = computed(() =>
     appStore.theme === "light" ? t("nav.switchToDarkMode") : t("nav.switchToLightMode"),
   )
   const showPlacesNav = computed(() =>
     placesStore.items.length > 0 && placesStore.listError === null,
   )
-  function formatRecentCreatorTitle(folder: (typeof recentCreators.value)[number]) {
-    return formatFolderTitle(folder, appStore.nestedFolderTitleFormat)
-  }
   const isPlacesRoute = computed(() =>
     route.name === "places" || route.name === "place",
   )
@@ -687,9 +633,14 @@ import { folderReadingRoute } from '../utils/work-gallery';
   max-width: 100%;
 }
 
-.sidebar__folder-copy {
-  width: calc(var(--sidebar-expanded-width, 15rem) - 6.15rem);
+.sidebar__statistics {
+  width: calc(var(--sidebar-expanded-width, 15rem) - 1.9rem);
+  padding: 0 .6rem;
+  margin-top: 1.6rem;
+  pointer-events: none;
 }
+
+.sidebar--expanded .sidebar__statistics { pointer-events: auto; }
 
 .sidebar--expanded .sidebar__label,
 .sidebar--expanded .sidebar__meta {

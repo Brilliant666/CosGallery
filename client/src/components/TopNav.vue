@@ -99,6 +99,7 @@
           </button>
 
           <div v-if="moreMenuOpen" class="mobile-nav__menu">
+            <GalleryStatistics class="px-4 pt-4 pb-3" />
             <RouterLink v-if="authStore.canUseSavedItems" custom :to="{ name: 'likes' }" v-slot="{ href, navigate, isActive }">
               <a
                 :href="href"
@@ -223,6 +224,7 @@
 
 <script setup lang="ts">
 import LibraryNavigation from './LibraryNavigation.vue';
+import GalleryStatistics from './GalleryStatistics.vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { RouterLink, useRoute } from 'vue-router';

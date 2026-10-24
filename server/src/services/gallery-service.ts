@@ -25,6 +25,7 @@ import { derivativeVersion as buildDerivativeVersion, imageDerivativeVersion } f
 import { isPublishedDerivativeFile } from '../utils/derivative-spec.js';
 import { appConfig } from '../config/env.js';
 import { databaseManager } from '../db/database.js';
+import { getGalleryStatistics } from '../db/gallery-statistics-repository.js';
 import { createReelQueuePager, ReelQueueExpiredError } from './reel-queue.js';
 import {
   appSettingsRepository,
@@ -2353,6 +2354,7 @@ export const galleryService = {
       folders: storageState.libraryAvailable ? folderRepository.count() : 0,
       indexedImages: indexedPosts,
       indexedPosts,
+      galleryStatistics: storageState.libraryAvailable ? getGalleryStatistics() : { creators: 0, works: 0, photos: 0 },
       indexedMediaAssets: storageState.libraryAvailable ? imageRepository.countVisibleMediaAssets() : 0,
       indexedCarousels: postCounts.carousels,
       indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleVideoCandidates() : 0,
@@ -2431,6 +2433,7 @@ export const galleryService = {
       indexedCarousels: postCounts.carousels,
       indexedVideos: storageState.libraryAvailable ? imageRepository.countVisibleVideoCandidates() : 0,
       deletedImages: storageState.libraryAvailable ? imageRepository.countDeleted() : 0,
+      galleryStatistics: storageState.libraryAvailable ? getGalleryStatistics() : { creators: 0, works: 0, photos: 0 },
       thumbnailCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.thumbnailsDir, 'thumbnail') : 0,
       previewCount: storageState.libraryAvailable ? countDerivativeFilesOnDisk(appConfig.previewsDir, 'preview') : 0,
       lastScan: lastCompletedScan,
