@@ -88,7 +88,7 @@ function resolveSavedDefaultLocale(locale: string | null | undefined): Supported
 }
 
 function resolveAccentColor(value: unknown): AccentColor {
-  return ACCENT_COLORS.includes(value as AccentColor) ? value as AccentColor : 'blue';
+  return ACCENT_COLORS.includes(value as AccentColor) ? value as AccentColor : 'purple';
 }
 
 export const useAppStore = defineStore('app', {

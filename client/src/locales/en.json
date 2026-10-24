@@ -366,7 +366,7 @@
       "accentColor": {
         "label": "Site accent color",
         "description": "Set one accent for buttons, links, selection and focus, shared by administrators and visitors.",
-        "helper": "Select a color, then Save changes below. Choose Blue to restore the default; light/dark mode remains a browser preference.",
+        "helper": "Select a color, then Save changes below. Choose Purple to restore the default; light/dark mode remains a browser preference.",
         "options": {
           "blue": "Blue",
           "purple": "Purple",

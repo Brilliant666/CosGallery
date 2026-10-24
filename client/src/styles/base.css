@@ -24,9 +24,10 @@
   --border: #d8dde3;
   --text: #111827;
   --muted: #6b7280;
-  --accent: #0095f6;
-  --accent-strong: #1877f2;
-  --accent-soft: rgba(0, 149, 246, 0.1);
+  --accent: #7c3aed;
+  --accent-strong: #6d28d9;
+  --accent-soft: rgba(124, 58, 237, 0.1);
+  --accent-fill: #7c3aed;
   --shadow: 0 12px 30px rgba(15, 20, 25, 0.08);
   --story-ring: conic-gradient(from 210deg,
       #feda75 0deg,
@@ -50,9 +51,9 @@
   --border: #262626;
   --text: #f5f5f5;
   --muted: #a8a8a8;
-  --accent: #4cb5f9;
-  --accent-strong: #4cb5f9;
-  --accent-soft: rgba(76, 181, 249, 0.18);
+  --accent: #a78bfa;
+  --accent-strong: #c4b5fd;
+  --accent-soft: rgba(167, 139, 250, 0.18);
   --shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
   --story-ring: conic-gradient(from 210deg,
       #feda75 0deg,
@@ -64,7 +65,18 @@
   --avatar-fallback: linear-gradient(135deg, #ff9d5c, #ff5b7f);
 }
 
-/* Site-wide presets; blue keeps the original light/dark theme defaults. */
+/* Purple also applies before status loads; an explicitly saved blue stays blue. */
+:root[data-accent="blue"] {
+  --accent: #0095f6;
+  --accent-strong: #1877f2;
+  --accent-soft: rgba(0, 149, 246, 0.1);
+  --accent-fill: var(--accent);
+}
+:root[data-theme="dark"][data-accent="blue"] {
+  --accent: #4cb5f9;
+  --accent-strong: #4cb5f9;
+  --accent-soft: rgba(76, 181, 249, 0.18);
+}
 :root[data-accent="purple"] {
   --accent: #7c3aed;
   --accent-strong: #6d28d9;
@@ -121,7 +133,7 @@
   --accent-soft: rgba(148, 163, 184, 0.18);
 }
 /* Keep white labels readable on filled actions while dark-theme text brightens. */
-:root[data-accent]:not([data-accent="blue"]) :is(.bg-accent, .btn-primary) {
+:root:not([data-accent="blue"]) :is(.bg-accent, .btn-primary) {
   background-color: var(--accent-fill, var(--accent));
 }
 

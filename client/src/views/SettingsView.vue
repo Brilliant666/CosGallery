@@ -1453,8 +1453,8 @@ const homeFeedDefaultMode = ref<FeedMode>('random');
 const reelsFeedDefaultMode = ref<ReelsFeedMode>('random');
 const folderImageOrderDefault = ref<FolderImageOrder>('newest');
 const nestedFolderTitleFormat = ref<NestedFolderTitleFormat>('folder');
-const accentColorDraft = ref<AccentColor>('blue');
-const savedAccentColor = ref<AccentColor>('blue');
+const accentColorDraft = ref<AccentColor>('purple');
+const savedAccentColor = ref<AccentColor>('purple');
 const accentColorHydrated = ref(false);
 const accentColorSwatches: Record<AccentColor, string> = {
   blue: '#0095f6', purple: '#7c3aed', rose: '#be185d', teal: '#0f766e', amber: '#a16207', slate: '#475569'

@@ -40,15 +40,15 @@ describe.sequential('shared accent color settings', () => {
     if (root) await fs.rm(root, { recursive: true, force: true });
   });
 
-  it('defaults missing and unknown stored values to blue without writing or repairing settings', async () => {
+  it('defaults missing and unknown stored values to purple without writing or repairing settings', async () => {
     for (const value of [null, 'obsolete-theme', '#ff0000', '']) {
       if (value !== null) settings.set(key, value);
       const before = snapshot();
       const publicResponse = await requestTestApp(app, 'GET', '/api/status');
       const adminResponse = await requestTestApp(app, 'GET', '/api/admin/stats', admin);
       expect(publicResponse.status).toBe(200); expect(adminResponse.status).toBe(200);
-      expect(publicResponse.body.preferences.accentColor).toBe('blue');
-      expect(adminResponse.body.preferences.accentColor).toBe('blue');
+      expect(publicResponse.body.preferences.accentColor).toBe('purple');
+      expect(adminResponse.body.preferences.accentColor).toBe('purple');
       expect(snapshot()).toEqual(before);
     }
   });

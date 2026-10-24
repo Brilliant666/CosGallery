@@ -148,7 +148,7 @@ describe('useAppStore locale preferences', () => {
     window.localStorage.clear();
     setNavigatorLocales(['en-US']);
     document.documentElement.lang = '';
-    document.documentElement.dataset.accent = 'blue';
+    delete document.documentElement.dataset.accent;
     i18n.global.locale.value = DEFAULT_LOCALE;
     fetchAdminScanProgressMock.mockReset();
     fetchAdminStatsMock.mockReset();
@@ -186,13 +186,24 @@ describe('useAppStore locale preferences', () => {
     expect(fetchAdminStatsMock).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, null, 'unknown', 'RED'])('uses blue for an absent or invalid public accent (%s)', async (value) => {
+  it('uses purple before the initial status is available without making a request or saving an override', () => {
+    const store = useAppStore();
+    expect(store.stats).toBeNull();
+    expect(store.accentColor).toBe('purple');
+    store.syncAccentFromStats();
+    expect(document.documentElement.dataset.accent).toBe('purple');
+    expect(fetchStatusMock).not.toHaveBeenCalled();
+    expect(fetchAdminStatsMock).not.toHaveBeenCalled();
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it.each([undefined, null, 'unknown', 'RED'])('uses purple for an absent or invalid public accent (%s)', async (value) => {
     const status = createAppStatus();
     status.preferences.accentColor = value as AppStatus['preferences']['accentColor'];
     fetchAdminStatsMock.mockResolvedValueOnce(status);
     await useAppStore().fetchStats();
-    expect(useAppStore().accentColor).toBe('blue');
-    expect(document.documentElement.dataset.accent).toBe('blue');
+    expect(useAppStore().accentColor).toBe('purple');
+    expect(document.documentElement.dataset.accent).toBe('purple');
   });
 
   it('does not apply a stale admin accent response after an anonymous refresh', async () => {

@@ -160,7 +160,7 @@ describe('SettingsView', () => {
     setActivePinia(createPinia());
     vi.restoreAllMocks();
     window.localStorage.clear();
-    document.documentElement.dataset.accent = 'blue';
+    document.documentElement.dataset.accent = 'purple';
     // These fixtures model an existing English app preference, not a fresh profile.
     useAppStore().setLocale('en', { persist: false });
     scrollIntoViewSpy.mockReset();
@@ -183,14 +183,14 @@ describe('SettingsView', () => {
 
   it('hydrates six native radio choices, preserves an unsaved accent across refreshes, and applies it only after saving', async () => {
     const appStore = useAppStore();
-    const initial = createAppStatus(); initial.preferences.accentColor = 'purple';
+    const initial = createAppStatus(); initial.preferences.accentColor = 'blue';
     appStore.$patch({ stats: initial }); appStore.syncAccentFromStats();
     vi.spyOn(appStore, 'fetchStats').mockResolvedValue();
     const update = vi.spyOn(galleryApi, 'updateAccentColor').mockResolvedValue({ accentColor: 'rose' });
     const wrapper = mountSettingsView(); await flushPromises(); await openGeneralSettingsSidebarTab(wrapper);
     const radios = wrapper.findAll<HTMLInputElement>('input[name="site-accent-color"]');
     expect(radios).toHaveLength(6);
-    expect(wrapper.get<HTMLInputElement>('input[value="purple"]').element.checked).toBe(true);
+    expect(wrapper.get<HTMLInputElement>('input[value="blue"]').element.checked).toBe(true);
     const refreshed = createAppStatus(); refreshed.preferences.accentColor = 'teal';
     appStore.$patch({ stats: refreshed }); appStore.syncAccentFromStats(); await flushPromises();
     expect(wrapper.get<HTMLInputElement>('input[value="teal"]').element.checked).toBe(true);
@@ -215,11 +215,12 @@ describe('SettingsView', () => {
     vi.spyOn(appStore, 'fetchStats').mockResolvedValue();
     vi.spyOn(galleryApi, 'updateAccentColor').mockRejectedValue(new Error('Accent save failed'));
     const wrapper = mountSettingsView(); await flushPromises(); await openGeneralSettingsSidebarTab(wrapper);
+    expect(wrapper.get<HTMLInputElement>('input[value="purple"]').element.checked).toBe(true);
     await wrapper.get('input[value="slate"]').setValue();
     await wrapper.findAll('button').find(button => button.text() === 'Save changes')!.trigger('click');
     await flushPromises();
-    expect(document.documentElement.dataset.accent).toBe('blue');
-    expect(appStore.accentColor).toBe('blue');
+    expect(document.documentElement.dataset.accent).toBe('purple');
+    expect(appStore.accentColor).toBe('purple');
     expect(wrapper.get<HTMLInputElement>('input[value="slate"]').element.checked).toBe(true);
     expect(wrapper.text()).toContain('Accent save failed');
     expect(wrapper.findAll('button').find(button => button.text() === 'Save changes')!.attributes('disabled')).toBeUndefined();
@@ -241,7 +242,7 @@ describe('SettingsView', () => {
     expect(accent).toHaveBeenCalledWith('amber');
     expect(wrapper.text()).toContain('Some settings were saved (nested folder titles)');
     expect(wrapper.get<HTMLInputElement>('input[value="amber"]').element.checked).toBe(true);
-    expect(document.documentElement.dataset.accent).toBe('blue');
+    expect(document.documentElement.dataset.accent).toBe('purple');
     await wrapper.findAll('button').find(button => button.text() === 'Save changes')!.trigger('click');
     await flushPromises();
     expect(nested).toHaveBeenCalledTimes(1);

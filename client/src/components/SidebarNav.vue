@@ -5,7 +5,6 @@
     :class="{ 'sidebar--expanded': expanded }"
     @pointerenter="handlePointerEnter"
     @pointerleave="handlePointerLeave"
-    @pointermove="handlePointerMove"
     @focusin="handleFocusIn"
     @focusout="handleFocusOut"
   >
@@ -459,7 +458,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
 
   function handlePointerEnter(event: PointerEvent) {
     if (!desktop.value || touchControls.value || event.pointerType === 'touch') return
-    pointerInside = true
+    pointerInside = pointerIsOverSidebar(event)
     reconcileExpansion()
   }
 
@@ -475,9 +474,11 @@ import GalleryStatistics from './GalleryStatistics.vue';
   }
 
   function handlePointerMove(event: PointerEvent) {
-    // The more menu and its full-screen backdrop are descendants of the aside.
-    // Their pointer events must not turn the whole screen into a hover target.
-    if (!moreMenuOpen.value || touchControls.value || event.pointerType === 'touch') return
+    // The menu/backdrop are aside descendants. Removing them can omit the
+    // aside's pointerleave, so observe document coordinates even after closing.
+    // Only an actual pointer event updates hover; keyboard clicks do not.
+    if (!desktop.value || touchControls.value || event.pointerType === 'touch') return
+    if (!props.expanded && !pointerInside && !moreMenuOpen.value) return
     const inside = pointerIsOverSidebar(event)
     if (inside !== pointerInside) {
       pointerInside = inside
@@ -498,9 +499,10 @@ import GalleryStatistics from './GalleryStatistics.vue';
     reconcileExpansion()
   }
 
-  function handlePointerDown() {
+  function handlePointerDown(event: PointerEvent) {
     inputMode = 'pointer'
     keyboardFocus.value = false
+    handlePointerMove(event)
   }
 
   function handleFocusIn(event: FocusEvent) {
@@ -585,6 +587,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
     desktopMedia.addEventListener('change', handleMediaChange)
     touchMedia.addEventListener('change', handleMediaChange)
     document.addEventListener('pointerdown', handlePointerDown, true)
+    document.addEventListener('pointermove', handlePointerMove, { capture: true, passive: true })
     window.addEventListener("keydown", handleWindowKeydown, true)
   })
 
@@ -593,6 +596,7 @@ import GalleryStatistics from './GalleryStatistics.vue';
     desktopMedia?.removeEventListener('change', handleMediaChange)
     touchMedia?.removeEventListener('change', handleMediaChange)
     document.removeEventListener('pointerdown', handlePointerDown, true)
+    document.removeEventListener('pointermove', handlePointerMove, true)
     window.removeEventListener("keydown", handleWindowKeydown, true)
   })
 </script>

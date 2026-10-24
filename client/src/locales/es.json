@@ -366,7 +366,7 @@
       "accentColor": {
         "label": "Color de acento del sitio",
         "description": "Unifica el color de botones, enlaces, selección y foco para administradores y visitantes.",
-        "helper": "Selecciona un color y pulsa Guardar cambios. Azul restaura el valor predeterminado; el modo claro/oscuro sigue siendo una preferencia del navegador.",
+        "helper": "Selecciona un color y pulsa Guardar cambios. Morado restaura el valor predeterminado; el modo claro/oscuro sigue siendo una preferencia del navegador.",
         "options": {
           "blue": "Azul",
           "purple": "Morado",
