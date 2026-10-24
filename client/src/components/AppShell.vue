@@ -14,7 +14,7 @@
     <SidebarNav
       class="hidden md:flex fixed top-0 left-0 h-screen z-30"
       :expanded="sidebarExpanded"
-      @toggle="toggleSidebar"
+      @expanded-change="sidebarExpanded = $event"
     />
     <!-- Content: margin-left matches sidebar width on desktop -->
     <div class="app-shell__content flex flex-1 min-h-screen min-w-0 flex-col">
@@ -103,9 +103,7 @@ import {
 
 const appStore = useAppStore();
 const route = useRoute();
-const sidebarStorageKey = 'cosgallery.sidebar-expanded.v1';
-// Read before the first render so a saved expanded sidebar never flashes closed.
-const sidebarExpanded = ref(readSidebarExpanded());
+const sidebarExpanded = ref(false);
 const isStandaloneDisplay = ref(false);
 const isExploreShell = computed(() => route.meta.shell === 'explore');
 const isReelsShell = computed(() => route.meta.shell === 'reels');
@@ -130,23 +128,6 @@ const stickyScanSummary = computed(() => getScanSummary(activeScan.value));
 const stickyScanActionLine = computed(() => getScanActionLine(activeScan.value));
 const stickyScanMetricLine = computed(() => getScanMetricLine(activeScan.value));
 const stickyScanBarState = computed(() => getScanBarState(activeScan.value));
-
-function readSidebarExpanded() {
-  try {
-    return window.localStorage.getItem(sidebarStorageKey) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function toggleSidebar() {
-  sidebarExpanded.value = !sidebarExpanded.value;
-  try {
-    window.localStorage.setItem(sidebarStorageKey, String(sidebarExpanded.value));
-  } catch {
-    // Keep the current session usable when browser storage is unavailable.
-  }
-}
 
 onMounted(() => {
   const navigatorWithStandalone = navigator as Navigator & { standalone?: boolean };

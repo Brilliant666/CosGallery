@@ -2,6 +2,7 @@
 // Real Vue components and browser clicks; every API response is synthetic.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { createServer as createNetServer } from 'node:net';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -18,8 +19,16 @@ for (const key of ['DATA_ROOT', 'DB_DIR', 'GALLERY_ROOT', 'THUMBNAILS_DIR', 'PRE
 process.env.VITEST = 'true';
 const output = path.resolve(process.env.CREATOR_GALLERY_BROWSER_OUTPUT ?? '../.mocks/pr52/browser');
 mkdirSync(output, { recursive: true });
+const isolatedPort = await new Promise((resolve, reject) => {
+  const probe = createNetServer();
+  probe.once('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const port = probe.address().port;
+    probe.close(error => error ? reject(error) : resolve(port));
+  });
+});
 const server = await createServer({
-  server: { host: '127.0.0.1', port: 0, strictPort: false, open: false }, logLevel: 'error',
+  server: { host: '127.0.0.1', port: isolatedPort, strictPort: true, open: false }, logLevel: 'error',
   plugins: [{
     name: 'synthetic-home-unused-media', enforce: 'pre',
     // The home fixture contains no feed posts and never opens a story viewer.
@@ -53,7 +62,7 @@ try {
   const origin = `http://127.0.0.1:${port}`;
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
-  await context.route('**/*', async route => {
+  const interceptSynthetic = async route => {
     const request = route.request(), url = new URL(request.url());
     if (url.origin !== origin) { unexpected.push(url.origin); return route.abort(); }
     if (!url.pathname.startsWith('/api/')) return route.continue();
@@ -93,7 +102,8 @@ try {
     }
     unexpected.push(url.pathname);
     return route.fulfill({ status: 500, json: { message: 'Unhandled synthetic endpoint' } });
-  });
+  };
+  await context.route('**/*', interceptSynthetic);
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') console.error(`Browser console: ${message.text()}`); });
@@ -184,9 +194,9 @@ try {
     await page.waitForFunction(currentVariant => !document.querySelector(`.library-nav--${currentVariant} .library-nav__menu`), variant);
     assert.equal(await nav(variant).locator('.library-nav__menu').count(), 0);
   };
-  const checkSidebarTransition = async (name, action) => {
+  const checkSidebarTransition = async (name, action, target = page) => {
     // Sample the real AppShell throughout expansion/collapse, not just its end state.
-    await page.evaluate(() => {
+    await target.evaluate(() => {
       window.__sidebarFrames = [];
       window.__sidebarSampling = new Promise(resolve => {
         const started = performance.now();
@@ -206,13 +216,13 @@ try {
       });
     });
     await action();
-    const frames = await page.evaluate(() => window.__sidebarSampling);
-    sidebarFrames.push({ viewport: page.viewportSize(), name, frames });
+    const frames = await target.evaluate(() => window.__sidebarSampling);
+    sidebarFrames.push({ viewport: target.viewportSize(), name, frames });
     for (const frame of frames) {
-      assert(frame.contentLeft >= frame.sidebarRight - 1, `${page.viewportSize().width}px ${name}: content ${frame.contentLeft} overlaps sidebar ${frame.sidebarRight}`);
-      if (frame.cardLeft !== null) assert(frame.cardLeft >= frame.sidebarRight - 1, `${page.viewportSize().width}px ${name}: first card ${frame.cardLeft} overlaps sidebar ${frame.sidebarRight}`);
-      if (frame.storyLeft !== null) assert(frame.storyLeft >= frame.sidebarRight - 1, `${page.viewportSize().width}px ${name}: first home story ${frame.storyLeft} overlaps sidebar ${frame.sidebarRight}`);
-      if (frame.storyRingLeft !== null) assert(frame.storyRingLeft >= frame.sidebarRight - 1, `${page.viewportSize().width}px ${name}: first home story ring overlaps the sidebar`);
+      assert(frame.contentLeft >= frame.sidebarRight - 1, `${target.viewportSize().width}px ${name}: content ${frame.contentLeft} overlaps sidebar ${frame.sidebarRight}`);
+      if (frame.cardLeft !== null) assert(frame.cardLeft >= frame.sidebarRight - 1, `${target.viewportSize().width}px ${name}: first card ${frame.cardLeft} overlaps sidebar ${frame.sidebarRight}`);
+      if (frame.storyLeft !== null) assert(frame.storyLeft >= frame.sidebarRight - 1, `${target.viewportSize().width}px ${name}: first home story ${frame.storyLeft} overlaps sidebar ${frame.sidebarRight}`);
+      if (frame.storyRingLeft !== null) assert(frame.storyRingLeft >= frame.sidebarRight - 1, `${target.viewportSize().width}px ${name}: first home story ring overlaps the sidebar`);
     }
     return frames.at(-1);
   };
@@ -224,19 +234,22 @@ try {
     const sidebar = document.querySelector('.sidebar');
     if (!sidebar) return false; // Reload may finish before the router mounts AppShell.
     if (getComputedStyle(sidebar).display === 'none') return true;
-    const toggle = document.querySelector('[data-test="sidebar-toggle"]');
-    if (!toggle) return false;
-    const expanded = toggle.getAttribute('aria-expanded') === 'true';
+    const expanded = sidebar.classList.contains('sidebar--expanded');
     return Math.abs(sidebar.getBoundingClientRect().width - (expanded ? 240 : 77.6)) < 1;
   });
   const sidebarToggle = () => page.locator('[data-test="sidebar-toggle"]');
+  const sidebarExpanded = () => page.locator('.sidebar').evaluate(node => node.classList.contains('sidebar--expanded'));
+  const enterSidebar = () => page.mouse.move(35, 100);
+  const leaveSidebar = () => page.mouse.move(page.viewportSize().width - 10, 10);
   const expectSidebarNoHorizontalScroll = async () => {
     const metrics = await page.locator('.sidebar__nav').evaluate(node => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth, scrollLeft: node.scrollLeft }));
     assert(metrics.scrollWidth <= metrics.clientWidth + 1 && metrics.scrollLeft === 0, `Sidebar navigation must not scroll horizontally: ${JSON.stringify(metrics)}`);
   };
   const setSidebar = async expanded => {
     if (page.viewportSize().width < 768) return;
-    if ((await sidebarToggle().getAttribute('aria-expanded') === 'true') !== expanded) await sidebarToggle().click();
+    if (expanded) await enterSidebar();
+    else await clearSidebarInteraction();
+    await page.waitForFunction(expected => document.querySelector('.sidebar')?.classList.contains('sidebar--expanded') === expected, expanded);
     await settleSidebar();
   };
   const shellGridBounds = () => page.locator('[aria-label="博主目录"]').evaluate(grid => {
@@ -246,112 +259,132 @@ try {
   const sidebarLabelsBefore = structuredClone(creators.map(creator => creator.galleryLabels));
   for (const width of [1440, 1098, 980, 768]) {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto(`${entry}#/library`);
+    await leaveSidebar();
+    await page.goto(entry + '#/library');
     await expectCards(3);
     await page.evaluate(() => document.fonts.ready);
-    assert(await page.locator('.sidebar').isVisible(), `${width}px uses the actual desktop breakpoint`);
-    const collapsed = await checkSidebarTransition('collapsed', clearSidebarInteraction);
-    assert(Math.abs(collapsed.sidebarWidth - 77.6) < 1);
+    assert(await page.locator('.sidebar').isVisible(), width + 'px uses the actual desktop breakpoint');
+    await setSidebar(false);
+    assert.equal(await sidebarToggle().isVisible(), false, 'Fine mouse input does not need a persistent expand button');
     await expectSidebarNoHorizontalScroll();
-    assert.equal(await sidebarToggle().getAttribute('aria-label'), '展开侧栏');
-    const hovered = await checkSidebarTransition('hover-stays-collapsed', () => page.locator('.sidebar').hover());
-    assert(Math.abs(hovered.sidebarWidth - 77.6) < 1);
-    const focused = await checkSidebarTransition('keyboard-focus-stays-collapsed', async () => {
-      await page.locator('.sidebar__brand').focus();
-      await page.keyboard.press('Tab');
+    const swept = await checkSidebarTransition('brief-45ms-hover-does-not-expand', async () => {
+      await enterSidebar();
+      await page.waitForTimeout(45);
+      assert.equal(await sidebarExpanded(), false, 'A brief pass must not trigger expansion');
+      await leaveSidebar();
     });
-    assert(Math.abs(focused.sidebarWidth - 77.6) < 1);
-    assert(await page.locator('.sidebar').evaluate(sidebar => sidebar.contains(document.activeElement)));
-    const expanded = await checkSidebarTransition('click-expand', () => sidebarToggle().click());
+    assert(Math.abs(swept.sidebarWidth - 77.6) < 1);
+    const expanded = await checkSidebarTransition('hover-expand', enterSidebar);
     assert(Math.abs(expanded.sidebarWidth - 240) < 1);
     await expectSidebarNoHorizontalScroll();
-    assert.equal(await sidebarToggle().getAttribute('aria-label'), '收起侧栏');
-    assert.equal(await page.evaluate(() => localStorage.getItem('cosgallery.sidebar-expanded.v1')), 'true');
-    await saveScreenshot(`sidebar-${width}-expanded`, '点击展开真实侧栏；首列卡片完整位于侧栏右侧');
+    await saveScreenshot('sidebar-' + width + '-expanded', '悬停展开真实侧栏；首列卡片完整位于侧栏右侧');
     await checkSidebarTransition('independent-category-open', () => nav('desktop').getByRole('button', { name: '展开图库分类' }).click());
     await expectOpenMenu('desktop');
     const openGrid = await shellGridBounds();
     for (const [label, title, count] of [['cosplay', 'Cosplay', 1], ['portrait', '写真', 1], ['selfie', '自拍', 1], ['fuliji', '福利姬', 0]]) {
-      await checkSidebarTransition(`persistent-category-${label}`, async () => {
+      await checkSidebarTransition('persistent-category-' + label, async () => {
         await nav('desktop').getByRole('link', { name: title, exact: true }).click();
-        await page.waitForURL(url => url.hash.includes(`label=${label}`));
+        await page.waitForURL(url => url.hash.includes('label=' + label));
         await expectCards(count);
-        await clearSidebarInteraction();
+        await leaveSidebar();
       });
       await expectOpenMenu('desktop');
       await expectCategoryCards();
+      assert.equal(await sidebarExpanded(), true, 'Open categories keep the sidebar expanded after pointer exit');
       if (count) {
         const currentGrid = await shellGridBounds();
         for (const coordinate of ['x', 'y', 'width']) assert(Math.abs(currentGrid[coordinate] - openGrid[coordinate]) <= 1,
-          `${width}px ${label}: grid.${coordinate} stays stable while the sidebar remains expanded`);
+          width + 'px ' + label + ': grid.' + coordinate + ' stays stable with the category menu open');
       }
     }
-    await checkSidebarTransition('hide-open-category-on-collapse', () => sidebarToggle().click());
-    await expectClosedMenu('desktop');
-    assert.equal(await page.evaluate(() => localStorage.getItem('cosgallery.sidebar-expanded.v1')), 'false');
-    for (let index = 0; index < 10; index += 1) {
-      await page.keyboard.press('Tab');
-      assert.equal(await page.evaluate(() => Boolean(document.activeElement?.closest('.library-nav__menu'))), false, 'Hidden submenu must not remain keyboard reachable');
-    }
-    await checkSidebarTransition('restore-open-category-on-expand', () => sidebarToggle().click());
-    await expectOpenMenu('desktop');
-    await checkSidebarTransition('rapid-pointer-reversal-with-open-menu', async () => {
-      const button = await sidebarToggle().boundingBox();
-      const x = button.x + 20, y = button.y + button.height / 2;
-      // Coordinates stay inside the icon while width changes; locator.click()
-      // would wait for layout stability and accidentally skip the live reversal.
-      await page.mouse.click(x, y);
-      await page.waitForTimeout(45);
-      await page.mouse.click(x, y);
-    });
-    assert(await sidebarToggle().evaluate(button => button === document.activeElement), 'Global toggle retains keyboard focus through a reversal');
-    await nav('desktop').getByRole('button', { name: '展开图库分类' }).focus();
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(45);
-    await page.keyboard.press('Enter');
-    await expectOpenMenu('desktop');
-    assert(await nav('desktop').locator('.library-nav__menu').evaluate(menu => !menu.hasAttribute('inert') && !menu.hasAttribute('aria-hidden')
-      && [...menu.querySelectorAll('a')].every(link => link.tabIndex >= 0)), 'Reversing submenu leave restores every link to keyboard and assistive technology');
-    await page.keyboard.press('Tab');
-    assert(await nav('desktop').getByRole('link', { name: 'Cosplay', exact: true }).evaluate(link => link === document.activeElement));
-    await page.keyboard.press('Enter');
-    await page.waitForURL(/label=cosplay/);
-    await expectCards(1);
-    await nav('desktop').getByRole('link', { name: '福利姬', exact: true }).click();
-    await expectCards(0);
-    await nav('desktop').getByRole('button', { name: '展开图库分类' }).click();
-    await page.waitForFunction(() => !document.querySelector('.library-nav--desktop .library-nav__menu'));
-    assert(Math.abs((await page.locator('.sidebar').boundingBox()).width - 240) < 1, 'Category toggle must not collapse the outer sidebar');
-    await page.reload();
-    await expectCards(0);
-    await settleSidebar();
-    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'true', 'Reload restores the explicit expanded preference');
-    await page.locator('.sidebar__brand').focus();
-    for (let index = 0; index < 20 && !await sidebarToggle().evaluate(button => button === document.activeElement); index += 1) await page.keyboard.press('Tab');
-    assert(await sidebarToggle().evaluate(button => button === document.activeElement), 'The global toggle is reachable by actual Tab navigation');
-    await checkSidebarTransition('keyboard-space-collapse', () => page.keyboard.press('Space'));
-    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'false');
-    await checkSidebarTransition('keyboard-enter-expand', () => page.keyboard.press('Enter'));
-    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'true');
-    await checkSidebarTransition('rapid-keyboard-reversal', async () => {
-      await page.keyboard.press('Enter');
-      await page.waitForTimeout(45);
-      await page.keyboard.press('Enter');
-    });
-    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'true');
-    await setSidebar(false);
-    await page.reload();
-    await settleSidebar();
-    assert.equal(await sidebarToggle().getAttribute('aria-expanded'), 'false', 'Reload restores the explicit collapsed preference');
-    await page.goto(`${entry}#/library`);
+    // A pointer click leaves DOM focus on this link; that focus must not pin width.
+    await nav('desktop').getByRole('link', { name: '图库', exact: true }).click();
     await expectCards(3);
-    await clearSidebarInteraction();
-    await settleSidebar();
-    await saveScreenshot(`sidebar-${width}-collapsed`, '侧栏收起后主体同步恢复；首卡无遮挡');
+    await expectClosedMenu('desktop');
+    const collapsed = await checkSidebarTransition('clicked-gallery-focus-does-not-pin-sidebar', leaveSidebar);
+    assert(Math.abs(collapsed.sidebarWidth - 77.6) < 1);
+    assert(await nav('desktop').getByRole('link', { name: '图库', exact: true }).evaluate(link => link === document.activeElement), 'The regression retains real mouse-click focus');
+    await expectSidebarNoHorizontalScroll();
+    await saveScreenshot('sidebar-' + width + '-collapsed', '鼠标点击图库后移出，保留焦点仍能收起；首卡无遮挡');
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(entry + '#/library');
+  await expectCards(3);
+  await setSidebar(true);
+  const reentered = await checkSidebarTransition('reenter-cancels-220ms-collapse', async () => {
+    await leaveSidebar();
+    await page.waitForTimeout(120);
+    assert.equal(await sidebarExpanded(), true, 'Collapse waits through a short exit');
+    await enterSidebar();
+  });
+  assert(Math.abs(reentered.sidebarWidth - 240) < 1);
+  const reversed = await checkSidebarTransition('rapid-hover-reversal', async () => {
+    await leaveSidebar();
+    await page.waitForTimeout(260);
+    await enterSidebar();
+  });
+  assert(Math.abs(reversed.sidebarWidth - 240) < 1);
+  await setSidebar(false);
+  const keyboard = await checkSidebarTransition('keyboard-focus-visible-expands-immediately', async () => {
+    await page.locator('.sidebar__brand').focus();
+    await page.keyboard.press('Tab');
+    assert.equal(await sidebarExpanded(), true, 'Keyboard focus expands without hover dwell');
+    assert(await page.locator('.sidebar').evaluate(sidebar => sidebar.contains(document.activeElement) && document.activeElement.matches(':focus-visible')));
+  });
+  assert(Math.abs(keyboard.sidebarWidth - 240) < 1);
+  await nav('desktop').getByRole('button', { name: '展开图库分类' }).focus();
+  await page.keyboard.press('Enter');
+  await expectOpenMenu('desktop');
+  await page.keyboard.press('Tab');
+  assert(await nav('desktop').getByRole('link', { name: 'Cosplay', exact: true }).evaluate(link => link === document.activeElement));
+  await page.keyboard.press('Enter');
+  await expectCards(1);
+  await page.keyboard.press('Escape');
+  await expectClosedMenu('desktop');
+  assert(await nav('desktop').getByRole('button', { name: '展开图库分类' }).evaluate(button => button === document.activeElement));
+  await nav('desktop').getByRole('button', { name: '展开图库分类' }).focus();
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(45);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(45);
+  await page.keyboard.press('Enter');
+  await expectOpenMenu('desktop');
+  assert(await nav('desktop').locator('.library-nav__menu').evaluate(menu => !menu.hasAttribute('inert') && !menu.hasAttribute('aria-hidden')
+    && [...menu.querySelectorAll('a')].every(link => link.tabIndex >= 0)), 'Quick submenu reversal restores keyboard and assistive access');
+  await page.keyboard.press('Escape');
+  await page.locator('main input[type="search"]').focus();
+  const focusExit = await checkSidebarTransition('keyboard-focus-exits-sidebar', leaveSidebar);
+  assert(Math.abs(focusExit.sidebarWidth - 77.6) < 1);
+  await setSidebar(true);
+  const more = () => page.locator('.sidebar button[aria-haspopup="menu"]');
+  await more().click();
+  const heldMore = await checkSidebarTransition('more-menu-holds-on-backdrop-pointer-exit', leaveSidebar);
+  assert.equal(await more().getAttribute('aria-expanded'), 'true');
+  assert(Math.abs(heldMore.sidebarWidth - 240) < 1);
+  const afterBackdrop = await checkSidebarTransition('more-backdrop-click-closes-without-another-pointer-move', () => page.mouse.click(900, 100));
+  assert.equal(await more().getAttribute('aria-expanded'), 'false');
+  assert(Math.abs(afterBackdrop.sidebarWidth - 77.6) < 1);
+  await setSidebar(true);
+  await more().click();
+  await leaveSidebar();
+  const afterEscape = await checkSidebarTransition('more-escape-closes-while-pointer-stays-outside', () => page.keyboard.press('Escape'));
+  assert.equal(await more().getAttribute('aria-expanded'), 'false');
+  assert(Math.abs(afterEscape.sidebarWidth - 77.6) < 1);
+  for (const key of ['Escape', 'Enter']) {
+    await more().focus();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Shift+Tab');
+    assert(await page.getByRole('button', { name: /切换到.*模式/ }).evaluate(button => button === document.activeElement), 'Actual keyboard navigation focuses an item inside the more menu');
+    const removedFocus = await checkSidebarTransition('keyboard-more-item-removal-' + key.toLowerCase(), () => page.keyboard.press(key));
+    assert.equal(await more().getAttribute('aria-expanded'), 'false');
+    assert(await page.locator('.sidebar').evaluate(sidebar => !sidebar.contains(document.activeElement)), 'Removing the focused menu item releases the keyboard hold');
+    assert(Math.abs(removedFocus.sidebarWidth - 77.6) < 1);
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await checkSidebarTransition('reduced-motion-click-expand', () => sidebarToggle().click());
-  await checkSidebarTransition('reduced-motion-click-collapse', () => sidebarToggle().click());
+  await checkSidebarTransition('reduced-motion-hover-expand', enterSidebar);
+  await checkSidebarTransition('reduced-motion-hover-collapse', leaveSidebar);
+  assert.equal(await page.locator('.sidebar').evaluate(node => getComputedStyle(node).transitionDuration), '0s');
+  assert.equal(await page.locator('.app-shell__content').evaluate(node => getComputedStyle(node).transitionDuration), '0s');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   for (const width of [767, 390]) {
     await page.setViewportSize({ width, height: 844 });
@@ -399,29 +432,63 @@ try {
     await readHome('collapsed');
     await saveScreenshot(`home-${width}-collapsed`, '真实HomeView合成近期批次：首个图标完整可见');
     if (width >= 768) {
-      await checkSidebarTransition('home-click-expand', () => sidebarToggle().click());
+      await checkSidebarTransition('home-hover-expand', enterSidebar);
       await readHome('expanded');
       await saveScreenshot(`home-${width}-expanded`, '真实HomeView随侧栏展开同步让位，首个近期批次图标无遮挡');
-      await checkSidebarTransition('home-click-collapse', () => sidebarToggle().click());
+      await checkSidebarTransition('home-hover-collapse', leaveSidebar);
     }
   }
+  await page.evaluate(() => localStorage.setItem('cosgallery.sidebar-expanded.v1', 'true'));
   const restricted = await context.newPage();
   restricted.on('pageerror', error => errors.push(error.message));
   await restricted.addInitScript(() => {
-    const get = Storage.prototype.getItem, set = Storage.prototype.setItem;
-    Storage.prototype.getItem = function(key) { if (key === 'cosgallery.sidebar-expanded.v1') throw new DOMException('Synthetic blocked storage', 'SecurityError'); return get.call(this, key); };
-    Storage.prototype.setItem = function(key, value) { if (key === 'cosgallery.sidebar-expanded.v1') throw new DOMException('Synthetic blocked storage', 'SecurityError'); return set.call(this, key, value); };
+    window.__retiredStorageAccess = [];
+    for (const method of ['getItem', 'setItem', 'removeItem']) {
+      const original = Storage.prototype[method];
+      Storage.prototype[method] = function(key, ...args) {
+        if (key === 'cosgallery.sidebar-expanded.v1') {
+          window.__retiredStorageAccess.push(method);
+          throw new DOMException('Synthetic blocked storage', 'SecurityError');
+        }
+        return original.call(this, key, ...args);
+      };
+    }
   });
-  await restricted.goto(`${entry}#/library`);
-  const restrictedToggle = restricted.locator('[data-test="sidebar-toggle"]');
-  assert.equal(await restrictedToggle.getAttribute('aria-expanded'), 'false');
-  await restrictedToggle.click();
+  await restricted.goto(entry + '#/library');
+  await restricted.locator('.sidebar').waitFor();
+  assert.equal(await restricted.locator('.sidebar').evaluate(node => node.classList.contains('sidebar--expanded')), false);
+  await restricted.mouse.move(35, 100);
   await restricted.waitForFunction(() => Math.abs(document.querySelector('.sidebar').getBoundingClientRect().width - 240) < 1);
-  assert.equal(await restrictedToggle.getAttribute('aria-expanded'), 'true');
+  await restricted.mouse.move(1400, 100);
   await restricted.reload();
-  assert.equal(await restrictedToggle.getAttribute('aria-expanded'), 'false');
-  storageChecks.push({ reads: 'SecurityError', writes: 'SecurityError', toggling: 'PASS', reloadFallback: 'collapsed' });
+  await restricted.locator('.sidebar').waitFor();
+  assert.equal(await restricted.locator('.sidebar').evaluate(node => node.classList.contains('sidebar--expanded')), false, 'Legacy stored true must not expand a fresh shell');
+  assert.deepEqual(await restricted.evaluate(() => window.__retiredStorageAccess), [], 'Retired preference is never accessed');
+  assert.equal(await page.evaluate(() => localStorage.getItem('cosgallery.sidebar-expanded.v1')), 'true', 'Retired stored value is preserved');
+  storageChecks.push({ oldValue: 'true', afterHoverAndReload: 'true', storageAccess: 0, reloadState: 'collapsed' });
   await restricted.close();
+  const touchContext = await browser.newContext({ viewport: { width: 980, height: 900 }, hasTouch: true, serviceWorkers: 'block' });
+  await touchContext.route('**/*', interceptSynthetic);
+  const touch = await touchContext.newPage();
+  touch.on('pageerror', error => errors.push(error.message));
+  await touch.goto(entry + '#/library');
+  const touchToggle = touch.locator('[data-test="sidebar-toggle"]');
+  await touchToggle.waitFor({ state: 'visible' });
+  assert(await touch.evaluate(() => matchMedia('(hover: none), (pointer: coarse)').matches), 'Touch fixture exercises the non-hover input query');
+  const touchExpanded = await checkSidebarTransition('touch-desktop-button-expand', () => touchToggle.tap(), touch);
+  assert(Math.abs(touchExpanded.sidebarWidth - 240) < 1);
+  const touchNav = touch.locator('.library-nav--desktop');
+  await touchNav.getByRole('button', { name: '展开图库分类' }).tap();
+  await touchNav.locator('.library-nav__menu').waitFor({ state: 'visible' });
+  const touchCollapsed = await checkSidebarTransition('touch-desktop-button-collapse-with-open-categories', () => touchToggle.tap(), touch);
+  assert(Math.abs(touchCollapsed.sidebarWidth - 77.6) < 1);
+  await touchNav.locator('.library-nav__menu').waitFor({ state: 'hidden' });
+  await touchToggle.tap();
+  await touchNav.locator('.library-nav__menu').waitFor({ state: 'visible' });
+  assert.equal(await touchNav.locator('.library-nav__menu a').count(), 4, 'Touch fallback retains the independent category choice');
+  await touch.screenshot({ path: path.join(output, 'sidebar-980-touch-fallback.png'), animations: 'disabled' });
+  evidence.push({ screenshot: 'sidebar-980-touch-fallback.png', url: touch.url(), viewport: touch.viewportSize(), action: '无hover大屏：触屏按钮收起/展开后四分类选择保留' });
+  await touchContext.close();
   assert.deepEqual(creators.map(creator => creator.galleryLabels), sidebarLabelsBefore, 'Sidebar layout must preserve all assigned labels');
   assert.equal(requests.filter(request => request.method !== 'GET').length, 0, 'Sidebar interactions must not persist any business data');
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -664,9 +731,9 @@ try {
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
   writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, requests, errors, unexpected }, null, 2));
-  console.log(JSON.stringify({ status: 'PASS', output, screenshots: evidence.length, requests: requests.length, layoutSamples: layouts.length, classificationRows: classificationRows.length,
+  console.log(JSON.stringify({ status: 'PASS', output, isolatedPort: port, screenshots: evidence.length, requests: requests.length, layoutSamples: layouts.length, classificationRows: classificationRows.length,
     sidebarTransitions: sidebarFrames.length, sidebarFrameCount: sidebarFrames.reduce((total, transition) => total + transition.frames.length, 0), homeLayouts: homeLayouts.length, storageChecks,
-    scenarios: ['desktop navigation and return', 'explicit click-only sidebar; hover/focus do not expand', 'actual Tab/Enter/Space and rapid reversal without overlap', 'submenu open choice survives global collapse and is hidden from keyboard', 'reload and route persistence; blocked storage fallback', 'real HomeView recent batches remain outside the sidebar at rest and throughout transitions', 'reduced-motion sidebar/content alignment', '767/768 breakpoint and 390 mobile navigation without desktop gap', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes at matching sidebar states'] }));
+    scenarios: ['desktop navigation and return', '100ms hover dwell and 220ms exit delay; brief passes and reentry', 'mouse-click focus does not pin sidebar; keyboard focus-visible expands immediately', 'category and more-menu holders including fixed backdrop click and outside Escape', 'keyboard focused more-menu item removal with Escape and Enter', 'touch desktop button fallback with independent category state', 'retired storage preference ignored and preserved', 'real HomeView recent batches remain outside the sidebar at rest and throughout transitions', 'reduced-motion sidebar/content alignment', '767/768 breakpoint and 390 mobile navigation without desktop gap', 'persistent category selections and rendered icons', 'category removes rating and classification row', 'all-gallery public labels and admin-only editing including untagged creators', 'single and multiple labels alongside edit at 1440, 390 and 320 pixels', 'navigation does not persist labels', 'multiple labels and conflict', 'anonymous and viewer privacy', 'mobile navigation accessible with menu open', 'all, outside and Escape dismissal', 'stable search, count and results across categories and scrollbar changes at matching sidebar states'] }));
 } catch (error) {
   writeFileSync(path.join(output, 'evidence.json'), JSON.stringify({ status: 'FAIL', message: error.message, evidence, layouts, classificationRows, sidebarFrames, homeLayouts, storageChecks, requests, errors, unexpected }, null, 2));
   for (const context of browser?.contexts() ?? []) for (const page of context.pages()) {

@@ -1,7 +1,13 @@
 <template>
   <aside
+    ref="sidebar"
     class="sidebar flex h-full flex-col overflow-visible bg-bg px-[0.95rem] py-5 text-text"
     :class="{ 'sidebar--expanded': expanded }"
+    @pointerenter="handlePointerEnter"
+    @pointerleave="handlePointerLeave"
+    @pointermove="handlePointerMove"
+    @focusin="handleFocusIn"
+    @focusout="handleFocusOut"
   >
     <RouterLink
       class="sidebar__brand relative inline-flex items-center justify-center w-12 h-12 p-[0.3rem] rounded-[1rem] color-inherit transition-[background-color,transform,opacity] duration-180 hover:bg-surface-hover hover:-translate-y-px"
@@ -96,7 +102,7 @@
         </a>
       </RouterLink>
 
-      <LibraryNavigation variant="desktop" :collapsed="!expanded" @navigate="closeMoreMenu" />
+      <LibraryNavigation variant="desktop" :collapsed="!expanded" @navigate="closeMoreMenu" @open-change="libraryMenuOpen = $event" />
 
       <RouterLink
         v-if="showPlacesNav"
@@ -232,24 +238,26 @@
     <div
       v-if="moreMenuOpen"
       class="fixed inset-0 z-40"
-      @click="closeMoreMenu"
+      @pointerenter="handlePointerLeave"
+      @click="handleMoreBackdropClick"
     />
 
     <div class="z-50 mt-auto pt-10 pb-2">
       <button
+        v-if="touchControls"
         class="sidebar__toggle sidebar-item w-full mb-[0.4rem]"
         data-test="sidebar-toggle"
         type="button"
         :aria-label="expanded ? '收起侧栏' : '展开侧栏'"
         :aria-expanded="expanded"
         :title="expanded ? '收起侧栏' : '展开侧栏'"
-        @click="toggleSidebar"
+        @click="toggleTouchSidebar"
       >
         <span
           class="sidebar__toggle-icon sidebar__icon i-fluent-chevron-right-20-regular flex-shrink-0 w-[1.45rem] h-[1.45rem]"
           aria-hidden="true"
         />
-        <span class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]">收起侧栏</span>
+        <span class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]">{{ expanded ? '收起侧栏' : '展开侧栏' }}</span>
       </button>
       <div class="relative">
         <div
@@ -389,8 +397,8 @@ import { folderReadingRoute } from '../utils/work-gallery';
   import Avatar from "./Avatar.vue"
   import BrandMark from "./BrandMark.vue"
 
-  withDefaults(defineProps<{ expanded?: boolean }>(), { expanded: false })
-  const emit = defineEmits<{ toggle: [] }>()
+  const props = withDefaults(defineProps<{ expanded?: boolean }>(), { expanded: false })
+  const emit = defineEmits<{ 'expanded-change': [expanded: boolean] }>()
   const { t } = useI18n()
   const appVersion = __APP_VERSION__
   const buildIdentity = `${__BUILD_INFO__.product} ${appVersion} · ${__BUILD_INFO__.commit?.slice(0, 12) ?? 'unverified'}${__BUILD_INFO__.dirty ? ' (modified build)' : ''}`
@@ -401,6 +409,18 @@ import { folderReadingRoute } from '../utils/work-gallery';
   const placesStore = usePlacesStore()
   const route = useRoute()
   const moreMenuOpen = ref(false)
+  const libraryMenuOpen = ref(false)
+  const sidebar = ref<HTMLElement | null>(null)
+  const desktop = ref(false)
+  const touchControls = ref(false)
+  const keyboardFocus = ref(false)
+  const touchExpanded = ref(false)
+  let pointerInside = false
+  let inputMode: 'keyboard' | 'pointer' | null = null
+  let expandTimer: ReturnType<typeof setTimeout> | undefined
+  let collapseTimer: ReturnType<typeof setTimeout> | undefined
+  let desktopMedia: MediaQueryList | undefined
+  let touchMedia: MediaQueryList | undefined
 
   const likedCountByFolder = computed(() =>
     buildLikedCountByFolder(likesStore.items),
@@ -441,9 +461,128 @@ import { folderReadingRoute } from '../utils/work-gallery';
     moreMenuOpen.value = !moreMenuOpen.value
   }
 
-  function toggleSidebar() {
+  function clearExpandTimer() {
+    clearTimeout(expandTimer)
+    expandTimer = undefined
+  }
+
+  function clearCollapseTimer() {
+    clearTimeout(collapseTimer)
+    collapseTimer = undefined
+  }
+
+  function clearTimers() {
+    clearExpandTimer()
+    clearCollapseTimer()
+  }
+
+  function requestExpanded(expanded: boolean) {
+    emit('expanded-change', expanded)
+  }
+
+  function hasExpansionHold() {
+    // Touch uses the explicit fallback button, including folding an open category list.
+    return keyboardFocus.value || (touchControls.value
+      ? touchExpanded.value
+      : libraryMenuOpen.value || moreMenuOpen.value)
+  }
+
+  function reconcileExpansion() {
+    if (!desktop.value) return
+    if (hasExpansionHold()) {
+      clearTimers()
+      requestExpanded(true)
+    } else if (touchControls.value) {
+      clearTimers()
+      requestExpanded(false)
+    } else if (pointerInside) {
+      clearCollapseTimer()
+      if (!props.expanded && expandTimer === undefined) {
+        expandTimer = setTimeout(() => {
+          expandTimer = undefined
+          if (desktop.value && pointerInside) requestExpanded(true)
+        }, 100)
+      }
+    } else {
+      clearExpandTimer()
+      if (props.expanded && collapseTimer === undefined) {
+        collapseTimer = setTimeout(() => {
+          collapseTimer = undefined
+          if (!pointerInside && !hasExpansionHold()) requestExpanded(false)
+        }, 220)
+      }
+    }
+  }
+
+  function handlePointerEnter(event: PointerEvent) {
+    if (!desktop.value || touchControls.value || event.pointerType === 'touch') return
+    pointerInside = true
+    reconcileExpansion()
+  }
+
+  function handlePointerLeave() {
+    pointerInside = false
+    reconcileExpansion()
+  }
+
+  function pointerIsOverSidebar(event: MouseEvent) {
+    const bounds = sidebar.value?.getBoundingClientRect()
+    return Boolean(bounds && event.clientX >= bounds.left && event.clientX < bounds.right &&
+      event.clientY >= bounds.top && event.clientY < bounds.bottom)
+  }
+
+  function handlePointerMove(event: PointerEvent) {
+    // The more menu and its full-screen backdrop are descendants of the aside.
+    // Their pointer events must not turn the whole screen into a hover target.
+    if (!moreMenuOpen.value || touchControls.value || event.pointerType === 'touch') return
+    const inside = pointerIsOverSidebar(event)
+    if (inside !== pointerInside) {
+      pointerInside = inside
+      reconcileExpansion()
+    }
+  }
+
+  function handleMoreBackdropClick(event: MouseEvent) {
+    pointerInside = !touchControls.value && pointerIsOverSidebar(event)
     closeMoreMenu()
-    emit('toggle')
+    reconcileExpansion()
+  }
+
+  function toggleTouchSidebar() {
+    touchExpanded.value = !props.expanded
+    if (!touchExpanded.value) keyboardFocus.value = false
+    closeMoreMenu()
+    reconcileExpansion()
+  }
+
+  function handlePointerDown() {
+    inputMode = 'pointer'
+    keyboardFocus.value = false
+  }
+
+  function handleFocusIn(event: FocusEvent) {
+    const target = event.target
+    keyboardFocus.value = inputMode !== 'pointer' && target instanceof HTMLElement &&
+      (inputMode === 'keyboard' || target.matches(':focus-visible'))
+  }
+
+  function handleFocusOut(event: FocusEvent) {
+    if (!(event.relatedTarget instanceof Node) || !sidebar.value?.contains(event.relatedTarget)) {
+      keyboardFocus.value = false
+    }
+  }
+
+  function handleMediaChange() {
+    clearTimers()
+    // Reset before changing capability flags so their watchers cannot retain a hold.
+    desktop.value = false
+    pointerInside = false
+    keyboardFocus.value = false
+    touchExpanded.value = false
+    closeMoreMenu()
+    touchControls.value = Boolean(desktopMedia?.matches && touchMedia?.matches)
+    desktop.value = Boolean(desktopMedia?.matches)
+    requestExpanded(false)
   }
 
   function handleAppearanceToggle() {
@@ -472,6 +611,11 @@ import { folderReadingRoute } from '../utils/work-gallery';
   }
 
   function handleWindowKeydown(event: KeyboardEvent) {
+    const isNavigationKey = ['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(event.key)
+    if (isNavigationKey && (event.key === 'Tab' || sidebar.value?.contains(document.activeElement))) {
+      inputMode = 'keyboard'
+      if (sidebar.value?.contains(document.activeElement)) keyboardFocus.value = true
+    }
     if (event.key === "Escape") {
       closeMoreMenu()
     }
@@ -484,13 +628,29 @@ import { folderReadingRoute } from '../utils/work-gallery';
     },
   )
 
+  watch([libraryMenuOpen, moreMenuOpen, keyboardFocus, touchExpanded], reconcileExpansion, { flush: 'sync' })
+  watch(moreMenuOpen, open => {
+    // Removing a focused menu item does not reliably dispatch focusout.
+    if (!open && !sidebar.value?.contains(document.activeElement)) keyboardFocus.value = false
+  }, { flush: 'post' })
+
   onMounted(() => {
     void placesStore.fetchPlaces()
-    window.addEventListener("keydown", handleWindowKeydown)
+    desktopMedia = window.matchMedia('(min-width: 48rem)')
+    touchMedia = window.matchMedia('(hover: none), (pointer: coarse)')
+    handleMediaChange()
+    desktopMedia.addEventListener('change', handleMediaChange)
+    touchMedia.addEventListener('change', handleMediaChange)
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    window.addEventListener("keydown", handleWindowKeydown, true)
   })
 
   onUnmounted(() => {
-    window.removeEventListener("keydown", handleWindowKeydown)
+    clearTimers()
+    desktopMedia?.removeEventListener('change', handleMediaChange)
+    touchMedia?.removeEventListener('change', handleMediaChange)
+    document.removeEventListener('pointerdown', handlePointerDown, true)
+    window.removeEventListener("keydown", handleWindowKeydown, true)
   })
 </script>
 
