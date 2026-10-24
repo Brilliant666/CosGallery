@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as galleryApi from '../api/gallery';
 import type { AppStats, AppStatus, PlacesStatus } from '../types/api';
 import { useAppStore } from '../stores/app';
+import { useAuthStore } from '../stores/auth';
 import SettingsView from './SettingsView.vue';
 import { useFeedStore } from '../stores/feed';
 import { useFoldersStore } from '../stores/folders';
@@ -12,6 +13,7 @@ import { useLikesStore } from '../stores/likes';
 import { useMomentsStore } from '../stores/moments';
 import { useViewerStore } from '../stores/viewer';
 import { RequestError } from '../api/http';
+import { readSidebarInteraction, SIDEBAR_CLICK_EXPANDED_KEY, SIDEBAR_INTERACTION_KEY, SIDEBAR_PREFERENCE_EVENT } from '../utils/sidebar-preferences';
 
 
 vi.mock('vue-router', () => ({
@@ -160,6 +162,7 @@ describe('SettingsView', () => {
     setActivePinia(createPinia());
     vi.restoreAllMocks();
     window.localStorage.clear();
+    readSidebarInteraction(true);
     document.documentElement.dataset.accent = 'purple';
     // These fixtures model an existing English app preference, not a fresh profile.
     useAppStore().setLocale('en', { persist: false });
@@ -178,6 +181,125 @@ describe('SettingsView', () => {
     expect(wrapper.find('application-recovery-panel-stub').exists()).toBe(true);
     await openGeneralSettingsSidebarTab(wrapper);
     expect(wrapper.find('application-recovery-panel-stub').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('saves sidebar interaction immediately as a browser preference without making a server request', async () => {
+    useAppStore().$patch({ stats: createAppStatus() });
+    vi.spyOn(galleryApi, 'fetchPlacesStatus').mockResolvedValue(createPlacesStatus());
+    const request = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected server request'));
+    const wrapper = mountSettingsView();
+    await flushPromises();
+    expect(wrapper.find('[data-test="sidebar-browser-preferences"]').exists()).toBe(false);
+    await openGeneralSettingsSidebarTab(wrapper);
+
+    const card = wrapper.get('[data-test="sidebar-browser-preferences"]');
+    const select = card.get<HTMLSelectElement>('[data-test="sidebar-interaction"]');
+    expect(select.element.value).toBe('click');
+    expect(card.findAll('button')).toHaveLength(0);
+    const savedButton = wrapper.findAll('button').find(button => button.text() === 'Saved')!;
+    expect(savedButton.attributes('disabled')).toBeDefined();
+
+    await select.setValue('hover');
+    expect(select.element.value).toBe('hover');
+    expect(window.localStorage.getItem(SIDEBAR_INTERACTION_KEY)).toBe('hover');
+    expect(savedButton.text()).toBe('Saved');
+    expect(savedButton.attributes('disabled')).toBeDefined();
+    expect(request).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it.each(['click', 'hover'] as const)('restores the saved %s sidebar preference without replacing the expanded state', async (interaction) => {
+    useAppStore().$patch({ stats: createAppStatus() });
+    vi.spyOn(galleryApi, 'fetchPlacesStatus').mockResolvedValue(createPlacesStatus());
+    window.localStorage.setItem(SIDEBAR_INTERACTION_KEY, interaction);
+    window.localStorage.setItem(SIDEBAR_CLICK_EXPANDED_KEY, 'true');
+    const wrapper = mountSettingsView();
+    await openGeneralSettingsSidebarTab(wrapper);
+
+    expect(wrapper.get<HTMLSelectElement>('[data-test="sidebar-interaction"]').element.value).toBe(interaction);
+    expect(window.localStorage.getItem(SIDEBAR_INTERACTION_KEY)).toBe(interaction);
+    expect(window.localStorage.getItem(SIDEBAR_CLICK_EXPANDED_KEY)).toBe('true');
+    wrapper.unmount();
+  });
+
+  it('keeps the sidebar selection in sync with same-page and other-tab preference changes', async () => {
+    useAppStore().$patch({ stats: createAppStatus() });
+    vi.spyOn(galleryApi, 'fetchPlacesStatus').mockResolvedValue(createPlacesStatus());
+    const wrapper = mountSettingsView();
+    await openGeneralSettingsSidebarTab(wrapper);
+    const select = wrapper.get<HTMLSelectElement>('[data-test="sidebar-interaction"]');
+
+    // Same-page notifications carry the active value even if storage is unavailable.
+    window.dispatchEvent(new CustomEvent(SIDEBAR_PREFERENCE_EVENT, {
+      detail: { key: SIDEBAR_INTERACTION_KEY, value: 'hover' }
+    }));
+    await flushPromises();
+    expect(select.element.value).toBe('hover');
+    expect(window.localStorage.getItem(SIDEBAR_INTERACTION_KEY)).toBeNull();
+
+    window.dispatchEvent(new CustomEvent(SIDEBAR_PREFERENCE_EVENT, {
+      detail: { key: SIDEBAR_INTERACTION_KEY, value: 'invalid' }
+    }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated-preference' }));
+    await flushPromises();
+    expect(select.element.value).toBe('hover');
+
+    window.localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'click');
+    window.dispatchEvent(new StorageEvent('storage', { key: SIDEBAR_INTERACTION_KEY }));
+    await flushPromises();
+    expect(select.element.value).toBe('click');
+
+    window.localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
+    window.dispatchEvent(new StorageEvent('storage', { key: SIDEBAR_INTERACTION_KEY }));
+    await flushPromises();
+    expect(select.element.value).toBe('hover');
+    window.localStorage.removeItem(SIDEBAR_INTERACTION_KEY);
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+    await flushPromises();
+    expect(select.element.value).toBe('click');
+    wrapper.unmount();
+  });
+
+  it('retains a mode that failed to save across remounts until another tab changes it', async () => {
+    useAppStore().$patch({ stats: createAppStatus() });
+    vi.spyOn(galleryApi, 'fetchPlacesStatus').mockResolvedValue(createPlacesStatus());
+    window.localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'click');
+    const failedWrite = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Storage quota exceeded');
+    });
+    const first = mountSettingsView();
+    await openGeneralSettingsSidebarTab(first);
+    await first.get('[data-test="sidebar-interaction"]').setValue('hover');
+    expect(window.localStorage.getItem(SIDEBAR_INTERACTION_KEY)).toBe('click');
+    first.unmount();
+
+    const reopened = mountSettingsView();
+    await openGeneralSettingsSidebarTab(reopened);
+    expect(reopened.get<HTMLSelectElement>('[data-test="sidebar-interaction"]').element.value).toBe('hover');
+
+    failedWrite.mockRestore();
+    // Model a later change from another tab after storage becomes writable again.
+    window.localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
+    window.localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'click');
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: SIDEBAR_INTERACTION_KEY, oldValue: 'hover', newValue: 'click'
+    }));
+    await flushPromises();
+    expect(reopened.get<HTMLSelectElement>('[data-test="sidebar-interaction"]').element.value).toBe('click');
+    expect(readSidebarInteraction()).toBe('click');
+    reopened.unmount();
+  });
+
+  it('hides browser preferences when the current session cannot access settings', async () => {
+    useAppStore().$patch({ stats: createAppStatus() });
+    vi.spyOn(galleryApi, 'fetchPlacesStatus').mockResolvedValue(createPlacesStatus());
+    const authStore = useAuthStore();
+    authStore.$patch({ capabilities: { canAccessSettings: false } });
+    const wrapper = mountSettingsView();
+    await openGeneralSettingsSidebarTab(wrapper);
+    expect(wrapper.find('[data-test="sidebar-browser-preferences"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="sidebar-interaction"]').exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -333,7 +455,7 @@ describe('SettingsView', () => {
     await flushPromises();
     await openGeneralSettingsSidebarTab(wrapper);
 
-    const languageSelect = wrapper.get('select');
+    const languageSelect = wrapper.get('#settings-language-select');
     expect((languageSelect.element as HTMLSelectElement).value).toBe('en');
 
     await languageSelect.setValue('es');
@@ -360,7 +482,7 @@ describe('SettingsView', () => {
     await flushPromises();
     await openGeneralSettingsSidebarTab(wrapper);
 
-    await wrapper.get('select').setValue('zh');
+    await wrapper.get('#settings-language-select').setValue('zh');
     await flushPromises();
 
     const saveButton = wrapper

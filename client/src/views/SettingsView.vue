@@ -479,6 +479,33 @@
         <!-- CATEGORY: GENERAL -->
         <template v-if="currentCategory === 'general'">
           <section
+            v-if="authStore.canAccessSettings"
+            class="card grid gap-4 p-6"
+            data-test="sidebar-browser-preferences"
+          >
+            <div class="flex items-start justify-between gap-4 max-sm:flex-col max-sm:items-stretch">
+              <div class="grid gap-[0.3rem]">
+                <h2 class="m-0 text-xl">{{ t('settings.general.browserPreferences.title') }}</h2>
+                <p class="m-0 text-muted">{{ t('settings.general.browserPreferences.description') }}</p>
+              </div>
+              <label class="grid min-w-[13rem] gap-2 text-[0.9rem] font-semibold">
+                <span>{{ t('nav.sidebarInteraction') }}</span>
+                <select
+                  class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-text"
+                  :value="sidebarInteraction"
+                  :aria-label="t('nav.sidebarInteraction')"
+                  data-test="sidebar-interaction"
+                  @change="changeSidebarInteraction"
+                >
+                  <option value="click">{{ t('nav.sidebarClick') }}</option>
+                  <option value="hover">{{ t('nav.sidebarHover') }}</option>
+                </select>
+              </label>
+            </div>
+            <p class="m-0 text-[0.85rem] text-muted">{{ t('nav.sidebarLocalHint') }}</p>
+          </section>
+
+          <section
             v-if="showCarouselsMigrationNotice"
             class="card grid gap-[1rem] p-6 border-[color-mix(in_srgb,#d2a133_42%,var(--border)_58%)]"
             style="background: radial-gradient(circle at top right, rgba(210,161,51,0.18), transparent 40%), linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, #fff3cf 6%) 0%, color-mix(in srgb, var(--surface) 88%, #ffe6a6 12%) 100%);"
@@ -1415,6 +1442,7 @@ import { useMomentsStore } from '../stores/moments';
 import { usePlacesStore } from '../stores/places';
 import { useViewerStore } from '../stores/viewer';
 import { ACCENT_COLORS, type AccentColor, type AppStats, type FeedMode, type FolderImageOrder, type NestedFolderTitleFormat, type ReelsFeedMode, type ViewerAccessMode } from '../types/api';
+import { readSidebarInteraction, saveSidebarPreference, SIDEBAR_INTERACTION_KEY, SIDEBAR_PREFERENCE_EVENT } from '../utils/sidebar-preferences';
 
 const { t, locale } = useI18n();
 const appStore = useAppStore();
@@ -1427,6 +1455,7 @@ const placesStore = usePlacesStore();
 const viewerStore = useViewerStore();
 const route = useRoute();
 const currentCategory = ref<'library' | 'general' | 'places' | 'access' | 'status'>('library');
+const sidebarInteraction = ref(readSidebarInteraction());
 const scanError = ref<string | null>(null);
 const scanPipelineNotice = ref<string | null>(null);
 const rebuildError = ref<string | null>(null);
@@ -3126,8 +3155,30 @@ async function runThumbnailRebuild() {
   }
 }
 
+function changeSidebarInteraction(event: Event) {
+  if (!authStore.canAccessSettings) return;
+  const value = (event.target as HTMLSelectElement).value;
+  if (value !== 'click' && value !== 'hover') return;
+  sidebarInteraction.value = value;
+  saveSidebarPreference(SIDEBAR_INTERACTION_KEY, value);
+}
+
+function handleSidebarPreferenceChange(event: Event) {
+  const detail = (event as CustomEvent<{ key?: string; value?: string }>).detail;
+  if (detail?.key !== SIDEBAR_INTERACTION_KEY || (detail.value !== 'click' && detail.value !== 'hover')) return;
+  sidebarInteraction.value = detail.value;
+}
+
+function handleSidebarPreferenceStorage(event: StorageEvent) {
+  if (event.key === null || event.key === SIDEBAR_INTERACTION_KEY) {
+    sidebarInteraction.value = readSidebarInteraction(true);
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('message', handleArchiveTaskSyncResult);
+  window.addEventListener(SIDEBAR_PREFERENCE_EVENT, handleSidebarPreferenceChange);
+  window.addEventListener('storage', handleSidebarPreferenceStorage);
   if (!appStore.stats && !appStore.loadingStats) {
     await appStore.fetchStats();
   }
@@ -3144,6 +3195,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('message', handleArchiveTaskSyncResult);
+  window.removeEventListener(SIDEBAR_PREFERENCE_EVENT, handleSidebarPreferenceChange);
+  window.removeEventListener('storage', handleSidebarPreferenceStorage);
 });
 
 watch(

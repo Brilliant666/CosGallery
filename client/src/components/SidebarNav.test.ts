@@ -7,9 +7,10 @@ import SidebarNav from './SidebarNav.vue';
 import { usePlacesStore } from '../stores/places';
 import { useFoldersStore } from '../stores/folders';
 import { useAppStore } from '../stores/app';
+import { useAuthStore } from '../stores/auth';
 import type { FolderSummary } from '../types/api';
 import { i18n } from '../locales';
-import { SIDEBAR_INTERACTION_KEY, SIDEBAR_CLICK_EXPANDED_KEY } from '../utils/sidebar-preferences';
+import { readSidebarInteraction, saveSidebarPreference, SIDEBAR_INTERACTION_KEY, SIDEBAR_CLICK_EXPANDED_KEY } from '../utils/sidebar-preferences';
 
 enableAutoUnmount(afterEach);
 
@@ -45,9 +46,15 @@ async function movePointerOutside(type = 'mouse') {
   await nextTick();
 }
 
+async function pointerClick(element: Element) {
+  element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+  await nextTick();
+}
+
 describe('sidebar hover intent', () => {
   beforeEach(() => {
     localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
+    readSidebarInteraction(true);
     vi.useFakeTimers();
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(min-width: 48rem)', addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   });
@@ -149,12 +156,11 @@ describe('sidebar hover intent', () => {
     await sidebar.trigger('pointerenter', { pointerType: 'touch', clientX: 18, clientY: 220 });
     await vi.advanceTimersByTimeAsync(200);
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
-    const toggle = sidebar.get('[data-test="sidebar-toggle"]');
-    await toggle.trigger('click');
+    await sidebar.get('[data-test="sidebar-expand"]').trigger('click');
     await movePointerOutside('touch'); await movePointerOutside('mouse');
     await vi.advanceTimersByTimeAsync(500);
     expect(sidebar.classes()).toContain('sidebar--expanded');
-    await toggle.trigger('click');
+    await sidebar.get('[data-test="sidebar-collapse"]').trigger('click');
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
   });
 
@@ -194,19 +200,20 @@ describe('personal sidebar interaction', () => {
     vi.useFakeTimers();
     localStorage.removeItem(SIDEBAR_INTERACTION_KEY);
     localStorage.removeItem(SIDEBAR_CLICK_EXPANDED_KEY);
+    readSidebarInteraction(true);
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(min-width: 48rem)', addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
   it('defaults to click mode and ignores pointer and keyboard focus expansion', async () => {
     const { sidebar } = await setup();
-    expect(sidebar.find('[data-test="sidebar-toggle"]').exists()).toBe(true);
+    expect(sidebar.find('[data-test="sidebar-expand"]').exists()).toBe(true);
     await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
     sidebar.get<HTMLAnchorElement>('a[href="/library"]').element.focus();
     await vi.advanceTimersByTimeAsync(400);
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
-    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-expand"]').trigger('click');
     await movePointerOutside();
     await vi.advanceTimersByTimeAsync(400);
     expect(sidebar.classes()).toContain('sidebar--expanded');
@@ -214,12 +221,12 @@ describe('personal sidebar interaction', () => {
 
   it('remembers both expanded and collapsed choices across remounts', async () => {
     const first = await setup();
-    await first.sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await first.sidebar.get('[data-test="sidebar-expand"]').trigger('click');
     expect(localStorage.getItem(SIDEBAR_CLICK_EXPANDED_KEY)).toBe('true');
     first.wrapper.unmount();
     const second = await setup();
     expect(second.sidebar.classes()).toContain('sidebar--expanded');
-    await second.sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await second.sidebar.get('[data-test="sidebar-collapse"]').trigger('click');
     expect(localStorage.getItem(SIDEBAR_CLICK_EXPANDED_KEY)).toBe('false');
     second.wrapper.unmount();
     const third = await setup();
@@ -231,36 +238,36 @@ describe('personal sidebar interaction', () => {
     const { sidebar } = await setup();
     await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
     await vi.advanceTimersByTimeAsync(45);
-    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
-    await sidebar.get('[data-test="sidebar-interaction"]').setValue('click');
+    saveSidebarPreference(SIDEBAR_INTERACTION_KEY, 'click');
     await vi.advanceTimersByTimeAsync(400);
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
     expect(localStorage.getItem(SIDEBAR_INTERACTION_KEY)).toBe('click');
-    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
-    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
-    await sidebar.get('[data-test="sidebar-interaction"]').trigger('pointerdown', { pointerType: 'mouse' });
-    await sidebar.get('[data-test="sidebar-interaction"]').setValue('hover');
-    expect(document.activeElement).toBe(sidebar.get('button[aria-haspopup="menu"]').element);
+    await pointerClick(sidebar.get('[data-test="sidebar-expand"]').element);
+    const settingsControl = document.createElement('select'); document.body.append(settingsControl); settingsControl.focus();
+    saveSidebarPreference(SIDEBAR_INTERACTION_KEY, 'hover');
+    expect(document.activeElement).toBe(settingsControl);
     await movePointerOutside();
     await vi.advanceTimersByTimeAsync(120);
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
-    expect(sidebar.find('[data-test="sidebar-toggle"]').exists()).toBe(false);
+    expect(sidebar.find('[data-test="sidebar-expand"]').exists()).toBe(true);
     await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
     await vi.advanceTimersByTimeAsync(100);
-    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
-    await sidebar.get('[data-test="sidebar-interaction"]').setValue('click');
+    saveSidebarPreference(SIDEBAR_INTERACTION_KEY, 'click'); await nextTick();
     expect(sidebar.classes()).toContain('sidebar--expanded');
+    settingsControl.remove();
   });
 
   it('keeps category choice independent from click mode collapse', async () => {
     const { sidebar, router } = await setup();
-    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-expand"]').trigger('click');
     await sidebar.get('button[aria-label="展开图库分类"]').trigger('click');
     await sidebar.get('.library-nav__menu a[href="/library?label=selfie"]').trigger('click');
     await flushPromises();
-    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-collapse"]').trigger('pointerdown');
+    await sidebar.get('[data-test="sidebar-collapse"]').trigger('click');
     expect(sidebar.find('.library-nav__menu').exists()).toBe(false);
-    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-expand"]').trigger('pointerdown');
+    await sidebar.get('[data-test="sidebar-expand"]').trigger('click');
     expect(router.currentRoute.value.query.label).toBe('selfie');
     expect(sidebar.get('.library-nav__menu a[href="/library?label=selfie"]').attributes('aria-current')).toBe('page');
   });
@@ -270,18 +277,16 @@ describe('personal sidebar interaction', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
     const { sidebar } = await setup();
-    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await pointerClick(sidebar.get('[data-test="sidebar-expand"]').element);
     expect(sidebar.classes()).toContain('sidebar--expanded');
-    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
-    await sidebar.get('[data-test="sidebar-interaction"]').trigger('pointerdown', { pointerType: 'mouse' });
-    await sidebar.get('[data-test="sidebar-interaction"]').setValue('hover');
+    saveSidebarPreference(SIDEBAR_INTERACTION_KEY, 'hover');
     await vi.advanceTimersByTimeAsync(120);
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
   });
 
   it('preserves keyboard focus expansion when another tab switches to hover without stealing focus', async () => {
     const { sidebar } = await setup();
-    await sidebar.get('[data-test="sidebar-toggle"]').trigger('click');
+    await sidebar.get('[data-test="sidebar-expand"]').trigger('click');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
     const link = sidebar.get<HTMLAnchorElement>('a[href="/library"]');
     link.element.focus();
@@ -309,6 +314,68 @@ describe('personal sidebar interaction', () => {
     await vi.advanceTimersByTimeAsync(120);
     expect(sidebar.classes()).not.toContain('sidebar--expanded');
     expect(localStorage.getItem('retained-preference')).toBe('unchanged');
+  });
+
+  it('opens at the brand without navigation, collapses at the header and restores keyboard focus', async () => {
+    const { sidebar, router } = await setup();
+    const brand = sidebar.get<HTMLButtonElement>('[data-test="sidebar-expand"]');
+    brand.element.focus();
+    await brand.trigger('click');
+    await nextTick();
+    expect(router.currentRoute.value.path).toBe('/library');
+    const collapse = sidebar.get<HTMLButtonElement>('[data-test="sidebar-collapse"]');
+    expect(document.activeElement).toBe(collapse.element);
+    await collapse.trigger('click'); await nextTick();
+    expect(document.activeElement).toBe(sidebar.get('[data-test="sidebar-expand"]').element);
+    expect(sidebar.find('[data-test="sidebar-collapse"]').exists()).toBe(false);
+    expect(sidebar.find('[data-test="sidebar-toggle"]').exists()).toBe(false);
+    await sidebar.get('a[href="/"]').trigger('click'); await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/');
+  });
+
+  it('keeps a manual hover collapse closed until the pointer leaves and returns', async () => {
+    localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
+    const { sidebar } = await setup();
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
+    await vi.advanceTimersByTimeAsync(100);
+    await sidebar.get('[data-test="sidebar-collapse"]').trigger('click'); await nextTick();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    expect(document.activeElement).toBe(sidebar.get('[data-test="sidebar-expand"]').element);
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    await movePointerOutside();
+    await sidebar.trigger('pointerenter', { pointerType: 'mouse', clientX: 18, clientY: 220 });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+  });
+
+  it('can reopen hover mode explicitly or by a fresh keyboard move after manual collapse', async () => {
+    localStorage.setItem(SIDEBAR_INTERACTION_KEY, 'hover');
+    const { sidebar } = await setup();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    sidebar.get<HTMLButtonElement>('[data-test="sidebar-expand"]').element.focus();
+    await sidebar.get('[data-test="sidebar-expand"]').trigger('click');
+    await nextTick();
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+    await sidebar.get('[data-test="sidebar-collapse"]').trigger('click'); await nextTick();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sidebar.classes()).not.toContain('sidebar--expanded');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    sidebar.get<HTMLAnchorElement>('a[href="/"]').element.focus(); await nextTick();
+    expect(sidebar.classes()).toContain('sidebar--expanded');
+  });
+
+  it('does not expose the mode setting or admin settings link to anonymous visitors', async () => {
+    const { sidebar } = await setup();
+    useAuthStore().$patch({ enabled: true, role: 'anonymous', capabilities: { canAccessSettings: false } });
+    await sidebar.get('button[aria-haspopup="menu"]').trigger('click');
+    expect(sidebar.find('[data-test="sidebar-interaction"]').exists()).toBe(false);
+    expect(sidebar.find('a[href="/settings"]').exists()).toBe(false);
+    expect(sidebar.find('[data-test="sidebar-expand"]').exists()).toBe(true);
   });
 });
 

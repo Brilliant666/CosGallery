@@ -26,7 +26,7 @@ async function setup(path: string, variant: 'desktop' | 'mobile' = 'desktop') {
   ] });
   await router.push(path);
   await router.isReady();
-  const wrapper = mount({ components: { LibraryNavigation }, data: () => ({ collapsed: false }), template: `<main><aside class="sidebar"><button data-test="sidebar-toggle" @click="collapsed = !collapsed">Toggle sidebar</button><LibraryNavigation variant="${variant}" :collapsed="collapsed" /></aside><RouterView /></main>` }, { attachTo: document.body, global: { plugins: [router], stubs: { Teleport: true } } });
+  const wrapper = mount({ components: { LibraryNavigation }, data: () => ({ collapsed: false }), template: `<main><aside class="sidebar"><button data-test="sidebar-toggle" data-sidebar-control @click="collapsed = !collapsed"><span>Toggle sidebar</span></button><LibraryNavigation variant="${variant}" :collapsed="collapsed" /></aside><RouterView /></main>` }, { attachTo: document.body, global: { plugins: [router], stubs: { Teleport: true } } });
   await flushPromises();
   return { wrapper, router };
 }
@@ -236,7 +236,7 @@ describe('gallery navigation and public reading state', () => {
     const nav = wrapper.getComponent(LibraryNavigation);
     await nav.get('button[aria-label="展开图库分类"]').trigger('click');
     const shellToggle = wrapper.get('[data-test="sidebar-toggle"]');
-    await shellToggle.trigger('pointerdown');
+    await shellToggle.get('span').trigger('pointerdown');
     await shellToggle.trigger('click');
     await shellToggle.trigger('pointerdown');
     await shellToggle.trigger('click');

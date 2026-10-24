@@ -8,20 +8,48 @@
     @focusin="handleFocusIn"
     @focusout="handleFocusOut"
   >
-    <RouterLink
-      class="sidebar__brand relative inline-flex items-center justify-center w-12 h-12 p-[0.3rem] rounded-[1rem] color-inherit transition-[background-color,transform,opacity] duration-180 hover:bg-surface-hover hover:-translate-y-px"
-      to="/"
-      :aria-label="t('nav.foldergramHome')"
-      :title="buildIdentity"
-    >
-      <span
-        class="pointer-events-none absolute top-[0.16rem] left-1/2 -translate-x-1/2 text-[0.42rem] leading-none tracking-[0.08em] text-muted"
-        aria-hidden="true"
+    <div class="sidebar__header relative flex h-12 shrink-0 items-center overflow-hidden">
+      <div class="sidebar__brand relative inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-[1rem] p-[0.3rem]" :title="buildIdentity">
+        <span class="sidebar__brand-art pointer-events-none inline-flex items-center justify-center" aria-hidden="true">
+          <span class="absolute top-[0.16rem] left-1/2 -translate-x-1/2 text-[0.42rem] leading-none tracking-[0.08em] text-muted">{{ appVersion }}</span>
+          <BrandMark />
+        </span>
+        <button
+          v-if="!expanded"
+          ref="expandButton"
+          class="sidebar__expand absolute inset-0 flex items-center justify-center rounded-[1rem] border-0 bg-transparent text-muted cursor-pointer hover:bg-surface-hover hover:text-text"
+          data-test="sidebar-expand"
+          data-sidebar-control
+          type="button"
+          :aria-label="t('nav.sidebarExpand')"
+          :aria-expanded="false"
+          :title="t('nav.sidebarExpand')"
+          @click="expandSidebar"
+        >
+          <svg class="sidebar__expand-icon h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="3" />
+            <path d="M9 3v18m4-12 3 3-3 3" />
+          </svg>
+        </button>
+      </div>
+      <button
+        v-if="expanded"
+        ref="collapseButton"
+        class="sidebar__collapse absolute flex h-9 w-9 items-center justify-center rounded-lg border-0 bg-transparent text-muted cursor-pointer hover:bg-surface-hover hover:text-text"
+        data-test="sidebar-collapse"
+        data-sidebar-control
+        type="button"
+        :aria-label="t('nav.sidebarCollapse')"
+        :aria-expanded="true"
+        :title="t('nav.sidebarCollapse')"
+        @click="collapseSidebar"
       >
-        {{ appVersion }}
-      </span>
-      <BrandMark />
-    </RouterLink>
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="3" />
+          <path d="M9 3v18" />
+        </svg>
+      </button>
+    </div>
 
     <nav
       class="sidebar__nav flex flex-col flex-1 min-h-0 gap-[0.4rem] overflow-y-auto mt-5 [scrollbar-width:none]"
@@ -204,22 +232,6 @@
     />
 
     <div class="z-50 mt-auto pt-10 pb-2">
-      <button
-        v-if="touchControls || sidebarInteraction === 'click'"
-        class="sidebar__toggle sidebar-item w-full mb-[0.4rem]"
-        data-test="sidebar-toggle"
-        type="button"
-        :aria-label="expanded ? t('nav.sidebarCollapse') : t('nav.sidebarExpand')"
-        :aria-expanded="expanded"
-        :title="expanded ? t('nav.sidebarCollapse') : t('nav.sidebarExpand')"
-        @click="toggleSidebar"
-      >
-        <span
-          class="sidebar__toggle-icon sidebar__icon i-fluent-chevron-right-20-regular flex-shrink-0 w-[1.45rem] h-[1.45rem]"
-          aria-hidden="true"
-        />
-        <span class="sidebar__label overflow-hidden whitespace-nowrap text-[0.9rem]">{{ expanded ? t('nav.sidebarCollapse') : t('nav.sidebarExpand') }}</span>
-      </button>
       <div class="relative">
         <div
           v-if="moreMenuOpen"
@@ -302,21 +314,6 @@
             <span>{{ t('nav.switchAppearance') }}</span>
           </button>
 
-          <label class="block border-t border-border px-[1.2rem] py-[0.85rem] text-[0.85rem]">
-            <span class="block font-semibold mb-2">{{ t('nav.sidebarInteraction') }}</span>
-            <select
-              class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-text"
-              :value="sidebarInteraction"
-              :aria-label="t('nav.sidebarInteraction')"
-              data-test="sidebar-interaction"
-              @change="changeSidebarInteraction"
-            >
-              <option value="click">{{ t('nav.sidebarClick') }}</option>
-              <option value="hover">{{ t('nav.sidebarHover') }}</option>
-            </select>
-            <small class="block mt-2 text-muted">{{ t('nav.sidebarLocalHint') }}</small>
-          </label>
-
           <button
             v-if="authStore.canSignOut"
             class="flex items-center gap-[0.95rem] w-full px-[1.2rem] py-[1rem] border-0 bg-transparent text-[0.98rem] text-text cursor-pointer text-left transition-colors duration-150 hover:bg-surface-hover disabled:opacity-60 disabled:cursor-wait"
@@ -359,7 +356,7 @@
 <script setup lang="ts">
 import LibraryNavigation from './LibraryNavigation.vue';
 import GalleryStatistics from './GalleryStatistics.vue';
-import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference, SIDEBAR_INTERACTION_KEY, SIDEBAR_CLICK_EXPANDED_KEY } from '../utils/sidebar-preferences';
+import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference, SIDEBAR_INTERACTION_KEY, SIDEBAR_CLICK_EXPANDED_KEY, SIDEBAR_PREFERENCE_EVENT } from '../utils/sidebar-preferences';
   import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
   import { useI18n } from "vue-i18n"
   import { RouterLink, useRoute } from "vue-router"
@@ -383,6 +380,8 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
   const moreMenuOpen = ref(false)
   const sidebar = ref<HTMLElement | null>(null)
   const moreButton = ref<HTMLButtonElement | null>(null)
+  const expandButton = ref<HTMLButtonElement | null>(null)
+  const collapseButton = ref<HTMLButtonElement | null>(null)
   const desktop = ref(false)
   const touchControls = ref(false)
   const keyboardFocus = ref(false)
@@ -390,6 +389,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
   const sidebarInteraction = ref(readSidebarInteraction())
   const clickExpanded = ref(readSidebarClickExpanded())
   let pointerInside = false
+  let hoverSuppressed = false
   let lastPointerPosition: { clientX: number; clientY: number } | null = null
   let inputMode: 'keyboard' | 'pointer' | null = null
   let expandTimer: ReturnType<typeof setTimeout> | undefined
@@ -457,7 +457,10 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
       requestExpanded(clickExpanded.value)
       return
     }
-    if (hasExpansionHold()) {
+    if (hoverSuppressed) {
+      clearTimers()
+      requestExpanded(false)
+    } else if (hasExpansionHold()) {
       clearTimers()
       requestExpanded(true)
     } else if (touchControls.value) {
@@ -468,7 +471,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
       if (!props.expanded && expandTimer === undefined) {
         expandTimer = setTimeout(() => {
           expandTimer = undefined
-          if (desktop.value && pointerInside) requestExpanded(true)
+          if (desktop.value && pointerInside && !hoverSuppressed) requestExpanded(true)
         }, 100)
       }
     } else {
@@ -491,6 +494,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
 
   function handlePointerLeave() {
     pointerInside = false
+    hoverSuppressed = false
     reconcileExpansion()
   }
 
@@ -506,8 +510,9 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
     // Only an actual pointer event updates hover; keyboard clicks do not.
     if (!desktop.value || touchControls.value || event.pointerType === 'touch') return
     lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
-    if (!props.expanded && !pointerInside && !moreMenuOpen.value) return
+    if (!props.expanded && !pointerInside && !moreMenuOpen.value && !hoverSuppressed) return
     const inside = pointerIsOverSidebar(event)
+    if (!inside) hoverSuppressed = false
     if (inside !== pointerInside) {
       pointerInside = inside
       reconcileExpansion()
@@ -520,33 +525,51 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
     reconcileExpansion()
   }
 
-  function toggleSidebar() {
-    if (sidebarInteraction.value === 'click') {
-      clickExpanded.value = !props.expanded
-      saveSidebarPreference(SIDEBAR_CLICK_EXPANDED_KEY, String(clickExpanded.value))
-      closeMoreMenu()
-      reconcileExpansion()
-      return
-    }
-    touchExpanded.value = !props.expanded
-    if (!touchExpanded.value) keyboardFocus.value = false
+  function expandSidebar(event: MouseEvent) {
+    clearTimers()
+    hoverSuppressed = false
     closeMoreMenu()
-    reconcileExpansion()
+    if (sidebarInteraction.value === 'click') {
+      clickExpanded.value = true
+      saveSidebarPreference(SIDEBAR_CLICK_EXPANDED_KEY, 'true')
+    } else if (touchControls.value) {
+      touchExpanded.value = true
+    }
+    requestExpanded(true)
+    if (event.detail === 0) void nextTick(() => collapseButton.value?.focus({ preventScroll: true }))
   }
 
-  function changeSidebarInteraction(event: Event) {
-    const value = (event.target as HTMLSelectElement).value
-    if (value !== 'click' && value !== 'hover') return
-    sidebarInteraction.value = value
-    saveSidebarPreference(SIDEBAR_INTERACTION_KEY, value)
-    resetInteraction()
-    void nextTick(() => moreButton.value?.focus({ preventScroll: true }))
+  function collapseSidebar() {
+    clearTimers()
+    hoverSuppressed = sidebarInteraction.value === 'hover'
+    keyboardFocus.value = false
+    touchExpanded.value = false
+    closeMoreMenu()
+    if (sidebarInteraction.value === 'click') {
+      clickExpanded.value = false
+      saveSidebarPreference(SIDEBAR_CLICK_EXPANDED_KEY, 'false')
+    }
+    requestExpanded(false)
+    void nextTick(() => expandButton.value?.focus({ preventScroll: true }))
+  }
+
+  function handleLocalPreference(event: Event) {
+    const detail = (event as CustomEvent<{ key: string; value: string }>).detail
+    if (!detail) return
+    if (detail.key === SIDEBAR_INTERACTION_KEY && (detail.value === 'click' || detail.value === 'hover')) {
+      sidebarInteraction.value = detail.value
+      resetInteraction(true)
+    } else if (detail.key === SIDEBAR_CLICK_EXPANDED_KEY) {
+      clickExpanded.value = detail.value === 'true'
+      reconcileExpansion()
+    }
   }
 
   function resetInteraction(preserveKeyboardFocus = false) {
     const keepKeyboardFocus = preserveKeyboardFocus && keyboardFocus.value &&
       Boolean(sidebar.value?.contains(document.activeElement))
     clearTimers()
+    hoverSuppressed = false
     keyboardFocus.value = keepKeyboardFocus
     touchExpanded.value = false
     pointerInside = !touchControls.value && Boolean(lastPointerPosition && pointerIsOverSidebar(lastPointerPosition))
@@ -556,7 +579,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
 
   function handlePreferenceStorage(event: StorageEvent) {
     if (event.key !== null && event.key !== SIDEBAR_INTERACTION_KEY && event.key !== SIDEBAR_CLICK_EXPANDED_KEY) return
-    sidebarInteraction.value = readSidebarInteraction()
+    sidebarInteraction.value = readSidebarInteraction(event.key === null || event.key === SIDEBAR_INTERACTION_KEY)
     clickExpanded.value = readSidebarClickExpanded()
     resetInteraction(true)
   }
@@ -569,6 +592,12 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
 
   function handleFocusIn(event: FocusEvent) {
     const target = event.target
+    // Restoring focus after closing must not immediately reopen hover mode.
+    if (target === expandButton.value) {
+      keyboardFocus.value = false
+      return
+    }
+    if (inputMode !== 'pointer') hoverSuppressed = false
     keyboardFocus.value = inputMode !== 'pointer' && target instanceof HTMLElement &&
       (inputMode === 'keyboard' || target.matches(':focus-visible'))
   }
@@ -584,6 +613,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
     // Reset before changing capability flags so their watchers cannot retain a hold.
     desktop.value = false
     pointerInside = false
+    hoverSuppressed = false
     keyboardFocus.value = false
     touchExpanded.value = false
     closeMoreMenu()
@@ -621,7 +651,10 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
     const isNavigationKey = ['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(event.key)
     if (isNavigationKey && (event.key === 'Tab' || sidebar.value?.contains(document.activeElement))) {
       inputMode = 'keyboard'
-      if (sidebar.value?.contains(document.activeElement)) keyboardFocus.value = true
+      if (sidebar.value?.contains(document.activeElement) && document.activeElement !== expandButton.value) {
+        hoverSuppressed = false
+        keyboardFocus.value = true
+      }
     }
     if (event.key === "Escape") {
       closeMoreMenu()
@@ -652,6 +685,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
     document.addEventListener('pointermove', handlePointerMove, { capture: true, passive: true })
     window.addEventListener("keydown", handleWindowKeydown, true)
     window.addEventListener('storage', handlePreferenceStorage)
+    window.addEventListener(SIDEBAR_PREFERENCE_EVENT, handleLocalPreference)
   })
 
   onUnmounted(() => {
@@ -662,6 +696,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
     document.removeEventListener('pointermove', handlePointerMove, true)
     window.removeEventListener("keydown", handleWindowKeydown, true)
     window.removeEventListener('storage', handlePreferenceStorage)
+    window.removeEventListener(SIDEBAR_PREFERENCE_EVENT, handleLocalPreference)
   })
 </script>
 
@@ -715,15 +750,16 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
   opacity: 1;
 }
 
-.sidebar__toggle-icon {
-  transition: transform var(--sidebar-width-duration, 180ms) var(--sidebar-motion-easing, cubic-bezier(0.22, 1, 0.36, 1));
-}
+.sidebar__expand-icon { opacity: 0; }
+/* Clip the control until its final position is revealed, instead of sliding it over the brand. */
+.sidebar__collapse { left: calc(var(--sidebar-expanded-width, 15rem) - 1.9rem - 2.25rem); }
+.sidebar__brand:has(.sidebar__expand:hover) .sidebar__brand-art,
+.sidebar__brand:has(.sidebar__expand:focus-visible) .sidebar__brand-art { opacity: 0; }
+.sidebar__expand:hover .sidebar__expand-icon,
+.sidebar__expand:focus-visible .sidebar__expand-icon { opacity: 1; }
 
-.sidebar--expanded .sidebar__toggle-icon {
-  transform: rotate(180deg);
-}
-
-.sidebar__toggle:focus-visible {
+.sidebar__expand:focus-visible,
+.sidebar__collapse:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -731,8 +767,7 @@ import { readSidebarInteraction, readSidebarClickExpanded, saveSidebarPreference
 @media (prefers-reduced-motion: reduce) {
   .sidebar,
   .sidebar__label,
-  .sidebar__meta,
-  .sidebar__toggle-icon {
+  .sidebar__meta {
     transition: none;
   }
 }

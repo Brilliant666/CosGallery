@@ -206,6 +206,10 @@
         "title": "常规设置",
         "description": "适用于语言、嵌套文件夹标题、stories 文件夹、排除文件夹、首页、短片和应用文件夹的全局默认项。"
       },
+      "browserPreferences": {
+        "title": "浏览偏好",
+        "description": "选择后立即生效，无需点击保存更改。"
+      },
       "language": {
         "label": "应用语言",
         "description": "选择此设备上用于导航、对话框和其他已翻译应用界面的语言。",

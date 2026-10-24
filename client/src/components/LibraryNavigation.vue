@@ -81,10 +81,10 @@ async function showAll(event: MouseEvent) {
 function outside(event: PointerEvent) {
   const target = event.target as Node;
   // Folding this sidebar only hides its categories; the user's open choice survives.
-  const sidebarToggle = props.variant === 'desktop'
-    ? container.value?.closest('.sidebar')?.querySelector('[data-test="sidebar-toggle"]')
+  const sidebarControl = props.variant === 'desktop' && target instanceof Element
+    ? target.closest('[data-sidebar-control]')
     : null;
-  if (sidebarToggle?.contains(target)) return;
+  if (sidebarControl && container.value?.closest('.sidebar')?.contains(sidebarControl)) return;
   if (!container.value?.contains(target)) closeMenu();
 }
 watch(menuVisible, visible => {

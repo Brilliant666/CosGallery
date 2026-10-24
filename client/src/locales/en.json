@@ -206,6 +206,10 @@
         "title": "General Settings",
         "description": "App-wide defaults for language, nested folder titles, stories folders, excluded folders, Home, Reels, and app folders."
       },
+      "browserPreferences": {
+        "title": "Browsing preferences",
+        "description": "Applies immediately without clicking Save changes."
+      },
       "language": {
         "label": "App language",
         "description": "Choose the language used for navigation, dialogs, and other translated app UI on this device.",

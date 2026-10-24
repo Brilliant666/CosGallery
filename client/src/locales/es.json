@@ -206,6 +206,10 @@
         "title": "Ajustes generales",
         "description": "Valores predeterminados de toda la app para idioma, títulos de carpetas anidadas, carpetas stories, carpetas excluidas, Inicio, Reels y carpetas de la app."
       },
+      "browserPreferences": {
+        "title": "Preferencias de navegación",
+        "description": "Se aplica de inmediato sin pulsar Guardar cambios."
+      },
       "language": {
         "label": "Idioma de la aplicación",
         "description": "Elige el idioma usado para la navegación, los diálogos y otras partes traducidas de la interfaz en este dispositivo.",
