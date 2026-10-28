@@ -5,24 +5,24 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { isolatedTestEnvironment } from '../../../scripts/test-environment.mjs';
 
 const root = await fs.realpath(path.resolve(process.argv[2] ?? ''));
-assert(root.startsWith(path.join(await fs.realpath(os.tmpdir()), 'cosgallery-roster-e2e-')));
+const temporary = await fs.realpath(os.tmpdir());
+assert(path.dirname(root) === temporary && path.basename(root).startsWith('cosgallery-roster-e2e-'));
 const port = Number(process.argv[3]);
 assert(Number.isSafeInteger(port) && port > 4400 && port < 4900);
-const paths = {
-  DATA_ROOT: root, DB_DIR: path.join(root, 'db'), GALLERY_ROOT: path.join(root, 'gallery'),
-  THUMBNAILS_DIR: path.join(root, 'thumbnails'), PREVIEWS_DIR: path.join(root, 'previews')
-};
-for (const [key, value] of Object.entries(paths)) {
+const paths = isolatedTestEnvironment(root, { nodeEnv: 'production' });
+Object.assign(process.env, paths);
+for (const key of ['DATA_ROOT', 'DB_DIR', 'GALLERY_ROOT', 'THUMBNAILS_DIR', 'PREVIEWS_DIR', 'BACKUP_ROOT']) {
+  const value = paths[key];
   assert(path.isAbsolute(value) && (value === root || value.startsWith(root + path.sep)));
-  process.env[key] = value;
   await fs.mkdir(value, { recursive: true });
 }
 Object.assign(process.env, {
   LOCAL_INGEST_SEVEN_ZIP_PATH: process.env.ROSTER_E2E_7ZIP ?? '',
-  NODE_ENV: 'production', SERVER_HOST: '127.0.0.1', SERVER_PORT: String(port),
-  LOCAL_INGEST_STARTUP_SCAN: 'false', COS_GALLERY_MODE: 'true', DERIVATIVE_MODE: 'lazy',
+  SERVER_HOST: '127.0.0.1', SERVER_PORT: String(port),
+  COS_GALLERY_MODE: 'true', DERIVATIVE_MODE: 'lazy',
   LOCAL_INGEST_ARCHIVE_PASSWORD: 'fixture-password-not-a-real-secret'
 });
 const load = relative => import(pathToFileURL(path.resolve('src', relative)).href);

@@ -32,17 +32,45 @@ data/      默认运行数据位置（不是测试夹具目录）
 | `pnpm build:server` / `pnpm build:client` | 仅构建指定端。 |
 | `pnpm start` | 设置 production，再调用服务端迁移脚本和编译入口。 |
 | `pnpm build:docs` | 仅构建文档站，不包含在应用 build 中。 |
-| `pnpm test` | 顺序运行服务端与客户端测试。 |
-| `pnpm test:server` / `pnpm test:client` | 单侧测试。 |
-| `pnpm lint` / `pnpm format:check` | 既有治理检查与列明文件的格式检查，不是全仓库格式化。 |
-| `pnpm test:build-info` / `pnpm test:workspace-runner` | 构建身份与工作区转发器专项。 |
+| `pnpm test` | 顺序运行服务端与客户端测试；服务端失败时不继续客户端。不包含下列独立专项、构建或文档检查。 |
+| `pnpm test:server` / `pnpm test:client` | 单侧测试，支持测试文件参数和 `-t` 名称过滤，见下方示例。 |
+| `pnpm lint` / `pnpm format:check` | 前者检查 manifest JSON、脚本语法与 diff 空白；后者仅检查列明文件的格式。不是全仓库代码 lint 或格式化。 |
+| `pnpm test:build-info` / `pnpm test:workspace-runner` | 独立运行构建身份、工作区转发器与测试入口回归专项。 |
 | `pnpm test:dev-security` | 使用合成夹具核对 Vite 开发文件边界、HMR 和后端代理。 |
 | `pnpm migrate` | 单独应用待执行迁移；会改变所配置数据库，不是只读诊断。 |
 | `pnpm rescan` | 显式图库重扫，会更新索引/派生数据，不是健康检查。 |
 
 维护 CLI 仍存在，例如 `pnpm --dir server local-folder-admission --help`、`pnpm --dir server local-ingest --help`。它们与网页复用服务，但**普通网页入库不要求调用 CLI**；不能把从别处复制来的 scope、plan 或 JSON 当作当前范围的授权。
 
-根目录命令请从 `pnpm run <script>`（或表中的 pnpm 简写）执行。工作区转发器使用调用方的 `npm_execpath`，并沿用当前 Node 执行包管理器；不要脱离包管理器上下文直接运行该内部脚本。此方式避免 Windows `node --run` 在含中文的工作目录中查找 `package.json` 失败。启动 pnpm 前应确认当前终端 `node --version` 符合项目支持范围；仅用绝对 Node 路径启动 pnpm，并不会自动替换终端 PATH 中另一个旧 Node。转发器仅给子进程前置当前 Node 目录，不修改系统 PATH。参数可以用 `pnpm run test:client -- <测试文件>` 传入，退出码与终止信号继续向上传递。
+根目录命令请从 `pnpm run <script>`（或表中的 pnpm 简写）执行。工作区转发器使用调用方的 `npm_execpath`，并沿用当前 Node 执行包管理器；不要脱离包管理器上下文直接运行该内部脚本。此方式避免 Windows `node --run` 在含中文的工作目录中查找 `package.json` 失败。启动 pnpm 前应确认当前终端 `node --version` 符合项目支持范围；仅用绝对 Node 路径启动 pnpm，并不会自动替换终端 PATH 中另一个旧 Node。转发器仅给子进程前置当前 Node 目录，不修改系统 PATH。退出码与终止信号继续向上传递。
+
+### 测试文件与名称过滤
+
+专项参数使用 `test:server` 或 `test:client`，不要把文件过滤参数交给同时运行两端的 `pnpm test`。文件路径相对于对应工作区：服务端从 `server/` 开始，客户端从 `client/` 开始；以下命令仍在仓库根目录执行。
+
+```powershell
+# 只运行一个服务端测试文件
+pnpm test:server -- test/gallery-statistics.test.ts
+
+# 在该文件内按测试名称过滤；-t 接受正则表达式
+pnpm test:server -- test/gallery-statistics.test.ts -t "unambiguous legacy copy"
+
+# 只运行一个客户端测试文件，或进一步按名称过滤
+pnpm test:client -- src/components/GalleryStatistics.test.ts
+pnpm test:client -- src/components/GalleryStatistics.test.ts -t "real empty gallery"
+```
+
+文件参数由 Vitest 匹配测试路径；需要单个文件时使用完整的工作区相对路径，并核对报告中的实际文件列表。没有匹配到测试文件时命令返回非零，不回退到全量，也不要用 `--passWithNoTests` 把选错文件当作通过。`-t` 沿用 Vitest 的名称过滤行为：没有匹配到名称时可能只报告 skipped，因此还要核对实际执行的测试数，不能只看退出码。
+
+以下专项独立于 `pnpm test`，按改动范围选择；现有 Verify 会分别调用它们：
+
+| 命令 | 覆盖范围 |
+| --- | --- |
+| `pnpm test:build-info` | 构建身份生成规则。 |
+| `pnpm test:workspace-runner` | 工作区命令参数、Node/包管理器上下文及退出行为，以及测试入口的文件选择和无匹配失败回归。 |
+| `pnpm test:dev-security` | 合成环境中的 Vite 文件访问、HMR 和代理边界；不是浏览器端到端测试。 |
+
+客户端常规测试使用 jsdom；`client/test/*-browser.mjs`、`server/test/fixtures/*-browser.cjs` 和 `scripts/perf/*-browser.mjs` 等浏览器脚本需要另外准备隔离环境并显式运行，不包含在常规 `pnpm test` 或 Verify 中。文件存在不等于浏览器场景已经验收。平台或能力条件造成的 skip、`-t` 过滤掉的测试，以及根本没有执行的独立专项，应分别记录原因和范围，不合并成“全部通过”。
 
 ## 开发端口与隔离
 
@@ -51,6 +79,8 @@ data/      默认运行数据位置（不是测试夹具目录）
 Vite 开发前端及静态预览默认监听 `127.0.0.1`，可通过 `DEV_CLIENT_HOST` 显式选择 `localhost` 或 IP；允许的静态文件范围与私有文件拒绝规则见[开发文件访问边界](/h1-development-boundary)。文档开发与预览脚本仍使用 `--host 0.0.0.0`，不与应用前端混为一谈。开发服务和 `vite preview` 都不代替配套 production 入口。
 
 端口分开**不代表数据已经隔离**。独立工作树/进程还必须有自己的数据库、图库、等待区、处理中目录、缩略图、预览目录及明确的 `BACKUP_ROOT`。不要让测试脚本、CLI 或第二个 Worker 指向真实实例的数据。特别检查从 `.env.example` 复制的显式路径值，避免只改 `DATA_ROOT` 却仍复用旧路径。服务端的 `APP_ENV_FILE` 不会自动切换客户端 Vite 的环境文件，两个工作区的有效配置分别核对。
+
+服务端 Vitest 配置及 `roster-first-runtime.mjs`、`unified-creator-sync-runtime.mjs` 两个可选端到端运行入口共用 `scripts/test-environment.mjs`：在导入应用模块前，将数据目录及其别名、数据库、图库、缩略图、预览、恢复点、环境文件和运行配置文件显式指向各自的夹具根目录，覆盖从 IDE 或终端继承的对应路径；同时关闭自动备份和入库启动补偿扫描，并清空继承的解压密码。测试仍可显式设置自己的合成夹具，其他手工脚本和客户端 Vite 不因此自动获得隔离。环境隔离回归位于 `server/test/test-environment.test.ts`，包含在常规 `pnpm test:server` 中。
 
 ## 正常启动链路
 

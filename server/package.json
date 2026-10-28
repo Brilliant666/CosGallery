@@ -16,7 +16,7 @@
     "local-ingest": "tsx src/scripts/local-ingest.ts",
     "local-folder-admission": "tsx src/scripts/local-folder-admission.ts",
     "recovery-point": "tsx src/scripts/recovery-point.ts",
-    "test": "vitest run --config vitest.config.ts test/"
+    "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
