@@ -73,7 +73,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/cosgallery-verify-logs"
           set -o pipefail
-          (pnpm lint && pnpm format:check && pnpm test:build-info && pnpm test:workspace-runner) 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/governance.log"
+          (pnpm lint && pnpm format:check && pnpm test:build-info && pnpm test:workspace-runner && pnpm test:release-tools) 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/governance.log"
 
       - name: Run client tests
         id: client_tests

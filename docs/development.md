@@ -38,6 +38,7 @@ Verify 也在 Node 24 执行一次文档构建；它不会部署文档。每个�
 | `pnpm test:server` / `pnpm test:client` | 单侧测试，支持测试文件参数和 `-t` 名称过滤，见下方示例。 |
 | `pnpm lint` / `pnpm format:check` | 前者检查 manifest JSON、脚本语法与 diff 空白；后者仅检查列明文件的格式。不是全仓库代码 lint 或格式化。 |
 | `pnpm test:build-info` / `pnpm test:workspace-runner` | 独立运行构建身份、工作区转发器与测试入口回归专项。 |
+| `pnpm test:release-tools` | 使用合成产物与回环服务测试[配套产物验证](/release-validation)和离线复制边界。 |
 | `pnpm test:dev-security` | 使用合成夹具核对 Vite 开发文件边界、HMR 和后端代理。 |
 | `pnpm migrate` | 单独应用待执行迁移；会改变所配置数据库，不是只读诊断。 |
 | `pnpm rescan` | 显式图库重扫，会更新索引/派生数据，不是健康检查。 |
@@ -69,6 +70,7 @@ pnpm test:client -- src/components/GalleryStatistics.test.ts -t "real empty gall
 | 命令 | 覆盖范围 |
 | --- | --- |
 | `pnpm test:build-info` | 构建身份生成规则。 |
+| `pnpm test:release-tools` | 合成产物清单、离线复制、身份比对及只读运行核查。 |
 | `pnpm test:workspace-runner` | 工作区命令参数、Node/包管理器上下文及退出行为，以及测试入口的文件选择和无匹配失败回归。 |
 | `pnpm test:dev-security` | 合成环境中的 Vite 文件访问、HMR 和代理边界；不是浏览器端到端测试。 |
 
