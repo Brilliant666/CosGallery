@@ -195,3 +195,93 @@ jobs:
             ${{ runner.temp }}/cosgallery-verify-logs/docs-build.log
           if-no-files-found: ignore
           retention-days: 7
+
+  windows-contracts:
+    name: Windows command and release contracts (Node 24)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check pnpm entry in Unicode and space paths
+        id: runner
+        run: pnpm test:workspace-runner
+      - name: Check synthetic release and path contracts
+        id: release
+        run: pnpm test:release-tools
+      - name: Summarize Windows checks
+        if: always()
+        shell: pwsh
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUNNER_RESULT: ${{ steps.runner.outcome }}
+          RELEASE_RESULT: ${{ steps.release.outcome }}
+        run: |
+          @(
+            '## Windows command and release contracts (Node 24)'
+            "- Event SHA: ``$env:EVENT_SHA``"
+            "- PR head SHA: ``$env:PR_HEAD_SHA``"
+            "- Workspace runner: $env:RUNNER_RESULT"
+            "- Release contracts: $env:RELEASE_RESULT"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+  browser-smoke:
+    name: Synthetic Chromium interaction smoke (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium and system dependencies
+        run: pnpm --dir client exec playwright install --with-deps --only-shell chromium
+      - name: Run isolated browser interactions
+        id: browser
+        shell: bash
+        env:
+          BROWSER_SMOKE_ROOT: ${{ runner.temp }}/cosgallery-browser
+        run: |
+          mkdir -p "$BROWSER_SMOKE_ROOT"
+          set -o pipefail
+          pnpm --dir client test:browser-smoke 2>&1 | tee "$BROWSER_SMOKE_ROOT/browser.log"
+      - name: Summarize browser check
+        if: always()
+        shell: bash
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BROWSER_RESULT: ${{ steps.browser.outcome }}
+        run: |
+          {
+            echo '## Synthetic Chromium interaction smoke (Node 24)'
+            printf -- '- Event SHA: `%s`\n' "$EVENT_SHA"
+            printf -- '- PR head SHA: `%s`\n' "${PR_HEAD_SHA:-not applicable}"
+            printf -- '- Browser interaction step: %s\n' "${BROWSER_RESULT:-not run}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-browser-smoke
+          path: |
+            ${{ runner.temp }}/cosgallery-browser/browser.log
+            ${{ runner.temp }}/cosgallery-browser/cosgallery-browser-smoke-*/results.json
+            ${{ runner.temp }}/cosgallery-browser/cosgallery-browser-smoke-*/*.png
+          if-no-files-found: ignore
+          retention-days: 7

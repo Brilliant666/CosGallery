@@ -39,6 +39,7 @@ Verify 也在 Node 24 执行一次文档构建；它不会部署文档。每个�
 | `pnpm lint` / `pnpm format:check` | 前者检查 manifest JSON、脚本语法与 diff 空白；后者仅检查列明文件的格式。不是全仓库代码 lint 或格式化。 |
 | `pnpm test:build-info` / `pnpm test:workspace-runner` | 独立运行构建身份、工作区转发器与测试入口回归专项。 |
 | `pnpm test:release-tools` | 使用合成产物与回环服务测试[配套产物验证](/release-validation)和离线复制边界。 |
+| `pnpm --dir client test:browser-smoke` | 使用独立 Chromium、随机本机端口及合成 API 运行窄范围交互；需先安装锁定版本的 Playwright Chromium。 |
 | `pnpm test:dev-security` | 使用合成夹具核对 Vite 开发文件边界、HMR 和后端代理。 |
 | `pnpm migrate` | 单独应用待执行迁移；会改变所配置数据库，不是只读诊断。 |
 | `pnpm rescan` | 显式图库重扫，会更新索引/派生数据，不是健康检查。 |
@@ -74,7 +75,7 @@ pnpm test:client -- src/components/GalleryStatistics.test.ts -t "real empty gall
 | `pnpm test:workspace-runner` | 工作区命令参数、Node/包管理器上下文及退出行为，以及测试入口的文件选择和无匹配失败回归。 |
 | `pnpm test:dev-security` | 合成环境中的 Vite 文件访问、HMR 和代理边界；不是浏览器端到端测试。 |
 
-客户端常规测试使用 jsdom；`client/test/*-browser.mjs`、`server/test/fixtures/*-browser.cjs` 和 `scripts/perf/*-browser.mjs` 等浏览器脚本需要另外准备隔离环境并显式运行，不包含在常规 `pnpm test` 或 Verify 中。文件存在不等于浏览器场景已经验收。平台或能力条件造成的 skip、`-t` 过滤掉的测试，以及根本没有执行的独立专项，应分别记录原因和范围，不合并成“全部通过”。
+客户端常规测试使用 jsdom；Verify 的独立 Chromium smoke 只覆盖合成目录编辑/分享、博主搜索及偏好筛选，不代表所有浏览器场景通过。它禁用 service worker，拦截外域、API 与 WebSocket，Vite 热更新尝试被拦截；不连接应用服务或真实浏览器配置。Windows 独立任务只验证工作区命令和合成发布工具，不是全量 Windows 矩阵。其他 `client/test/*-browser.mjs`、`server/test/fixtures/*-browser.cjs` 和 `scripts/perf/*-browser.mjs` 仍需另行准备隔离环境并显式运行，不包含在常规 `pnpm test` 或这一 smoke 中。旧 `client/test/catalog-browser.mjs` 在本轮首次重跑时失败：它使用已过期的 `/catalog` 测试路由和表格结构，后续 Stage 1/3 页面也已迁移；这些旧断言保留，未计为通过或由新 smoke 覆盖。平台或能力条件造成的 skip、`-t` 过滤掉的测试，以及根本没有执行的独立专项，应分别记录原因和范围，不合并成“全部通过”。
 
 ## 开发端口与隔离
 

@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.build.json && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:browser-smoke": "node test/ci-browser-smoke.mjs"
   },
   "dependencies": {
     "pinia": "^3.0.1",
@@ -24,6 +25,7 @@
     "@unocss/transformer-directives": "^66.6.6",
     "@vitejs/plugin-vue": "^5.2.1",
     "jsdom": "^26.1.0",
+    "playwright": "1.62.1",
     "typescript": "^5.8.2",
     "unocss": "^66.6.6",
     "vite": "^6.2.0",
