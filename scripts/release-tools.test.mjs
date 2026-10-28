@@ -67,7 +67,14 @@ test('rejects malicious manifest paths, collisions and invalid identities', t =>
   collision.artifacts.client.push({ ...collision.artifacts.client[0], path: 'ASSETS/other.js' })
   assert.throws(() => verifyManifest({ ...f, manifest: collision }), /Case-colliding/)
   assert.throws(() => createManifest({ ...f, declaredSourceSha: 'not-a-sha' }), /declared source SHA/)
-  assert.throws(() => createManifest({ ...f, serverDist: path.relative(process.cwd(), f.serverDist) }), /absolute path/)
+  // Windows returns an absolute path for different drives, so derive the
+  // rejected relative input from the fixture's own root instead of cwd.
+  const crossDrive = path.win32.relative('D:\\workspace', 'C:\\fixture\\source')
+  assert.equal(path.win32.isAbsolute(crossDrive), true)
+  assert.equal(crossDrive, 'C:\\fixture\\source')
+  const relativeInput = path.relative(f.root, f.serverDist)
+  assert.equal(path.isAbsolute(relativeInput), false)
+  assert.throws(() => createManifest({ ...f, serverDist: relativeInput }), /absolute path/)
 })
 
 test('preflight is read only; explicit install copies to a new child and verifies contents', t => {
