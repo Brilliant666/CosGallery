@@ -1,5 +1,9 @@
 # Contributing
 
+## Scope for CosGallery
+
+This repository is the CosGallery adaptation of Foldergram. For owner-directed CosGallery work, an explicit task specification approving the proposed design satisfies the prior-discussion requirement below; a separate issue or discussion is not an additional prerequisite for that approved scope. Contributions to upstream Foldergram remain subject to its own contribution policy.
+
 Foldergram accepts contributions, but it is an opinionated project with clear product and architecture boundaries. Not every technically correct change fits the direction of the project.
 
 ## What You Can Usually Submit Directly
