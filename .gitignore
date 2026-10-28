@@ -1,6 +1,12 @@
 node_modules
 dist
 .env
+.env.*
+!.env.example
+!.env.*.example
+# 本机IDE和运行配置可能含私有路径/凭据；脱敏示例另存docs。
+/.idea/
+/.run/
 data/
 data_backup/
 **/data_backup/

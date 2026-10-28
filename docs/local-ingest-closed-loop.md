@@ -183,6 +183,7 @@ pnpm --dir server exec tsx src/scripts/local-ingest.ts jobs
 可保留类型限于逐文件明确批准的：
 
 - `pixel_limit`：仅 JPEG，默认 Sharp 必须实际报告像素限制。正常 JPEG 或其他解码损坏不能借此绕过；不关闭或提高像素安全上限。
+- `decode_failed`：当前识别的非空图片，经实际解码诊断确认无法解码后，才可逐文件明确批准保留原件；无法解码不等于已确认损坏，也不表示已经修复。磁盘、权限等读取错误不属于该例外，零字节文件和正常可解码图片不能借此放行。
 - `attachment`：精确指定的 PDF、TXT、URL，作为附件完整保留，不转换成图片、不打开 URL、不算广告。网页审核中，未被明确批准移出的 TXT/URL 默认按此方式保留；这不改变普通 Stage3 的原有流程，也不放行未知文件类型。
 
 以上沿用 `_未支持格式原件` 和现有索引排除机制，不另建原件库。图片原件计入 `retainedOriginalCount`；附件单列 `retainedAttachmentCount`，不计入可展示图片/视频、媒体字节或未支持图片数量。原有 HEIC/HEIF/TIFF 自动保留和旧手工保留记录兼容，不重新解释旧决定。
