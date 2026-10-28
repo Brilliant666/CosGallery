@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# Only a newer run for the same PR supersedes an older one. Push runs retain
+# their own group so a PR update cannot cancel verification of main.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('verify-pr-{0}', github.event.pull_request.number) || format('verify-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     name: Verify (Node ${{ matrix.node }})
@@ -21,51 +27,97 @@ jobs:
 
     steps:
       - name: Check out repository
+        id: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install pnpm
+        id: pnpm_setup
         uses: pnpm/action-setup@v4
         with:
           version: 10.28.0
 
       - name: Use Node.js ${{ matrix.node }}
+        id: node_setup
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
 
       - name: Install locked dependencies
+        id: install
         run: pnpm install --frozen-lockfile
 
       - name: Check pull request diff
+        id: pr_diff
         if: github.event_name == 'pull_request'
         run: git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
 
       - name: Check pushed diff
+        id: push_diff
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         run: git diff --check "${{ github.event.before }}...${{ github.sha }}"
 
       - name: Run server and migration tests
-        run: pnpm --dir server test
+        id: server_tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cosgallery-verify-logs"
+          set -o pipefail
+          pnpm --dir server test 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/server-tests.log"
 
       - name: Check governance and build metadata
-        run: pnpm lint && pnpm format:check && pnpm test:build-info && pnpm test:workspace-runner
+        id: governance
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cosgallery-verify-logs"
+          set -o pipefail
+          (pnpm lint && pnpm format:check && pnpm test:build-info && pnpm test:workspace-runner && pnpm test:release-tools) 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/governance.log"
 
       - name: Run client tests
-        run: pnpm --dir client test
+        id: client_tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cosgallery-verify-logs"
+          set -o pipefail
+          pnpm --dir client test 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/client-tests.log"
 
       - name: Check Vite development boundary with synthetic fixtures
-        run: pnpm test:dev-security
+        id: dev_security
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cosgallery-verify-logs"
+          set -o pipefail
+          pnpm test:dev-security 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/dev-security.log"
 
       - name: Build server
-        run: pnpm --dir server build
+        id: server_build
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cosgallery-verify-logs"
+          set -o pipefail
+          pnpm --dir server build 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/server-build.log"
 
       - name: Build client
-        run: pnpm --dir client build
+        id: client_build
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cosgallery-verify-logs"
+          set -o pipefail
+          pnpm --dir client build 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/client-build.log"
+
+      - name: Build documentation
+        if: matrix.node == 24
+        id: docs_build
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cosgallery-verify-logs"
+          set -o pipefail
+          pnpm build:docs 2>&1 | tee "$RUNNER_TEMP/cosgallery-verify-logs/docs-build.log"
 
       - name: Reject emitted source artifacts
+        id: clean_tree
         shell: bash
         run: |
           status="$(git status --porcelain --untracked-files=all)"
@@ -74,3 +126,162 @@ jobs:
             echo "$status"
             exit 1
           fi
+
+      - name: Summarize verification
+        if: always()
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          MATRIX_NODE: ${{ matrix.node }}
+          CHECKOUT: ${{ steps.checkout.outcome }}
+          PNPM_SETUP: ${{ steps.pnpm_setup.outcome }}
+          NODE_SETUP: ${{ steps.node_setup.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          PR_DIFF: ${{ steps.pr_diff.outcome }}
+          PUSH_DIFF: ${{ steps.push_diff.outcome }}
+          SERVER_TESTS: ${{ steps.server_tests.outcome }}
+          GOVERNANCE: ${{ steps.governance.outcome }}
+          CLIENT_TESTS: ${{ steps.client_tests.outcome }}
+          DEV_SECURITY: ${{ steps.dev_security.outcome }}
+          SERVER_BUILD: ${{ steps.server_build.outcome }}
+          CLIENT_BUILD: ${{ steps.client_build.outcome }}
+          DOCS_BUILD: ${{ steps.docs_build.outcome }}
+          CLEAN_TREE: ${{ steps.clean_tree.outcome }}
+        run: |
+          {
+            echo "## Verify (Node $MATRIX_NODE)"
+            echo
+            printf -- '- Event: `%s`\n' "$EVENT_NAME"
+            printf -- '- Event SHA (PR merge ref when applicable): `%s`\n' "$EVENT_SHA"
+            printf -- '- PR head SHA: `%s`\n' "${PR_HEAD_SHA:-not applicable}"
+            printf -- '- PR base SHA: `%s`\n' "${PR_BASE_SHA:-not applicable}"
+            printf -- '- Push before SHA: `%s`\n' "${PUSH_BEFORE_SHA:-not applicable}"
+            printf -- '- Checked-out SHA: `%s`\n' "$(git rev-parse HEAD 2>/dev/null || printf unavailable)"
+            echo
+            echo '| Check | Outcome |'
+            echo '| --- | --- |'
+            printf '| Checkout | %s |\n' "${CHECKOUT:-not run}"
+            printf '| pnpm setup | %s |\n' "${PNPM_SETUP:-not run}"
+            printf '| Node setup | %s |\n' "${NODE_SETUP:-not run}"
+            printf '| Locked dependency installation | %s |\n' "${INSTALL:-not run}"
+            printf '| PR diff check | %s |\n' "${PR_DIFF:-not run}"
+            printf '| Push diff check | %s |\n' "${PUSH_DIFF:-not run}"
+            printf '| Server and migration tests | %s |\n' "${SERVER_TESTS:-not run}"
+            printf '| Governance and build metadata | %s |\n' "${GOVERNANCE:-not run}"
+            printf '| Client tests | %s |\n' "${CLIENT_TESTS:-not run}"
+            printf '| Development boundary | %s |\n' "${DEV_SECURITY:-not run}"
+            printf '| Server build | %s |\n' "${SERVER_BUILD:-not run}"
+            printf '| Client build | %s |\n' "${CLIENT_BUILD:-not run}"
+            printf '| Documentation build (Node 24) | %s |\n' "${DOCS_BUILD:-not run}"
+            printf '| Source tree clean | %s |\n' "${CLEAN_TREE:-not run}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload verification logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-logs-node-${{ matrix.node }}
+          path: |
+            ${{ runner.temp }}/cosgallery-verify-logs/server-tests.log
+            ${{ runner.temp }}/cosgallery-verify-logs/governance.log
+            ${{ runner.temp }}/cosgallery-verify-logs/client-tests.log
+            ${{ runner.temp }}/cosgallery-verify-logs/dev-security.log
+            ${{ runner.temp }}/cosgallery-verify-logs/server-build.log
+            ${{ runner.temp }}/cosgallery-verify-logs/client-build.log
+            ${{ runner.temp }}/cosgallery-verify-logs/docs-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  windows-contracts:
+    name: Windows command and release contracts (Node 24)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check pnpm entry in Unicode and space paths
+        id: runner
+        run: pnpm test:workspace-runner
+      - name: Check synthetic release and path contracts
+        id: release
+        run: pnpm test:release-tools
+      - name: Summarize Windows checks
+        if: always()
+        shell: pwsh
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUNNER_RESULT: ${{ steps.runner.outcome }}
+          RELEASE_RESULT: ${{ steps.release.outcome }}
+        run: |
+          @(
+            '## Windows command and release contracts (Node 24)'
+            "- Event SHA: ``$env:EVENT_SHA``"
+            "- PR head SHA: ``$env:PR_HEAD_SHA``"
+            "- Workspace runner: $env:RUNNER_RESULT"
+            "- Release contracts: $env:RELEASE_RESULT"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+  browser-smoke:
+    name: Synthetic Chromium interaction smoke (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium and system dependencies
+        run: pnpm --dir client exec playwright install --with-deps --only-shell chromium
+      - name: Run isolated browser interactions
+        id: browser
+        shell: bash
+        env:
+          BROWSER_SMOKE_ROOT: ${{ runner.temp }}/cosgallery-browser
+        run: |
+          mkdir -p "$BROWSER_SMOKE_ROOT"
+          set -o pipefail
+          pnpm --dir client test:browser-smoke 2>&1 | tee "$BROWSER_SMOKE_ROOT/browser.log"
+      - name: Summarize browser check
+        if: always()
+        shell: bash
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BROWSER_RESULT: ${{ steps.browser.outcome }}
+        run: |
+          {
+            echo '## Synthetic Chromium interaction smoke (Node 24)'
+            printf -- '- Event SHA: `%s`\n' "$EVENT_SHA"
+            printf -- '- PR head SHA: `%s`\n' "${PR_HEAD_SHA:-not applicable}"
+            printf -- '- Browser interaction step: %s\n' "${BROWSER_RESULT:-not run}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-browser-smoke
+          path: |
+            ${{ runner.temp }}/cosgallery-browser/browser.log
+            ${{ runner.temp }}/cosgallery-browser/cosgallery-browser-smoke-*/results.json
+            ${{ runner.temp }}/cosgallery-browser/cosgallery-browser-smoke-*/*.png
+          if-no-files-found: ignore
+          retention-days: 7
