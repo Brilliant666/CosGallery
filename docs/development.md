@@ -19,6 +19,8 @@ data/      默认运行数据位置（不是测试夹具目录）
 
 使用 `pnpm@10.28.0` 和锁文件，推荐 Node 24.21.0，版本由 `.node-version` / `.nvmrc` 固定。根 `package.json` 的 `engines` 支持 Node `>=22.16.0 <23 || >=24.0.0 <25`；Node 22 下限来自 `node:sqlite` backup API。GitHub Verify 在 Ubuntu 上分别执行 Node 22、24 矩阵。平台相关跳过需要看具体条件，不能仅凭两边通过数量不同判定回归或全部正常。
 
+Verify 也在 Node 24 执行一次文档构建；它不会部署文档。每个矩阵任务的摘要分别列出事件 SHA、PR 的 head/base SHA、实际检出 SHA 和各检查结果。PR 的事件 SHA 可能是合并测试提交，不能当作候选 head；push 的 `before` 也单独列出。失败时，固定测试与构建日志作为 Actions artifact 保留 7 天；安装依赖或检出等步骤的详细输出仍在 Actions 日志中。新的同一 PR 运行会取消被替代的旧运行，main 的 push 验证不互相取消。
+
 ## 根命令
 
 在仓库根目录运行：
