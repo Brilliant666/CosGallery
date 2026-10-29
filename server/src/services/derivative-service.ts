@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import sharp from 'sharp';
+import sharp, { type Metadata } from 'sharp';
 
 import type { ImageExifData, MediaType, PlaybackStrategy } from '../types/models.js';
 import { appConfig } from '../config/env.js';
@@ -198,7 +198,7 @@ function normalizeImageOrientation(orientation: number | null | undefined): numb
 }
 
 function resolveImageDisplayDimensions(
-  metadata: sharp.Metadata,
+  metadata: Metadata,
   displayOrientation: number
 ): Pick<MediaMetadata, 'width' | 'height'> {
   const width = metadata.width ?? THUMBNAIL_SIZE;

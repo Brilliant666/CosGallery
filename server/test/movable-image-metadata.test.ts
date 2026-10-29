@@ -2,17 +2,16 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 describe('real process image metadata before same-volume movement', () => {
   it('keeps default Sharp caching and pixel limits while Chinese WebP/JPEG inputs can link/unlink', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'movable-metadata-real-process-'));
     const helper = new URL('../src/utils/movable-image-metadata.ts', import.meta.url).href;
-    const sharpModule = new URL('../node_modules/sharp/lib/index.js', import.meta.url).href;
-    const loader = new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url).href;
     const script = `
       import fs from 'node:fs/promises'; import path from 'node:path';
-      import sharp from ${JSON.stringify(sharpModule)};
+      import sharp from 'sharp';
       import {readMovableImageMetadata} from ${JSON.stringify(helper)};
       const root=process.argv[1],before=sharp.cache(),start=performance.now(),rss=process.memoryUsage().rss;
       const jpeg=await sharp({create:{width:48,height:64,channels:3,background:'#587492'}}).jpeg().toBuffer();
@@ -37,7 +36,12 @@ describe('real process image metadata before same-volume movement', () => {
       console.log(JSON.stringify({files:6,pixelLimit:limited,cache:after,defaultFileCache:before.files.max,timesMs:times,durationMs:performance.now()-start,rssDelta:process.memoryUsage().rss-rss,maxRSSKiB:process.resourceUsage().maxRSS}));
     `;
     try {
-      const result = spawnSync(process.execPath, ['--import', loader, '--input-type=module', '-e', script, root], { encoding: 'utf8', timeout: 30_000, windowsHide: true });
+      // Resolve public package entrypoints from this workspace, independent of
+      // dependency internals and the directory used to launch Vitest.
+      const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, root], {
+        cwd: fileURLToPath(new URL('../', import.meta.url)),
+        encoding: 'utf8', timeout: 30_000, windowsHide: true
+      });
       expect(result.status, result.stderr || result.stdout).toBe(0);
       const report = JSON.parse(result.stdout.trim());
       expect(report).toMatchObject({ files: 6, pixelLimit: true, defaultFileCache: 20 });
