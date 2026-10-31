@@ -18,7 +18,7 @@
     "format:check": "prettier --check scripts/build-info.mjs scripts/build-info.test.mjs scripts/write-build-info.mjs scripts/check-governance.mjs .github/dependabot.yml SECURITY.md",
     "format:governance": "prettier --write scripts/build-info.mjs scripts/build-info.test.mjs scripts/write-build-info.mjs scripts/check-governance.mjs .github/dependabot.yml SECURITY.md",
     "test:build-info": "node --test scripts/build-info.test.mjs",
-    "test:release-tools": "node --test scripts/release-tools.test.mjs",
+    "test:release-tools": "node --test scripts/release-tools.test.mjs scripts/release-preflight.test.mjs scripts/release-timing.test.mjs",
     "test:workspace-runner": "node --test scripts/run-workspace-script.test.mjs scripts/test-entrypoints.test.mjs",
     "test:dev-security": "node client/node_modules/vitest/vitest.mjs run --config client/test/dev-server-security.config.ts",
     "dev": "concurrently -k \"node scripts/run-workspace-script.mjs server dev\" \"node scripts/run-workspace-script.mjs client dev\" \"node scripts/run-workspace-script.mjs docs dev\"",

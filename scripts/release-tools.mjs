@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { prepareDeployment } from './release-preflight.mjs'
+import { summarizeTiming } from './release-timing.mjs'
 
 const identityKeys = ['product', 'version', 'commit', 'tree', 'dirty']
 const shaPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
-function absoluteSafe(value, label, { missingLeaf = false } = {}) {
+export function absoluteSafe(value, label, { missingLeaf = false } = {}) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || value.split(/[\\/]/).includes('..')) throw new Error(`${label} must be an absolute path without traversal`)
   const resolved = path.resolve(value)
   if (resolved === path.parse(resolved).root) throw new Error(`${label} cannot be a filesystem root`)
@@ -180,7 +182,7 @@ export function installRelease(options) {
   return { mode: 'installed', destination: target, verification: installed }
 }
 
-function readJson(file, label) {
+export function readJson(file, label) {
   const resolved = absoluteSafe(file, label)
   if (!lstatSync(resolved).isFile()) throw new Error(`${label} must be a regular file`)
   return JSON.parse(readFileSync(resolved, 'utf8').replace(/^\uFEFF/, ''))
@@ -229,8 +231,8 @@ export async function probeRuntime({ baseUrl, manifest }) {
 
 async function main(args) {
   const command = args.shift()
-  const allowed = { manifest: ['server-dist', 'client-dist', 'declared-source-sha'], verify: ['manifest', 'server-dist', 'client-dist', 'runtime-info'], install: ['manifest', 'server-dist', 'client-dist', 'destination', 'allow-parent', 'apply'], runtime: ['base-url', 'manifest'] }[command]
-  if (!allowed) throw new Error('Usage: release-tools.mjs manifest|verify|install|runtime --option value [--apply]')
+  const allowed = { manifest: ['server-dist', 'client-dist', 'declared-source-sha'], verify: ['manifest', 'server-dist', 'client-dist', 'runtime-info'], install: ['manifest', 'server-dist', 'client-dist', 'destination', 'allow-parent', 'apply'], runtime: ['base-url', 'manifest'], plan: ['profile'], prepare: ['profile', 'evidence'], timing: ['plan', 'log'] }[command]
+  if (!allowed) throw new Error('Usage: release-tools.mjs manifest|verify|install|runtime|plan|prepare|timing --option value [--apply]')
   const options = {}
   while (args.length) {
     const key = args.shift()
@@ -245,7 +247,16 @@ async function main(args) {
   }
   const base = { serverDist: options['server-dist'], clientDist: options['client-dist'] }
   let result
-  if (command === 'manifest') result = createManifest({ ...base, declaredSourceSha: options['declared-source-sha'] })
+  if (command === 'plan' || command === 'prepare') {
+    result = prepareDeployment({ profile: readJson(options.profile, 'profile'), evidenceFile: options.evidence, requireEvidence: command === 'prepare' })
+  }
+  else if (command === 'timing') {
+    const plan = readJson(options.plan, 'prepared plan')
+    const log = readJson(options.log, 'timing log')
+    if (plan.schema !== 'cosgallery-deployment-preflight/v1' || plan.offlineReady !== true || log.planDigest !== plan.planDigest) throw new Error('Timing log must match a successful prepared plan')
+    result = summarizeTiming(log)
+  }
+  else if (command === 'manifest') result = createManifest({ ...base, declaredSourceSha: options['declared-source-sha'] })
   else if (command === 'runtime') result = await probeRuntime({ baseUrl: options['base-url'], manifest: options.manifest ? readJson(options.manifest, 'manifest') : undefined })
   else {
     const manifest = readJson(options.manifest, 'manifest')

@@ -1,0 +1,79 @@
+{
+  "schema": "cosgallery-deployment-profile/v1",
+  "sourceRoot": "C:/example/source",
+  "candidateSha": "REPLACE_WITH_FULL_CANDIDATE_SHA",
+  "baselineSha": "REPLACE_WITH_VERIFIED_BASELINE_SHA",
+  "manifest": "C:/example/evidence/candidate-manifest.json",
+  "serverDist": "C:/example/candidate/server/dist",
+  "clientDist": "C:/example/candidate/client/dist",
+  "runtime": {
+    "node": "24.21.0",
+    "pnpm": "10.28.0",
+    "platform": "win32",
+    "arch": "x64"
+  },
+  "records": {
+    "dependencies": "C:/example/evidence/dependencies.json",
+    "recovery": "C:/example/evidence/recovery.json"
+  },
+  "regression": [
+    {
+      "argv": ["C:/example/runtime/node.exe", "--version"],
+      "cwd": "C:/example/source",
+      "inputs": [],
+      "expected": "未配置：替换为本次范围相关的真实回归命令、输入清单和结果预期；此占位命令不能证明回归通过"
+    }
+  ],
+  "steps": [
+    {
+      "stage": "read-check",
+      "argv": ["C:/example/runtime/node.exe", "--version"],
+      "cwd": "C:/example/source",
+      "inputs": [],
+      "expected": "未配置：填写当前授权、进程身份、业务空闲和保护项只读核对；此命令不用于部署"
+    },
+    {
+      "stage": "stop",
+      "argv": ["C:/example/runtime/node.exe", "--version"],
+      "cwd": "C:/example/source",
+      "inputs": [],
+      "expected": "未配置：填写获授权的独立停止步骤；已关闭时不重复停止；此命令不用于部署"
+    },
+    {
+      "stage": "confirm-exit",
+      "argv": ["C:/example/runtime/node.exe", "--version"],
+      "cwd": "C:/example/source",
+      "inputs": [],
+      "expected": "未配置：填写独立确认退出步骤；此命令不用于部署"
+    },
+    {
+      "stage": "install",
+      "argv": ["C:/example/runtime/node.exe", "--version"],
+      "cwd": "C:/example/source",
+      "inputs": [],
+      "expected": "未配置：填写保留用户修改、数据和恢复材料的安装与离线核对步骤；此命令不用于部署"
+    },
+    {
+      "stage": "start",
+      "argv": ["C:/example/runtime/node.exe", "--version"],
+      "cwd": "C:/example/source",
+      "inputs": [],
+      "expected": "未配置：仅在当前授权包含启动时填写独立启动步骤；此命令不用于部署"
+    },
+    {
+      "stage": "health",
+      "argv": ["C:/example/runtime/node.exe", "--version"],
+      "cwd": "C:/example/source",
+      "inputs": [],
+      "expected": "未配置：填写独立只读健康与构建身份核查，明确匿名401边界；此命令不用于部署"
+    }
+  ],
+  "acceptance": {
+    "auth": "enabled",
+    "checks": [
+      { "method": "GET", "path": "/api/health", "access": "public", "expectedStatus": 200 },
+      { "method": "GET", "path": "/build-info.json", "access": "public", "expectedStatus": 200 },
+      { "method": "GET", "path": "/api/admin/status", "access": "admin", "expectedStatus": 401 }
+    ]
+  }
+}
