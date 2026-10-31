@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { lstatSync, readFileSync } from 'node:fs'
+import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { absoluteSafe, readJson, verifyManifest } from './release-tools.mjs'
 
@@ -30,9 +30,12 @@ function regularFile(value, label) {
 
 function sourceSnapshot(root, revision) {
   sha(revision)
+  const canonicalRoot = realpathSync.native(root)
   // Read Git objects, not a possibly modified checkout; no fetch, hooks or checkout.
-  const git = (...args) => execFileSync('git', ['--no-optional-locks', '-c', `safe.directory=${root.replaceAll('\\', '/')}`, '-C', root, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 }).trimEnd()
-  demand(path.resolve(git('rev-parse', '--show-toplevel')) === root, 'sourceRoot must be the repository root')
+  const git = (...args) => execFileSync('git', ['--no-optional-locks', '-c', `safe.directory=${canonicalRoot.replaceAll('\\', '/')}`, '-C', canonicalRoot, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 }).trimEnd()
+  // Git may expand a Windows TEMP 8.3 alias or normalize drive spelling.
+  // absoluteSafe already rejected links/junctions in the supplied root.
+  demand(path.relative(realpathSync.native(git('rev-parse', '--show-toplevel')), canonicalRoot) === '', 'sourceRoot must be the repository root')
   demand(git('rev-parse', `${revision}^{commit}`) === revision, 'Revision must identify a commit')
   const tree = git('rev-parse', `${revision}^{tree}`)
   const entries = git('ls-tree', '-rz', '--full-tree', revision).split('\0').filter(Boolean).map(line => {

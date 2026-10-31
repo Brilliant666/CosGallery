@@ -291,3 +291,31 @@ test('docs workspace install inputs invalidate dependencies despite unchanged ap
   assert.notEqual(after.context.candidate.dependencyInputs, before.context.candidate.dependencyInputs)
   assert.equal(after.evidenceStatus.dependencies, 'missing-or-stale')
 })
+
+test('repository root comparison accepts Windows path aliases but still rejects a repository subdirectory', t => {
+  const f = fixture(t)
+  // Git normalizes drive spelling; TEMP may also use a Windows 8.3 alias.
+  // The root check must compare existing directories, not their spelling.
+  if (process.platform === 'win32') f.profile.sourceRoot = f.profile.sourceRoot.replace(/^[A-Z]:/, drive => drive.toLowerCase())
+  const accepted = prepareDeployment({ profile: f.profile, requireEvidence: false })
+  assert.equal(accepted.ok, true, JSON.stringify(accepted.issues))
+  if (process.platform === 'win32') {
+    // Only ask cmd to expand the short name of our generated fixture. This
+    // performs no file operation; the fixture cleanup still uses its own root.
+    assert.doesNotMatch(f.profile.sourceRoot, /[%!"\r\n]/)
+    const shortName = spawnSync('cmd.exe', ['/d', '/u', '/c', `for %I in ("${f.profile.sourceRoot}") do @echo "%~sI"`], { encoding: 'utf16le', windowsHide: true, windowsVerbatimArguments: true })
+    assert.equal(shortName.status, 0, shortName.stderr)
+    const alias = shortName.stdout.trim().replace(/^"(.*)"$/, '$1')
+    assert.ok(path.isAbsolute(alias))
+    if (alias.toLowerCase() !== f.profile.sourceRoot.toLowerCase()) {
+      f.profile.sourceRoot = alias
+      const shortAccepted = prepareDeployment({ profile: f.profile, requireEvidence: false })
+      assert.equal(shortAccepted.ok, true, JSON.stringify(shortAccepted.issues))
+      t.diagnostic('Windows 8.3 repository alias exercised')
+    } else t.diagnostic('No distinct 8.3 alias on this volume; drive-case check exercised')
+  }
+  f.profile.sourceRoot = path.join(f.profile.sourceRoot, 'server')
+  const rejected = prepareDeployment({ profile: f.profile, requireEvidence: false })
+  assert.equal(rejected.ok, false)
+  assert.ok(rejected.issues.some(issue => issue.field === 'candidateSha' && /repository root/.test(issue.message)))
+})
